@@ -619,6 +619,7 @@ export class LocalOrchestrator {
           const synthesized: Array<ContentBlock & { type: 'tool_use' }> = textParsed.toolCalls.map((tc, i) => ({
             type: 'tool_use' as const,
             id: `text_call_${i}_${Date.now()}`,
+            caller: { type: 'direct' as const },
             name: tc.name,
             input: tc.arguments,
           }));

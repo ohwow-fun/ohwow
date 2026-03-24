@@ -779,6 +779,7 @@ export class RuntimeEngine {
                 response = {
                   id: `msg_cached_${Date.now()}`,
                   type: 'message',
+                  container: null,
                   role: 'assistant',
                   content: [{ type: 'text' as const, text: cached.responseContent, citations: null }],
                   model: modelId as Anthropic.Messages.Model,
