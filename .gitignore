@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.tui-compiled/
+.DS_Store
+*.pem
+*.tsbuildinfo
+npm-debug.log*
+.env*
+!.env.example
+coverage/
+playwright-report/
+test-results/
+screenshots/
+.playwright-mcp/
+*.db
+.claude/settings.local.json

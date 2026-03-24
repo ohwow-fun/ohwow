@@ -1,0 +1,317 @@
+/**
+ * Desktop Control Tools
+ * Claude tool_use definitions and dispatcher for local desktop automation.
+ * Includes a lightweight `request_desktop` tool for dynamic on-demand access.
+ */
+
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
+import type { LocalDesktopService } from './local-desktop.service.js';
+import type { DesktopAction, DesktopActionResult } from './desktop-types.js';
+
+// ============================================================================
+// REQUEST DESKTOP TOOL (lightweight, included by default)
+// ============================================================================
+
+export const REQUEST_DESKTOP_TOOL: Tool = {
+  name: 'request_desktop',
+  description:
+    'Request desktop control to interact with macOS apps. Call this when the task requires clicking, typing, or taking screenshots of the desktop. Desktop tools will become available after activation.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      reason: {
+        type: 'string',
+        description: 'Brief reason why desktop access is needed',
+      },
+    },
+    required: ['reason'],
+  },
+};
+
+export const DESKTOP_ACTIVATION_MESSAGE = `Desktop control activated. You now have these tools:
+- desktop_screenshot: Capture the screen (always do this first)
+- desktop_click: Click at coordinates (x, y)
+- desktop_type: Type text at cursor position
+- desktop_key: Press keyboard shortcuts (e.g. "cmd+c", "enter")
+- desktop_scroll: Scroll at position
+- desktop_drag: Click-drag between two points
+- desktop_wait: Pause for a duration
+
+Workflow: screenshot first to see the screen, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
+
+export const DESKTOP_SYSTEM_PROMPT = `## Desktop Control (Active)
+You can control this macOS desktop. You see the screen via screenshots and interact via mouse and keyboard.
+
+After each action (click, type, key, scroll), you receive an automatic screenshot showing the result. Use this to verify your action worked before proceeding.
+
+Coordinate system: Screenshots are scaled to fit within 1280x800. Use coordinates as they appear in the scaled image. The system handles mapping to actual screen coordinates.
+
+Tips:
+- Always take a screenshot first to orient yourself
+- Click precisely on buttons and text fields
+- Use desktop_key for keyboard shortcuts (e.g. "cmd+s" to save, "cmd+tab" to switch apps)
+- If an action didn't work, try again or try an alternative approach
+- Use desktop_wait if you need to let an animation or loading complete`;
+
+// ============================================================================
+// FULL DESKTOP TOOL DEFINITIONS (injected after request_desktop is called)
+// ============================================================================
+
+export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'desktop_screenshot',
+    description:
+      'Take a screenshot of the entire macOS screen. Returns a JPEG image. Always call this first to see what is on screen before interacting.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'desktop_click',
+    description:
+      'Click at a specific (x, y) coordinate on the screen. Coordinates are relative to the screenshot image dimensions. Use the most recent screenshot to determine where to click.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'X coordinate in the screenshot image' },
+        y: { type: 'number', description: 'Y coordinate in the screenshot image' },
+        button: {
+          type: 'string',
+          enum: ['left', 'right', 'double'],
+          description: 'Mouse button (default: left). Use "double" for double-click.',
+        },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'desktop_type',
+    description:
+      'Type text at the current cursor position. Click on a text field first, then use this tool to enter text.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'The text to type' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'desktop_key',
+    description:
+      'Press a keyboard shortcut or special key. Use "+" to combine modifiers (e.g. "cmd+c", "cmd+shift+s", "enter", "escape", "tab", "cmd+tab").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          description: 'Key or combo to press (e.g. "cmd+c", "enter", "escape", "cmd+shift+s")',
+        },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'desktop_scroll',
+    description:
+      'Scroll at a specific screen position. Move the mouse to (x, y) then scroll in the given direction.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'X coordinate to scroll at' },
+        y: { type: 'number', description: 'Y coordinate to scroll at' },
+        direction: {
+          type: 'string',
+          enum: ['up', 'down', 'left', 'right'],
+          description: 'Scroll direction',
+        },
+        amount: {
+          type: 'number',
+          description: 'Number of scroll steps (default: 3)',
+        },
+      },
+      required: ['x', 'y', 'direction'],
+    },
+  },
+  {
+    name: 'desktop_drag',
+    description:
+      'Click and drag from one position to another. Useful for moving windows, selecting regions, or slider controls.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startX: { type: 'number', description: 'Starting X coordinate' },
+        startY: { type: 'number', description: 'Starting Y coordinate' },
+        endX: { type: 'number', description: 'Ending X coordinate' },
+        endY: { type: 'number', description: 'Ending Y coordinate' },
+      },
+      required: ['startX', 'startY', 'endX', 'endY'],
+    },
+  },
+  {
+    name: 'desktop_wait',
+    description:
+      'Wait for a specified duration in milliseconds. Use this when you need to wait for an animation, loading, or transition to complete.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        duration: {
+          type: 'number',
+          description: 'Duration to wait in milliseconds (e.g. 1000 for 1 second)',
+        },
+      },
+      required: ['duration'],
+    },
+  },
+];
+
+// ============================================================================
+// TOOL NAME HELPERS
+// ============================================================================
+
+const DESKTOP_TOOL_NAMES = new Set([
+  'desktop_screenshot',
+  'desktop_click',
+  'desktop_type',
+  'desktop_key',
+  'desktop_scroll',
+  'desktop_drag',
+  'desktop_wait',
+]);
+
+/** Check if a tool name is a desktop tool */
+export function isDesktopTool(toolName: string): boolean {
+  return DESKTOP_TOOL_NAMES.has(toolName);
+}
+
+// ============================================================================
+// TOOL DISPATCHER
+// ============================================================================
+
+/**
+ * Map a tool call to a DesktopAction and execute it.
+ */
+export async function executeDesktopTool(
+  desktopService: LocalDesktopService,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): Promise<DesktopActionResult> {
+  const action = mapToolToAction(toolName, toolInput);
+  if (!action) {
+    return {
+      success: false,
+      type: 'screenshot',
+      error: `Unknown desktop tool: ${toolName}`,
+    };
+  }
+  return desktopService.executeAction(action);
+}
+
+function mapToolToAction(
+  toolName: string,
+  input: Record<string, unknown>,
+): DesktopAction | null {
+  switch (toolName) {
+    case 'desktop_screenshot':
+      return { type: 'screenshot' };
+
+    case 'desktop_click': {
+      const button = input.button as string | undefined;
+      if (button === 'right') {
+        return { type: 'right_click', x: input.x as number, y: input.y as number };
+      }
+      if (button === 'double') {
+        return { type: 'double_click', x: input.x as number, y: input.y as number };
+      }
+      return { type: 'left_click', x: input.x as number, y: input.y as number };
+    }
+
+    case 'desktop_type':
+      return { type: 'type_text', text: input.text as string };
+
+    case 'desktop_key':
+      return { type: 'key', key: input.key as string };
+
+    case 'desktop_scroll':
+      return {
+        type: 'scroll',
+        x: input.x as number,
+        y: input.y as number,
+        direction: input.direction as 'up' | 'down' | 'left' | 'right',
+        amount: (input.amount as number) ?? 3,
+      };
+
+    case 'desktop_drag':
+      return {
+        type: 'left_click_drag',
+        startX: input.startX as number,
+        startY: input.startY as number,
+        endX: input.endX as number,
+        endY: input.endY as number,
+      };
+
+    case 'desktop_wait':
+      return { type: 'wait', duration: input.duration as number };
+
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
+// RESULT FORMATTER
+// ============================================================================
+
+/**
+ * Format a DesktopActionResult into content blocks for the LLM response.
+ * Returns text + image blocks (same pattern as formatBrowserToolResult).
+ */
+export function formatDesktopToolResult(
+  result: DesktopActionResult,
+): Array<{ type: string; text?: string; [key: string]: unknown }> {
+  const blocks: Array<{ type: string; text?: string; [key: string]: unknown }> = [];
+
+  if (!result.success) {
+    blocks.push({ type: 'text', text: `Error: ${result.error}` });
+    return blocks;
+  }
+
+  // Text description of what happened
+  const descriptions: Record<string, string> = {
+    screenshot: 'Screenshot captured.',
+    left_click: 'Left click performed.',
+    right_click: 'Right click performed.',
+    double_click: 'Double click performed.',
+    triple_click: 'Triple click performed.',
+    type_text: 'Text typed.',
+    key: 'Key pressed.',
+    scroll: 'Scrolled.',
+    mouse_move: 'Mouse moved.',
+    wait: 'Wait completed.',
+    left_click_drag: 'Drag performed.',
+  };
+
+  blocks.push({ type: 'text', text: descriptions[result.type] ?? `Action ${result.type} completed.` });
+
+  // Include screenshot as base64 image block
+  if (result.screenshot) {
+    blocks.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        media_type: 'image/jpeg',
+        data: result.screenshot,
+      },
+    });
+    if (result.scaledWidth && result.scaledHeight) {
+      blocks.push({
+        type: 'text',
+        text: `Screen dimensions: ${result.scaledWidth}x${result.scaledHeight}`,
+      });
+    }
+  }
+
+  return blocks;
+}

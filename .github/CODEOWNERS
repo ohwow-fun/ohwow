@@ -1,0 +1,8 @@
+# Default owner for everything
+* @ohwow-fun/core
+
+# Security-sensitive areas
+src/lib/url-validation.ts  @ohwow-fun/core
+src/execution/bash/         @ohwow-fun/core
+src/lib/prompt-safety*      @ohwow-fun/core
+SECURITY.md                 @ohwow-fun/core
