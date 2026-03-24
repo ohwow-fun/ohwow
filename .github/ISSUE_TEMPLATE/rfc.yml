@@ -1,0 +1,44 @@
+name: RFC (Request for Comments)
+description: Propose a significant change to ohwow's architecture or behavior
+labels: ["rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RFCs are for proposing changes that affect ohwow's architecture, public API, or core behavior.
+        For smaller features, use the [feature request](https://github.com/ohwow-fun/ohwow/issues/new?template=feature_request.yml) template instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph explaining the proposed change
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this change needed? What problem does it solve?
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Proposed Design
+      description: How would this work? Include affected modules, new interfaces, migration path
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider and why were they rejected?
+    validations:
+      required: false
+  - type: textarea
+    id: breaking
+    attributes:
+      label: Breaking Changes
+      description: Will this break existing behavior? How will users migrate?
+    validations:
+      required: false

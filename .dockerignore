@@ -1,0 +1,10 @@
+.git
+node_modules
+src/
+*.test.ts
+.env*
+coverage/
+.husky/
+*.md
+!README.md
+docs/

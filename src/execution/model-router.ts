@@ -1,0 +1,1314 @@
+/**
+ * ModelRouter — Abstracts model providers for local (Ollama) and cloud (Anthropic) inference.
+ *
+ * Routes based on task type:
+ * - Orchestrator chat, memory extraction → Ollama (when available)
+ * - Planning, browser tasks, complex reasoning → Claude (Anthropic)
+ * - Auto-fallback: if Ollama fails, escalate to Claude transparently
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+import { getWorkingNumCtx, getModelContextSize } from '../lib/ollama-models.js';
+import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
+import type { OperationType, ExecutionPolicy } from './execution-policy.js';
+import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
+import type {
+  TextBlock,
+  MessageParam,
+  ImageBlockParam,
+  ContentBlockParam,
+  Tool,
+  ToolUseBlock,
+  ToolResultBlockParam,
+} from '@anthropic-ai/sdk/resources/messages/messages';
+
+// ============================================================================
+// PROVIDER INTERFACE
+// ============================================================================
+
+export type MessageContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+export interface ModelMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | MessageContentPart[];
+  tool_call_id?: string;
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+}
+
+export interface ModelResponse {
+  content: string;
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+  provider: 'anthropic' | 'ollama' | 'openrouter';
+}
+
+// ============================================================================
+// TOOL CALLING TYPES (OpenAI format, used by Ollama)
+// ============================================================================
+
+export interface OpenAIToolFunction {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface OpenAITool {
+  type: 'function';
+  function: OpenAIToolFunction;
+}
+
+export interface OpenAIToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+export interface ModelResponseWithTools extends ModelResponse {
+  toolCalls: OpenAIToolCall[];
+}
+
+export interface CreateMessageParams {
+  model?: string;
+  system?: string;
+  messages: ModelMessage[];
+  maxTokens?: number;
+  temperature?: number;
+  /** Ollama num_ctx override — sets the context window size for the request. */
+  numCtx?: number;
+}
+
+export interface ModelProvider {
+  createMessage(params: CreateMessageParams): Promise<ModelResponse>;
+  createMessageWithTools?(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): Promise<ModelResponseWithTools>;
+  isAvailable(): Promise<boolean>;
+  readonly name: string;
+}
+
+// ============================================================================
+// ANTHROPIC PROVIDER
+// ============================================================================
+
+export class AnthropicProvider implements ModelProvider {
+  readonly name = 'anthropic';
+  private client: Anthropic;
+
+  constructor(apiKey: string) {
+    this.client = new Anthropic({ apiKey });
+  }
+
+  async createMessage(params: CreateMessageParams): Promise<ModelResponse> {
+    const messages: MessageParam[] = params.messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: typeof m.content === 'string'
+          ? m.content
+          : this.convertToAnthropicContent(m.content),
+      }));
+
+    const response = await this.client.messages.create({
+      model: params.model || 'claude-haiku-4-5-20251001',
+      max_tokens: params.maxTokens || 4096,
+      temperature: params.temperature ?? 0.5,
+      system: params.system,
+      messages,
+    });
+
+    const textContent = response.content
+      .filter((b): b is TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('');
+
+    return {
+      content: textContent,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      model: params.model || 'claude-haiku-4-5-20251001',
+      provider: 'anthropic',
+    };
+  }
+
+  async createMessageWithTools(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): Promise<ModelResponseWithTools> {
+    // Convert OpenAI-format tools to Anthropic format
+    const anthropicTools: Tool[] = params.tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters as Tool['input_schema'],
+    }));
+
+    // Convert messages to Anthropic format, handling tool_calls and tool results
+    const messages: MessageParam[] = [];
+    for (const m of params.messages) {
+      if (m.role === 'system') continue;
+
+      if (m.role === 'tool' && m.tool_call_id) {
+        // Tool result → user message with tool_result content block
+        const resultContent = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        messages.push({
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: m.tool_call_id,
+            content: resultContent,
+          } as ToolResultBlockParam],
+        });
+      } else if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+        // Assistant message with tool_calls → assistant with tool_use content blocks
+        const blocks: ContentBlockParam[] = [];
+        const textContent = typeof m.content === 'string' ? m.content : '';
+        if (textContent) {
+          blocks.push({ type: 'text', text: textContent });
+        }
+        for (const tc of m.tool_calls) {
+          let input: Record<string, unknown>;
+          try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
+          blocks.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input,
+          } as ContentBlockParam);
+        }
+        messages.push({ role: 'assistant', content: blocks });
+      } else {
+        // Regular message
+        messages.push({
+          role: m.role as 'user' | 'assistant',
+          content: typeof m.content === 'string'
+            ? m.content
+            : this.convertToAnthropicContent(m.content),
+        });
+      }
+    }
+
+    const response = await this.client.messages.create({
+      model: params.model || 'claude-haiku-4-5-20251001',
+      max_tokens: params.maxTokens || 4096,
+      temperature: params.temperature ?? 0.5,
+      system: params.system,
+      messages,
+      tools: anthropicTools,
+      tool_choice: { type: 'auto' },
+    });
+
+    // Extract text content and tool calls from response
+    let textContent = '';
+    const toolCalls: OpenAIToolCall[] = [];
+
+    for (const block of response.content) {
+      if (block.type === 'text') {
+        textContent += (block as TextBlock).text;
+      } else if (block.type === 'tool_use') {
+        const toolBlock = block as ToolUseBlock;
+        toolCalls.push({
+          id: toolBlock.id,
+          type: 'function',
+          function: {
+            name: toolBlock.name,
+            arguments: JSON.stringify(toolBlock.input),
+          },
+        });
+      }
+    }
+
+    return {
+      content: textContent,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      model: params.model || 'claude-haiku-4-5-20251001',
+      provider: 'anthropic',
+      toolCalls,
+    };
+  }
+
+  /** Convert OpenAI-style content parts to Anthropic content blocks, including images. */
+  private convertToAnthropicContent(parts: MessageContentPart[]): string | ContentBlockParam[] {
+    const hasImages = parts.some((p) => p.type === 'image_url');
+    if (!hasImages) {
+      // Text-only: join as a single string (original behavior)
+      return parts
+        .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n');
+    }
+
+    // Mixed content: build Anthropic content blocks
+    const blocks: ContentBlockParam[] = [];
+    for (const part of parts) {
+      if (part.type === 'text') {
+        blocks.push({ type: 'text', text: part.text });
+      } else if (part.type === 'image_url') {
+        const url = part.image_url.url;
+        const dataUriMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (dataUriMatch) {
+          const mediaType = dataUriMatch[1] as ImageBlockParam['source'] extends { media_type: infer T } ? T : never;
+          blocks.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: dataUriMatch[2],
+            },
+          } as ImageBlockParam);
+        }
+      }
+    }
+    return blocks;
+  }
+
+  async isAvailable(): Promise<boolean> {
+    return true; // Available as long as API key exists
+  }
+}
+
+// ============================================================================
+// OLLAMA PROVIDER
+// ============================================================================
+
+const AVAILABILITY_TTL_OK_MS = 30_000;   // 30s when Ollama is up
+const AVAILABILITY_TTL_FAIL_MS = 5_000;  // 5s when down (fast recovery)
+
+export class OllamaProvider implements ModelProvider {
+  readonly name = 'ollama';
+  private baseUrl: string;
+  private defaultModel: string;
+  private _available: boolean | null = null;
+  private _availableCheckedAt = 0;
+  private _responseCallback: ((model: string, inputTokens: number, outputTokens: number, durationMs: number) => void) | null = null;
+
+  constructor(baseUrl: string, defaultModel: string) {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.defaultModel = defaultModel;
+  }
+
+  /** Set a callback that fires after each successful response (for stats tracking). */
+  setResponseCallback(cb: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void): void {
+    this._responseCallback = cb;
+  }
+
+  async createMessage(params: CreateMessageParams): Promise<ModelResponse> {
+    const model = params.model || this.defaultModel;
+
+    // Build messages in OpenAI format (Ollama supports this)
+    const messages: Array<{ role: string; content: string | MessageContentPart[] }> = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      messages.push({ role: m.role, content: m.content });
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: false,
+          options: { num_ctx: params.numCtx || getWorkingNumCtx(model) },
+        }),
+      });
+    } catch (err) {
+      // Network error — reset availability cache so next check re-probes
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      await this.throwOllamaError(response);
+    }
+
+    const data = await response.json() as {
+      choices: Array<{ message: { content: string } }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    const content = data.choices?.[0]?.message?.content || '';
+    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+    const durationMs = Date.now() - startTime;
+
+    // Notify stats tracker
+    if (this._responseCallback) {
+      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+    }
+
+    return {
+      content,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'ollama',
+    };
+  }
+
+  async createMessageWithTools(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): Promise<ModelResponseWithTools> {
+    const model = params.model || this.defaultModel;
+
+    type OllamaMsg = {
+      role: string;
+      content: string | MessageContentPart[];
+      tool_call_id?: string;
+      tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    };
+    const messages: OllamaMsg[] = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      const msg: OllamaMsg = { role: m.role, content: m.content };
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      messages.push(msg);
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: false,
+          tools: params.tools,
+          tool_choice: 'auto',
+          options: { num_ctx: params.numCtx || getWorkingNumCtx(model) },
+        }),
+      });
+    } catch (err) {
+      // Network error — reset availability cache so next check re-probes
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      await this.throwOllamaError(response);
+    }
+
+    const data = await response.json() as {
+      choices: Array<{
+        message: {
+          content: string | null;
+          tool_calls?: Array<{
+            id?: string;
+            type: 'function';
+            function: { name: string; arguments: string };
+          }>;
+        };
+        finish_reason?: string;
+      }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content || '';
+    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+    const durationMs = Date.now() - startTime;
+
+    // Notify stats tracker
+    if (this._responseCallback) {
+      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+    }
+
+    const toolCalls: OpenAIToolCall[] = (choice?.message?.tool_calls || [])
+      .filter((tc) => tc.function && typeof tc.function.name === 'string')
+      .map((tc, i) => ({
+        id: tc.id || `call_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'function' as const,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments ?? '{}',
+        },
+      }));
+
+    return {
+      content,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'ollama',
+      toolCalls,
+    };
+  }
+
+  async isAvailable(): Promise<boolean> {
+    // Return cached value if within TTL (shorter TTL for failures → faster recovery)
+    if (this._available !== null) {
+      const ttl = this._available ? AVAILABILITY_TTL_OK_MS : AVAILABILITY_TTL_FAIL_MS;
+      if ((Date.now() - this._availableCheckedAt) < ttl) {
+        return this._available;
+      }
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      this._available = response.ok;
+      this._availableCheckedAt = Date.now();
+      return this._available;
+    } catch {
+      this._available = false;
+      this._availableCheckedAt = Date.now();
+      return false;
+    }
+  }
+
+  /** Parse Ollama error response and throw a descriptive error (OOM + model-not-found detection). */
+  private async throwOllamaError(response: Response): Promise<never> {
+    const text = await response.text();
+    const lower = text.toLowerCase();
+    if (lower.includes('out of memory') || lower.includes('cuda') || lower.includes('mmap') || lower.includes('oom') || lower.includes('not enough memory')) {
+      throw new Error(`Model too large for available memory. Try a smaller model. Ollama: ${text.slice(0, 200)}`);
+    }
+    if (response.status === 404 || lower.includes('not found') || lower.includes('no such model')) {
+      throw new Error(`Model not found in Ollama. Make sure it's downloaded first. Ollama: ${text.slice(0, 200)}`);
+    }
+    throw new Error(`Ollama request failed (${response.status}): ${text}`);
+  }
+
+  /**
+   * Streaming version of createMessage(). Yields text tokens as they arrive
+   * and returns the final ModelResponse.
+   */
+  async *createMessageStreaming(params: CreateMessageParams): AsyncGenerator<{ type: 'token'; content: string }, ModelResponse> {
+    const model = params.model || this.defaultModel;
+
+    const messages: Array<{ role: string; content: string | MessageContentPart[] }> = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      messages.push({ role: m.role, content: m.content });
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: true,
+          options: { num_ctx: params.numCtx || getWorkingNumCtx(model) },
+        }),
+      });
+    } catch (err) {
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      await this.throwOllamaError(response);
+    }
+
+    let fullContent = '';
+    let usage = { prompt_tokens: 0, completion_tokens: 0 };
+
+    for await (const chunk of this.parseOllamaStream(response)) {
+      if (chunk.content) {
+        fullContent += chunk.content;
+        yield { type: 'token', content: chunk.content };
+      }
+      if (chunk.usage) {
+        usage = chunk.usage;
+      }
+    }
+
+    const durationMs = Date.now() - startTime;
+    if (this._responseCallback) {
+      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+    }
+
+    return {
+      content: fullContent,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'ollama',
+    };
+  }
+
+  /**
+   * Streaming version of createMessageWithTools(). Yields text tokens as they arrive,
+   * accumulates tool call deltas, and returns the final ModelResponseWithTools.
+   */
+  async *createMessageWithToolsStreaming(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): AsyncGenerator<{ type: 'token'; content: string }, ModelResponseWithTools> {
+    const model = params.model || this.defaultModel;
+
+    type OllamaMsg = {
+      role: string;
+      content: string | MessageContentPart[];
+      tool_call_id?: string;
+      tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    };
+    const messages: OllamaMsg[] = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      const msg: OllamaMsg = { role: m.role, content: m.content };
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      messages.push(msg);
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: true,
+          tools: params.tools,
+          tool_choice: 'auto',
+          options: { num_ctx: params.numCtx || getWorkingNumCtx(model) },
+        }),
+      });
+    } catch (err) {
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      await this.throwOllamaError(response);
+    }
+
+    let fullContent = '';
+    let usage = { prompt_tokens: 0, completion_tokens: 0 };
+    // Accumulate tool calls by index
+    const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
+    let hasToolCalls = false;
+
+    for await (const chunk of this.parseOllamaStream(response)) {
+      if (chunk.content && !hasToolCalls) {
+        fullContent += chunk.content;
+        yield { type: 'token', content: chunk.content };
+      } else if (chunk.content) {
+        // Tool calls detected — accumulate text but don't yield
+        fullContent += chunk.content;
+      }
+      if (chunk.toolCalls) {
+        hasToolCalls = true;
+        for (const tc of chunk.toolCalls) {
+          const existing = toolCallAccum.get(tc.index);
+          if (existing) {
+            if (tc.name) existing.name += tc.name;
+            if (tc.arguments) existing.arguments += tc.arguments;
+          } else {
+            toolCallAccum.set(tc.index, {
+              id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              name: tc.name || '',
+              arguments: tc.arguments || '',
+            });
+          }
+        }
+      }
+      if (chunk.usage) {
+        usage = chunk.usage;
+      }
+    }
+
+    const durationMs = Date.now() - startTime;
+    if (this._responseCallback) {
+      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+    }
+
+    const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
+      .filter(tc => tc.name)
+      .map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.name,
+          arguments: tc.arguments || '{}',
+        },
+      }));
+
+    return {
+      content: fullContent,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'ollama',
+      toolCalls,
+    };
+  }
+
+  /**
+   * Parse an SSE stream from Ollama's OpenAI-compatible endpoint.
+   * Yields parsed chunks with content, tool call deltas, and usage.
+   */
+  private async *parseOllamaStream(response: Response): AsyncGenerator<{
+    content?: string;
+    toolCalls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>;
+    usage?: { prompt_tokens: number; completion_tokens: number };
+  }> {
+    if (!response.body) return;
+
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const chunk = JSON.parse(data) as {
+              choices?: Array<{
+                delta?: {
+                  content?: string;
+                  tool_calls?: Array<{
+                    index: number;
+                    id?: string;
+                    function?: { name?: string; arguments?: string };
+                  }>;
+                };
+              }>;
+              usage?: { prompt_tokens: number; completion_tokens: number };
+            };
+
+            const delta = chunk.choices?.[0]?.delta;
+            const result: {
+              content?: string;
+              toolCalls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>;
+              usage?: { prompt_tokens: number; completion_tokens: number };
+            } = {};
+
+            if (delta?.content) {
+              result.content = delta.content;
+            }
+
+            if (delta?.tool_calls) {
+              result.toolCalls = delta.tool_calls.map(tc => ({
+                index: tc.index,
+                id: tc.id,
+                name: tc.function?.name,
+                arguments: tc.function?.arguments,
+              }));
+            }
+
+            if (chunk.usage) {
+              result.usage = chunk.usage;
+            }
+
+            if (result.content || result.toolCalls || result.usage) {
+              yield result;
+            }
+          } catch {
+            // Skip malformed chunks
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /** Update the default model used for inference. */
+  setDefaultModel(model: string): void {
+    this.defaultModel = model;
+  }
+
+  /** Returns the current default model tag. */
+  getDefaultModel(): string {
+    return this.defaultModel;
+  }
+
+  /** Reset cached availability (for retry after reconnect) */
+  resetAvailability(): void {
+    this._available = null;
+    this._availableCheckedAt = 0;
+  }
+
+  /** Get list of available models from Ollama */
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!response.ok) return [];
+      const data = await response.json() as { models?: Array<{ name: string }> };
+      return (data.models || []).map((m) => m.name);
+    } catch {
+      return [];
+    }
+  }
+}
+
+// ============================================================================
+// OPENROUTER PROVIDER
+// ============================================================================
+
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+
+export class OpenRouterProvider implements ModelProvider {
+  readonly name = 'openrouter';
+  private apiKey: string;
+  private defaultModel: string;
+  private _available: boolean | null = null;
+  private _availableCheckedAt = 0;
+
+  constructor(apiKey: string, defaultModel: string = 'openrouter/optimus-alpha') {
+    this.apiKey = apiKey;
+    this.defaultModel = defaultModel;
+  }
+
+  private getHeaders(): Record<string, string> {
+    return {
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://ohwow.fun',
+      'X-Title': 'OHWOW',
+    };
+  }
+
+  async createMessage(params: CreateMessageParams): Promise<ModelResponse> {
+    const model = params.model || this.defaultModel;
+
+    const messages: Array<{ role: string; content: string | MessageContentPart[] }> = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      messages.push({ role: m.role, content: m.content });
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: false,
+        }),
+      });
+    } catch (err) {
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`OpenRouter request failed (${response.status}): ${text.slice(0, 200)}`);
+    }
+
+    const data = await response.json() as {
+      choices: Array<{ message: { content: string } }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    const content = data.choices?.[0]?.message?.content || '';
+    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+    const _durationMs = Date.now() - startTime;
+
+    return {
+      content,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'openrouter',
+    };
+  }
+
+  async createMessageWithTools(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): Promise<ModelResponseWithTools> {
+    const model = params.model || this.defaultModel;
+
+    type ORMsg = {
+      role: string;
+      content: string | MessageContentPart[];
+      tool_call_id?: string;
+      tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    };
+    const messages: ORMsg[] = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      const msg: ORMsg = { role: m.role, content: m.content };
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      messages.push(msg);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: false,
+          tools: params.tools,
+          tool_choice: 'auto',
+        }),
+      });
+    } catch (err) {
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`OpenRouter request failed (${response.status}): ${text.slice(0, 200)}`);
+    }
+
+    const data = await response.json() as {
+      choices: Array<{
+        message: {
+          content: string | null;
+          tool_calls?: Array<{
+            id?: string;
+            type: 'function';
+            function: { name: string; arguments: string };
+          }>;
+        };
+      }>;
+      usage?: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content || '';
+    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+
+    const toolCalls: OpenAIToolCall[] = (choice?.message?.tool_calls || [])
+      .filter((tc) => tc.function && typeof tc.function.name === 'string')
+      .map((tc, i) => ({
+        id: tc.id || `call_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        type: 'function' as const,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments ?? '{}',
+        },
+      }));
+
+    return {
+      content,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'openrouter',
+      toolCalls,
+    };
+  }
+
+  async isAvailable(): Promise<boolean> {
+    if (this._available !== null) {
+      const ttl = this._available ? AVAILABILITY_TTL_OK_MS : AVAILABILITY_TTL_FAIL_MS;
+      if ((Date.now() - this._availableCheckedAt) < ttl) {
+        return this._available;
+      }
+    }
+
+    try {
+      const response = await fetch(`${OPENROUTER_BASE_URL}/models`, {
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      this._available = response.ok;
+      this._availableCheckedAt = Date.now();
+      return this._available;
+    } catch {
+      this._available = false;
+      this._availableCheckedAt = Date.now();
+      return false;
+    }
+  }
+
+  setDefaultModel(model: string): void {
+    this.defaultModel = model;
+  }
+
+  setApiKey(key: string): void {
+    this.apiKey = key;
+    this._available = null;
+    this._availableCheckedAt = 0;
+  }
+
+  resetAvailability(): void {
+    this._available = null;
+    this._availableCheckedAt = 0;
+  }
+}
+
+// ============================================================================
+// MODEL ROUTER
+// ============================================================================
+
+export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision';
+
+export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'auto';
+
+export class ModelRouter {
+  private anthropic: AnthropicProvider | null;
+  private ollama: OllamaProvider | null;
+  private ocrOllama: OllamaProvider | null;
+  private quickOllama: OllamaProvider | null;
+  private openrouter: OpenRouterProvider | null;
+  private preferLocal: boolean;
+  private modelSource: ModelSourceOption;
+  private mainModelHasVision: boolean;
+  private _onOllamaResponse: ((model: string, inputTokens: number, outputTokens: number, durationMs: number) => void) | null = null;
+  /** Cached credit balance percentage (0-100). Updated from heartbeat responses. */
+  private _creditBalancePercent = 100;
+
+  constructor(opts: {
+    anthropicApiKey?: string;
+    ollamaUrl?: string;
+    ollamaModel?: string;
+    ocrModel?: string;
+    quickModel?: string;
+    openRouterApiKey?: string;
+    openRouterModel?: string;
+    preferLocalModel?: boolean;
+    modelSource?: ModelSourceOption;
+    mainModelHasVision?: boolean;
+    onOllamaResponse?: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void;
+  }) {
+    this.anthropic = opts.anthropicApiKey
+      ? new AnthropicProvider(opts.anthropicApiKey)
+      : null;
+    this.modelSource = opts.modelSource ?? 'auto';
+    this.ollama = opts.ollamaUrl
+      ? new OllamaProvider(opts.ollamaUrl, opts.ollamaModel || 'qwen3:4b')
+      : null;
+    this.ocrOllama = opts.ollamaUrl && opts.ocrModel
+      ? new OllamaProvider(opts.ollamaUrl, opts.ocrModel)
+      : null;
+    this.quickOllama = opts.ollamaUrl && opts.quickModel
+      ? new OllamaProvider(opts.ollamaUrl, opts.quickModel)
+      : null;
+    this.openrouter = opts.openRouterApiKey
+      ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'openrouter/optimus-alpha')
+      : null;
+    this.preferLocal = opts.preferLocalModel ?? false;
+    this.mainModelHasVision = opts.mainModelHasVision ?? false;
+    this._onOllamaResponse = opts.onOllamaResponse ?? null;
+
+    // Wire response callback to all Ollama providers
+    if (this._onOllamaResponse) {
+      const cb = this._onOllamaResponse;
+      this.ollama?.setResponseCallback(cb);
+      this.ocrOllama?.setResponseCallback(cb);
+      this.quickOllama?.setResponseCallback(cb);
+    }
+  }
+
+  /** Set callback for Ollama response tracking (usage stats). */
+  setOnOllamaResponse(cb: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void): void {
+    this._onOllamaResponse = cb;
+    this.ollama?.setResponseCallback(cb);
+    this.ocrOllama?.setResponseCallback(cb);
+  }
+
+  /** Notify the callback after a successful Ollama response. */
+  notifyOllamaResponse(model: string, inputTokens: number, outputTokens: number, durationMs: number): void {
+    if (this._onOllamaResponse) {
+      try {
+        this._onOllamaResponse(model, inputTokens, outputTokens, durationMs);
+      } catch {
+        // Stats tracking should never break request flow
+      }
+    }
+  }
+
+  /**
+   * Get the appropriate provider for a task type.
+   * Behavior depends on modelSource (and optionally, execution policy):
+   * - 'cloud': always use Anthropic (all task types), fall back to Ollama if unavailable
+   * - 'local': always prefer Ollama, fall back to Anthropic
+   * - 'auto': route by task type (orchestrator/memory → Ollama, planning/agent/browser → Anthropic)
+   *
+   * When operationType is provided, the execution policy may override the modelSource
+   * for that specific operation (e.g., planning always prefers cloud, memory extraction always local).
+   */
+  async getProvider(taskType: TaskType, difficulty?: 'simple' | 'moderate' | 'complex', operationType?: OperationType): Promise<ModelProvider> {
+    // OCR and vision tasks: try dedicated OCR model → vision-capable main model → Anthropic
+    if (taskType === 'ocr' || taskType === 'vision') {
+      // 1. Dedicated OCR model (best for OCR/vision tasks)
+      if (this.ocrOllama) {
+        const available = await this.ocrOllama.isAvailable();
+        if (available) return this.ocrOllama;
+      }
+      // 2. Main Ollama model if it supports vision
+      if (this.mainModelHasVision && this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      // 3. Anthropic (Claude supports vision natively)
+      if (this.anthropic) return this.anthropic;
+
+      throw new Error('No vision-capable model available. Configure an OCR model, use a vision-capable local model, or add an Anthropic API key.');
+    }
+
+    // Execution policy override: when an operationType is provided and modelSource is 'auto',
+    // the execution policy may override routing for that specific operation.
+    if (operationType && this.modelSource === 'auto') {
+      const policy = resolvePolicy(operationType);
+      if (shouldPreferLocal(policy, this._creditBalancePercent)) {
+        // Policy says prefer local (either explicitly or because credits are low)
+        if (this.ollama) {
+          const available = await this.ollama.isAvailable();
+          if (available) return this.ollama;
+        }
+        // Fall back based on policy
+        if (policy.fallback === 'cloud') {
+          if (this.openrouter) {
+            const available = await this.openrouter.isAvailable();
+            if (available) return this.openrouter;
+          }
+          if (this.anthropic) return this.anthropic;
+        }
+      } else if (policy.modelSource === 'cloud') {
+        // Policy explicitly wants cloud
+        if (this.anthropic) return this.anthropic;
+        if (this.openrouter) {
+          const available = await this.openrouter.isAvailable();
+          if (available) return this.openrouter;
+        }
+        // Fall back to local if policy allows
+        if (policy.fallback === 'local' && this.ollama) {
+          const available = await this.ollama.isAvailable();
+          if (available) return this.ollama;
+        }
+      }
+      // For 'auto' policy modelSource, fall through to standard routing below
+    }
+
+    // OpenRouter mode: always prefer OpenRouter, fall back to others
+    if (this.modelSource === 'openrouter') {
+      if (this.openrouter) {
+        const available = await this.openrouter.isAvailable();
+        if (available) return this.openrouter;
+      }
+      // Fall back to Anthropic → Ollama
+      if (this.anthropic) return this.anthropic;
+      if (this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      throw new Error('OpenRouter mode selected but OpenRouter is not available. Check your API key or switch to a different mode.');
+    }
+
+    // Cloud mode: always prefer Anthropic for all task types
+    if (this.modelSource === 'cloud') {
+      if (this.anthropic) return this.anthropic;
+      // Fall back to Ollama if Anthropic not configured
+      if (this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      throw new Error('Cloud mode selected but no Anthropic API key configured. Add an API key or switch to local mode.');
+    }
+
+    // Local mode: always prefer Ollama for all task types
+    if (this.modelSource === 'local') {
+      if (this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      // Fall back to Anthropic
+      if (this.anthropic) return this.anthropic;
+      throw new Error('Local mode selected but Ollama is not running. Start Ollama or switch to cloud mode.');
+    }
+
+    // Auto mode: difficulty-aware routing
+    // Simple tasks use quick model when configured
+    if (difficulty === 'simple' && this.quickOllama) {
+      const available = await this.quickOllama.isAvailable();
+      if (available) return this.quickOllama;
+    }
+
+    // Complex tasks prefer Anthropic even for orchestrator tasks
+    if (difficulty === 'complex' && this.anthropic) {
+      return this.anthropic;
+    }
+
+    // Auto mode: route by task type (original behavior)
+    const useLocal = this.preferLocal && this.ollama && (
+      taskType === 'orchestrator' || taskType === 'memory_extraction'
+    );
+
+    if (useLocal && this.ollama) {
+      const available = await this.ollama.isAvailable();
+      if (available) return this.ollama;
+      // Fall back to Anthropic
+    }
+
+    // Try OpenRouter as middle tier (free, cloud-quality)
+    if (this.openrouter) {
+      const available = await this.openrouter.isAvailable();
+      if (available) return this.openrouter;
+    }
+
+    if (this.anthropic) return this.anthropic;
+
+    // Last resort: try Ollama even for non-preferred tasks (free tier always uses Ollama)
+    if (this.ollama) {
+      const available = await this.ollama.isAvailable();
+      if (available) return this.ollama;
+    }
+
+    throw new Error('No model provider available. Make sure Ollama is running, or configure an Anthropic API key.');
+  }
+
+  /** Get the Anthropic provider directly (for tool-using tasks that need the SDK) */
+  getAnthropicProvider(): AnthropicProvider | null {
+    return this.anthropic;
+  }
+
+  /** Get the Ollama provider directly (for status checks) */
+  getOllamaProvider(): OllamaProvider | null {
+    return this.ollama;
+  }
+
+  /** Get the OCR Ollama provider directly (for status checks) */
+  getOcrProvider(): OllamaProvider | null {
+    return this.ocrOllama;
+  }
+
+  /** Check if Ollama is connected */
+  async isOllamaAvailable(): Promise<boolean> {
+    if (!this.ollama) return false;
+    return this.ollama.isAvailable();
+  }
+
+  /** Reset Ollama availability cache (for reconnection attempts) */
+  resetOllamaStatus(): void {
+    this.ollama?.resetAvailability();
+  }
+
+  /** Update the active Ollama model at runtime (called when user changes active model). */
+  setOllamaModel(model: string): void {
+    this.ollama?.setDefaultModel(model);
+    this.ollama?.resetAvailability();  // Force re-probe with new model
+  }
+
+  /** Update the model source at runtime (called when user switches cloud/local). */
+  setModelSource(source: ModelSourceOption): void {
+    this.modelSource = source;
+  }
+
+  /** Get the OpenRouter provider directly (for status checks). */
+  getOpenRouterProvider(): OpenRouterProvider | null {
+    return this.openrouter;
+  }
+
+  /** Update the OpenRouter API key at runtime (called when user changes key in settings). */
+  setOpenRouterApiKey(key: string): void {
+    if (key) {
+      if (this.openrouter) {
+        this.openrouter.setApiKey(key);
+      } else {
+        this.openrouter = new OpenRouterProvider(key);
+      }
+    } else {
+      this.openrouter = null;
+    }
+  }
+
+  /** Update the OpenRouter model at runtime. */
+  setOpenRouterModel(model: string): void {
+    this.openrouter?.setDefaultModel(model);
+  }
+
+  /** Update cached credit balance (called from heartbeat responses). */
+  setCreditBalance(percent: number): void {
+    this._creditBalancePercent = Math.max(0, Math.min(100, percent));
+  }
+
+  /** Get the current cached credit balance percentage. */
+  getCreditBalance(): number {
+    return this._creditBalancePercent;
+  }
+
+  /**
+   * Returns the effective context limit (in tokens) for the active provider.
+   * For Anthropic: uses CLAUDE_CONTEXT_LIMITS. For Ollama: delegates to getWorkingNumCtx().
+   * Callers get a single, provider-agnostic way to know how much context is available.
+   */
+  async getContextLimit(taskType: TaskType, maxOllamaCtx?: number): Promise<number> {
+    let provider: ModelProvider;
+    try {
+      provider = await this.getProvider(taskType);
+    } catch {
+      return CLAUDE_CONTEXT_LIMITS['claude-sonnet-4-5']; // safe default
+    }
+
+    if (provider.name === 'anthropic') {
+      return CLAUDE_CONTEXT_LIMITS['claude-sonnet-4-5'];
+    }
+
+    if (provider.name === 'ollama' && this.ollama) {
+      // Use the Ollama model's working context, with optional cap override
+      return getWorkingNumCtx(this.ollama.getDefaultModel(), maxOllamaCtx);
+    }
+
+    // OpenRouter or unknown provider: assume large context
+    return CLAUDE_CONTEXT_LIMITS['claude-sonnet-4-5'];
+  }
+}
