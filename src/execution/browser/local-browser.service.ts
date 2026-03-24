@@ -5,8 +5,6 @@
  * agent_task) but runs on the user's machine with their residential IP.
  */
 
-import { Stagehand } from '@browserbasehq/stagehand';
-import type { AgentResult } from '@browserbasehq/stagehand';
 import type {
   BrowserAction,
   BrowserActionResult,
@@ -15,9 +13,30 @@ import type {
 import { logger } from '../../lib/logger.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+type StagehandInstance = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AgentResult = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type StagehandPage = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type StagehandContext = any;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let StagehandClass: any = null;
+
+async function loadStagehand(): Promise<{ Stagehand: new (...args: unknown[]) => StagehandInstance }> {
+  if (!StagehandClass) {
+    try {
+      const mod = await import('@browserbasehq/stagehand');
+      StagehandClass = mod.Stagehand;
+    } catch {
+      throw new Error(
+        'Browser automation requires @browserbasehq/stagehand. Install it with: npm install @browserbasehq/stagehand',
+      );
+    }
+  }
+  return { Stagehand: StagehandClass };
+}
 
 export interface LocalBrowserServiceOptions {
   headless?: boolean;
@@ -32,7 +51,7 @@ export interface LocalBrowserServiceOptions {
 // ============================================================================
 
 export class LocalBrowserService {
-  private stagehand: Stagehand | null = null;
+  private stagehand: StagehandInstance | null = null;
   private page: StagehandPage = null;
   private ctx: StagehandContext = null;
   private headless: boolean;
@@ -59,6 +78,7 @@ export class LocalBrowserService {
     if (this.page) return this.page;
 
     try {
+      const { Stagehand } = await loadStagehand();
       logger.debug(`[browser] Stagehand.init — headless: ${this.headless}, model: ${this.modelName}`);
       this.stagehand = new Stagehand({
         env: 'LOCAL',

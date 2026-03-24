@@ -21,7 +21,7 @@ const stubDevtools: Plugin = {
 const localNodeModules = resolve('node_modules');
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/mcp-server/index.ts'],
+  entry: ['src/index.ts', 'src/api.ts', 'src/mcp-server/index.ts'],
   format: ['esm'],
   target: 'node20',
   outDir: 'dist',

@@ -13,8 +13,23 @@ import { execFileSync, execSync } from 'child_process';
 import { readFileSync, unlinkSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import sharp from 'sharp';
 import { logger } from '../../lib/logger.js';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let sharpModule: any = null;
+
+async function loadSharp(): Promise<typeof import('sharp')> {
+  if (!sharpModule) {
+    try {
+      sharpModule = (await import('sharp')).default;
+    } catch {
+      throw new Error(
+        'Screenshot scaling requires sharp. Install it with: npm install sharp',
+      );
+    }
+  }
+  return sharpModule;
+}
 import type { ScreenInfo } from './desktop-types.js';
 
 // ============================================================================
@@ -86,6 +101,7 @@ export async function captureAndScaleScreenshot(
     const rawBuffer = readFileSync(tmpPath);
 
     // Get actual captured dimensions (may differ from system_profiler on multi-monitor)
+    const sharp = await loadSharp();
     const metadata = await sharp(rawBuffer).metadata();
     const capturedWidth = metadata.width ?? screenInfo.physicalWidth;
     const capturedHeight = metadata.height ?? screenInfo.physicalHeight;

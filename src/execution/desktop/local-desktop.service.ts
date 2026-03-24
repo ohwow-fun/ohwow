@@ -37,7 +37,13 @@ let nutJs: any = null;
 
 async function loadNutJs(): Promise<typeof import('@nut-tree-fork/nut-js')> {
   if (!nutJs) {
-    nutJs = await import('@nut-tree-fork/nut-js');
+    try {
+      nutJs = await import('@nut-tree-fork/nut-js');
+    } catch {
+      throw new Error(
+        'Desktop control requires @nut-tree-fork/nut-js. Install it with: npm install @nut-tree-fork/nut-js',
+      );
+    }
   }
   return nutJs;
 }

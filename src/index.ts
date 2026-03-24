@@ -19,9 +19,6 @@ import { checkForUpdate } from './update-check.js';
 import { startTui } from './tui/render.js';
 import { VERSION } from './version.js';
 
-// Re-exports for consumers
-export { createSqliteAdapter } from './db/sqlite-adapter.js';
-export type { SqliteAdapterOptions } from './db/sqlite-adapter.js';
 
 await checkForUpdate(VERSION);
 
