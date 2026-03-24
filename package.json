@@ -65,7 +65,7 @@
     "*.ts": "bash -c 'npx tsc --noEmit'"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.74.0",
+    "@anthropic-ai/sdk": "^0.80.0",
     "@browserbasehq/stagehand": "^3.2.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
