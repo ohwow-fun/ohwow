@@ -1,0 +1,267 @@
+/**
+ * Runtime Config
+ * Loads configuration from ~/.ohwow/config.json or environment variables.
+ * Supports free tier (no license key) and connected tier (cloud via license key).
+ * Plan-specific enforcement happens on the cloud side, not in the runtime.
+ */
+
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
+import type { McpServerConfig } from './mcp/types.js';
+import { logger } from './lib/logger.js';
+
+export type RuntimeTier = 'free' | 'connected';
+
+export type ModelSource = 'local' | 'cloud' | 'auto';
+
+export type DeviceRole = 'hybrid' | 'worker' | 'coordinator';
+
+export interface RuntimeConfig {
+  /** License key for the workspace (empty for free tier) */
+  licenseKey: string;
+  /** Cloud control plane URL */
+  cloudUrl: string;
+  /** Anthropic API key (customer's own key) */
+  anthropicApiKey: string;
+  /** Which model provider to use: local (Ollama), cloud (Claude), or auto (route by task) */
+  modelSource: ModelSource;
+  /** Cloud model ID for Claude inference */
+  cloudModel: string;
+  /** OAuth token from Anthropic browser flow */
+  anthropicOAuthToken: string;
+  /** Port for the local HTTP server */
+  port: number;
+  /** Path to SQLite database file */
+  dbPath: string;
+  /** JWT secret (shared with cloud) */
+  jwtSecret: string;
+  /** Local URL the runtime is accessible at */
+  localUrl: string;
+  /** Run browser in headless mode (default: true). Set OHWOW_BROWSER_HEADLESS=false to show window. */
+  browserHeadless: boolean;
+  /** Ollama URL for local model inference (default: http://localhost:11434) */
+  ollamaUrl: string;
+  /** Ollama model name (default: llama3.1) */
+  ollamaModel: string;
+  /** Prefer local Ollama model for routine tasks (default: false) */
+  preferLocalModel: boolean;
+  /** Override model for the orchestrator chat (empty = use default ollamaModel or Claude) */
+  orchestratorModel: string;
+  /** Smaller/faster Ollama model for simple tasks (default: empty, disabled) */
+  quickModel: string;
+  /** Ollama OCR model name for vision/text extraction (default: empty, disabled) */
+  ocrModel: string;
+  /** OpenRouter API key for free frontier models */
+  openRouterApiKey: string;
+  /** OpenRouter model ID (default: openrouter/optimus-alpha) */
+  openRouterModel: string;
+  /** Port for the Scrapling sidecar server (default: 8100) */
+  scraplingPort: number;
+  /** Auto-start Scrapling server on first use (default: true) */
+  scraplingAutoStart: boolean;
+  /** Default proxy for Scrapling requests */
+  scraplingProxy: string;
+  /** List of proxies for rotation */
+  scraplingProxies: string[];
+  /** Whether onboarding has been completed */
+  onboardingComplete: boolean;
+  /** Whether the agent setup wizard has been completed (post-onboarding) */
+  agentSetupComplete: boolean;
+  /** Enable Cloudflare tunnel for public webhook URL (default: false) */
+  tunnelEnabled: boolean;
+  /** Skip cost confirmation dialogs for cloud media generation (default: false) */
+  skipMediaCostConfirmation: boolean;
+  /** Runtime tier: free (local only) or connected (cloud + integrations) */
+  tier: RuntimeTier;
+  /** Display-only: the workspace's plan name (set by cloud on connect). Not used for gating. */
+  planName?: string;
+  /** Device role: hybrid (all services), worker (task execution only), coordinator (orchestrator only) */
+  deviceRole: DeviceRole;
+  /** Workspace group for mesh isolation (only peers in the same group auto-pair) */
+  workspaceGroup: string;
+  /** Global MCP server defaults available to all agents */
+  mcpServers: McpServerConfig[];
+  /** Whether the MCP server for Claude Code is enabled */
+  mcpServerEnabled: boolean;
+  /** OpenClaw integration configuration */
+  openclaw: import('./integrations/openclaw/types.js').OpenClawConfig;
+}
+
+interface ConfigFile {
+  licenseKey?: string;
+  cloudUrl?: string;
+  anthropicApiKey?: string;
+  modelSource?: ModelSource;
+  cloudModel?: string;
+  anthropicOAuthToken?: string;
+  port?: number;
+  dbPath?: string;
+  jwtSecret?: string;
+  localUrl?: string;
+  browserHeadless?: boolean;
+  ollamaUrl?: string;
+  ollamaModel?: string;
+  preferLocalModel?: boolean;
+  orchestratorModel?: string;
+  quickModel?: string;
+  ocrModel?: string;
+  openRouterApiKey?: string;
+  openRouterModel?: string;
+  scraplingPort?: number;
+  scraplingAutoStart?: boolean;
+  scraplingProxy?: string;
+  scraplingProxies?: string[];
+  onboardingComplete?: boolean;
+  agentSetupComplete?: boolean;
+  tunnelEnabled?: boolean;
+  skipMediaCostConfirmation?: boolean;
+  pendingAgentSetup?: {
+    businessType: string;
+    agent: {
+      name: string;
+      role: string;
+      systemPrompt: string;
+      tools: string[];
+    };
+  } | null;
+  tier?: RuntimeTier | 'starter' | 'pro' | 'enterprise';
+  deviceRole?: DeviceRole;
+  workspaceGroup?: string;
+  mcpServers?: McpServerConfig[];
+  mcpServerEnabled?: boolean;
+  openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
+}
+
+export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
+export const DEFAULT_CONFIG_PATH = join(DEFAULT_CONFIG_DIR, 'config.json');
+export const DEFAULT_DB_PATH = join(DEFAULT_CONFIG_DIR, 'data', 'runtime.db');
+export const DEFAULT_PORT = 7700;
+export const DEFAULT_CLOUD_URL = 'https://ohwow.fun';
+
+/**
+ * Load runtime config from file + env vars (env vars override file values).
+ * Free tier: no license key or API key required.
+ * Connected tier: requires license key.
+ */
+export function loadConfig(configPath?: string): RuntimeConfig {
+  const path = configPath || DEFAULT_CONFIG_PATH;
+  let fileConfig: ConfigFile = {};
+
+  if (existsSync(path)) {
+    try {
+      const raw = readFileSync(path, 'utf-8');
+      fileConfig = JSON.parse(raw) as ConfigFile;
+    } catch (err) {
+      logger.warn(`[Config] Failed to parse ${path}: ${err}`);
+    }
+  }
+
+  // Determine tier: connected if license key exists, otherwise free.
+  // All plan-specific enforcement happens on the cloud side.
+  const licenseKey = process.env.OHWOW_LICENSE_KEY || fileConfig.licenseKey || '';
+  const tier: RuntimeTier = (() => {
+    const raw = fileConfig.tier || (licenseKey ? 'connected' : 'free');
+    // Backward compat: map any paid tier name to 'connected'
+    if (['connected', 'starter', 'pro', 'enterprise'].includes(raw as string)) return 'connected';
+    if (raw === 'free') return 'free';
+    return licenseKey ? 'connected' : 'free';
+  })();
+
+  const config: RuntimeConfig = {
+    licenseKey,
+    cloudUrl: process.env.OHWOW_CLOUD_URL || fileConfig.cloudUrl || DEFAULT_CLOUD_URL,
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || fileConfig.anthropicApiKey || '',
+    modelSource: (process.env.OHWOW_MODEL_SOURCE as ModelSource) || fileConfig.modelSource || 'local',
+    cloudModel: process.env.OHWOW_CLOUD_MODEL || fileConfig.cloudModel || 'claude-haiku-4-5-20251001',
+    anthropicOAuthToken: process.env.ANTHROPIC_OAUTH_TOKEN || fileConfig.anthropicOAuthToken || '',
+    port: parseInt(process.env.OHWOW_PORT || '', 10) || fileConfig.port || DEFAULT_PORT,
+    dbPath: process.env.OHWOW_DB_PATH || fileConfig.dbPath || DEFAULT_DB_PATH,
+    jwtSecret: process.env.ENTERPRISE_JWT_SECRET || fileConfig.jwtSecret || '',
+    localUrl: process.env.OHWOW_LOCAL_URL || fileConfig.localUrl || `http://localhost:${fileConfig.port || DEFAULT_PORT}`,
+    browserHeadless: process.env.OHWOW_BROWSER_HEADLESS === 'true' ? true : (fileConfig.browserHeadless === true),
+    ollamaUrl: process.env.OHWOW_OLLAMA_URL || fileConfig.ollamaUrl || 'http://localhost:11434',
+    ollamaModel: process.env.OHWOW_OLLAMA_MODEL || fileConfig.ollamaModel || 'qwen3:4b',
+    preferLocalModel: process.env.OHWOW_PREFER_LOCAL === 'true' || fileConfig.preferLocalModel === true,
+    orchestratorModel: process.env.OHWOW_ORCHESTRATOR_MODEL || fileConfig.orchestratorModel || '',
+    quickModel: process.env.OHWOW_QUICK_MODEL || fileConfig.quickModel || '',
+    ocrModel: process.env.OHWOW_OCR_MODEL || fileConfig.ocrModel || '',
+    openRouterApiKey: process.env.OPENROUTER_API_KEY || fileConfig.openRouterApiKey || '',
+    openRouterModel: process.env.OPENROUTER_MODEL || fileConfig.openRouterModel || 'openrouter/optimus-alpha',
+    scraplingPort: parseInt(process.env.OHWOW_SCRAPLING_PORT || '', 10) || fileConfig.scraplingPort || 8100,
+    scraplingAutoStart: process.env.OHWOW_SCRAPLING_AUTO_START === 'false' ? false : (fileConfig.scraplingAutoStart !== false),
+    scraplingProxy: process.env.OHWOW_SCRAPLING_PROXY || fileConfig.scraplingProxy || '',
+    scraplingProxies: fileConfig.scraplingProxies || [],
+    onboardingComplete: fileConfig.onboardingComplete ?? false,
+    agentSetupComplete: fileConfig.agentSetupComplete ?? true,
+    tunnelEnabled: process.env.OHWOW_TUNNEL_ENABLED === 'true' || fileConfig.tunnelEnabled === true,
+    skipMediaCostConfirmation: fileConfig.skipMediaCostConfirmation ?? false,
+    tier,
+    deviceRole: (process.env.OHWOW_DEVICE_ROLE as DeviceRole) || fileConfig.deviceRole || 'hybrid',
+    workspaceGroup: process.env.OHWOW_WORKSPACE_GROUP || fileConfig.workspaceGroup || 'default',
+    mcpServers: fileConfig.mcpServers ?? [],
+    mcpServerEnabled: fileConfig.mcpServerEnabled ?? false,
+    openclaw: {
+      enabled: fileConfig.openclaw?.enabled ?? false,
+      binaryPath: fileConfig.openclaw?.binaryPath ?? '',
+      allowlistedSkills: fileConfig.openclaw?.allowlistedSkills ?? [],
+      rateLimitPerMinute: fileConfig.openclaw?.rateLimitPerMinute ?? 10,
+      rateLimitPerHour: fileConfig.openclaw?.rateLimitPerHour ?? 100,
+      sandboxAllowNetwork: fileConfig.openclaw?.sandboxAllowNetwork ?? false,
+      maxExecutionTimeMs: fileConfig.openclaw?.maxExecutionTimeMs ?? 30_000,
+    },
+  };
+
+
+  // Connected tier validates required fields
+  if (tier !== 'free') {
+    if (!config.licenseKey) {
+      throw new Error('Missing license key. Set OHWOW_LICENSE_KEY or add licenseKey to ~/.ohwow/config.json');
+    }
+  }
+
+  return config;
+}
+
+/**
+ * Try to load config — returns null instead of throwing when config is missing/incomplete.
+ * Used by the setup wizard to detect first-run state.
+ */
+export function tryLoadConfig(configPath?: string): RuntimeConfig | null {
+  try {
+    return loadConfig(configPath);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read ~/.ohwow/config.json, merge updates, and write it back.
+ * Creates the file if it doesn't exist.
+ */
+export function updateConfigFile(updates: Partial<ConfigFile>, configPath?: string): void {
+  const path = configPath || DEFAULT_CONFIG_PATH;
+  let existing: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    try {
+      existing = JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      // Corrupted file — overwrite
+    }
+  }
+  const merged = { ...existing, ...updates };
+  writeFileSync(path, JSON.stringify(merged, null, 2));
+}
+
+/** Check if this is a first run (no config file or onboarding not complete). */
+export function isFirstRun(configPath?: string): boolean {
+  const path = configPath || DEFAULT_CONFIG_PATH;
+  if (!existsSync(path)) return true;
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    const fileConfig = JSON.parse(raw) as ConfigFile;
+    return !fileConfig.onboardingComplete;
+  } catch {
+    return true;
+  }
+}
