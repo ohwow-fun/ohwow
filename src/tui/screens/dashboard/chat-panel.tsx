@@ -30,6 +30,9 @@ interface ChatPanelProps {
   slashCommands: SlashCommand[];
   slashIdx: number;
   modelPickerNode: React.ReactNode | null;
+  agents?: { name: string; role: string }[];
+  businessName?: string;
+  welcomeLoading?: boolean;
 }
 
 export function ChatPanel({
@@ -47,6 +50,9 @@ export function ChatPanel({
   slashCommands,
   slashIdx,
   modelPickerNode,
+  agents,
+  businessName,
+  welcomeLoading,
 }: ChatPanelProps) {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
@@ -71,6 +77,9 @@ export function ChatPanel({
             orchestrator={orchestrator}
             maxVisible={15}
             showPlan={showPlan}
+            agents={agents}
+            businessName={businessName}
+            welcomeLoading={welcomeLoading}
           />
 
           {/* Chat input / Rename mode */}

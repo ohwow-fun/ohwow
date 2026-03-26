@@ -85,6 +85,7 @@ export interface OrchestratorState {
   streamingElapsedMs: number;
   lastTokens: { input: number; output: number };
   sendMessage: (text: string) => void;
+  sendWelcome: (internalPrompt: string) => void;
   stopStreaming: () => void;
   newSession: () => void;
   clearSwitchTab: () => void;
@@ -155,14 +156,16 @@ export function useOrchestrator(
     setStreamingElapsedMs(0);
   }, []);
 
-  const sendMessage = useCallback(async (text: string) => {
+  const sendInternal = useCallback(async (text: string, options?: { hideUserMessage?: boolean }) => {
     if (isStreaming) return;
 
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    // Add user message
-    setMessages((prev) => [...prev, { role: 'user', content: trimmed }]);
+    // Add user message (unless hidden for welcome flow)
+    if (!options?.hideUserMessage) {
+      setMessages((prev) => [...prev, { role: 'user', content: trimmed }]);
+    }
     setIsStreaming(true);
     setStreamingSteps([]);
     setError(null);
@@ -393,7 +396,9 @@ export function useOrchestrator(
 
       // Set session title from first user message if not already set
       if (!sessionTitle) {
-        const title = trimmed.slice(0, 60).replace(/\s+\S*$/, '') || trimmed.slice(0, 60);
+        const title = options?.hideUserMessage
+          ? 'Welcome'
+          : (trimmed.slice(0, 60).replace(/\s+\S*$/, '') || trimmed.slice(0, 60));
         setSessionTitle(title);
       }
     } catch (err) {
@@ -428,6 +433,14 @@ export function useOrchestrator(
       abortRef.current = null;
     }
   }, [isStreaming, sessionId, sessionTitle, currentModel, modelSource, daemonPort, startElapsedTimer, stopElapsedTimer]);
+
+  const sendMessage = useCallback((text: string) => {
+    sendInternal(text);
+  }, [sendInternal]);
+
+  const sendWelcome = useCallback((internalPrompt: string) => {
+    sendInternal(internalPrompt, { hideUserMessage: true });
+  }, [sendInternal]);
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort();
@@ -619,6 +632,7 @@ export function useOrchestrator(
     streamingElapsedMs,
     lastTokens,
     sendMessage,
+    sendWelcome,
     stopStreaming,
     newSession,
     clearSwitchTab,

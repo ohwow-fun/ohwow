@@ -68,6 +68,8 @@ export interface RuntimeConfig {
   onboardingComplete: boolean;
   /** Whether the agent setup wizard has been completed (post-onboarding) */
   agentSetupComplete: boolean;
+  /** Whether the first guided chat welcome has been triggered (prevents replay) */
+  firstChatCompleted: boolean;
   /** Enable Cloudflare tunnel for public webhook URL (default: false) */
   tunnelEnabled: boolean;
   /** Skip cost confirmation dialogs for cloud media generation (default: false) */
@@ -114,6 +116,7 @@ interface ConfigFile {
   scraplingProxies?: string[];
   onboardingComplete?: boolean;
   agentSetupComplete?: boolean;
+  firstChatCompleted?: boolean;
   tunnelEnabled?: boolean;
   skipMediaCostConfirmation?: boolean;
   pendingAgentSetup?: {
@@ -194,6 +197,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     scraplingProxies: fileConfig.scraplingProxies || [],
     onboardingComplete: fileConfig.onboardingComplete ?? false,
     agentSetupComplete: fileConfig.agentSetupComplete ?? true,
+    firstChatCompleted: fileConfig.firstChatCompleted ?? false,
     tunnelEnabled: process.env.OHWOW_TUNNEL_ENABLED === 'true' || fileConfig.tunnelEnabled === true,
     skipMediaCostConfirmation: fileConfig.skipMediaCostConfirmation ?? false,
     tier,

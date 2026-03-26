@@ -192,6 +192,9 @@ export function App() {
     return () => { cancelled = true; };
   }, [initialCheck, config, existingState]);
 
+  // Track whether the user just completed onboarding this session (for welcome flow)
+  const [justOnboarded, setJustOnboarded] = useState(false);
+
   // Track whether dashboard should show the nudge banner
   const [needsOnboarding, setNeedsOnboarding] = useState<boolean>(() => {
     if (!config) return true;
@@ -202,6 +205,7 @@ export function App() {
   const handleOnboardingComplete = (newConfig: RuntimeConfig) => {
     setConfig(newConfig);
     setNeedsOnboarding(false);
+    setJustOnboarded(true);
     setView('dashboard');
   };
 
@@ -258,6 +262,7 @@ export function App() {
       db={dbState.db}
       rawDb={dbState.rawDb}
       needsOnboarding={needsOnboarding}
+      justOnboarded={justOnboarded}
       onStartOnboarding={handleStartOnboarding}
       onConfigChange={setConfig}
     />

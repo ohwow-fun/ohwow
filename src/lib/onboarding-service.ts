@@ -191,6 +191,7 @@ export class OnboardingService {
       scraplingProxies: [],
       onboardingComplete: true,
       agentSetupComplete: false,
+      firstChatCompleted: false,
       tunnelEnabled: false,
       skipMediaCostConfirmation: false,
       tier: 'free',

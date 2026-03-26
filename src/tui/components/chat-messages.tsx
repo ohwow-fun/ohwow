@@ -37,9 +37,37 @@ interface ChatMessagesProps {
   orchestrator: OrchestratorState;
   maxVisible?: number;
   showPlan?: boolean;
+  agents?: { name: string; role: string }[];
+  businessName?: string;
+  welcomeLoading?: boolean;
 }
 
-export function ChatMessages({ orchestrator, maxVisible = 15, showPlan = true }: ChatMessagesProps) {
+function buildExamplePrompts(agents?: { name: string; role: string }[]): string[] {
+  if (!agents || agents.length === 0) {
+    return [
+      '"What agents do I have?"',
+      '"Run the content writer to draft a blog post"',
+      '"Show me pending approvals"',
+      '"What\'s the status of my workspace?"',
+    ];
+  }
+  const prompts: string[] = [];
+  // Use up to 2 actual agents for personalized examples
+  const first = agents[0];
+  prompts.push(`"Run ${first.name} on a quick task"`);
+  if (agents.length > 1) {
+    prompts.push(`"What can ${agents[1].name} do?"`);
+  }
+  prompts.push('"Check your workspace status"');
+  if (agents.length > 2) {
+    prompts.push(`"Show me all ${agents.length} agents and their roles"`);
+  } else {
+    prompts.push('"Show me pending approvals"');
+  }
+  return prompts;
+}
+
+export function ChatMessages({ orchestrator, maxVisible = 15, showPlan = true, agents, businessName, welcomeLoading }: ChatMessagesProps) {
   const allItems: Array<{ type: 'message'; index: number } | { type: 'streaming' }> = [];
   for (let i = 0; i < orchestrator.messages.length; i++) {
     allItems.push({ type: 'message', index: i });
@@ -55,14 +83,23 @@ export function ChatMessages({ orchestrator, maxVisible = 15, showPlan = true }:
 
   return (
     <Box flexDirection="column" flexGrow={1}>
-      {orchestrator.messages.length === 0 && !orchestrator.isStreaming && (
+      {orchestrator.messages.length === 0 && !orchestrator.isStreaming && !welcomeLoading && (
         <Box flexDirection="column" paddingX={1}>
-          <Text color="gray">Ask me anything about your agents, tasks, or workspace.</Text>
+          <Text color="gray">
+            {businessName
+              ? `Ask me anything about ${businessName}, your agents, or tasks.`
+              : 'Ask me anything about your agents, tasks, or workspace.'}
+          </Text>
           <Text color="gray">Examples:</Text>
-          <Text color="gray">{'  \u2022 "What agents do I have?"'}</Text>
-          <Text color="gray">{'  \u2022 "Run the content writer to draft a blog post"'}</Text>
-          <Text color="gray">{'  \u2022 "Show me pending approvals"'}</Text>
-          <Text color="gray">{'  \u2022 "What\'s the status of my workspace?"'}</Text>
+          {buildExamplePrompts(agents).map((prompt, i) => (
+            <Text key={i} color="gray">{'  \u2022 '}{prompt}</Text>
+          ))}
+        </Box>
+      )}
+
+      {welcomeLoading && orchestrator.messages.length === 0 && !orchestrator.isStreaming && (
+        <Box flexDirection="column" paddingX={1}>
+          <Text color="cyan">Getting your workspace ready...</Text>
         </Box>
       )}
 

@@ -80,11 +80,12 @@ interface DashboardProps {
   db: DatabaseAdapter;
   rawDb: Database.Database;
   needsOnboarding?: boolean;
+  justOnboarded?: boolean;
   onStartOnboarding?: () => void;
   onConfigChange?: (config: RuntimeConfig) => void;
 }
 
-export function Dashboard({ config, db, rawDb, needsOnboarding, onStartOnboarding, onConfigChange }: DashboardProps) {
+export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, onStartOnboarding, onConfigChange }: DashboardProps) {
   const { exit } = useApp();
   const runtime = useRuntime({ config, db, rawDb });
   const nav = useNavigation();
@@ -161,6 +162,37 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, onStartOnboardin
     const timer = setTimeout(() => setWaNotification(null), 5000);
     return () => clearTimeout(timer);
   }, [waMessageEvent]);
+
+  // Welcome flow: auto-send a greeting after first onboarding
+  const [welcomeLoading, setWelcomeLoading] = useState(false);
+  const welcomeFiredRef = useRef(false);
+  useEffect(() => {
+    if (!justOnboarded || config.firstChatCompleted || welcomeFiredRef.current) return;
+    if (orchestrator.isStreaming || orchestrator.messages.length > 0) return;
+
+    welcomeFiredRef.current = true;
+    setWelcomeLoading(true);
+
+    const agentCount = agents.list.length;
+    const agentNames = agents.list.slice(0, 3).map(a => a.name).join(', ');
+    const prompt = agentCount > 0
+      ? `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`
+      : 'Hi! I just set up ohwow. Help me figure out which AI agents I need for my business.';
+
+    const timer = setTimeout(() => {
+      setWelcomeLoading(false);
+      orchestrator.sendWelcome(prompt);
+      updateConfigFile({ firstChatCompleted: true });
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [justOnboarded, config.firstChatCompleted, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Derive agent info for contextual empty state
+  const chatAgents = useMemo(() =>
+    agents.list.map(a => ({ name: a.name, role: a.role })),
+    [agents.list],
+  );
 
   const isConnected = config.tier !== 'free';
   const gridScreens = getGridScreens(config.tier);
@@ -1371,6 +1403,8 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, onStartOnboardin
           showSlash={showSlash}
           slashCommands={slashCommands}
           slashIdx={slashIdx}
+          agents={chatAgents}
+          welcomeLoading={welcomeLoading}
           modelPickerNode={showModelPicker ? (
             <ModelPicker
               port={config.port}
