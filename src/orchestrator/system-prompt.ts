@@ -561,10 +561,10 @@ export function buildOnboardingAddendum(agentCount: number): string {
 This is a new workspace with no agents. Guide the user from their goal to running operations.
 
 Conversation flow (macro to micro):
-1. **Goal**: Ask "What's the #1 thing you want to achieve in your business right now?" Understand the strategic objective (growth, efficiency, launch, retention, etc.)
-2. **Pain points**: Ask "What takes the most time or falls through the cracks in that process?" Identify bottlenecks and manual work that can be automated
-3. **Build the operation**: Based on their answers, call \`list_available_presets\` with the matching business type. Look at the automations each agent brings. Then call \`bootstrap_workspace\` with:
-   - A clear goal title synthesized from their answers
+1. **Understand the business**: Ask "What does your business do?" or "Tell me about what you're building." Get a quick picture of their world
+2. **Discover bottlenecks**: Ask "What takes the most time or falls through the cracks in your day-to-day?" Identify the pain points, repetitive tasks, and manual work that eats their time
+3. **Build the operation**: Based on their answers, SYNTHESIZE a goal from what they told you (don't ask for a goal directly — infer it from their pain points and priorities). Call \`list_available_presets\` with the matching business type. Look at the automations each agent brings. Then call \`bootstrap_workspace\` with:
+   - A clear goal title you synthesize from their bottlenecks and priorities (e.g., if they say "leads slip through the cracks" → goal: "Build a consistent lead follow-up pipeline")
    - Optional metric and target if they mentioned numbers (e.g., "50 leads/month")
    - The preset IDs that address their pain points (prefer agents WITH automations)
    - The business type
