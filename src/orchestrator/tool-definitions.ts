@@ -1292,6 +1292,46 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['preset_ids'],
     },
   },
+  {
+    name: 'bootstrap_workspace',
+    description:
+      'Set up the full workspace in one call: creates a goal, AI agents from presets, and their automations/schedules. Use this during initial onboarding after understanding the user\'s goal and pain points. Prefer this over setup_agents when a goal has been identified.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        goal_title: {
+          type: 'string',
+          description: 'The user\'s primary business goal (e.g. "Grow content presence and generate consistent leads")',
+        },
+        goal_description: {
+          type: 'string',
+          description: 'Optional longer description of the goal',
+        },
+        goal_metric: {
+          type: 'string',
+          description: 'Optional metric to track (e.g. "leads_per_month", "revenue", "blog_posts")',
+        },
+        goal_target: {
+          type: 'number',
+          description: 'Optional target value for the metric (e.g. 50)',
+        },
+        goal_unit: {
+          type: 'string',
+          description: 'Optional unit for the metric (e.g. "leads", "USD", "posts")',
+        },
+        preset_ids: {
+          type: 'array',
+          description: 'Array of agent preset IDs to create',
+          items: { type: 'string' },
+        },
+        business_type: {
+          type: 'string',
+          description: 'Business type to scope the presets',
+        },
+      },
+      required: ['goal_title', 'preset_ids'],
+    },
+  },
 
   // =========================================================================
   // MEDIA TOOLS
@@ -1496,6 +1536,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   get_agent_suggestions: ['agents'],
   list_available_presets: ['agents'],
   setup_agents: ['agents'],
+  bootstrap_workspace: ['agents'],
 
   // Workspace stats/activity → 'pulse'
   get_workspace_stats: ['pulse'],

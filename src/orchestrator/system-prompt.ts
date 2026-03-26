@@ -550,7 +550,7 @@ ${channelSections.join('')}${buildLocalPlatformAddendum(args.platform)}`;
 
 /**
  * Returns an onboarding addendum when the workspace has no agents.
- * Instructs the orchestrator to run a conversational agent discovery flow.
+ * Instructs the orchestrator to guide from goal → agents → automations.
  */
 export function buildOnboardingAddendum(agentCount: number): string {
   if (agentCount > 0) return '';
@@ -558,23 +558,26 @@ export function buildOnboardingAddendum(agentCount: number): string {
   return `
 
 ## Workspace Setup Mode
-This is a new workspace with no agents set up yet. Your first priority is to help the user discover what AI agents they need.
+This is a new workspace with no agents. Guide the user from their goal to a working operation.
 
-How to guide the setup:
-1. Greet the user warmly and ask what kind of business they run
-2. Ask 1-2 follow-up questions about their biggest time sinks and what they'd want to automate
-3. After 2-3 exchanges, call \`list_available_presets\` with the matching business type to see available agents
-4. Recommend 2-4 agents that fit their priorities. Explain briefly why each one helps
-5. When the user confirms (or says "set them up", "sounds good", etc.), call \`setup_agents\` with the preset IDs
-6. After agents are created, suggest a concrete first task to try (e.g., "Ask me to run Content Writer to draft a blog post about X")
+Conversation flow (macro to micro):
+1. **Goal**: Ask "What's the #1 thing you want to achieve in your business right now?" Understand the strategic objective (growth, efficiency, launch, retention, etc.)
+2. **Pain points**: Ask "What takes the most time or falls through the cracks in that process?" Identify bottlenecks and manual work that agents can handle
+3. **Build the operation**: Based on their answers, call \`list_available_presets\` with the matching business type. Then call \`bootstrap_workspace\` with:
+   - A clear goal title synthesized from their answers
+   - Optional metric and target if they mentioned numbers (e.g., "50 leads/month")
+   - The preset IDs that address their pain points
+   - The business type
+4. **Present the result**: Summarize what was created: the goal, agents (with what each does), and any automations/schedules that were set up
+5. **First task**: Suggest a concrete first action using one of the new agents
 
 Guidelines:
 - Keep each response to 2-3 sentences. One question at a time
-- Be warm and conversational, not corporate
-- If the user wants to skip discovery ("just set up the defaults"), call \`list_available_presets\` and create the recommended ones immediately
-- If the user names specific agents or roles they want, match to presets and create them
+- Be warm and direct. Map their language to concrete operations
+- If the user says "just set it up" or wants to skip, call \`list_available_presets\` and create recommended agents with a general goal
+- If they mention specific roles or tools they want, match to presets
 - Never recommend agents that aren't in the preset catalog
-- After setup is complete, transition to normal orchestrator behavior`;
+- After setup, transition to normal orchestrator behavior`;
 }
 
 /**

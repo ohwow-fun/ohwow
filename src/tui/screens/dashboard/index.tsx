@@ -177,7 +177,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     const agentNames = agents.list.slice(0, 3).map(a => a.name).join(', ');
     const prompt = agentCount > 0
       ? `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`
-      : 'Hi! I just set up ohwow. Help me figure out which AI agents I need for my business.';
+      : "Hi! I just set up ohwow. What's the #1 thing I want to achieve in my business right now?";
 
     const timer = setTimeout(() => {
       setWelcomeLoading(false);
