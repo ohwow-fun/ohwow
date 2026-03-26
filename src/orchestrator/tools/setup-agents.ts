@@ -1,0 +1,157 @@
+/**
+ * Orchestrator tools: setup_agents + list_available_presets
+ * Used during the conversational onboarding flow to discover and create agents.
+ */
+
+import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import { BUSINESS_TYPES, type AgentPreset } from '../../tui/data/agent-presets.js';
+import {
+  getPresetsForBusinessType,
+  presetToAgent,
+  createAgentsFromPresets,
+} from '../../lib/onboarding-logic.js';
+import { loadConfig } from '../../config.js';
+import { logger } from '../../lib/logger.js';
+
+/**
+ * List available agent presets from the catalog.
+ * The AI calls this to see what agents it can recommend for a business type.
+ */
+export async function listAvailablePresets(
+  _ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const businessType = typeof input.business_type === 'string' ? input.business_type : undefined;
+
+  if (businessType) {
+    const presets = getPresetsForBusinessType(businessType);
+    if (presets.length === 0) {
+      const validTypes = BUSINESS_TYPES.map(bt => `${bt.id} (${bt.label})`).join(', ');
+      return {
+        success: false,
+        error: `Unknown business type "${businessType}". Valid types: ${validTypes}`,
+      };
+    }
+    return {
+      success: true,
+      data: {
+        business_type: businessType,
+        agents: presets.map(formatPreset),
+      },
+    };
+  }
+
+  // No business type: return all types with their agents
+  const catalog = BUSINESS_TYPES.map(bt => ({
+    id: bt.id,
+    label: bt.label,
+    tagline: bt.tagline,
+    agents: bt.agents.map(formatPreset),
+  }));
+
+  return {
+    success: true,
+    data: { business_types: catalog },
+  };
+}
+
+function formatPreset(p: AgentPreset) {
+  return {
+    id: p.id,
+    name: p.name,
+    role: p.role,
+    description: p.description,
+    department: p.department || null,
+    recommended: p.recommended || false,
+    tools: p.tools,
+  };
+}
+
+/**
+ * Create agents from preset IDs. The AI calls this after the user confirms
+ * which agents they want during the onboarding conversation.
+ */
+export async function setupAgents(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const presetIds = input.preset_ids;
+  if (!Array.isArray(presetIds) || presetIds.length === 0) {
+    return { success: false, error: 'preset_ids must be a non-empty array of agent preset IDs.' };
+  }
+
+  const businessType = typeof input.business_type === 'string'
+    ? input.business_type
+    : undefined;
+
+  // Collect matching presets across all business types
+  const allPresets = businessType
+    ? getPresetsForBusinessType(businessType)
+    : BUSINESS_TYPES.flatMap(bt => bt.agents);
+
+  const matched: AgentPreset[] = [];
+  const unknown: string[] = [];
+
+  for (const id of presetIds) {
+    if (typeof id !== 'string') continue;
+    const preset = allPresets.find(p => p.id === id);
+    if (preset) {
+      matched.push(preset);
+    } else {
+      unknown.push(id);
+    }
+  }
+
+  if (matched.length === 0) {
+    return {
+      success: false,
+      error: `None of the preset IDs matched the catalog. Unknown IDs: ${unknown.join(', ')}`,
+    };
+  }
+
+  // Convert presets to agents and create them
+  const agents = matched.map(p => presetToAgent(p, p.department));
+
+  let ollamaModel = 'qwen3:4b';
+  try {
+    const config = loadConfig();
+    ollamaModel = config.ollamaModel || ollamaModel;
+  } catch {
+    // Use default
+  }
+
+  try {
+    const presetIdMap = await createAgentsFromPresets(
+      ctx.db,
+      agents,
+      ctx.workspaceId,
+      ollamaModel,
+      matched,
+    );
+
+    const created = matched.map(p => ({
+      name: p.name,
+      role: p.role,
+      department: p.department || null,
+      preset_id: p.id,
+      agent_id: presetIdMap[p.id] || null,
+    }));
+
+    logger.info({ count: created.length }, '[setup_agents] Created agents from presets');
+
+    const result: Record<string, unknown> = {
+      message: `Created ${created.length} agent${created.length !== 1 ? 's' : ''}.`,
+      agents: created,
+    };
+
+    if (unknown.length > 0) {
+      result.warnings = [`Unknown preset IDs (skipped): ${unknown.join(', ')}`];
+    }
+
+    return { success: true, data: result };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Failed to create agents';
+    logger.error({ err }, '[setup_agents] Error creating agents');
+    return { success: false, error: msg };
+  }
+}

@@ -28,6 +28,7 @@ import { localRunBash } from './bash.js';
 import { pdfInspectFields, pdfFillForm } from './pdf.js';
 import { listPeers, delegateToPeer, askPeer, listPeerAgentsTool } from './peers.js';
 import { getAgentSuggestions } from './agent-suggestions.js';
+import { listAvailablePresets, setupAgents } from './setup-agents.js';
 import { discoverCapabilities, proposeAutomation, createAutomation } from './automation-builder.js';
 import { generateSlides, exportSlidesToPdf } from './media.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
@@ -165,6 +166,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Agent suggestions
   ['get_agent_suggestions', (ctx, input) => getAgentSuggestions(ctx, input)],
+
+  // Agent setup (onboarding)
+  ['list_available_presets', (ctx, input) => listAvailablePresets(ctx, input)],
+  ['setup_agents', (ctx, input) => setupAgents(ctx, input)],
 
   // Automation builder tools
   ['discover_capabilities', (ctx, input) => discoverCapabilities(ctx, input)],

@@ -7,7 +7,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { IntentSection } from './tool-definitions.js';
-import { buildStaticInstructionsForIntent, buildDynamicContext, type BuildLocalSystemPromptArgs } from './system-prompt.js';
+import { buildStaticInstructionsForIntent, buildDynamicContext, buildOnboardingAddendum, type BuildLocalSystemPromptArgs } from './system-prompt.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import type { ChannelType } from '../integrations/channel-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
@@ -232,9 +232,11 @@ export async function buildTargetedPrompt(
     platform,
   };
 
+  const dynamicPart = buildDynamicContext(args) + buildOnboardingAddendum(agents.length);
+
   return {
     staticPart: buildStaticInstructionsForIntent(sections),
-    dynamicPart: buildDynamicContext(args),
+    dynamicPart,
   };
 }
 

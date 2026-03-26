@@ -1256,6 +1256,43 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // Agent onboarding / setup
+  {
+    name: 'list_available_presets',
+    description:
+      'Browse the agent preset catalog. Returns available agent templates grouped by business type. Use this during initial workspace setup to see what agents can be created. If business_type is provided, returns only agents for that type.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        business_type: {
+          type: 'string',
+          description: 'Filter by business type (e.g. "saas_startup", "ecommerce", "agency", "content_creator", "service_business", "consulting", "tech_company"). Omit to see all types.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'setup_agents',
+    description:
+      'Create AI agents from the preset catalog. Call this after discussing with the user which agents they need. Pass the preset IDs from list_available_presets. Only use during initial workspace setup when the user has no agents yet.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        preset_ids: {
+          type: 'array',
+          description: 'Array of preset agent IDs to create (e.g. ["saas_content_writer", "saas_data_analyst"])',
+          items: { type: 'string' },
+        },
+        business_type: {
+          type: 'string',
+          description: 'Business type to scope the presets (optional, helps resolve IDs)',
+        },
+      },
+      required: ['preset_ids'],
+    },
+  },
+
   // =========================================================================
   // MEDIA TOOLS
   // =========================================================================
@@ -1457,6 +1494,8 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   retry_task: ['agents'],
   cancel_task: ['agents'],
   get_agent_suggestions: ['agents'],
+  list_available_presets: ['agents'],
+  setup_agents: ['agents'],
 
   // Workspace stats/activity → 'pulse'
   get_workspace_stats: ['pulse'],
