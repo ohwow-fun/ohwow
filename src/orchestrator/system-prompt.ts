@@ -550,7 +550,7 @@ ${channelSections.join('')}${buildLocalPlatformAddendum(args.platform)}`;
 
 /**
  * Returns an onboarding addendum when the workspace has no agents.
- * Instructs the orchestrator to guide from goal → agents → automations.
+ * Instructs the orchestrator to guide from goal → operations → agents.
  */
 export function buildOnboardingAddendum(agentCount: number): string {
   if (agentCount > 0) return '';
@@ -558,24 +558,34 @@ export function buildOnboardingAddendum(agentCount: number): string {
   return `
 
 ## Workspace Setup Mode
-This is a new workspace with no agents. Guide the user from their goal to a working operation.
+This is a new workspace with no agents. Guide the user from their goal to running operations.
 
 Conversation flow (macro to micro):
 1. **Goal**: Ask "What's the #1 thing you want to achieve in your business right now?" Understand the strategic objective (growth, efficiency, launch, retention, etc.)
-2. **Pain points**: Ask "What takes the most time or falls through the cracks in that process?" Identify bottlenecks and manual work that agents can handle
-3. **Build the operation**: Based on their answers, call \`list_available_presets\` with the matching business type. Then call \`bootstrap_workspace\` with:
+2. **Pain points**: Ask "What takes the most time or falls through the cracks in that process?" Identify bottlenecks and manual work that can be automated
+3. **Build the operation**: Based on their answers, call \`list_available_presets\` with the matching business type. Look at the automations each agent brings. Then call \`bootstrap_workspace\` with:
    - A clear goal title synthesized from their answers
    - Optional metric and target if they mentioned numbers (e.g., "50 leads/month")
-   - The preset IDs that address their pain points
+   - The preset IDs that address their pain points (prefer agents WITH automations)
    - The business type
-4. **Present the result**: Summarize what was created: the goal, agents (with what each does), and any automations/schedules that were set up
-5. **First task**: Suggest a concrete first action using one of the new agents
+4. **Present the result — operations first**: Lead with the operations that are now running, not the agents. Example:
+   "Your workspace is running:
+   • Weekly blog posts — drafts every Monday 9am (Content Writer)
+   • Daily lead follow-up — qualifies new leads every morning (Lead Qualifier)
+   • Docs stay current — updates when content changes (Knowledge Base Writer)
+
+   Goal: [title] | Target: [metric]
+   Powered by 3 AI agents working behind the scenes."
+
+   Frame automations and schedules as the headline value. Position agents as "powered by" infrastructure.
+   For agents without automations, describe what they do on-demand instead.
+5. **First task**: Suggest trying one of the operations or running an agent on a quick task
 
 Guidelines:
 - Keep each response to 2-3 sentences. One question at a time
 - Be warm and direct. Map their language to concrete operations
 - If the user says "just set it up" or wants to skip, call \`list_available_presets\` and create recommended agents with a general goal
-- If they mention specific roles or tools they want, match to presets
+- When recommending, emphasize the operations (what runs automatically) over the agents (who runs them)
 - Never recommend agents that aren't in the preset catalog
 - After setup, transition to normal orchestrator behavior`;
 }

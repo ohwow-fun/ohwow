@@ -65,6 +65,14 @@ function formatPreset(p: AgentPreset) {
     department: p.department || null,
     recommended: p.recommended || false,
     tools: p.tools,
+    automations: (p.automations || []).map(a => ({
+      name: a.name,
+      description: a.description,
+      trigger: a.trigger_type,
+      schedule: a.trigger_type === 'schedule'
+        ? (a.trigger_config as Record<string, unknown>).cron
+        : undefined,
+    })),
   };
 }
 
@@ -260,22 +268,28 @@ export async function bootstrapWorkspace(
       agent_id: presetIdMap[p.id] || null,
     }));
 
-    // Collect automation names from presets
-    const createdAutomations = matched.flatMap(p =>
+    // Collect operations (automations) from presets — with the agent that powers each
+    const createdOperations = matched.flatMap(p =>
       (p.automations || []).map(a => ({
         name: a.name,
+        description: a.description,
         trigger: a.trigger_type,
         schedule: a.trigger_type === 'schedule' ? (a.trigger_config as Record<string, unknown>)?.cron : undefined,
+        powered_by: p.name,
       })),
     );
 
     logger.info(
-      { goalId, agentCount: createdAgents.length, automationCount: createdAutomations.length },
+      { goalId, agentCount: createdAgents.length, operationCount: createdOperations.length },
       '[bootstrap_workspace] Workspace bootstrapped',
     );
 
+    const opLabel = createdOperations.length > 0
+      ? `${createdOperations.length} active operation${createdOperations.length !== 1 ? 's' : ''}`
+      : 'on-demand agents';
+
     const result: Record<string, unknown> = {
-      message: `Workspace set up: 1 goal, ${createdAgents.length} agent${createdAgents.length !== 1 ? 's' : ''}, ${createdAutomations.length} automation${createdAutomations.length !== 1 ? 's' : ''}.`,
+      message: `Workspace set up with ${opLabel}, powered by ${createdAgents.length} AI agent${createdAgents.length !== 1 ? 's' : ''}.`,
       goal: {
         id: goalId,
         title: goalTitle,
@@ -283,8 +297,8 @@ export async function bootstrapWorkspace(
         target: input.goal_target != null ? Number(input.goal_target) : undefined,
         unit: (input.goal_unit as string) || undefined,
       },
+      operations: createdOperations,
       agents: createdAgents,
-      automations: createdAutomations,
     };
 
     if (unknown.length > 0) {

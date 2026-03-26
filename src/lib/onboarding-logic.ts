@@ -306,7 +306,16 @@ export function buildAgentDiscoveryPrompt(
   presetCatalog: AgentPreset[],
 ): string {
   const presetList = presetCatalog
-    .map(p => `- ${p.id}: ${p.name} (${p.role}) — ${p.description}`)
+    .map(p => {
+      const base = `- ${p.id}: ${p.name} — ${p.description}`;
+      const ops = (p.automations || []).map(a => {
+        const schedule = a.trigger_type === 'schedule'
+          ? ` (${(a.trigger_config as Record<string, unknown>).cron})`
+          : '';
+        return `  [Operation: ${a.name}${schedule}]`;
+      });
+      return ops.length > 0 ? `${base}\n${ops.join('\n')}` : base;
+    })
     .join('\n');
 
   const pathLabel = FOUNDER_PATHS.find(p => p.id === founderPath)?.label || founderPath;
@@ -325,7 +334,11 @@ ${presetList}
 Your conversation flow:
 1. First, ask about their #1 goal right now. What does success look like in the next 30 days?
 2. Then ask what takes the most time or falls through the cracks.
-3. After 2-3 exchanges, recommend a concrete goal and 2-4 agents that will help them hit it.
+3. After 2-3 exchanges, recommend:
+   - A concrete goal with optional metric
+   - The operations that will run automatically (look at agents with [Operation:] tags)
+   - The agents that power those operations
+   Present operations first ("Weekly blog posts every Monday"), agents second ("powered by Content Writer"). Prefer agents that bring automations.
 
 When you make your final recommendation, include a \`\`\`setup JSON block like this:
 
