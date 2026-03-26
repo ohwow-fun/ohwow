@@ -4,6 +4,7 @@
  * Handles model setup, business profiling, AI agent discovery, and agent creation.
  */
 
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { OnboardingService } from '../../lib/onboarding-service.js';
@@ -103,6 +104,7 @@ export function createOnboardingRouter(db?: DatabaseAdapter | null): Router {
       founderPath,
       founderFocus,
       agents,
+      goal,
     } = req.body as {
       modelTag?: string;
       businessName?: string;
@@ -111,6 +113,7 @@ export function createOnboardingRouter(db?: DatabaseAdapter | null): Router {
       founderPath?: string;
       founderFocus?: string;
       agents?: AgentToCreate[];
+      goal?: { title: string; metric?: string; target?: number; unit?: string };
     };
 
     try {
@@ -139,6 +142,28 @@ export function createOnboardingRouter(db?: DatabaseAdapter | null): Router {
       // Create agents in SQLite (if db available and agents provided)
       if (db && agents && agents.length > 0) {
         await createAgentsFromPresets(db, agents, 'local', modelTag || 'qwen3:4b');
+      }
+
+      // Create goal if discovered during chat
+      if (db && goal?.title) {
+        const goalId = randomUUID();
+        const now = new Date().toISOString();
+        await db.from('agent_workforce_goals').insert({
+          id: goalId,
+          workspace_id: 'local',
+          title: goal.title,
+          description: null,
+          target_metric: goal.metric || null,
+          target_value: goal.target != null ? goal.target : null,
+          current_value: 0,
+          unit: goal.unit || null,
+          status: 'active',
+          priority: 'high',
+          color: '#6366f1',
+          position: 0,
+          created_at: now,
+          updated_at: now,
+        });
       }
 
       res.json({ data: { config, tier: config.tier } });

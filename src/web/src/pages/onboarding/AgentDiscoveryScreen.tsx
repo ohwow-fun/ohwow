@@ -25,6 +25,7 @@ interface AgentDiscoveryScreenProps {
   founderFocus: string;
   chatMessages: ChatMessage[];
   presets: AgentPreset[];
+  discoveredGoal: { title: string; metric?: string; target?: number; unit?: string } | null;
   onSendMessage: (message: string) => void;
   onContinue: () => void;
   onBack: () => void;
@@ -35,6 +36,7 @@ export function AgentDiscoveryScreen({
   modelAvailable,
   chatMessages,
   presets,
+  discoveredGoal,
   onSendMessage,
   onContinue,
   onBack,
@@ -105,9 +107,16 @@ export function AgentDiscoveryScreen({
       <div className="max-w-lg w-full space-y-6">
         <div className="text-center space-y-2">
           <p className="text-xs text-neutral-400 uppercase tracking-wider">Step 5 of 7</p>
-          <h2 className="text-2xl font-bold text-white">Meet your AI advisor</h2>
-          <p className="text-sm text-neutral-400">Chat to get personalized agent recommendations.</p>
+          <h2 className="text-2xl font-bold text-white">Let's define your goal</h2>
+          <p className="text-sm text-neutral-400">Tell me what you want to achieve and I'll build your AI team around it</p>
         </div>
+
+        {/* Goal summary */}
+        {discoveredGoal && (
+          <div className="px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <span className="text-sm text-emerald-400">Goal: {discoveredGoal.title}</span>
+          </div>
+        )}
 
         {/* Chat area */}
         <div
@@ -163,7 +172,7 @@ export function AgentDiscoveryScreen({
             onClick={onContinue}
             className="flex-1 bg-white text-black rounded-lg px-6 py-2.5 text-sm font-medium hover:bg-neutral-200 transition-colors"
           >
-            {chatMessages.length >= 4 ? 'Continue to selection' : 'Skip to selection'}
+            {chatMessages.length >= 4 ? 'Set up my workspace' : 'Skip to selection'}
           </button>
         </div>
       </div>

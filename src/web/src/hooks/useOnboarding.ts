@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { parseDiscoveryResult } from '../../../lib/onboarding-logic.js';
 
 export type OnboardingScreen =
   | 'splash'
@@ -97,6 +98,8 @@ export interface OnboardingState {
   // Agent selection
   presets: AgentPreset[];
   selectedAgentIds: Set<string>;
+  // Goal discovery
+  discoveredGoal: { title: string; metric?: string; target?: number; unit?: string } | null;
 }
 
 export function useOnboarding() {
@@ -121,6 +124,7 @@ export function useOnboarding() {
     chatStreaming: false,
     presets: [],
     selectedAgentIds: new Set(),
+    discoveredGoal: null,
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -366,20 +370,16 @@ export function useOnboarding() {
           chatStreaming: false,
         }));
 
-        // Try to parse agent recommendations
-        const agentBlockMatch = fullContent.match(/```agents\s*\n?([\s\S]*?)```/);
-        if (agentBlockMatch) {
-          try {
-            const parsed = JSON.parse(agentBlockMatch[1].trim());
-            if (Array.isArray(parsed)) {
-              setState(s => ({
-                ...s,
-                selectedAgentIds: new Set(parsed.filter((id: unknown) => typeof id === 'string' && s.presets.some(p => p.id === id))),
-              }));
-            }
-          } catch {
-            // No valid recommendations
-          }
+        // Try to parse goal + agent recommendations
+        const result = parseDiscoveryResult(fullContent);
+        if (result.agentIds.length > 0) {
+          setState(s => ({
+            ...s,
+            selectedAgentIds: new Set(result.agentIds.filter(id => s.presets.some(p => p.id === id))),
+            discoveredGoal: result.goal,
+          }));
+        } else if (result.goal) {
+          setState(s => ({ ...s, discoveredGoal: result.goal }));
         }
       } else {
         setState(s => ({ ...s, chatStreaming: false }));
@@ -493,6 +493,7 @@ export function useOnboarding() {
           founderPath: state.founderPath,
           founderFocus: state.founderFocus,
           agents,
+          goal: state.discoveredGoal,
         }),
       });
       if (!res.ok) throw new Error('Could not save config');
@@ -504,7 +505,7 @@ export function useOnboarding() {
       setState(s => ({ ...s, loading: false, error: msg }));
       return msg;
     }
-  }, [state.selectedModel, state.businessName, state.businessType, state.businessDescription, state.founderPath, state.founderFocus, state.presets, state.selectedAgentIds]);
+  }, [state.selectedModel, state.businessName, state.businessType, state.businessDescription, state.founderPath, state.founderFocus, state.presets, state.selectedAgentIds, state.discoveredGoal]);
 
   return {
     ...state,

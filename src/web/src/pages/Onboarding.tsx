@@ -95,6 +95,7 @@ export function OnboardingPage({ sessionToken }: OnboardingPageProps) {
           founderFocus={onboarding.founderFocus}
           chatMessages={onboarding.chatMessages}
           presets={onboarding.presets}
+          discoveredGoal={onboarding.discoveredGoal}
           onSendMessage={onboarding.sendChatMessage}
           onContinue={onboarding.goToAgentSelection}
           onBack={onboarding.goToFounderStage}

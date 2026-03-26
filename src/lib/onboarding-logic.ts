@@ -312,32 +312,43 @@ export function buildAgentDiscoveryPrompt(
   const pathLabel = FOUNDER_PATHS.find(p => p.id === founderPath)?.label || founderPath;
   const typeLabel = BUSINESS_TYPES.find(bt => bt.id === businessType)?.label || businessType;
 
-  return `You are an AI assistant helping a founder set up their AI team.
+  return `You are a friendly AI advisor helping a founder figure out their top goal and build an AI team around it.
 
 Context about the user:
 - Business type: ${typeLabel}
 - Stage: ${pathLabel}
 - Current focus: ${founderFocus || 'not specified'}
 
-Available agents to recommend:
+Available agents you can recommend:
 ${presetList}
 
-Your job:
-1. Have a brief, natural conversation (2-3 exchanges) to understand their biggest priorities
-2. Then recommend 2-4 agents from the list above that would help most
-3. Format your final recommendation as a JSON block:
+Your conversation flow:
+1. First, ask about their #1 goal right now. What does success look like in the next 30 days?
+2. Then ask what takes the most time or falls through the cracks.
+3. After 2-3 exchanges, recommend a concrete goal and 2-4 agents that will help them hit it.
 
-\`\`\`agents
-["agent_id_1", "agent_id_2", "agent_id_3"]
+When you make your final recommendation, include a \`\`\`setup JSON block like this:
+
+\`\`\`setup
+{
+  "goal": "Goal title here",
+  "goal_metric": "optional_metric_name",
+  "goal_target": 50,
+  "agents": ["preset_id_1", "preset_id_2"]
+}
 \`\`\`
+
+The "goal" field is a short, action-oriented title (e.g. "Get to 20 paying customers").
+The "goal_metric" is an optional snake_case metric name (e.g. "paying_customers").
+The "goal_target" is an optional numeric target value.
+The "agents" array contains preset IDs from the list above.
 
 Guidelines:
 - Keep responses SHORT (2-3 sentences max per turn)
 - Be warm and conversational, not corporate
 - Ask one focused question at a time
-- After 2-3 exchanges, give your recommendation
-- Only recommend agents from the available list above
-- Always include the \`\`\`agents JSON block in your final message`;
+- After 2-3 exchanges, give your recommendation with the \`\`\`setup block
+- Only recommend agents from the available list above`;
 }
 
 /** Parse agent IDs from the model's response. */
@@ -365,6 +376,51 @@ export function parseAgentRecommendations(response: string): string[] {
   }
 
   return [];
+}
+
+// ── Discovery Result Parsing ────────────────────────────────────────────────
+
+export interface DiscoveryResult {
+  goal: { title: string; metric?: string; target?: number; unit?: string } | null;
+  agentIds: string[];
+}
+
+/** Parse a ```setup JSON block from the model's response. Falls back to parseAgentRecommendations(). */
+export function parseDiscoveryResult(response: string): DiscoveryResult {
+  // Try to parse ```setup JSON block
+  const setupBlockMatch = response.match(/```setup\s*\n?([\s\S]*?)```/);
+  if (setupBlockMatch) {
+    try {
+      const parsed = JSON.parse(setupBlockMatch[1].trim()) as {
+        goal?: string;
+        goal_metric?: string;
+        goal_target?: number;
+        unit?: string;
+        agents?: string[];
+      };
+
+      const goal = parsed.goal
+        ? {
+            title: parsed.goal,
+            metric: parsed.goal_metric || undefined,
+            target: parsed.goal_target != null ? parsed.goal_target : undefined,
+            unit: parsed.unit || undefined,
+          }
+        : null;
+
+      const agentIds = Array.isArray(parsed.agents)
+        ? parsed.agents.filter((id): id is string => typeof id === 'string')
+        : [];
+
+      return { goal, agentIds };
+    } catch {
+      // Fall through to legacy parsing
+    }
+  }
+
+  // Fall back to parseAgentRecommendations() for backward compat
+  const agentIds = parseAgentRecommendations(response);
+  return { goal: null, agentIds };
 }
 
 /** Get static recommendations when no model is available (fallback). */
