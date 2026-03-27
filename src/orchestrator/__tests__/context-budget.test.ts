@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateTokens, estimateMessageTokens, ContextBudget, estimateToolTokens } from '../context-budget.js';
+import { estimateTokens, estimateMessageTokens, ContextBudget, estimateToolTokens, compressToolResult } from '../context-budget.js';
 
 describe('estimateTokens', () => {
   it('returns 0 for empty string', () => {
@@ -189,5 +189,63 @@ describe('estimateToolTokens', () => {
     const one = estimateToolTokens([makeTool('tool1')]);
     const three = estimateToolTokens([makeTool('t1'), makeTool('t2'), makeTool('t3')]);
     expect(three).toBeGreaterThan(one * 2);
+  });
+});
+
+describe('compressToolResult', () => {
+  it('compresses JSON array to item count', () => {
+    const result = compressToolResult(JSON.stringify([{ id: 1 }, { id: 2 }, { id: 3 }]));
+    expect(result).toContain('3 items');
+  });
+
+  it('compresses JSON object to field names when <= 3 fields', () => {
+    const result = compressToolResult(JSON.stringify({ name: 'John', email: 'j@test.com' }));
+    expect(result).toContain('name');
+    expect(result).toContain('email');
+  });
+
+  it('compresses large JSON object to field count', () => {
+    const result = compressToolResult(JSON.stringify({ a: 1, b: 2, c: 3, d: 4, e: 5 }));
+    expect(result).toContain('5 fields');
+  });
+
+  it('compresses multi-line text to line count', () => {
+    const text = 'line 1\nline 2\nline 3\nline 4\nline 5';
+    const result = compressToolResult(text);
+    expect(result).toContain('5 lines');
+  });
+
+  it('keeps short text as-is', () => {
+    const result = compressToolResult('Task completed successfully');
+    expect(result).toContain('Task completed successfully');
+  });
+
+  it('truncates long single-line text', () => {
+    const longText = 'x'.repeat(200);
+    const result = compressToolResult(longText);
+    expect(result.length).toBeLessThan(120);
+    expect(result).toContain('...');
+  });
+});
+
+describe('observation masking in summarizeAndTrim', () => {
+  it('compresses tool messages in middle to one-line summaries', () => {
+    const budget = new ContextBudget(500, 50);
+    const messages = [
+      { role: 'user', content: 'find contacts' },
+      { role: 'tool', content: JSON.stringify([{ name: 'John' }, { name: 'Jane' }, { name: 'Bob' }]) },
+      { role: 'assistant', content: 'Found 3 contacts.' },
+      { role: 'tool', content: JSON.stringify({ result: 'success', data: 'lots of data here' }) },
+      { role: 'user', content: 'thanks' },
+      { role: 'assistant', content: 'You are welcome.' },
+    ];
+    const result = budget.summarizeAndTrim(messages, 2);
+    // The summary message should contain compressed tool results, not raw JSON
+    const summary = result.find(m => typeof m.content === 'string' && m.content.includes('context summary'));
+    if (summary) {
+      const content = summary.content as string;
+      expect(content).toContain('items');
+      expect(content).not.toContain('"name"');  // raw JSON should be gone
+    }
   });
 });

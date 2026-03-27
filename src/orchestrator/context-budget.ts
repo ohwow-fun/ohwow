@@ -147,21 +147,52 @@ export class ContextBudget {
     const middleMessages = messages.slice(1, messages.length - safeKeepRecent);
     const recentMessages = messages.slice(messages.length - safeKeepRecent);
 
-    // Build a concise summary from the middle messages (no LLM, just key extraction)
+    // Build a concise summary from the middle messages using observation masking:
+    // - User messages: preserved as short snippets
+    // - Assistant text: first 150 chars
+    // - Tool results: compressed to one-line summaries (biggest win)
+    // - Assistant tool_calls: just tool name + key args
     const summaryParts: string[] = [];
     for (const msg of middleMessages) {
       const content = typeof msg.content === 'string'
         ? msg.content
         : JSON.stringify(msg.content);
 
-      if (msg.role === 'assistant') {
-        // Extract first 150 chars of assistant reasoning
-        const snippet = content.slice(0, 150).replace(/\n/g, ' ');
-        if (snippet.trim()) summaryParts.push(`Assistant: ${snippet}...`);
-      } else if (msg.role === 'user' || msg.role === 'tool') {
-        // For tool results, just note the tool was called
-        if (content.includes('tool_result') || msg.role === 'tool') {
-          summaryParts.push('(tool results processed)');
+      if (msg.role === 'tool') {
+        // Observation masking: compress tool output to one-line summary
+        summaryParts.push(compressToolResult(content));
+      } else if (msg.role === 'assistant') {
+        // Check for tool_calls in content (array format)
+        if (Array.isArray(msg.content)) {
+          const blocks = msg.content as Array<Record<string, unknown>>;
+          const toolUses = blocks.filter(b => b.type === 'tool_use');
+          if (toolUses.length > 0) {
+            const toolSummary = toolUses.map(tu =>
+              `called ${tu.name}(${summarizeArgs(tu.input as Record<string, unknown>)})`,
+            ).join(', ');
+            summaryParts.push(`Assistant: ${toolSummary}`);
+          } else {
+            const textParts = blocks.filter(b => b.type === 'text').map(b => b.text as string);
+            const snippet = textParts.join(' ').slice(0, 150).replace(/\n/g, ' ');
+            if (snippet.trim()) summaryParts.push(`Assistant: ${snippet}...`);
+          }
+        } else {
+          const snippet = content.slice(0, 150).replace(/\n/g, ' ');
+          if (snippet.trim()) summaryParts.push(`Assistant: ${snippet}...`);
+        }
+      } else if (msg.role === 'user') {
+        if (content.includes('tool_result')) {
+          // Anthropic-format tool results embedded in user messages
+          try {
+            const blocks = JSON.parse(content) as Array<Record<string, unknown>>;
+            const results = blocks.filter((b: Record<string, unknown>) => b.type === 'tool_result');
+            for (const r of results) {
+              const resultContent = typeof r.content === 'string' ? r.content : JSON.stringify(r.content);
+              summaryParts.push(compressToolResult(resultContent));
+            }
+          } catch {
+            summaryParts.push(compressToolResult(content));
+          }
         } else {
           const snippet = content.slice(0, 100).replace(/\n/g, ' ');
           if (snippet.trim()) summaryParts.push(`User: ${snippet}...`);
@@ -169,9 +200,9 @@ export class ContextBudget {
       }
     }
 
-    // Deduplicate consecutive "(tool results processed)" entries
+    // Deduplicate consecutive identical entries
     const deduped = summaryParts.filter(
-      (part, i) => !(part === '(tool results processed)' && summaryParts[i - 1] === '(tool results processed)'),
+      (part, i) => part !== summaryParts[i - 1],
     );
 
     const summaryText = `[Previous context summary (${middleMessages.length} messages condensed):\n${deduped.join('\n')}\n]`;
@@ -191,6 +222,54 @@ export class ContextBudget {
     this.messageCount = result.length;
     return result;
   }
+}
+
+/**
+ * Compress a tool result into a one-line summary.
+ * This is the core of observation masking — tool results dominate token usage.
+ */
+export function compressToolResult(content: string): string {
+  const trimmed = content.trim();
+
+  // Try to parse as JSON
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return `(tool result: ${parsed.length} items returned)`;
+    }
+    if (typeof parsed === 'object' && parsed !== null) {
+      const keys = Object.keys(parsed);
+      if (keys.length <= 3) {
+        return `(tool result: {${keys.join(', ')}})`;
+      }
+      return `(tool result: object with ${keys.length} fields)`;
+    }
+  } catch {
+    // Not JSON, treat as text
+  }
+
+  // Count lines for text content
+  const lines = trimmed.split('\n');
+  if (lines.length > 3) {
+    const firstLine = lines[0].slice(0, 80);
+    return `(tool result: ${lines.length} lines, starting: ${firstLine}...)`;
+  }
+
+  // Short text — keep as-is if under 100 chars
+  if (trimmed.length <= 100) return `(tool result: ${trimmed})`;
+  return `(tool result: ${trimmed.slice(0, 80)}...)`;
+}
+
+/** Summarize tool call arguments to key fields only. */
+function summarizeArgs(input: Record<string, unknown> | undefined): string {
+  if (!input) return '';
+  const entries = Object.entries(input);
+  if (entries.length === 0) return '';
+  // Show first 2 key-value pairs, truncated
+  return entries.slice(0, 2).map(([k, v]) => {
+    const val = typeof v === 'string' ? (v.length > 30 ? v.slice(0, 27) + '...' : v) : String(v);
+    return `${k}=${val}`;
+  }).join(', ');
 }
 
 /** Estimate token count for an array of OpenAI-format tool definitions. */
