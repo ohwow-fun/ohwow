@@ -28,6 +28,7 @@ import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, OllamaProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
+import { repairToolCall } from './tool-call-repair.js';
 import { extractToolCallsFromText } from '../execution/text-tool-parse.js';
 import type { ScraplingService } from '../execution/scrapling/index.js';
 import type { McpServerConfig } from '../mcp/types.js';
@@ -1177,7 +1178,27 @@ export class LocalOrchestrator {
       const toolResultsSummary: { name: string; content: string }[] = [];
       const validRequests: { req: ToolCallRequest; toolCall: typeof response.toolCalls[0] }[] = [];
 
-      for (const toolCall of response.toolCalls) {
+      for (let toolCall of response.toolCalls) {
+        // Repair malformed tool calls from small models
+        const repairResult = repairToolCall(toolCall, openaiTools);
+        if (repairResult.repairs.length > 0) {
+          logger.info(`[LocalOrchestrator] Tool call repaired: ${repairResult.repairs.join(', ')}`);
+          toolCall = repairResult.toolCall;
+        }
+        if (repairResult.error) {
+          logger.warn(`[LocalOrchestrator] Tool call repair failed: ${repairResult.error}`);
+          loopMessages.push({ role: 'tool', content: repairResult.error, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: toolCall.function.name || 'unknown_tool', content: repairResult.error });
+          consecutiveParseErrors++;
+          if (consecutiveParseErrors >= 3) {
+            fullContent += '\n\nI had trouble using the tools. Let me answer directly instead.';
+            yield { type: 'text', content: '\n\nI had trouble using the tools. Let me answer directly instead.' };
+            toolLoopAborted = true;
+            break;
+          }
+          continue;
+        }
+
         const toolName = toolCall.function.name;
 
         if (!toolName) {
