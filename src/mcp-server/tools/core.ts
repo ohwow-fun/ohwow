@@ -11,7 +11,7 @@ export function registerCoreTools(server: McpServer, client: DaemonApiClient): v
   // ohwow_chat — Primary tool: send message to orchestrator
   server.tool(
     'ohwow_chat',
-    'Send a message to the OHWOW orchestrator. It has 88+ internal tools including automation builder, A2A protocol, PDF forms, desktop control, and more. Use this for complex, multi-step, or advanced requests not covered by the direct tools (ohwow_list_contacts, ohwow_list_workflows, ohwow_deep_research, etc.).',
+    '[Orchestrator] Send a message to the OHWOW orchestrator (88+ internal tools). Use this for: desktop control, automation creation, agent scheduling, approval management, agent state persistence, A2A protocol, PDF forms, media generation, and any multi-step request not covered by the direct tools. Do NOT use for simple listing or CRUD operations that have dedicated tools.',
     { message: z.string().describe('The message or instruction to send to the orchestrator') },
     async ({ message }) => {
       try {
@@ -42,7 +42,7 @@ export function registerCoreTools(server: McpServer, client: DaemonApiClient): v
   // ohwow_run_agent — Execute a specific agent
   server.tool(
     'ohwow_run_agent',
-    '[Agents] Execute a specific agent with a prompt. Returns a task ID you can check with ohwow_get_task.',
+    '[Agents] Execute a specific agent with a prompt. Returns a task ID immediately (execution is async). Use ohwow_get_task to poll for status and result. Use ohwow_list_agents to find agent IDs.',
     {
       agentId: z.string().describe('The ID of the agent to run'),
       prompt: z.string().describe('The task or instruction for the agent'),

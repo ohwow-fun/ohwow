@@ -62,7 +62,15 @@ export function enableClaudeCodeIntegration(): string {
   settings.mcpServers.ohwow = { command, args };
   writeClaudeSettings(settings);
 
-  return `Claude Code integration enabled. Restart Claude Code to connect.\nConfig written to ${CLAUDE_SETTINGS_PATH}`;
+  return `Claude Code integration enabled.
+
+Next steps:
+  1. Restart Claude Code (or run /reload-plugins)
+  2. Say "ohwow_workspace_status" to verify the connection
+  3. Optional: Set modelSource to "claude-code" in ~/.ohwow/config.json
+     to use Claude as the AI processor for your agents (no API key needed)
+
+Config written to ${CLAUDE_SETTINGS_PATH}`;
 }
 
 /**

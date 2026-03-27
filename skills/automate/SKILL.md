@@ -26,6 +26,8 @@ Use `ohwow_chat` with a message like:
 
 > "Use the propose_automation tool to create an automation that [user's description]. Show me the proposed steps before creating it."
 
+Note: `propose_automation` and `create_automation` are internal orchestrator tools only accessible through `ohwow_chat`, not as direct MCP tools.
+
 The orchestrator will propose the automation. Review it with the user before confirming.
 
 To confirm and create, send another `ohwow_chat`:

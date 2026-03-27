@@ -165,48 +165,56 @@ export function registerResources(server: McpServer, client: DaemonApiClient): v
   );
 }
 
-const CAPABILITIES_MANIFEST = `OHWOW MCP Plugin — Tool Reference
+const CAPABILITIES_MANIFEST = `OHWOW MCP Plugin — Quick Reference
 
-CORE
-  ohwow_chat              Send free-form messages to the orchestrator (88+ internal tools)
-  ohwow_list_agents       List all agents with status and capabilities
-  ohwow_run_agent         Execute an agent with a prompt (returns task ID)
-  ohwow_get_task          Get task status and result by ID
-  ohwow_list_tasks        List recent tasks with optional filters
-  ohwow_workspace_status  Workspace overview: agents, uptime, tier, stats
+GETTING STARTED
+  1. ohwow_workspace_status    Check connection and workspace overview
+  2. ohwow_list_agents         See available AI agents
+  3. ohwow_run_agent           Run an agent (returns task ID)
+  4. ohwow_get_task            Poll for task result
 
-CRM
-  ohwow_list_contacts     List contacts (filterable by name/email/company)
-  ohwow_create_contact    Add a new contact to the CRM
-  ohwow_search_contacts   Full-text search across all contacts
+CORE (instant)
+  ohwow_chat              Orchestrator: desktop control, scheduling, approvals, A2A, PDF, and 80+ more
+  ohwow_list_agents       List all agents
+  ohwow_run_agent         Run agent (async; poll with ohwow_get_task)
+  ohwow_get_task          Check task status and result
+  ohwow_list_tasks        Recent tasks with filters
+  ohwow_workspace_status  Agent count, uptime, tier
 
-WORKFLOWS & AUTOMATIONS
-  ohwow_list_workflows    List all workflows
-  ohwow_run_workflow      Execute a workflow by ID
-  ohwow_list_automations  List all automations with triggers
-  ohwow_run_automation    Manually trigger an automation
+CRM (instant)
+  ohwow_list_contacts     List/filter contacts
+  ohwow_create_contact    Add contact
+  ohwow_search_contacts   Full-text search (~5s)
 
-PROJECTS & GOALS
-  ohwow_list_projects     List projects with task counts
-  ohwow_create_project    Create a new project
-  ohwow_list_goals        List goals with progress tracking
+WORKFLOWS (instant unless noted)
+  ohwow_list_workflows    List workflows
+  ohwow_run_workflow      Run workflow (~10-60s)
+  ohwow_list_automations  List automations
+  ohwow_run_automation    Trigger automation
 
-KNOWLEDGE BASE
-  ohwow_list_knowledge    List all knowledge documents
-  ohwow_search_knowledge  Semantic search across the knowledge base
-  ohwow_add_knowledge_url Add a web page to the knowledge base
+PROJECTS (instant)
+  ohwow_list_projects     List projects
+  ohwow_create_project    Create project
+  ohwow_list_goals        List goals (~5s)
 
-RESEARCH
-  ohwow_deep_research     Multi-source web research with synthesis
-  ohwow_scrape_url        Scrape a web page for structured content
+KNOWLEDGE (~5-30s)
+  ohwow_list_knowledge    List documents
+  ohwow_search_knowledge  Semantic search
+  ohwow_add_knowledge_url Ingest web page
 
-MESSAGING
-  ohwow_send_message      Send a message via WhatsApp or Telegram
-  ohwow_list_chats        List connected chats for a channel
+RESEARCH (slow)
+  ohwow_deep_research     Web research (30-120s depending on depth)
+  ohwow_scrape_url        Scrape page (~10s)
 
-CLOUD (requires ohwow.fun connection)
-  ohwow_list_sites        List sites on the cloud dashboard
-  ohwow_list_integrations List connected third-party integrations
+MESSAGING (~5s)
+  ohwow_send_message      Send WhatsApp/Telegram (channel must be connected)
+  ohwow_list_chats        List connected chats
 
-For anything not listed above, use ohwow_chat to access the full orchestrator.
+CLOUD (instant, requires ohwow.fun)
+  ohwow_list_sites        Cloud sites
+  ohwow_list_integrations Connected services
+
+USE ohwow_chat FOR: desktop control, scheduling, agent state, approvals,
+A2A protocol, PDF forms, media generation, automation creation, and
+anything not listed above.
 `;

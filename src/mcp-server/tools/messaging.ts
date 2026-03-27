@@ -11,7 +11,7 @@ export function registerMessagingTools(server: McpServer, client: DaemonApiClien
   // ohwow_send_message — Via orchestrator
   server.tool(
     'ohwow_send_message',
-    '[Messaging] Send a message via WhatsApp or Telegram. The channel must be connected first.',
+    '[Messaging] Send a message via WhatsApp or Telegram. Use ohwow_list_chats to find chat IDs. The channel must be connected in the ohwow dashboard first.',
     {
       channel: z.enum(['whatsapp', 'telegram']).describe('Messaging channel'),
       chatId: z.string().describe('Chat or contact ID to send to'),

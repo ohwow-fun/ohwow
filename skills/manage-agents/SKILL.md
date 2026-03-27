@@ -27,6 +27,12 @@ After running an agent:
 - If still running, let the user know and offer to check again
 - When complete, summarize the result
 
+## Error Recovery
+
+- If `ohwow_run_agent` returns an error, check daemon status with `ohwow_workspace_status`
+- If the task shows status "failed", read the error details in the `ohwow_get_task` output
+- For long-running agents, poll `ohwow_get_task` every 10-15 seconds until status is "completed" or "failed"
+
 ## Tips
 
 - If the user says "run" or "execute" without specifying an agent, use `ohwow_list_agents` first to help them pick

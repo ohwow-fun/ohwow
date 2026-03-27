@@ -27,7 +27,7 @@ export function registerWorkflowTools(server: McpServer, client: DaemonApiClient
   // ohwow_run_workflow — Via orchestrator (complex execution logic)
   server.tool(
     'ohwow_run_workflow',
-    '[Workflows] Execute a workflow by ID. Use ohwow_list_workflows to find workflow IDs.',
+    '[Workflows] Execute a workflow by ID. Use ohwow_list_workflows to find IDs. May take up to 60 seconds depending on complexity.',
     {
       workflowId: z.string().describe('The workflow ID to execute'),
       variables: z.record(z.string(), z.unknown()).optional().describe('Input variables for the workflow'),
@@ -64,7 +64,7 @@ export function registerWorkflowTools(server: McpServer, client: DaemonApiClient
   // ohwow_run_automation — Direct REST
   server.tool(
     'ohwow_run_automation',
-    '[Automations] Manually trigger an automation by ID. Use ohwow_list_automations to find automation IDs.',
+    '[Automations] Manually trigger an automation by ID. Use ohwow_list_automations to find IDs.',
     {
       automationId: z.string().describe('The automation ID to trigger'),
     },

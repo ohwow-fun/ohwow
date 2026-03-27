@@ -11,7 +11,7 @@ export function registerResearchTools(server: McpServer, client: DaemonApiClient
   // ohwow_deep_research — Via orchestrator (long-running)
   server.tool(
     'ohwow_deep_research',
-    '[Research] Multi-source web research. Searches the web, reads sources, and synthesizes a report. Can take 30-120 seconds depending on depth.',
+    '[Research] Multi-source web research with synthesis. Timing: quick ~30s, thorough ~60s, comprehensive ~120s.',
     {
       question: z.string().describe('The research question'),
       depth: z.enum(['quick', 'thorough', 'comprehensive']).optional().describe('Research depth (default: thorough)'),

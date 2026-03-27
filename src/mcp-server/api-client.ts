@@ -104,7 +104,7 @@ export class DaemonApiClient {
       headers: this.authHeaders(),
     });
     if (!res.ok) {
-      throw new Error(`Daemon API error: ${res.status} ${res.statusText}`);
+      throw new Error(`ohwow daemon error on GET ${path}: ${res.status}. Check daemon with: ohwow logs`);
     }
     return res.json();
   }
@@ -119,7 +119,7 @@ export class DaemonApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`Daemon API error: ${res.status} ${res.statusText}`);
+      throw new Error(`ohwow daemon error on POST ${path}: ${res.status}. Check daemon with: ohwow logs`);
     }
     return res.json();
   }
@@ -199,7 +199,7 @@ export class DaemonApiClient {
       return textParts.join('');
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        return textParts.join('') + '\n[Response timed out after 120s]';
+        return textParts.join('') + `\n[Timed out after ${timeoutMs / 1000}s. The task may still be running. Check with ohwow_list_tasks.]`;
       }
       throw err;
     } finally {
