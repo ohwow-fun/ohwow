@@ -6,6 +6,23 @@
 import type { DeviceInfo, MemoryTier } from './device-info.js';
 import { getMemoryTier } from './device-info.js';
 
+export type ParameterTier = 'micro' | 'small' | 'medium' | 'large';
+
+/** Infer parameter tier from model file size. */
+export function inferParameterTier(sizeGB: number): ParameterTier {
+  if (sizeGB < 1.0) return 'micro';
+  if (sizeGB < 3.0) return 'small';
+  if (sizeGB < 7.0) return 'medium';
+  return 'large';
+}
+
+/** Get the parameter tier for a model by tag. Falls back to 'medium'. */
+export function getParameterTier(tag: string): ParameterTier {
+  const entry = MODEL_CATALOG.find(m => m.tag === tag);
+  if (!entry) return 'medium';
+  return inferParameterTier(entry.sizeGB);
+}
+
 export interface OllamaModelInfo {
   tag: string;
   label: string;

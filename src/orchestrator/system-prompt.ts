@@ -333,6 +333,25 @@ export function buildCompactStaticInstructionsForIntent(sections: Set<string>): 
   return [...included, COMPACT_ALWAYS_BLOCKS].join('\n\n');
 }
 
+/**
+ * Returns micro-tier instructions (~300 tokens) for sub-2B parameter models.
+ * Bare skeleton with explicit tool call example. No protocols, no verbose guidance.
+ */
+export function buildMicroStaticInstructions(): string {
+  return `You are a helpful AI assistant with tool access. Use tools to complete tasks.
+
+## Rules
+- Call tools using structured tool calling. Never describe actions without calling tools.
+- Never make up data. Call a tool first, then respond based on results.
+- Be concise. 1-2 sentences per response.
+
+## Tool Call Example
+When you need to use a tool, call it like this:
+\`\`\`tool_call
+{"tool": "list_agents", "arguments": {}}
+\`\`\``;
+}
+
 // Blocks always included regardless of intent
 const ALWAYS_BLOCKS = `## Planning Complex Requests
 For complex, multi-step requests (setting up pipelines, building workflows, configuring multiple agents), ALWAYS plan before executing:
@@ -703,6 +722,24 @@ ${memorySection}${ragSection}${projectInstructionsSection}
 ## Agents
 ${agentList || 'No agents yet.'}
 ${projectSection}${buildLocalPlatformAddendum(args.platform)}`;
+}
+
+/**
+ * Returns micro-tier dynamic context (~100 tokens) for sub-2B parameter models.
+ * Just the bare essentials: date, agents, working directory.
+ */
+export function buildMicroDynamicContext(args: BuildLocalSystemPromptArgs): string {
+  const { agents, business, workingDirectory } = args;
+  const agentList = agents.map(a => `- ${a.name} [${a.status}] [id: ${a.id}]`).join('\n');
+  const now = new Date();
+  const lines = [
+    `Business: ${business?.name || 'unknown'}`,
+    `Date: ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+    workingDirectory ? `Dir: ${workingDirectory}` : '',
+  ].filter(Boolean);
+
+  return `${lines.join(' | ')}
+Agents: ${agentList || 'none'}`;
 }
 
 /**

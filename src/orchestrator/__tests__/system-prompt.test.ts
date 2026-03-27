@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLocalSystemPrompt, buildLocalPlatformAddendum, buildCompactDynamicContext, buildCompactStaticInstructionsForIntent, buildStaticInstructionsForIntent, buildDynamicContext, type BuildLocalSystemPromptArgs } from '../system-prompt.js';
+import { buildLocalSystemPrompt, buildLocalPlatformAddendum, buildCompactDynamicContext, buildCompactStaticInstructionsForIntent, buildStaticInstructionsForIntent, buildDynamicContext, buildMicroStaticInstructions, buildMicroDynamicContext, type BuildLocalSystemPromptArgs } from '../system-prompt.js';
 
 // ─── Fixtures ───
 
@@ -293,5 +293,39 @@ describe('compact prompt variants', () => {
     }));
     expect(compact).not.toContain('WhatsApp formatting reference');
     expect(compact).not.toContain('surround text with asterisks');
+  });
+});
+
+describe('micro prompt tier', () => {
+  it('micro static instructions are under 400 tokens (~1600 chars)', () => {
+    const micro = buildMicroStaticInstructions();
+    expect(micro.length).toBeLessThan(1600);
+  });
+
+  it('micro static instructions contain tool call example', () => {
+    const micro = buildMicroStaticInstructions();
+    expect(micro).toContain('tool_call');
+    expect(micro).toContain('list_agents');
+  });
+
+  it('micro static instructions are shorter than compact', () => {
+    const sections = new Set(['agents', 'filesystem', 'browser']);
+    const compact = buildCompactStaticInstructionsForIntent(sections);
+    const micro = buildMicroStaticInstructions();
+    expect(micro.length).toBeLessThan(compact.length * 0.5);
+  });
+
+  it('micro dynamic context is shorter than compact', () => {
+    const args = baseArgs({ workingDirectory: '/home/user/project' });
+    const compact = buildCompactDynamicContext(args);
+    const micro = buildMicroDynamicContext(args);
+    expect(micro.length).toBeLessThan(compact.length);
+  });
+
+  it('micro dynamic context includes business name and agents', () => {
+    const micro = buildMicroDynamicContext(baseArgs());
+    expect(micro).toContain('TestCo');
+    expect(micro).toContain('Scout');
+    expect(micro).toContain('Writer');
   });
 });

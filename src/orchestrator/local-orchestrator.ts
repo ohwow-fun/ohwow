@@ -19,7 +19,7 @@ import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
 import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
-import { getWorkingNumCtx, MODEL_CATALOG } from '../lib/ollama-models.js';
+import { getWorkingNumCtx, MODEL_CATALOG, getParameterTier } from '../lib/ollama-models.js';
 import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
@@ -443,15 +443,17 @@ export class LocalOrchestrator {
         if (provider.createMessageWithTools) {
           yield* this.runOllamaToolLoop(userMessage, sessionId, provider as ModelProvider & { createMessageWithTools: NonNullable<ModelProvider['createMessageWithTools']> }, options, seedMessages);
         } else {
-          let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage);
+          const textParamTier = getParameterTier(this.orchestratorModel || '');
+          const textPromptMode: boolean | 'micro' = textParamTier === 'micro' ? 'micro' : textParamTier === 'small' ? true : false;
+          let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage, textPromptMode || undefined);
           let systemPrompt = staticPart + '\n\n' + dynamicPart;
           const device = detectDevice();
           const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
 
-          // Switch to compact prompt if context is tight (no tools in text-only path)
-          if (budget.isTight(2000)) {
+          // Switch to compact prompt if context is still tight (no tools in text-only path)
+          if (!textPromptMode && budget.isTight(2000)) {
             const compact = await buildFullPrompt(this.promptDeps, userMessage, true);
             staticPart = compact.staticPart;
             dynamicPart = compact.dynamicPart;
@@ -948,15 +950,21 @@ export class LocalOrchestrator {
       this.desktopActivated = true;
     }
 
-    let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated);
-    let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
-
-    // Compute context budget and progressive tool priority
+    // Determine model capability tier for prompt/tool selection
     const device = detectDevice();
     const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
+    const paramTier = getParameterTier(this.orchestratorModel || '');
     const modelEntry = MODEL_CATALOG.find(m => m.tag === (this.orchestratorModel || ''));
     const modelSizeGB = modelEntry?.sizeGB ?? 2.5;
     const priorityLimit = getToolPriorityLimit(modelSizeGB, numCtx);
+
+    // Build prompt tier-aware: micro models get bare skeleton, small get compact, medium+ get full
+    const initialPromptMode: boolean | 'micro' = paramTier === 'micro' ? 'micro' : paramTier === 'small' ? true : false;
+    let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, initialPromptMode);
+    let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
+    if (initialPromptMode) {
+      logger.debug(`[orchestrator] Model tier: ${paramTier} (${modelSizeGB}GB) → ${initialPromptMode === 'micro' ? 'micro' : 'compact'} prompt (${estimateTokens(systemPrompt)} tokens)`);
+    }
 
     // Convert Anthropic tool definitions to OpenAI format (with priority filtering)
     const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated, priorityLimit);
