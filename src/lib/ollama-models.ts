@@ -203,6 +203,19 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     tier: 'medium',
     contextSize: 65_536,
   },
+  {
+    tag: 'gemma3:12b-it-qat',
+    label: 'Gemma 3 12B QAT',
+    description: '12B quality in 6.6 GB via quantization-aware training. Vision and tool use.',
+    sizeGB: 6.6,
+    minRAM: 8,
+    features: ['text', 'vision', '128K context'],
+    family: 'gemma',
+    tier: 'medium',
+    toolCalling: true,
+    vision: true,
+    contextSize: 131_072,
+  },
 
   // Large (16-32 GB RAM)
   {
@@ -290,6 +303,19 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     family: 'deepseek',
     tier: 'large',
     contextSize: 65_536,
+  },
+  {
+    tag: 'gemma3:27b-it-qat',
+    label: 'Gemma 3 27B QAT',
+    description: '27B quality in 14 GB via quantization-aware training. Best value per GB.',
+    sizeGB: 14,
+    minRAM: 16,
+    features: ['text', 'vision', '128K context'],
+    family: 'gemma',
+    tier: 'large',
+    toolCalling: true,
+    vision: true,
+    contextSize: 131_072,
   },
 
   // XLarge (32GB+)
