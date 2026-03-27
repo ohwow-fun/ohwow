@@ -7,7 +7,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { IntentSection } from './tool-definitions.js';
-import { buildStaticInstructionsForIntent, buildDynamicContext, buildOnboardingAddendum, type BuildLocalSystemPromptArgs } from './system-prompt.js';
+import { buildStaticInstructionsForIntent, buildCompactStaticInstructionsForIntent, buildDynamicContext, buildCompactDynamicContext, buildOnboardingAddendum, type BuildLocalSystemPromptArgs } from './system-prompt.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import type { ChannelType } from '../integrations/channel-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
@@ -31,6 +31,7 @@ export async function buildTargetedPrompt(
   browserPreActivated?: boolean,
   platform?: ChannelType,
   desktopPreActivated?: boolean,
+  compact?: boolean,
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const need = (s: IntentSection) => sections.has(s);
 
@@ -232,10 +233,14 @@ export async function buildTargetedPrompt(
     platform,
   };
 
-  const dynamicPart = buildDynamicContext(args) + buildOnboardingAddendum(agents.length);
+  const dynamicPart = compact
+    ? buildCompactDynamicContext(args) + buildOnboardingAddendum(agents.length)
+    : buildDynamicContext(args) + buildOnboardingAddendum(agents.length);
 
   return {
-    staticPart: buildStaticInstructionsForIntent(sections),
+    staticPart: compact
+      ? buildCompactStaticInstructionsForIntent(sections)
+      : buildStaticInstructionsForIntent(sections),
     dynamicPart,
   };
 }
@@ -243,10 +248,11 @@ export async function buildTargetedPrompt(
 export async function buildFullPrompt(
   deps: PromptBuilderDeps,
   userMessage?: string,
+  compact?: boolean,
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const allSections = new Set<IntentSection>([
     'pulse', 'agents', 'projects', 'business', 'memory', 'rag',
     'vision', 'filesystem', 'channels', 'browser', 'project_instructions',
   ]);
-  return buildTargetedPrompt(deps, userMessage, allSections);
+  return buildTargetedPrompt(deps, userMessage, allSections, undefined, undefined, undefined, compact);
 }

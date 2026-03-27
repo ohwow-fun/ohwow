@@ -20,12 +20,12 @@ import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
 import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { getWorkingNumCtx } from '../lib/ollama-models.js';
-import { ContextBudget, estimateTokens } from './context-budget.js';
+import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, OllamaProvider } from '../execution/model-router.js';
-import { convertToolsToOpenAI } from '../execution/tool-format.js';
+import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
 import { extractToolCallsFromText } from '../execution/text-tool-parse.js';
 import type { ScraplingService } from '../execution/scrapling/index.js';
@@ -441,11 +441,21 @@ export class LocalOrchestrator {
         if (provider.createMessageWithTools) {
           yield* this.runOllamaToolLoop(userMessage, sessionId, provider as ModelProvider & { createMessageWithTools: NonNullable<ModelProvider['createMessageWithTools']> }, options, seedMessages);
         } else {
-          const { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage);
-          const systemPrompt = staticPart + '\n\n' + dynamicPart;
+          let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage);
+          let systemPrompt = staticPart + '\n\n' + dynamicPart;
           const numCtx = getWorkingNumCtx(this.orchestratorModel || '');
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
+
+          // Switch to compact prompt if context is tight (no tools in text-only path)
+          if (budget.isTight(2000)) {
+            const compact = await buildFullPrompt(this.promptDeps, userMessage, true);
+            staticPart = compact.staticPart;
+            dynamicPart = compact.dynamicPart;
+            systemPrompt = staticPart + '\n\n' + dynamicPart;
+            budget.setSystemPrompt(systemPrompt);
+            logger.debug(`[orchestrator] Text-only: switched to compact prompt (${budget.getState().systemPromptTokens} tokens)`);
+          }
 
           const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
           history.push({ role: 'user', content: userMessage });
@@ -934,8 +944,8 @@ export class LocalOrchestrator {
       this.desktopActivated = true;
     }
 
-    const { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated);
-    const systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
+    let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated);
+    let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
 
     // Convert Anthropic tool definitions to OpenAI format
     const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated);
@@ -944,13 +954,36 @@ export class LocalOrchestrator {
     const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
     history.push({ role: 'user', content: userMessage });
 
-    // Token-aware truncation using ContextBudget
+    // Context-aware compression for small models
     const numCtx = getWorkingNumCtx(this.orchestratorModel || '');
+    let toolTokenCount = estimateToolTokens(openaiTools);
+    const systemTokens = estimateTokens(systemPrompt);
+    const historyBudget = numCtx - systemTokens - toolTokenCount - 4096;
+
+    if (historyBudget < 2000) {
+      // Tight context: compress tool descriptions first (cheapest win)
+      openaiTools = compressToolsForContext(openaiTools);
+      toolTokenCount = estimateToolTokens(openaiTools);
+      logger.debug(`[orchestrator] Compressed tool descriptions (${anthropicTools.length} tools, ${toolTokenCount} tokens)`);
+
+      // Still tight: rebuild system prompt in compact mode
+      const compactHistoryBudget = numCtx - estimateTokens(systemPrompt) - toolTokenCount - 4096;
+      if (compactHistoryBudget < 1500) {
+        const compact = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, true);
+        ollamaStatic = compact.staticPart;
+        ollamaDynamic = compact.dynamicPart;
+        systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
+        logger.debug(`[orchestrator] Switched to compact system prompt (${estimateTokens(systemPrompt)} tokens)`);
+      }
+    }
+
+    // Token-aware truncation using ContextBudget (now includes tool tokens)
     const budget = new ContextBudget(numCtx, 4096);
     budget.setSystemPrompt(systemPrompt);
+    budget.setToolTokens(toolTokenCount);
     const truncatedHistory = budget.summarizeAndTrim(history);
     const budgetState = budget.getState();
-    logger.debug(`[orchestrator] Context budget: ${budgetState.utilizationPct}% used | sys:${budgetState.systemPromptTokens} hist:${budgetState.historyTokens} msgs:${budgetState.messageCount} | capacity:${budgetState.modelCapacity} available:${budgetState.availableTokens}`);
+    logger.debug(`[orchestrator] Context budget: ${budgetState.utilizationPct}% used | sys:${budgetState.systemPromptTokens} tools:${budgetState.toolTokens} hist:${budgetState.historyTokens} msgs:${budgetState.messageCount} | capacity:${budgetState.modelCapacity} available:${budgetState.availableTokens}`);
     const loopMessages: OllamaMessage[] = [];
     for (const m of truncatedHistory) {
       if (typeof m.content === 'string') {
