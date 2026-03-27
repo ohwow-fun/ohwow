@@ -1662,12 +1662,79 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
 const ALWAYS_INCLUDED_TOOLS = new Set(['update_plan', 'delegate_subtask']);
 
 /**
+ * Tool priority tiers for progressive revelation.
+ * P1 = core tools always loaded, P2 = common extensions, P3 = rare/advanced.
+ * Tools not listed default to P2 (included unless budget is very tight).
+ */
+const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
+  // P1: Core tools per section (3-5 per section)
+  run_agent: 1, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
+  local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
+  search_contacts: 1, list_contacts: 1, create_contact: 1,
+  get_workspace_stats: 1, get_activity_feed: 1,
+  request_browser: 1, request_desktop: 1,
+  scrape_url: 1, deep_research: 1,
+  send_whatsapp_message: 1, list_whatsapp_chats: 1, connect_whatsapp: 1,
+  send_telegram_message: 1, list_telegram_chats: 1,
+  ocr_extract_text: 1, analyze_image: 1,
+  search_knowledge: 1,
+
+  // P2: Common extensions (default for unlisted tools)
+  queue_task: 2, reject_task: 2, retry_task: 2, cancel_task: 2,
+  get_pending_approvals: 2, spawn_agents: 2, await_agent_results: 2,
+  local_search_files: 2, local_search_content: 2, local_edit_file: 2,
+  update_contact: 2, log_contact_event: 2,
+  get_business_pulse: 2, get_contact_pipeline: 2, get_daily_reps_status: 2,
+  get_whatsapp_status: 2, add_whatsapp_chat: 2, remove_whatsapp_chat: 2,
+  get_whatsapp_messages: 2, disconnect_whatsapp: 2, update_whatsapp_chat: 2,
+  list_whatsapp_connections: 2, list_telegram_connections: 2,
+  discover_capabilities: 2, propose_automation: 2, create_automation: 2,
+  list_projects: 2, create_project: 2, list_goals: 2, create_goal: 2,
+  scrape_search: 2, list_knowledge: 2,
+  get_agent_suggestions: 2,
+
+  // P3: Rare/advanced tools
+  list_workflows: 3, run_workflow: 3, get_workflow_detail: 3,
+  generate_workflow: 3, create_workflow: 3, update_workflow: 3, delete_workflow: 3,
+  list_workflow_triggers: 3, create_workflow_trigger: 3, update_workflow_trigger: 3, delete_workflow_trigger: 3,
+  get_agent_schedules: 3, update_agent_schedule: 3,
+  update_project: 3, get_project_board: 3, move_task_column: 3,
+  update_goal: 3, link_task_to_goal: 3, link_project_to_goal: 3,
+  get_agent_state: 3, set_agent_state: 3, list_agent_state: 3, delete_agent_state: 3,
+  list_a2a_connections: 3, send_a2a_task: 3, test_a2a_connection: 3,
+  list_peers: 3, delegate_to_peer: 3, ask_peer: 3, list_peer_agents: 3,
+  scrape_bulk: 3, upload_knowledge: 3, add_knowledge_from_url: 3,
+  assign_knowledge: 3, delete_knowledge: 3,
+  pdf_inspect_fields: 3, pdf_fill_form: 3,
+  list_available_presets: 3, setup_agents: 3, bootstrap_workspace: 3,
+  generate_slides: 3, export_slides_pdf: 3,
+};
+
+/**
+ * Determine the maximum tool priority tier based on model size and available context.
+ * Smaller models / tighter contexts get fewer tools.
+ */
+export function getToolPriorityLimit(modelSizeGB: number, availableContextTokens: number): 1 | 2 | 3 {
+  if (modelSizeGB < 1.5 || availableContextTokens < 6000) return 1;
+  if (modelSizeGB < 5 || availableContextTokens < 12000) return 2;
+  return 3;
+}
+
+/**
  * Filter tools to only those relevant to the active intent sections.
+ * When `maxPriority` is set, additionally filters out tools above that priority tier.
  * Tools not in TOOL_SECTION_MAP or in ALWAYS_INCLUDED_TOOLS are always kept.
  */
-export function filterToolsByIntent(tools: Tool[], sections: Set<IntentSection>): Tool[] {
+export function filterToolsByIntent(tools: Tool[], sections: Set<IntentSection>, maxPriority?: 1 | 2 | 3): Tool[] {
   return tools.filter((t) => {
     if (ALWAYS_INCLUDED_TOOLS.has(t.name)) return true;
+
+    // Priority filter
+    if (maxPriority) {
+      const priority = TOOL_PRIORITY[t.name] ?? 2; // default to P2
+      if (priority > maxPriority) return false;
+    }
+
     const mappedSections = TOOL_SECTION_MAP[t.name];
     if (!mappedSections) return true; // Not mapped → always include
     return mappedSections.some((s) => sections.has(s));

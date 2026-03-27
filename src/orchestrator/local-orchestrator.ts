@@ -17,9 +17,9 @@ import type {
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
-import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, type IntentSection } from './tool-definitions.js';
+import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
-import { getWorkingNumCtx } from '../lib/ollama-models.js';
+import { getWorkingNumCtx, MODEL_CATALOG } from '../lib/ollama-models.js';
 import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
@@ -861,6 +861,7 @@ export class LocalOrchestrator {
     browserPreActivated?: boolean,
     sections?: Set<IntentSection>,
     desktopPreActivated?: boolean,
+    maxPriority?: 1 | 2 | 3,
   ): Promise<Tool[]> {
     let tools = options?.excludedTools?.length
       ? ORCHESTRATOR_TOOL_DEFINITIONS.filter((t) => !options.excludedTools.includes(t.name))
@@ -889,9 +890,9 @@ export class LocalOrchestrator {
     // Append MCP tools (skip intent filtering — MCP tools aren't in TOOL_SECTION_MAP)
     const mcpTools = this.mcpClients?.getToolDefinitions() ?? [];
 
-    // Filter by intent sections when provided (Anthropic path only)
+    // Filter by intent sections and priority when provided
     if (sections) {
-      tools = filterToolsByIntent(tools, sections);
+      tools = filterToolsByIntent(tools, sections, maxPriority);
     }
 
     // Add MCP tools after filtering (they pass through since they're not mapped)
@@ -950,16 +951,22 @@ export class LocalOrchestrator {
     let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated);
     let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
 
-    // Convert Anthropic tool definitions to OpenAI format
-    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated);
+    // Compute context budget and progressive tool priority
+    const device = detectDevice();
+    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
+    const modelEntry = MODEL_CATALOG.find(m => m.tag === (this.orchestratorModel || ''));
+    const modelSizeGB = modelEntry?.sizeGB ?? 2.5;
+    const priorityLimit = getToolPriorityLimit(modelSizeGB, numCtx);
+
+    // Convert Anthropic tool definitions to OpenAI format (with priority filtering)
+    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated, priorityLimit);
     let openaiTools = convertToolsToOpenAI(anthropicTools);
+    if (priorityLimit < 3) {
+      logger.debug(`[orchestrator] Progressive tool revelation: P${priorityLimit} limit, ${anthropicTools.length} tools (model: ${modelSizeGB}GB, ctx: ${numCtx})`);
+    }
 
     const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
     history.push({ role: 'user', content: userMessage });
-
-    // Context-aware compression for small models
-    const device = detectDevice();
-    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
     let toolTokenCount = estimateToolTokens(openaiTools);
     const systemTokens = estimateTokens(systemPrompt);
     const historyBudget = numCtx - systemTokens - toolTokenCount - 4096;
