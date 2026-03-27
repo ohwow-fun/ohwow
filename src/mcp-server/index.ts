@@ -9,6 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { DaemonApiClient } from './api-client.js';
 import { registerTools } from './tools.js';
 import { registerResources } from './resources.js';
+import { startSamplingBridge } from './sampling-bridge.js';
 import { VERSION } from '../version.js';
 
 export async function startMcpServer(): Promise<void> {
@@ -32,7 +33,9 @@ export async function startMcpServer(): Promise<void> {
   const transport = new StdioServerTransport();
 
   // Graceful shutdown on signals
+  let samplingCleanup: (() => void) | null = null;
   const shutdown = async () => {
+    samplingCleanup?.();
     try {
       await server.close();
     } catch {
@@ -46,6 +49,10 @@ export async function startMcpServer(): Promise<void> {
   try {
     await server.connect(transport);
     process.stderr.write(`[ohwow-mcp] Connected (v${VERSION})\n`);
+
+    // Start sampling bridge so the daemon can route LLM calls through Claude Code
+    const bridge = startSamplingBridge(server);
+    samplingCleanup = bridge.cleanup;
   } catch (err) {
     process.stderr.write(`[ohwow-mcp] Failed to connect: ${err instanceof Error ? err.message : 'Unknown error'}\n`);
     process.exit(1);

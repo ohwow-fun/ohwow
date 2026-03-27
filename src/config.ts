@@ -13,7 +13,7 @@ import { logger } from './lib/logger.js';
 
 export type RuntimeTier = 'free' | 'connected';
 
-export type ModelSource = 'local' | 'cloud' | 'auto';
+export type ModelSource = 'local' | 'cloud' | 'auto' | 'claude-code';
 
 export type DeviceRole = 'hybrid' | 'worker' | 'coordinator';
 

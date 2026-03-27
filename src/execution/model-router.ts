@@ -12,6 +12,7 @@ import { getWorkingNumCtx, getModelContextSize } from '../lib/ollama-models.js';
 import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
 import type { OperationType, ExecutionPolicy } from './execution-policy.js';
 import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
+import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import type {
   TextBlock,
   MessageParam,
@@ -42,7 +43,7 @@ export interface ModelResponse {
   inputTokens: number;
   outputTokens: number;
   model: string;
-  provider: 'anthropic' | 'ollama' | 'openrouter';
+  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code';
 }
 
 // ============================================================================
@@ -1001,7 +1002,7 @@ export class OpenRouterProvider implements ModelProvider {
 
 export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision';
 
-export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'auto';
+export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'auto';
 
 export class ModelRouter {
   private anthropic: AnthropicProvider | null;
@@ -1009,6 +1010,7 @@ export class ModelRouter {
   private ocrOllama: OllamaProvider | null;
   private quickOllama: OllamaProvider | null;
   private openrouter: OpenRouterProvider | null;
+  private claudeCode: ClaudeCodeProvider | null;
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
@@ -1045,6 +1047,7 @@ export class ModelRouter {
     this.openrouter = opts.openRouterApiKey
       ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'openrouter/optimus-alpha')
       : null;
+    this.claudeCode = this.modelSource === 'claude-code' ? new ClaudeCodeProvider() : null;
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
     this._onOllamaResponse = opts.onOllamaResponse ?? null;
@@ -1137,6 +1140,21 @@ export class ModelRouter {
         }
       }
       // For 'auto' policy modelSource, fall through to standard routing below
+    }
+
+    // Claude Code mode: route through MCP sampling bridge
+    if (this.modelSource === 'claude-code') {
+      if (this.claudeCode) {
+        const available = await this.claudeCode.isAvailable();
+        if (available) return this.claudeCode;
+      }
+      // Fall back to Ollama → Anthropic
+      if (this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      if (this.anthropic) return this.anthropic;
+      throw new Error('Claude Code mode selected but the sampling bridge is not running. Make sure Claude Code is open with the ohwow plugin connected.');
     }
 
     // OpenRouter mode: always prefer OpenRouter, fall back to others
@@ -1251,6 +1269,10 @@ export class ModelRouter {
   /** Update the model source at runtime (called when user switches cloud/local). */
   setModelSource(source: ModelSourceOption): void {
     this.modelSource = source;
+    // Lazily create Claude Code provider when switching to it
+    if (source === 'claude-code' && !this.claudeCode) {
+      this.claudeCode = new ClaudeCodeProvider();
+    }
   }
 
   /** Get the OpenRouter provider directly (for status checks). */
