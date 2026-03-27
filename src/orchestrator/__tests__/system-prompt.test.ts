@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildLocalSystemPrompt, buildLocalPlatformAddendum, type BuildLocalSystemPromptArgs } from '../system-prompt.js';
+import { buildLocalSystemPrompt, buildLocalPlatformAddendum, buildCompactDynamicContext, buildCompactStaticInstructionsForIntent, buildStaticInstructionsForIntent, buildDynamicContext, type BuildLocalSystemPromptArgs } from '../system-prompt.js';
 
 // ─── Fixtures ───
 
@@ -244,5 +244,54 @@ describe('buildLocalSystemPrompt edge cases', () => {
   it('contains no unresolved template variables', () => {
     const prompt = buildLocalSystemPrompt(baseArgs());
     expect(prompt).not.toMatch(/\{\{[^}]+\}\}/);
+  });
+});
+
+describe('compact prompt variants', () => {
+  it('compact static instructions are shorter than full version', () => {
+    const sections = new Set(['pulse', 'agents', 'filesystem', 'browser']);
+    const full = buildStaticInstructionsForIntent(sections);
+    const compact = buildCompactStaticInstructionsForIntent(sections);
+    expect(compact.length).toBeLessThan(full.length);
+    // Should be at least 40% shorter
+    expect(compact.length).toBeLessThan(full.length * 0.6);
+  });
+
+  it('compact static instructions still contain critical rules', () => {
+    const sections = new Set(['agents', 'filesystem']);
+    const compact = buildCompactStaticInstructionsForIntent(sections);
+    expect(compact).toContain('NEVER fabricate');
+    expect(compact).toContain('tool_call');
+  });
+
+  it('compact dynamic context is shorter than full version', () => {
+    const args = baseArgs({
+      businessPulse: {
+        tasksCompletedToday: 5, tasksCompletedYesterday: 3,
+        totalLeads: 10, totalCustomers: 5, totalContacts: 20, recentContactEvents: 3,
+      },
+      connectedChannels: ['whatsapp'] as BuildLocalSystemPromptArgs['connectedChannels'],
+      workingDirectory: '/home/user/project',
+    });
+    const full = buildDynamicContext(args);
+    const compact = buildCompactDynamicContext(args);
+    expect(compact.length).toBeLessThan(full.length);
+    // Should be significantly shorter
+    expect(compact.length).toBeLessThan(full.length * 0.5);
+  });
+
+  it('compact dynamic context still includes business name and agents', () => {
+    const compact = buildCompactDynamicContext(baseArgs());
+    expect(compact).toContain('TestCo');
+    expect(compact).toContain('Scout');
+    expect(compact).toContain('Writer');
+  });
+
+  it('compact dynamic context omits WhatsApp formatting reference', () => {
+    const compact = buildCompactDynamicContext(baseArgs({
+      connectedChannels: ['whatsapp'] as BuildLocalSystemPromptArgs['connectedChannels'],
+    }));
+    expect(compact).not.toContain('WhatsApp formatting reference');
+    expect(compact).not.toContain('surround text with asterisks');
   });
 });

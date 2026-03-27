@@ -250,6 +250,89 @@ When the user's request involves research + output generation (e.g., "analyze th
   },
 ];
 
+// ============================================================================
+// COMPACT VARIANTS — used when context budget is tight (small local models)
+// ============================================================================
+
+const COMPACT_INSTRUCTION_BLOCKS: Array<{ keys: InstructionSection[]; text: string }> = [
+  {
+    keys: ['pulse', 'agents'],
+    text: `## Behavior
+When greeted: check pulse, give 1-2 line status, suggest one action. When mid-task: stay focused.`,
+  },
+  {
+    keys: ['projects', 'agents'],
+    text: `## Plans
+Use \`create_plan\` for multi-step goals. Plans start as drafts until approved.`,
+  },
+  {
+    keys: ['agents', 'business'],
+    text: `## CRM
+Use \`search_contacts\` before discussing a person/company. Use \`log_contact_event\` to record interactions.`,
+  },
+  {
+    keys: ['channels', 'agents'],
+    text: `## Automations
+For "when X do Y" requests: \`discover_capabilities\` → ask clarifying questions → \`propose_automation\` → \`create_automation\`. For scheduled tasks use trigger_type='schedule' with cron. Never send messages directly for recurring tasks.`,
+  },
+  {
+    keys: ['browser'],
+    text: `## Browser
+\`browser_navigate\` → \`browser_snapshot\` → \`browser_click\`/\`browser_type\` to interact.`,
+  },
+  {
+    keys: ['agents'],
+    text: `## Media
+When media MCP servers are connected, generate images/video/audio directly. Confirm before video generation. Local generation costs 0 credits.`,
+  },
+  {
+    keys: ['rag', 'browser'],
+    text: `## Research
+Use \`deep_research\` for market research, competitive analysis, or multi-source synthesis.`,
+  },
+  {
+    keys: ['agents', 'projects'],
+    text: `## Tasks
+Before \`run_agent\`/\`queue_task\`: state plan, confirm deliverable, ask to proceed. Once confirmed, CALL the tool immediately. Never describe completed actions without calling a tool.`,
+  },
+  {
+    keys: ['agents', 'projects', 'vision'],
+    text: `## Tools
+Fetch data proactively. Confirm before approve/reject/run actions. Use \`run_agent\` for immediate work, \`queue_task\` for backlog. Never call vision tools without actual data.`,
+  },
+  {
+    keys: ['filesystem', 'project_instructions'],
+    text: `## Filesystem
+Explore first, never ask for paths. Use \`local_list_directory\`, \`local_read_file\`, \`local_search_content\`, \`local_write_file\`, \`local_edit_file\`. Read before editing. Never say you lack filesystem access.`,
+  },
+  {
+    keys: ['filesystem', 'rag'],
+    text: `## Multi-Step Tasks
+Complete research + output autonomously. Don't stop mid-task to ask for clarification if you have tools to gather context.`,
+  },
+];
+
+const COMPACT_ALWAYS_BLOCKS = `## How to Call Tools
+Use structured tool calling. If unavailable, use:
+\`\`\`tool_call
+{"tool": "tool_name", "arguments": {"param1": "value1"}}
+\`\`\`
+
+## Critical Rules
+- NEVER fabricate file contents, search results, or tool outputs. Call the tool first.
+- NEVER describe completed actions without calling a tool.
+- Be concise (2-4 sentences). Lead with insight, not information.
+- Only use agents from the list in your context.`;
+
+/** Returns compact static instructions for tight-context models. */
+export function buildCompactStaticInstructionsForIntent(sections: Set<string>): string {
+  const included = COMPACT_INSTRUCTION_BLOCKS
+    .filter(block => block.keys.some(k => sections.has(k)))
+    .map(block => block.text);
+
+  return [...included, COMPACT_ALWAYS_BLOCKS].join('\n\n');
+}
+
 // Blocks always included regardless of intent
 const ALWAYS_BLOCKS = `## Planning Complex Requests
 For complex, multi-step requests (setting up pipelines, building workflows, configuring multiple agents), ALWAYS plan before executing:
@@ -546,6 +629,80 @@ ${visionSection}
 ${browserSection}
 ${desktopSection}
 ${channelSections.join('')}${buildLocalPlatformAddendum(args.platform)}`;
+}
+
+/**
+ * Returns a compact dynamic context block for tight-context models.
+ * Same data, drastically shorter format. Omits stats, formatting references, verbose sections.
+ */
+export function buildCompactDynamicContext(args: BuildLocalSystemPromptArgs): string {
+  const { agents, business, dashboardContext, businessPulse, projects, connectedChannels, orchestratorMemory, ragContext, workingDirectory, hasFilesystemTools, projectInstructions } = args;
+
+  const agentList = agents
+    .map(a => `- ${a.name} (${a.role}) [${a.status}] [id: ${a.id}]`)
+    .join('\n');
+
+  const cwdLine = workingDirectory
+    ? `Working directory: \`${workingDirectory}\`. Filesystem tools active.`
+    : hasFilesystemTools
+      ? 'Filesystem tools active. Start from `~`.'
+      : '';
+
+  const businessLine = business
+    ? `Business: ${business.name} (${business.type})${business.growthStage != null ? `, stage ${business.growthStage}/9` : ''}`
+    : '';
+
+  const memorySection = orchestratorMemory
+    ? `\n## Memory\n${orchestratorMemory}`
+    : '';
+
+  const ragSection = ragContext
+    ? `\n## Knowledge\n${ragContext}`
+    : '';
+
+  const projectInstructionsSection = projectInstructions
+    ? `\n## Project Instructions\n${projectInstructions}`
+    : '';
+
+  let pulseLine = '';
+  if (businessPulse) {
+    const p = businessPulse;
+    const allZero = p.tasksCompletedToday === 0 && p.tasksCompletedYesterday === 0 &&
+      p.totalContacts === 0 && dashboardContext.pendingApprovals === 0;
+    if (!allZero) {
+      pulseLine = `Pulse: ${p.tasksCompletedToday} tasks today, ${p.totalLeads} leads, ${p.totalCustomers} customers, ${dashboardContext.pendingApprovals} pending approvals`;
+    }
+  }
+
+  const channels = connectedChannels ?? [];
+  const channelLine = channels.length > 0
+    ? `Channels: ${channels.join(', ')} connected`
+    : '';
+
+  const browserLine = args.browserPreActivated ? 'Browser: active' : args.hasBrowserTools ? 'Browser: available' : '';
+  const desktopLine = args.desktopPreActivated ? 'Desktop control: active' : args.hasDesktopTools ? 'Desktop control: available' : '';
+
+  const now = new Date();
+  const lines = [
+    `You are the Orchestrator for ${business?.name || 'the business'}, running locally.`,
+    `Date: ${now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`,
+    cwdLine,
+    businessLine,
+    pulseLine,
+    channelLine,
+    browserLine,
+    desktopLine,
+  ].filter(Boolean);
+
+  const projectSection = projects && projects.length > 0
+    ? `\n## Projects\n${projects.map(p => `- ${p.name} (${p.status}) [id: ${p.id}]`).join('\n')}`
+    : '';
+
+  return `${lines.join('\n')}
+${memorySection}${ragSection}${projectInstructionsSection}
+## Agents
+${agentList || 'No agents yet.'}
+${projectSection}${buildLocalPlatformAddendum(args.platform)}`;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateTokens, estimateMessageTokens, ContextBudget } from '../context-budget.js';
+import { estimateTokens, estimateMessageTokens, ContextBudget, estimateToolTokens } from '../context-budget.js';
 
 describe('estimateTokens', () => {
   it('returns 0 for empty string', () => {
@@ -104,5 +104,90 @@ describe('ContextBudget', () => {
     // used = 100 + 0 + 333 = 433, pct = 433/1000 * 100 = 43.3 → 43
     const state = budget.getState();
     expect(state.utilizationPct).toBe(Math.round((433 / 1000) * 100));
+  });
+
+  it('setToolTokens reduces availableForHistory', () => {
+    const budget = new ContextBudget(10000, 2000);
+    budget.setSystemPrompt('a'.repeat(400)); // 100 tokens
+    expect(budget.availableForHistory).toBe(10000 - 100 - 2000);
+
+    budget.setToolTokens(3000);
+    expect(budget.availableForHistory).toBe(10000 - 100 - 3000 - 2000);
+  });
+
+  it('getState() includes toolTokens in utilization', () => {
+    const budget = new ContextBudget(10000, 2000);
+    budget.setSystemPrompt('a'.repeat(400)); // 100 tokens
+    budget.setToolTokens(500);
+    const state = budget.getState();
+    expect(state.toolTokens).toBe(500);
+    // used = 100 + 500 + 0 + 2000 = 2600
+    expect(state.availableTokens).toBe(10000 - 2600);
+    expect(state.utilizationPct).toBe(Math.round((2600 / 10000) * 100));
+  });
+
+  it('isTight returns true when available history is below threshold', () => {
+    const budget = new ContextBudget(5000, 2000);
+    budget.setSystemPrompt('a'.repeat(400)); // 100 tokens
+    budget.setToolTokens(2500);
+    // available = 5000 - 100 - 2500 - 2000 = 400
+    expect(budget.isTight(2000)).toBe(true);
+    expect(budget.isTight(400)).toBe(false);
+  });
+
+  it('trimToFit respects tool token reservation', () => {
+    const budget = new ContextBudget(500, 50);
+    budget.setToolTokens(300);
+    // available = 500 - 0 - 300 - 50 = 150
+    const messages = Array.from({ length: 10 }, (_, i) => ({
+      role: 'user',
+      content: `msg ${i} ${'x'.repeat(40)}`,
+    }));
+    const result = budget.trimToFit(messages);
+    expect(result.length).toBeLessThan(messages.length);
+    expect(result[result.length - 1]).toBe(messages[messages.length - 1]);
+  });
+});
+
+describe('estimateToolTokens', () => {
+  it('returns reasonable estimate for sample tools', () => {
+    const tools = [
+      {
+        type: 'function',
+        function: {
+          name: 'run_agent',
+          description: 'Run a specific agent with a task description.',
+          parameters: {
+            type: 'object',
+            properties: {
+              agent_id: { type: 'string', description: 'The agent ID' },
+              task: { type: 'string', description: 'What the agent should do' },
+            },
+            required: ['agent_id', 'task'],
+          },
+        },
+      },
+    ];
+    const tokens = estimateToolTokens(tools);
+    expect(tokens).toBeGreaterThan(10);
+    expect(tokens).toBeLessThan(500);
+  });
+
+  it('returns 0 for empty array', () => {
+    expect(estimateToolTokens([])).toBe(0);
+  });
+
+  it('scales with number of tools', () => {
+    const makeTool = (name: string) => ({
+      type: 'function',
+      function: {
+        name,
+        description: 'A tool that does something useful.',
+        parameters: { type: 'object', properties: { x: { type: 'string' } } },
+      },
+    });
+    const one = estimateToolTokens([makeTool('tool1')]);
+    const three = estimateToolTokens([makeTool('t1'), makeTool('t2'), makeTool('t3')]);
+    expect(three).toBeGreaterThan(one * 2);
   });
 });

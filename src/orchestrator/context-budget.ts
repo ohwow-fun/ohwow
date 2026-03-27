@@ -20,6 +20,7 @@ export function estimateMessageTokens(message: { role: string; content: string |
 export interface ContextBudgetState {
   modelCapacity: number;
   systemPromptTokens: number;
+  toolTokens: number;
   historyTokens: number;
   reservedForResponse: number;
   availableTokens: number;
@@ -31,6 +32,7 @@ export class ContextBudget {
   private modelCapacity: number;
   private reservedForResponse: number;
   private systemPromptTokens: number = 0;
+  private toolTokens: number = 0;
   private historyTokens: number = 0;
   private messageCount: number = 0;
 
@@ -44,17 +46,23 @@ export class ContextBudget {
     this.systemPromptTokens = estimateTokens(prompt);
   }
 
+  /** Set token count for tool definitions (OpenAI format tools sent alongside messages) */
+  setToolTokens(count: number): void {
+    this.toolTokens = count;
+  }
+
   /** Get remaining tokens available for conversation history */
   get availableForHistory(): number {
-    return Math.max(0, this.modelCapacity - this.systemPromptTokens - this.reservedForResponse);
+    return Math.max(0, this.modelCapacity - this.systemPromptTokens - this.toolTokens - this.reservedForResponse);
   }
 
   /** Get current state snapshot */
   getState(): ContextBudgetState {
-    const used = this.systemPromptTokens + this.historyTokens + this.reservedForResponse;
+    const used = this.systemPromptTokens + this.toolTokens + this.historyTokens + this.reservedForResponse;
     return {
       modelCapacity: this.modelCapacity,
       systemPromptTokens: this.systemPromptTokens,
+      toolTokens: this.toolTokens,
       historyTokens: this.historyTokens,
       reservedForResponse: this.reservedForResponse,
       availableTokens: Math.max(0, this.modelCapacity - used),
@@ -103,6 +111,14 @@ export class ContextBudget {
    * This is a fast, local-only approach (no LLM call). For LLM-based distillation,
    * use the mid-loop summarization in engine.ts.
    */
+  /**
+   * Check if the context budget is tight (less than `threshold` tokens available for history).
+   * Useful for deciding whether to compress tools or switch to compact prompts.
+   */
+  isTight(threshold: number = 2000): boolean {
+    return this.availableForHistory < threshold;
+  }
+
   summarizeAndTrim<T extends { role: string; content: string | unknown[] }>(
     messages: T[],
     keepRecent: number = 4,
@@ -175,4 +191,16 @@ export class ContextBudget {
     this.messageCount = result.length;
     return result;
   }
+}
+
+/** Estimate token count for an array of OpenAI-format tool definitions. */
+export function estimateToolTokens(tools: { type: string; function: { name: string; description: string; parameters: Record<string, unknown> } }[]): number {
+  let total = 0;
+  for (const tool of tools) {
+    total += estimateTokens(tool.function.name);
+    total += estimateTokens(tool.function.description);
+    total += estimateTokens(JSON.stringify(tool.function.parameters));
+    total += 10; // per-tool framing overhead
+  }
+  return total;
 }
