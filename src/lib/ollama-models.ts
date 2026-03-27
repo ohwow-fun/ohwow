@@ -512,12 +512,40 @@ export function getModelContextSize(tag: string): number {
   return match ? parseInt(match[1]) * 1024 : 8192;
 }
 
+/**
+ * Compute a hardware-aware context window size for a model.
+ * Uses available RAM after reserving space for the model weights.
+ * Returns the largest safe num_ctx, capped by the model's native context size.
+ *
+ * Formula: availableRAM = totalRAM * 0.75 - modelSizeGB
+ * Tokens ≈ availableRAM_GB * 1024 * 500 (conservative KV cache estimate for Q4 models)
+ */
+export function computeDynamicNumCtx(tag: string, device: DeviceInfo): number {
+  const entry = MODEL_CATALOG.find(m => m.tag === tag);
+  const modelSize = entry?.sizeGB ?? 2.5; // conservative fallback
+  const nativeContext = getModelContextSize(tag);
+
+  const availableRAM = device.totalMemoryGB * 0.75 - modelSize;
+  if (availableRAM <= 0) return 4096; // barely fits, use minimum
+
+  const tokensFromRAM = Math.floor(availableRAM * 1024 * 500);
+
+  // Safety cap for low-RAM machines to avoid Ollama OOM
+  const ramSafetyCap = device.totalMemoryGB < 16 ? 65_536 : 131_072;
+
+  return Math.max(4096, Math.min(nativeContext, tokensFromRAM, ramSafetyCap));
+}
+
 /** Returns a practical num_ctx to request from Ollama.
- *  Caps at `maxNumCtx` (default 16384) to avoid excessive RAM,
- *  but respects models with smaller windows. Pass a higher cap
- *  when the machine has enough RAM for larger context. */
-export function getWorkingNumCtx(tag: string, maxNumCtx?: number): number {
+ *  When `device` is provided, computes a hardware-aware context window.
+ *  Otherwise caps at `maxNumCtx` (default 16384) for backward compatibility. */
+export function getWorkingNumCtx(tag: string, maxNumCtx?: number, device?: DeviceInfo): number {
   const full = getModelContextSize(tag);
+
+  if (device) {
+    return computeDynamicNumCtx(tag, device);
+  }
+
   const cap = maxNumCtx ?? 16_384;
   return Math.min(full, cap);
 }

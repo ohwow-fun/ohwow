@@ -27,6 +27,7 @@ import { stripThinkTags } from './orchestrator-types.js';
 import { convertToolsToOpenAI } from '../execution/tool-format.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
 import { getWorkingNumCtx } from '../lib/ollama-models.js';
+import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget } from './context-budget.js';
 import { summarizeToolResult } from './result-summarizer.js';
 
@@ -296,7 +297,7 @@ async function runOllamaSubLoop(
   maxIterations: number,
 ): Promise<SubOrchestratorResult> {
   const openaiTools = convertToolsToOpenAI(tools);
-  const numCtx = getWorkingNumCtx(orchestratorModel || '');
+  const numCtx = getWorkingNumCtx(orchestratorModel || '', undefined, detectDevice());
   const budget = new ContextBudget(numCtx, 2048);
   budget.setSystemPrompt(systemPrompt);
 

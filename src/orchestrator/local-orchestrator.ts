@@ -20,6 +20,7 @@ import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
 import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { getWorkingNumCtx } from '../lib/ollama-models.js';
+import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
@@ -443,7 +444,8 @@ export class LocalOrchestrator {
         } else {
           let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage);
           let systemPrompt = staticPart + '\n\n' + dynamicPart;
-          const numCtx = getWorkingNumCtx(this.orchestratorModel || '');
+          const device = detectDevice();
+          const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
 
@@ -955,7 +957,8 @@ export class LocalOrchestrator {
     history.push({ role: 'user', content: userMessage });
 
     // Context-aware compression for small models
-    const numCtx = getWorkingNumCtx(this.orchestratorModel || '');
+    const device = detectDevice();
+    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
     let toolTokenCount = estimateToolTokens(openaiTools);
     const systemTokens = estimateTokens(systemPrompt);
     const historyBudget = numCtx - systemTokens - toolTokenCount - 4096;
