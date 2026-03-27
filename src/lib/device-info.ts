@@ -10,6 +10,8 @@ export interface DeviceInfo {
   arch: string;
   platform: string;
   totalMemoryGB: number;
+  /** Currently free/available RAM (accounts for other running processes). */
+  freeMemoryGB: number;
   cpuModel: string;
   cpuCores: number;
   isAppleSilicon: boolean;
@@ -25,6 +27,7 @@ export function detectDevice(): DeviceInfo {
   const arch = os.arch();
   const platform = os.platform();
   const totalMemoryGB = Math.round(os.totalmem() / (1024 * 1024 * 1024));
+  const freeMemoryGB = parseFloat((os.freemem() / (1024 * 1024 * 1024)).toFixed(1));
   const cpus = os.cpus();
   const cpuModel = cpus[0]?.model || 'Unknown';
   const cpuCores = cpus.length;
@@ -81,6 +84,7 @@ export function detectDevice(): DeviceInfo {
     arch,
     platform,
     totalMemoryGB,
+    freeMemoryGB,
     cpuModel,
     cpuCores,
     isAppleSilicon,

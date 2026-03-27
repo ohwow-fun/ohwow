@@ -7,6 +7,7 @@ function makeDevice(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
     arch: 'arm64',
     platform: 'darwin',
     totalMemoryGB: 16,
+    freeMemoryGB: 10,
     cpuModel: 'Apple M1',
     cpuCores: 8,
     isAppleSilicon: true,

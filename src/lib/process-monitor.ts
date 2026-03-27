@@ -183,6 +183,7 @@ export class ProcessMonitor {
           arch: 'unknown',
           platform: 'unknown',
           totalMemoryGB: peer.total_memory_gb || 0,
+          freeMemoryGB: (peer.total_memory_gb || 0) * 0.5, // estimate for remote peers
           cpuModel: peer.name,
           cpuCores: 0,
           isAppleSilicon: false,

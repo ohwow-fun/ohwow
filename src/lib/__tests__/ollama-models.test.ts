@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { inferParameterTier, getParameterTier, computeDynamicNumCtx, getWorkingNumCtx } from '../ollama-models.js';
 import type { DeviceInfo } from '../device-info.js';
 
-function makeDevice(totalMemoryGB: number): DeviceInfo {
+function makeDevice(totalMemoryGB: number, freeMemoryGB?: number): DeviceInfo {
   return {
     arch: 'arm64',
     platform: 'darwin',
     totalMemoryGB,
+    freeMemoryGB: freeMemoryGB ?? totalMemoryGB * 0.6, // default: 60% free
     cpuModel: 'Apple M1',
     cpuCores: 8,
     isAppleSilicon: true,
@@ -81,6 +82,19 @@ describe('computeDynamicNumCtx', () => {
     // Uses default 2.5GB model size, 8192 default context
     expect(result).toBeGreaterThanOrEqual(4096);
     expect(result).toBeLessThanOrEqual(65_536);
+  });
+
+  it('produces smaller context when free memory is low', () => {
+    const lotsOfFree = computeDynamicNumCtx('qwen3:8b', makeDevice(32, 24));
+    const littleFree = computeDynamicNumCtx('qwen3:8b', makeDevice(32, 6));
+    expect(littleFree).toBeLessThanOrEqual(lotsOfFree);
+  });
+
+  it('floors free memory at 50% of total (OS cache is reclaimable)', () => {
+    // Even with only 1GB "free", should use at least 50% of total
+    const veryLowFree = computeDynamicNumCtx('qwen3:4b', makeDevice(32, 1));
+    const halfFree = computeDynamicNumCtx('qwen3:4b', makeDevice(32, 16));
+    expect(veryLowFree).toBe(halfFree); // both should floor at 50%
   });
 });
 

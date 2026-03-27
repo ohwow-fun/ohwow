@@ -531,21 +531,29 @@ export function getModelContextSize(tag: string): number {
 
 /**
  * Compute a hardware-aware context window size for a model.
- * Uses available RAM after reserving space for the model weights.
+ * Uses actually free RAM (not total) to account for other running processes,
+ * then subtracts model weight size to get RAM available for KV cache.
  * Returns the largest safe num_ctx, capped by the model's native context size.
  *
- * Formula: availableRAM = totalRAM * 0.75 - modelSizeGB
- * Tokens ≈ availableRAM_GB * 1024 * 500 (conservative KV cache estimate for Q4 models)
+ * Uses freeMemoryGB (from os.freemem) which reflects real-time availability,
+ * with a floor of 50% of total RAM to avoid being too conservative when the
+ * OS reports low free memory due to disk cache (which is reclaimable).
  */
 export function computeDynamicNumCtx(tag: string, device: DeviceInfo): number {
   const entry = MODEL_CATALOG.find(m => m.tag === tag);
   const modelSize = entry?.sizeGB ?? 2.5; // conservative fallback
   const nativeContext = getModelContextSize(tag);
 
-  const availableRAM = device.totalMemoryGB * 0.75 - modelSize;
-  if (availableRAM <= 0) return 4096; // barely fits, use minimum
+  // Use free memory but floor at 50% of total (OS disk cache is reclaimable)
+  const effectiveFree = Math.max(device.freeMemoryGB, device.totalMemoryGB * 0.5);
+  // Reserve 1GB for OS + other processes on top of what's already in use
+  const availableForModel = effectiveFree - 1.0;
+  // Subtract model weights to get RAM available for KV cache
+  const availableForContext = availableForModel - modelSize;
+  if (availableForContext <= 0) return 4096; // barely fits, use minimum
 
-  const tokensFromRAM = Math.floor(availableRAM * 1024 * 500);
+  // Conservative KV cache estimate: ~500 tokens per MB for Q4 quantized models
+  const tokensFromRAM = Math.floor(availableForContext * 1024 * 500);
 
   // Safety cap for low-RAM machines to avoid Ollama OOM
   const ramSafetyCap = device.totalMemoryGB < 16 ? 65_536 : 131_072;
