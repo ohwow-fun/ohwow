@@ -46,7 +46,8 @@ export function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<DashboardPage />} />
+          <Route index element={<Navigate to="/chat" replace />} />
+          <Route path="dashboard" element={<DashboardPage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="agents/:id" element={<AgentDetailPage />} />
           <Route path="tasks" element={<TasksPage />} />

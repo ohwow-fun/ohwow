@@ -34,7 +34,7 @@ export function OnboardingPage({ sessionToken }: OnboardingPageProps) {
       if (sessionToken) {
         setToken(sessionToken);
       }
-      window.location.href = '/ui/';
+      window.location.href = '/ui/chat';
     }
   };
 
