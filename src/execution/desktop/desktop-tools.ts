@@ -120,11 +120,20 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'desktop_type',
     description:
-      'Type text at the current cursor position. Click on a text field first, then use this tool to enter text.',
+      'Type text at the current cursor position. Click on a text field first, then use this tool to enter text. Use mode "typewrite" for character-by-character input (more reliable in apps that drop characters).',
     input_schema: {
       type: 'object',
       properties: {
         text: { type: 'string', description: 'The text to type' },
+        mode: {
+          type: 'string',
+          enum: ['normal', 'typewrite'],
+          description: 'Typing mode. "normal" sends all text at once (default). "typewrite" types each character individually with a delay, more reliable in some apps.',
+        },
+        delayMs: {
+          type: 'number',
+          description: 'Delay between keystrokes in typewrite mode (default: 50ms). Ignored in normal mode.',
+        },
       },
       required: ['text'],
     },
@@ -259,8 +268,12 @@ function mapToolToAction(
       return { type: 'left_click', x: input.x as number, y: input.y as number };
     }
 
-    case 'desktop_type':
+    case 'desktop_type': {
+      if (input.mode === 'typewrite') {
+        return { type: 'typewrite', text: input.text as string, delayMs: input.delayMs as number | undefined };
+      }
       return { type: 'type_text', text: input.text as string };
+    }
 
     case 'desktop_key':
       return { type: 'key', key: input.key as string };
@@ -317,6 +330,7 @@ export function formatDesktopToolResult(
     double_click: 'Double click performed.',
     triple_click: 'Triple click performed.',
     type_text: 'Text typed.',
+    typewrite: 'Text typed (character-by-character).',
     key: 'Key pressed.',
     scroll: 'Scrolled.',
     mouse_move: 'Mouse moved.',

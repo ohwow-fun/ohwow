@@ -1107,7 +1107,7 @@ export class RuntimeEngine {
         }
         // Always close desktop after task execution (if it was activated)
         if (desktopService) {
-          desktopService.close();
+          await desktopService.close();
         }
         // Close MCP connections
         if (mcpClients) {

@@ -50,3 +50,8 @@ export {
   calculateScaledDimensions,
   notifyScreenshotCaptured,
 } from './screenshot-capture.js';
+
+export { DesktopJournal } from './desktop-journal.js';
+export type { JournalEntry } from './desktop-journal.js';
+
+export { SessionRecorder } from './session-recorder.js';

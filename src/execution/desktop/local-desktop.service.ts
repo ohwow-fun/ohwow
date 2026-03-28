@@ -24,6 +24,8 @@ import {
 } from './screenshot-capture.js';
 import { checkActionSafety, logSafetyEvent, getFrontmostApp } from './safety-guard.js';
 import { desktopLock } from './desktop-lock.js';
+import { DesktopJournal } from './desktop-journal.js';
+import { SessionRecorder } from './session-recorder.js';
 import type {
   DesktopAction,
   DesktopActionResult,
@@ -163,6 +165,10 @@ export class LocalDesktopService {
   private notifyOnScreenshot: boolean;
   private approvalCallback?: (action: DesktopAction, context: string) => Promise<boolean>;
   private autonomyLevel: number;
+  private enablePreActionScreenshots: boolean;
+  private enableRecording: boolean;
+  private journal: DesktopJournal | null = null;
+  private recorder: SessionRecorder | null = null;
 
   /** Subscribe to action events for audit logging */
   onAction: DesktopActionCallback | null = null;
@@ -176,6 +182,8 @@ export class LocalDesktopService {
     this.notifyOnScreenshot = opts?.notifyOnScreenshot ?? true;
     this.approvalCallback = opts?.approvalCallback;
     this.autonomyLevel = opts?.autonomyLevel ?? 5;
+    this.enablePreActionScreenshots = opts?.enablePreActionScreenshots ?? false;
+    this.enableRecording = opts?.enableRecording ?? false;
   }
 
   // ==========================================================================
@@ -210,6 +218,19 @@ export class LocalDesktopService {
     const nut = await loadNutJs();
     // Configure mouse speed for precision
     nut.mouse.config.mouseSpeed = 1000;
+
+    // Initialize action journal when a data directory is available
+    const sessionId = `desktop-${Date.now()}`;
+    if (this.dataDir) {
+      this.journal = new DesktopJournal(this.dataDir, sessionId);
+      logger.info(`[desktop] Action journal: ${this.dataDir}/desktop-journal/${sessionId}.jsonl`);
+    }
+
+    // Start video recording if enabled
+    if (this.enableRecording) {
+      this.recorder = new SessionRecorder();
+      await this.recorder.start(sessionId, this.dataDir);
+    }
 
     this.ready = true;
     this.startKillFileWatcher();
@@ -284,6 +305,22 @@ export class LocalDesktopService {
       const { mouse, keyboard, Key, Button, Point } = nut;
 
       let result: DesktopActionResult;
+      const actionStartTime = Date.now();
+
+      // Capture pre-action screenshot for before/after debugging (opt-in)
+      let preActionBase64: string | undefined;
+      if (this.enablePreActionScreenshots && isMutationAction(action.type)) {
+        try {
+          const pre = await captureAndScaleScreenshot(
+            this.screenInfo,
+            this.maxLongEdge,
+            this.lastCaptureDisplayNumber,
+          );
+          preActionBase64 = pre.base64;
+        } catch (err) {
+          logger.debug(`[desktop] Pre-action screenshot failed (non-blocking): ${err}`);
+        }
+      }
 
       switch (action.type) {
         case 'screenshot': {
@@ -332,10 +369,27 @@ export class LocalDesktopService {
           break;
         }
 
+        case 'typewrite': {
+          // Type each character individually with a delay between keystrokes.
+          // More reliable than bulk type() in some macOS apps that drop characters.
+          const delay = action.delayMs ?? 50;
+          for (const char of action.text) {
+            await keyboard.type(char);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+          result = await this.mutationResult('typewrite');
+          break;
+        }
+
         case 'key': {
           const keys = parseKeyCombo(action.key, Key);
           await keyboard.pressKey(...keys);
-          await keyboard.releaseKey(...keys);
+          try {
+            await keyboard.releaseKey(...keys);
+          } catch {
+            // If releaseKey fails, force-release all modifiers to prevent stuck keys
+            await this.releaseAllModifiers();
+          }
           result = await this.mutationResult('key');
           break;
         }
@@ -378,10 +432,14 @@ export class LocalDesktopService {
           // window manager to register the drag).
           await mouse.setPosition(new Point(start.x, start.y));
           await mouse.pressButton(Button.LEFT);
-          await new Promise(resolve => setTimeout(resolve, 100));
-          await mouse.move([new Point(start.x, start.y), new Point(end.x, end.y)]);
-          await new Promise(resolve => setTimeout(resolve, 50));
-          await mouse.releaseButton(Button.LEFT);
+          try {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await mouse.move([new Point(start.x, start.y), new Point(end.x, end.y)]);
+            await new Promise(resolve => setTimeout(resolve, 50));
+          } finally {
+            // Always release the button, even if the drag fails mid-way
+            await mouse.releaseButton(Button.LEFT);
+          }
           result = await this.mutationResult('left_click_drag');
           break;
         }
@@ -392,8 +450,12 @@ export class LocalDesktopService {
         }
       }
 
-      // Attach frontmost app to all results for audit
+      // Attach metadata for audit
       result.frontmostApp = currentApp ?? undefined;
+      if (preActionBase64) result.preActionScreenshot = preActionBase64;
+
+      // Write to action journal
+      this.journal?.log(action, result, Date.now() - actionStartTime);
 
       // Emit action callback for audit logging
       this.onAction?.(action, result);
@@ -402,6 +464,10 @@ export class LocalDesktopService {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown desktop error';
       logger.error(`[desktop] Action ${action.type} failed: ${errorMessage}`);
+
+      // Release modifier keys to prevent stuck keys from cascading
+      await this.releaseAllModifiers();
+
       const errorResult: DesktopActionResult = { success: false, type: action.type, error: errorMessage };
       this.onAction?.(action, errorResult);
       return errorResult;
@@ -412,23 +478,37 @@ export class LocalDesktopService {
   // EMERGENCY STOP
   // ==========================================================================
 
+  /**
+   * Release all common modifier keys. Called on action failure and emergency stop
+   * to prevent stuck keys from cascading into subsequent actions.
+   */
+  private async releaseAllModifiers(): Promise<void> {
+    try {
+      const nut = await loadNutJs();
+      const { keyboard, Key } = nut;
+      await keyboard.releaseKey(Key.LeftCmd);
+      await keyboard.releaseKey(Key.LeftControl);
+      await keyboard.releaseKey(Key.LeftAlt);
+      await keyboard.releaseKey(Key.LeftShift);
+    } catch { /* best effort — releasing an unpressed key is a no-op in nut.js */ }
+  }
+
   async emergencyStop(): Promise<void> {
     this.stopped = true;
     this.stopKillFileWatcher();
     desktopLock.forceRelease();
     logger.warn('[desktop] Emergency stop triggered');
 
+    // Stop recording before releasing controls
+    if (this.recorder?.isRecording()) {
+      await this.recorder.stop();
+    }
+
     try {
       const nut = await loadNutJs();
-      const { mouse, keyboard, Point, Key } = nut;
+      const { mouse, Point } = nut;
 
-      // Release common modifier keys
-      try {
-        await keyboard.releaseKey(Key.LeftCmd);
-        await keyboard.releaseKey(Key.LeftControl);
-        await keyboard.releaseKey(Key.LeftAlt);
-        await keyboard.releaseKey(Key.LeftShift);
-      } catch { /* best effort */ }
+      await this.releaseAllModifiers();
 
       // Move mouse to screen center
       const centerX = Math.round(this.screenInfo.physicalWidth / 2);
@@ -443,10 +523,15 @@ export class LocalDesktopService {
   // CLEANUP
   // ==========================================================================
 
-  close(): void {
+  async close(): Promise<void> {
     this.stopped = true;
     this.ready = false;
     this.stopKillFileWatcher();
+
+    if (this.recorder?.isRecording()) {
+      await this.recorder.stop();
+    }
+
     logger.info('[desktop] Desktop control service closed');
   }
 

@@ -905,7 +905,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     warmupAbort?.abort();
     engine.drainQueue('Daemon shutting down');
     orchestrator?.closeBrowser().catch(() => {});
-    orchestrator?.closeDesktop();
+    orchestrator?.closeDesktop().catch(() => {});
     orchestrator?.closeMcp().catch(() => {});
     ollamaMonitor?.stop();
     processMonitor.stop();

@@ -201,6 +201,7 @@ export function classifyActionRisk(action: DesktopAction): DesktopActionRisk {
       return 'medium';
 
     case 'type_text':
+    case 'typewrite':
     case 'key':
       return 'high';
 
@@ -219,7 +220,7 @@ export function classifyActionRisk(action: DesktopAction): DesktopActionRisk {
  */
 export function checkActionSafety(action: DesktopAction): SafetyCheckResult {
   // Type text into Terminal is dangerous (arbitrary command execution)
-  if (action.type === 'type_text') {
+  if (action.type === 'type_text' || action.type === 'typewrite') {
     if (isTerminalFocused()) {
       return {
         allowed: false,

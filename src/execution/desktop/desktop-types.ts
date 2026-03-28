@@ -15,6 +15,7 @@ export type DesktopActionType =
   | 'double_click'
   | 'triple_click'
   | 'type_text'
+  | 'typewrite'
   | 'key'
   | 'scroll'
   | 'mouse_move'
@@ -31,6 +32,7 @@ export interface DesktopRightClickAction { type: 'right_click'; x: number; y: nu
 export interface DesktopDoubleClickAction { type: 'double_click'; x: number; y: number }
 export interface DesktopTripleClickAction { type: 'triple_click'; x: number; y: number }
 export interface DesktopTypeTextAction { type: 'type_text'; text: string }
+export interface DesktopTypewriteAction { type: 'typewrite'; text: string; delayMs?: number }
 export interface DesktopKeyAction { type: 'key'; key: string }
 export interface DesktopScrollAction { type: 'scroll'; x: number; y: number; direction: 'up' | 'down' | 'left' | 'right'; amount: number }
 export interface DesktopMouseMoveAction { type: 'mouse_move'; x: number; y: number }
@@ -44,6 +46,7 @@ export type DesktopAction =
   | DesktopDoubleClickAction
   | DesktopTripleClickAction
   | DesktopTypeTextAction
+  | DesktopTypewriteAction
   | DesktopKeyAction
   | DesktopScrollAction
   | DesktopMouseMoveAction
@@ -67,6 +70,8 @@ export interface DesktopActionResult {
   frontmostApp?: string;
   /** Human-readable display layout description for multi-monitor setups */
   displayLayout?: string;
+  /** Base64 JPEG screenshot captured before the action (for audit/debugging, not sent to LLM) */
+  preActionScreenshot?: string;
 }
 
 // ============================================================================
@@ -90,6 +95,10 @@ export interface DesktopServiceOptions {
   approvalCallback?: (action: DesktopAction, context: string) => Promise<boolean>;
   /** Agent's autonomy level (1-5) for approval decisions */
   autonomyLevel?: number;
+  /** Capture a screenshot before mutation actions for before/after comparison (default: false) */
+  enablePreActionScreenshots?: boolean;
+  /** Record the desktop session as video via FFmpeg (default: false) */
+  enableRecording?: boolean;
 }
 
 // ============================================================================

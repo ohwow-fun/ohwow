@@ -251,10 +251,10 @@ export class LocalOrchestrator {
   }
 
   /** Close the desktop control service (call from orchestrator cleanup/shutdown). */
-  closeDesktop(): void {
+  async closeDesktop(): Promise<void> {
     if (this.desktopService) {
       logger.debug('[desktop] closeDesktop() called — closing desktop service');
-      this.desktopService.close();
+      await this.desktopService.close();
       this.desktopService = null;
       this.desktopActivated = false;
     }
