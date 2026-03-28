@@ -234,9 +234,9 @@ export function Layout() {
   const visibleNav = NAV_ITEMS;
 
   return (
-    <div className="flex h-screen bg-black text-white">
+    <div className="flex h-dvh bg-black text-white">
       {/* Desktop Sidebar */}
-      <aside className="hidden md:flex w-64 border-r border-white/10 flex-col h-screen sticky top-0">
+      <aside className="hidden md:flex w-64 border-r border-white/10 flex-col h-dvh sticky top-0">
         <SidebarContent
           health={health ?? null}
           tier={tier}
@@ -278,7 +278,7 @@ export function Layout() {
       </AnimatePresence>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {/* Mobile header */}
         <div className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-white/10">
           <button
@@ -293,7 +293,7 @@ export function Layout() {
           </span>
         </div>
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto min-h-0">
           {showModelBanner && (
             <div className="bg-warning/10 border-b border-warning/20 px-6 py-2.5 flex items-center justify-between">
               <p className="text-sm text-warning">
