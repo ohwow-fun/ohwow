@@ -187,8 +187,8 @@ export function ChatPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-6 pt-6 pb-0">
+    <div className="flex flex-col h-full min-h-0">
+      <div className="px-6 pt-6 pb-0 shrink-0">
         <PageHeader
           title="Chat"
           subtitle="Talk to your orchestrator"
@@ -238,7 +238,7 @@ export function ChatPage() {
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-6 py-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-neutral-400 text-sm">
             Ask your orchestrator anything about your agents, tasks, or business.
@@ -263,7 +263,7 @@ export function ChatPage() {
       </div>
 
       {/* Input */}
-      <div className="border-t border-white/[0.08] px-6 py-4">
+      <div className="border-t border-white/[0.08] px-6 py-4 shrink-0">
         <div className="flex gap-2 max-w-2xl">
           <textarea
             value={input}
