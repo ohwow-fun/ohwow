@@ -131,7 +131,7 @@ export class LocalOrchestrator {
   }
 
   private get desktopState(): DesktopState {
-    return { service: this.desktopService, activated: this.desktopActivated };
+    return { service: this.desktopService, activated: this.desktopActivated, dataDir: this.dataDir };
   }
 
   private buildToolCtx(): LocalToolContext {
@@ -1191,6 +1191,7 @@ export class LocalOrchestrator {
 
       // Parse all tool calls first, collecting valid requests and handling errors
       const toolResultsSummary: { name: string; content: string }[] = [];
+      const screenshotImages: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
       const validRequests: { req: ToolCallRequest; toolCall: typeof response.toolCalls[0] }[] = [];
 
       for (let toolCall of response.toolCalls) {
@@ -1287,6 +1288,18 @@ export class LocalOrchestrator {
           // Ollama format: use text resultContent (no image blocks)
           loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
           toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
+
+          // Collect base64 images from formattedBlocks for vision-capable models
+          if (outcome.formattedBlocks) {
+            for (const block of outcome.formattedBlocks) {
+              if (block.type === 'image' && 'source' in block) {
+                const src = (block as { type: 'image'; source: { type: string; media_type: string; data: string } }).source;
+                if (src.type === 'base64' && src.data) {
+                  screenshotImages.push({ type: 'image_url', image_url: { url: `data:${src.media_type};base64,${src.data}` } });
+                }
+              }
+            }
+          }
         }
       }
 
@@ -1308,10 +1321,21 @@ export class LocalOrchestrator {
         .join('\n\n');
 
       const ollamaReflection = buildReflectionPrompt(userMessage, executedToolCallsOllama, iteration, ollamaMaxIter);
-      loopMessages.push({
-        role: 'user',
-        content: `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${ollamaReflection}]`,
-      });
+      const reflectionText = `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${ollamaReflection}]`;
+
+      // Include screenshot images in the reflection message for vision-capable models
+      if (screenshotImages.length > 0) {
+        loopMessages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: reflectionText },
+            ...screenshotImages,
+          ],
+        });
+        screenshotImages.length = 0;
+      } else {
+        loopMessages.push({ role: 'user', content: reflectionText });
+      }
     }
 
     // Save to session (full turn with tool context, converted to MessageParam format)

@@ -76,6 +76,7 @@ export interface BrowserState {
 export interface DesktopState {
   service: LocalDesktopService | null;
   activated: boolean;
+  dataDir: string;
 }
 
 export interface ToolExecutionContext {
@@ -268,15 +269,30 @@ export async function* executeToolCall(
   // --- Desktop tool execution ---
   if (isDesktopTool(request.name) && ctx.desktopState?.service) {
     const desktopResult = await executeDesktopTool(ctx.desktopState.service, request.name, toolInput);
+    let screenshotPath: string | undefined;
+    if (desktopResult.screenshot && ctx.desktopState.dataDir) {
+      try {
+        const saved = await saveScreenshotLocally(desktopResult.screenshot, ctx.desktopState.dataDir);
+        screenshotPath = saved.path;
+      } catch { /* non-fatal */ }
+    }
     const formatted = formatDesktopToolResult(desktopResult) as BrowserResultBlock[];
+    if (screenshotPath) {
+      formatted.push({ type: 'text', text: `Screenshot saved to ${screenshotPath}` });
+    }
     const toolResult: ToolResult = desktopResult.error
       ? { success: false, error: desktopResult.error }
-      : { success: true, data: desktopResult.type === 'screenshot' ? 'Screenshot captured.' : `Action ${desktopResult.type} completed.` };
+      : { success: true, data: screenshotPath ? `Done. Screenshot saved to ${screenshotPath}` : `Action ${desktopResult.type} completed.` };
     ctx.executedToolCalls.set(toolKey, toolResult);
     yield { type: 'tool_done', name: request.name, result: toolResult };
+    if (screenshotPath) {
+      yield { type: 'screenshot', path: screenshotPath };
+    }
 
     const ollamaContent = formatted
-      .map(b => (b.type === 'text' ? b.text : '[desktop screenshot]'))
+      .map(b => (b.type === 'text' ? b.text : (screenshotPath
+        ? `Screenshot saved to ${screenshotPath}. The image shows the current desktop screen.`
+        : '[desktop screenshot]')))
       .join('\n');
 
     return {
@@ -285,6 +301,7 @@ export async function* executeToolCall(
       resultContent: ollamaContent,
       formattedBlocks: formatted,
       isError: !!desktopResult.error,
+      screenshotPath,
     };
   }
 

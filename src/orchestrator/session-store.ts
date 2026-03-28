@@ -163,9 +163,13 @@ export function buildAnthropicTurnMessages(
   return turnMessages;
 }
 
+export type OllamaMessageContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export type OllamaMessage = {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
+  content: string | OllamaMessageContentPart[];
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   tool_call_id?: string;
 };
@@ -181,9 +185,11 @@ export function buildOllamaTurnMessages(
   for (let i = turnStartIndex; i < loopMessages.length; i++) {
     const msg = loopMessages[i];
 
+    const contentStr = typeof msg.content === 'string' ? msg.content : msg.content.map(p => p.type === 'text' ? p.text : '').join('');
+
     if (msg.role === 'assistant' && msg.tool_calls?.length) {
       const content: ContentBlockParam[] = [];
-      if (msg.content) content.push({ type: 'text', text: msg.content });
+      if (contentStr) content.push({ type: 'text', text: contentStr });
       for (const tc of msg.tool_calls) {
         let parsedInput: Record<string, unknown> = {};
         try { parsedInput = JSON.parse(tc.function.arguments || '{}'); } catch { /* empty */ }
@@ -199,7 +205,7 @@ export function buildOllamaTurnMessages(
       const toolResult: ToolResultBlockParam = {
         type: 'tool_result',
         tool_use_id: msg.tool_call_id || '',
-        content: msg.content,
+        content: contentStr,
       };
       const last = turnMessages[turnMessages.length - 1];
       if (last?.role === 'user' && Array.isArray(last.content) &&
@@ -208,7 +214,7 @@ export function buildOllamaTurnMessages(
       } else {
         turnMessages.push({ role: 'user', content: [toolResult] });
       }
-    } else if (msg.role === 'user' && msg.content.includes('[Tool results received above.')) {
+    } else if (msg.role === 'user' && contentStr.includes('[Tool results received above.')) {
       continue;
     }
   }
