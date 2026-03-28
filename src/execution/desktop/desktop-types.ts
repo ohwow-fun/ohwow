@@ -25,7 +25,7 @@ export type DesktopActionType =
 // DESKTOP ACTIONS (tool inputs for the LLM)
 // ============================================================================
 
-export interface DesktopScreenshotAction { type: 'screenshot' }
+export interface DesktopScreenshotAction { type: 'screenshot'; display?: number }
 export interface DesktopLeftClickAction { type: 'left_click'; x: number; y: number }
 export interface DesktopRightClickAction { type: 'right_click'; x: number; y: number }
 export interface DesktopDoubleClickAction { type: 'double_click'; x: number; y: number }
@@ -65,6 +65,8 @@ export interface DesktopActionResult {
   error?: string;
   /** Name of the frontmost macOS application when the action was executed */
   frontmostApp?: string;
+  /** Human-readable display layout description for multi-monitor setups */
+  displayLayout?: string;
 }
 
 // ============================================================================
@@ -94,11 +96,36 @@ export interface DesktopServiceOptions {
 // SCREEN INFO
 // ============================================================================
 
-export interface ScreenInfo {
-  /** Physical pixel width of the display */
+export interface DisplayInfo {
+  /** Display index (1-based, matches screencapture -D numbering) */
+  displayNumber: number;
+  /** Human-readable name (e.g. "Built-in Retina Display", "DELL U2723QE") */
+  name: string;
+  /** Whether this is the primary/main display */
+  isPrimary: boolean;
+  /** Physical pixel width of this display */
   physicalWidth: number;
-  /** Physical pixel height of the display */
+  /** Physical pixel height of this display */
   physicalHeight: number;
-  /** Retina scale factor (e.g. 2.0 on Retina, 1.0 on non-Retina) */
+  /** Logical (point) width before Retina scaling */
+  logicalWidth: number;
+  /** Logical (point) height before Retina scaling */
+  logicalHeight: number;
+  /** Retina scale factor (2 for Retina, 1 for standard) */
   scaleFactor: number;
+  /** Origin X in macOS global coordinate space (logical points) */
+  originX: number;
+  /** Origin Y in macOS global coordinate space (logical points) */
+  originY: number;
+}
+
+export interface ScreenInfo {
+  /** Physical pixel width of the composite capture (all displays) */
+  physicalWidth: number;
+  /** Physical pixel height of the composite capture (all displays) */
+  physicalHeight: number;
+  /** Retina scale factor of the primary display (backward compat) */
+  scaleFactor: number;
+  /** Per-display info, ordered by displayNumber. Empty = legacy single-display mode. */
+  displays: DisplayInfo[];
 }

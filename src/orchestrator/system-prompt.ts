@@ -53,6 +53,7 @@ export interface BuildLocalSystemPromptArgs {
   browserPreActivated?: boolean;
   hasDesktopTools?: boolean;
   desktopPreActivated?: boolean;
+  desktopDisplayLayout?: string;
   platform?: ChannelType;
 }
 
@@ -605,13 +606,13 @@ Always call \`request_browser\` before using any browser_ tool.`
   const desktopSection = args.desktopPreActivated
     ? `\n## Desktop Control (Active)
 You can control this macOS desktop. Use these tools:
-- \`desktop_screenshot\` — capture the screen
+- \`desktop_screenshot\` — capture the screen${args.desktopDisplayLayout ? ' (supports display parameter for single-monitor capture)' : ''}
 - \`desktop_click\` — click at (x, y) coordinates
 - \`desktop_type\` — type text at cursor
 - \`desktop_key\` — press keyboard shortcuts (e.g. "cmd+c", "cmd+tab")
 - \`desktop_scroll\` — scroll at position
 - \`desktop_drag\` — click-drag between points
-
+${args.desktopDisplayLayout ? `\n${args.desktopDisplayLayout}\n` : ''}
 Workflow: screenshot first, then click/type to interact. A screenshot is taken automatically after each action.`
     : args.hasDesktopTools
       ? `\n## Desktop Control

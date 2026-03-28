@@ -43,6 +43,7 @@ import {
   DESKTOP_TOOL_DEFINITIONS,
 } from '../execution/desktop/desktop-tools.js';
 import { LocalDesktopService } from '../execution/desktop/local-desktop.service.js';
+import { buildDisplayLayout } from '../execution/desktop/screenshot-capture.js';
 import {
   type OrchestratorEvent,
   type ClassifiedIntent,
@@ -568,7 +569,8 @@ export class LocalOrchestrator {
     }
 
     // Build targeted system prompt (only fetches context for relevant sections)
-    const { staticPart, dynamicPart } = await buildTargetedPrompt(this.promptDeps, userMessage, sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated);
+    const desktopDisplayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
+    const { staticPart, dynamicPart } = await buildTargetedPrompt(this.promptDeps, userMessage, sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, undefined, desktopDisplayLayout);
 
     // Array format: static block is cached, dynamic block changes each call
     const systemBlocks: TextBlockParam[] = [
@@ -960,7 +962,8 @@ export class LocalOrchestrator {
 
     // Build prompt tier-aware: micro models get bare skeleton, small get compact, medium+ get full
     const initialPromptMode: boolean | 'micro' = paramTier === 'micro' ? 'micro' : paramTier === 'small' ? true : false;
-    let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, initialPromptMode);
+    const ollamaDisplayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
+    let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, initialPromptMode, ollamaDisplayLayout);
     let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
     if (initialPromptMode) {
       logger.debug(`[orchestrator] Model tier: ${paramTier} (${modelSizeGB}GB) → ${initialPromptMode === 'micro' ? 'micro' : 'compact'} prompt (${estimateTokens(systemPrompt)} tokens)`);
@@ -988,7 +991,7 @@ export class LocalOrchestrator {
       // Still tight: rebuild system prompt in compact mode
       const compactHistoryBudget = numCtx - estimateTokens(systemPrompt) - toolTokenCount - 4096;
       if (compactHistoryBudget < 1500) {
-        const compact = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, true);
+        const compact = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, true, ollamaDisplayLayout);
         ollamaStatic = compact.staticPart;
         ollamaDynamic = compact.dynamicPart;
         systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;

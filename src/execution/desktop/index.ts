@@ -8,6 +8,7 @@ export type {
   DesktopActionResult,
   DesktopServiceOptions,
   ScreenInfo,
+  DisplayInfo,
 } from './desktop-types.js';
 
 export { LocalDesktopService } from './local-desktop.service.js';
@@ -18,6 +19,7 @@ export {
   DESKTOP_TOOL_DEFINITIONS,
   DESKTOP_ACTIVATION_MESSAGE,
   DESKTOP_SYSTEM_PROMPT,
+  buildDesktopSystemPrompt,
   isDesktopTool,
   executeDesktopTool,
   formatDesktopToolResult,
@@ -40,8 +42,11 @@ export type { SafetyCheckResult, DesktopActionRisk } from './safety-guard.js';
 
 export {
   detectScreenInfo,
+  detectAllDisplays,
   captureAndScaleScreenshot,
   scaleToPhysical,
+  scaleToPhysicalForDisplay,
+  buildDisplayLayout,
   calculateScaledDimensions,
   notifyScreenshotCaptured,
 } from './screenshot-capture.js';

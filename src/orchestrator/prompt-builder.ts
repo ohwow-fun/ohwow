@@ -32,6 +32,7 @@ export async function buildTargetedPrompt(
   platform?: ChannelType,
   desktopPreActivated?: boolean,
   compact?: boolean | 'micro',
+  desktopDisplayLayout?: string,
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const need = (s: IntentSection) => sections.has(s);
 
@@ -230,6 +231,7 @@ export async function buildTargetedPrompt(
     browserPreActivated,
     hasDesktopTools: need('desktop'),
     desktopPreActivated,
+    desktopDisplayLayout,
     platform,
   };
 

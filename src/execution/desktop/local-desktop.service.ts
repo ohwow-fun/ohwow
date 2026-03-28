@@ -18,6 +18,8 @@ import {
   detectScreenInfo,
   captureAndScaleScreenshot,
   scaleToPhysical,
+  scaleToPhysicalForDisplay,
+  buildDisplayLayout,
   notifyScreenshotCaptured,
 } from './screenshot-capture.js';
 import { checkActionSafety, logSafetyEvent, getFrontmostApp } from './safety-guard.js';
@@ -146,9 +148,10 @@ export type DesktopActionCallback = (
 export class LocalDesktopService {
   private ready = false;
   private stopped = false;
-  private screenInfo: ScreenInfo = { physicalWidth: 1920, physicalHeight: 1080, scaleFactor: 1 };
+  private screenInfo: ScreenInfo = { physicalWidth: 1920, physicalHeight: 1080, scaleFactor: 1, displays: [] };
   private lastScaledWidth = 0;
   private lastScaledHeight = 0;
+  private lastCaptureDisplayNumber: number | undefined = undefined;
   private lastActionTime = 0;
   private killCheckInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -190,11 +193,18 @@ export class LocalDesktopService {
       );
     }
 
-    // Detect screen info
+    // Detect screen info (multi-monitor aware)
     this.screenInfo = detectScreenInfo();
-    logger.info(
-      `[desktop] Screen detected: ${this.screenInfo.physicalWidth}x${this.screenInfo.physicalHeight} (scale: ${this.screenInfo.scaleFactor})`,
-    );
+    if (this.screenInfo.displays.length > 1) {
+      const displayDescs = this.screenInfo.displays.map(d =>
+        `${d.name} (${d.physicalWidth}x${d.physicalHeight}${d.isPrimary ? ', primary' : ''}${d.scaleFactor > 1 ? ', Retina' : ''} at ${d.originX},${d.originY})`,
+      );
+      logger.info(`[desktop] ${this.screenInfo.displays.length} displays detected: ${displayDescs.join(' | ')}`);
+    } else {
+      logger.info(
+        `[desktop] Screen detected: ${this.screenInfo.physicalWidth}x${this.screenInfo.physicalHeight} (scale: ${this.screenInfo.scaleFactor})`,
+      );
+    }
 
     // Pre-load nut.js
     const nut = await loadNutJs();
@@ -277,7 +287,7 @@ export class LocalDesktopService {
 
       switch (action.type) {
         case 'screenshot': {
-          result = await this.takeScreenshot();
+          result = await this.takeScreenshot(action.display);
           break;
         }
 
@@ -446,14 +456,23 @@ export class LocalDesktopService {
 
   /**
    * Take a screenshot and return as a result.
+   * @param displayNumber - Capture a specific display (1-based), or all if omitted.
    */
-  private async takeScreenshot(): Promise<DesktopActionResult> {
-    const { base64, scaledWidth, scaledHeight } = await captureAndScaleScreenshot(
+  private async takeScreenshot(displayNumber?: number): Promise<DesktopActionResult> {
+    const { base64, scaledWidth, scaledHeight, dimensionsChanged } = await captureAndScaleScreenshot(
       this.screenInfo,
       this.maxLongEdge,
+      displayNumber,
     );
     this.lastScaledWidth = scaledWidth;
     this.lastScaledHeight = scaledHeight;
+    this.lastCaptureDisplayNumber = displayNumber;
+
+    // Hot-plug: re-detect displays if composite dimensions changed
+    if (dimensionsChanged && !displayNumber) {
+      logger.info('[desktop] Display dimensions changed, re-detecting displays');
+      this.screenInfo = detectScreenInfo();
+    }
 
     if (this.notifyOnScreenshot) notifyScreenshotCaptured();
 
@@ -463,11 +482,13 @@ export class LocalDesktopService {
       screenshot: base64,
       scaledWidth,
       scaledHeight,
+      displayLayout: buildDisplayLayout(this.screenInfo.displays, displayNumber),
     };
   }
 
   /**
    * After a mutation action, wait briefly then auto-capture a screenshot.
+   * Re-captures the same display that was last targeted (or composite if none).
    */
   private async mutationResult(
     type: DesktopActionResult['type'],
@@ -475,10 +496,11 @@ export class LocalDesktopService {
     // Wait for UI to settle
     await new Promise(resolve => setTimeout(resolve, this.postActionDelay));
 
-    // Auto-capture screenshot for visual feedback
+    // Auto-capture screenshot for visual feedback (same display as last capture)
     const { base64, scaledWidth, scaledHeight } = await captureAndScaleScreenshot(
       this.screenInfo,
       this.maxLongEdge,
+      this.lastCaptureDisplayNumber,
     );
     this.lastScaledWidth = scaledWidth;
     this.lastScaledHeight = scaledHeight;
@@ -489,22 +511,45 @@ export class LocalDesktopService {
       screenshot: base64,
       scaledWidth,
       scaledHeight,
+      displayLayout: buildDisplayLayout(this.screenInfo.displays, this.lastCaptureDisplayNumber),
     };
   }
 
   /**
    * Scale LLM coordinates to physical screen coordinates.
+   * Uses per-display mapping when a single display was last captured.
    */
   private scaleCoords(x: number, y: number): { x: number; y: number } {
     if (this.lastScaledWidth === 0 || this.lastScaledHeight === 0) {
       // No previous screenshot — assume 1:1 mapping
       return { x: Math.round(x), y: Math.round(y) };
     }
+
+    // Single-display capture: map coords to that display's global position
+    if (this.lastCaptureDisplayNumber && this.screenInfo.displays.length > 0) {
+      const display = this.screenInfo.displays.find(d => d.displayNumber === this.lastCaptureDisplayNumber);
+      if (display) {
+        return scaleToPhysicalForDisplay(
+          x, y,
+          this.lastScaledWidth, this.lastScaledHeight,
+          display,
+        );
+      }
+    }
+
+    // Composite capture: linear scaling across full desktop
     return scaleToPhysical(
       x, y,
       this.lastScaledWidth, this.lastScaledHeight,
       this.screenInfo.physicalWidth, this.screenInfo.physicalHeight,
     );
+  }
+
+  /**
+   * Get the current screen info (for prompt building and display layout).
+   */
+  getScreenInfo(): ScreenInfo {
+    return this.screenInfo;
   }
 
   /**

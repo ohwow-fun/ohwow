@@ -6,7 +6,7 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalDesktopService } from './local-desktop.service.js';
-import type { DesktopAction, DesktopActionResult } from './desktop-types.js';
+import type { DesktopAction, DesktopActionResult, DisplayInfo } from './desktop-types.js';
 
 // ============================================================================
 // REQUEST DESKTOP TOOL (lightweight, included by default)
@@ -39,12 +39,31 @@ export const DESKTOP_ACTIVATION_MESSAGE = `Desktop control activated. You now ha
 
 Workflow: screenshot first to see the screen, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
 
-export const DESKTOP_SYSTEM_PROMPT = `## Desktop Control (Active)
+/**
+ * Build the desktop system prompt, optionally including multi-monitor layout info.
+ */
+export function buildDesktopSystemPrompt(displays?: DisplayInfo[]): string {
+  let prompt = `## Desktop Control (Active)
 You can control this macOS desktop. You see the screen via screenshots and interact via mouse and keyboard.
 
 After each action (click, type, key, scroll), you receive an automatic screenshot showing the result. Use this to verify your action worked before proceeding.
 
-Coordinate system: Screenshots are scaled to fit within 1280x800. Use coordinates as they appear in the scaled image. The system handles mapping to actual screen coordinates.
+Coordinate system: Screenshots are scaled to fit within 1280x800. Use coordinates as they appear in the scaled image. The system handles mapping to actual screen coordinates.`;
+
+  if (displays && displays.length > 1) {
+    const displayDescs = displays.map(d => {
+      const flags = [d.isPrimary ? 'primary' : null, d.scaleFactor > 1 ? 'Retina' : null].filter(Boolean).join(', ');
+      return `- Display ${d.displayNumber}: ${d.name} (${flags ? flags + ', ' : ''}${d.physicalWidth}x${d.physicalHeight})`;
+    });
+    prompt += `
+
+Multi-monitor setup:
+${displayDescs.join('\n')}
+
+You can capture a specific display for better resolution: desktop_screenshot with display parameter (e.g. display: 1 for the primary). Omit to capture all displays as a composite. Use composite to see the full layout, then switch to single-display for precise interactions.`;
+  }
+
+  prompt += `
 
 Tips:
 - Always take a screenshot first to orient yourself
@@ -54,6 +73,12 @@ Tips:
 - Use desktop_wait if you need to let an animation or loading complete
 - To move a window, drag from its title bar (the thin bar at the very top of the window), not from the center. Starting a drag from the window center will interact with content instead of moving the window.`;
 
+  return prompt;
+}
+
+/** Default system prompt (single display, backward compat) */
+export const DESKTOP_SYSTEM_PROMPT = buildDesktopSystemPrompt();
+
 // ============================================================================
 // FULL DESKTOP TOOL DEFINITIONS (injected after request_desktop is called)
 // ============================================================================
@@ -62,10 +87,15 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'desktop_screenshot',
     description:
-      'Take a screenshot of the entire macOS screen. Returns a JPEG image. Always call this first to see what is on screen before interacting.',
+      'Take a screenshot of the macOS screen. By default captures all displays as a composite. Optionally specify a display number to capture only that display (gives better resolution for focused work on multi-monitor setups).',
     input_schema: {
       type: 'object',
-      properties: {},
+      properties: {
+        display: {
+          type: 'number',
+          description: 'Display number to capture (1 = primary). Omit to capture all displays.',
+        },
+      },
       required: [],
     },
   },
@@ -216,7 +246,7 @@ function mapToolToAction(
 ): DesktopAction | null {
   switch (toolName) {
     case 'desktop_screenshot':
-      return { type: 'screenshot' };
+      return { type: 'screenshot', display: input.display as number | undefined };
 
     case 'desktop_click': {
       const button = input.button as string | undefined;
@@ -307,10 +337,11 @@ export function formatDesktopToolResult(
       },
     });
     if (result.scaledWidth && result.scaledHeight) {
-      blocks.push({
-        type: 'text',
-        text: `Screen dimensions: ${result.scaledWidth}x${result.scaledHeight}`,
-      });
+      let dimText = `Screen dimensions: ${result.scaledWidth}x${result.scaledHeight}`;
+      if (result.displayLayout) {
+        dimText += `\n${result.displayLayout}`;
+      }
+      blocks.push({ type: 'text', text: dimText });
     }
   }
 
