@@ -1290,7 +1290,7 @@ export class LocalOrchestrator {
           toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
 
           // Collect base64 images from formattedBlocks for vision-capable models
-          if (outcome.formattedBlocks) {
+          if (modelEntry?.vision && outcome.formattedBlocks) {
             for (const block of outcome.formattedBlocks) {
               if (block.type === 'image' && 'source' in block) {
                 const src = (block as { type: 'image'; source: { type: string; media_type: string; data: string } }).source;
