@@ -47,6 +47,7 @@ import {
   DESKTOP_TOOL_DEFINITIONS,
   REQUEST_DESKTOP_TOOL,
 } from './desktop/index.js';
+import type { DesktopServiceOptions } from './desktop/index.js';
 import {
   DRAFT_TOOL_DEFINITIONS,
   DRAFT_TOOL_PROMPT_HINT,
@@ -231,6 +232,7 @@ export class RuntimeEngine {
     browserActivated: boolean;
     desktopService: LocalDesktopService | null;
     desktopActivated: boolean;
+    desktopOptions?: Partial<DesktopServiceOptions>;
     fileAccessGuard: FileAccessGuard | null;
     mcpClients: McpClientManager | null;
   }): ToolExecutionContext {
@@ -250,6 +252,7 @@ export class RuntimeEngine {
       browserActivated: opts.browserActivated,
       desktopService: opts.desktopService,
       desktopActivated: opts.desktopActivated,
+      desktopOptions: opts.desktopOptions,
     };
   }
 
@@ -436,7 +439,18 @@ export class RuntimeEngine {
       const bashEnabled = agentConfig.bash_enabled === true;
       const mcpEnabled = agentConfig.mcp_enabled === true;
       const desktopEnabled = agentConfig.desktop_enabled === true;
+      const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
+      const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
+      const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];
       const agentMcpServers: McpServerConfig[] = agentConfig.mcp_servers ?? [];
+
+      // Desktop service options (passed via buildToolContext → request-desktop-executor)
+      const desktopOptions: Partial<DesktopServiceOptions> = {
+        enableRecording: desktopRecordingEnabled,
+        enablePreActionScreenshots: desktopPreActionScreenshots,
+        allowedApps: desktopAllowedApps,
+        autonomyLevel,
+      };
 
       // Load file access guard if enabled
       let fileAccessGuard: FileAccessGuard | null = null;
@@ -749,6 +763,7 @@ export class RuntimeEngine {
             approvalRequired,
             browserEnabled,
             mcpClients,
+            desktopOptions,
             difficulty,
           });
           fullContent = ollamaResult.fullContent;
@@ -868,7 +883,7 @@ export class RuntimeEngine {
             // Activate desktop on-demand if request_desktop is called
             const hasRequestDesktop = toolUseBlocks.some(b => b.name === 'request_desktop');
             if (hasRequestDesktop && !desktopActivated) {
-              desktopService = new LocalDesktopService({ dataDir: this.config.dataDir });
+              desktopService = new LocalDesktopService({ dataDir: this.config.dataDir, ...desktopOptions });
               desktopActivated = true;
 
               const requestDesktopIdx = tools.findIndex(t => 'name' in t && t.name === 'request_desktop');
@@ -887,6 +902,7 @@ export class RuntimeEngine {
               browserActivated,
               desktopService,
               desktopActivated,
+              desktopOptions,
               fileAccessGuard,
               mcpClients,
             });
@@ -1772,6 +1788,7 @@ export class RuntimeEngine {
     approvalRequired: boolean;
     browserEnabled: boolean;
     mcpClients?: McpClientManager | null;
+    desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[] }> {
     const provider = await this.modelRouter!.getProvider('agent_task', opts.difficulty);
@@ -1963,6 +1980,7 @@ export class RuntimeEngine {
             browserActivated,
             desktopService: null,
             desktopActivated: false,
+            desktopOptions: opts.desktopOptions,
             fileAccessGuard: opts.fileAccessGuard,
             mcpClients: opts.mcpClients ?? null,
           });

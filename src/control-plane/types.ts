@@ -48,6 +48,8 @@ export interface AgentConfigPayload {
     bash_enabled?: boolean;
     desktop_enabled?: boolean;
     desktop_allowed_apps?: string[];
+    desktop_recording_enabled?: boolean;
+    desktop_pre_action_screenshots?: boolean;
   };
   fileAccessPaths?: Array<{ path: string; label?: string }>;
   /** Per-agent memory sync policy. Controls which memory types can leave the device. */
