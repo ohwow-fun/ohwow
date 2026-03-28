@@ -46,7 +46,7 @@ export function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Navigate to="/chat" replace />} />
+          <Route index element={<ChatPage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="agents" element={<AgentsPage />} />
           <Route path="agents/:id" element={<AgentDetailPage />} />
@@ -66,7 +66,7 @@ export function App() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
           <Route path="messages" element={<MessagesPage />} />
-          <Route path="chat" element={<ChatPage />} />
+          <Route path="chat" element={<Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

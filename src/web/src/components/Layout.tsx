@@ -34,6 +34,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   // Primary (unlabeled)
+  { path: '/', label: 'Chat', icon: ChatCircle, group: 'primary' },
   { path: '/dashboard', label: 'Overview', icon: SquaresFour, group: 'primary' },
   { path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'primary' },
   { path: '/activity', label: 'Activity', icon: Pulse, group: 'primary' },
