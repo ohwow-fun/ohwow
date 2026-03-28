@@ -1057,6 +1057,27 @@ export class LocalOrchestrator {
     const ollamaProvider = provider as unknown as OllamaProvider;
 
     for (let iteration = 0; iteration < ollamaMaxIter; iteration++) {
+      // Evict old screenshots: keep only the most recent image to avoid
+      // blowing the context window on multi-step desktop workflows.
+      // Each base64 screenshot is ~40-50K tokens.
+      let lastImageIdx = -1;
+      for (let i = loopMessages.length - 1; i >= 0; i--) {
+        const c = loopMessages[i].content;
+        if (Array.isArray(c) && c.some(p => p.type === 'image_url')) {
+          if (lastImageIdx === -1) {
+            lastImageIdx = i; // keep this one
+          } else {
+            // Strip image parts, keep text
+            loopMessages[i].content = c.filter(p => p.type !== 'image_url');
+            // If only text parts remain and there's exactly one, collapse to string
+            const remaining = loopMessages[i].content as Array<{ type: string; text?: string }>;
+            if (remaining.length === 1 && remaining[0].type === 'text') {
+              loopMessages[i].content = remaining[0].text || '';
+            }
+          }
+        }
+      }
+
       let response: ModelResponseWithTools;
       try {
         // Stream tokens — createMessageWithToolsStreaming yields text tokens
