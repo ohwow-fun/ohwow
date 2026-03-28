@@ -74,7 +74,7 @@ export function ReadyScreen({ selectedModel, loading, error, onLaunch, businessN
           disabled={loading}
           className="w-full bg-white text-black rounded-lg px-6 py-3.5 text-base font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50"
         >
-          {loading ? 'Saving...' : 'Open Dashboard'}
+          {loading ? 'Saving...' : 'Start Chatting'}
         </button>
       </div>
     </div>
