@@ -381,10 +381,16 @@ export function createServer(deps: ServerDeps): {
             sttProvider: stt,
             ttsProvider: tts,
             ttsOptions: profileId !== 'default' ? { voiceProfileId: profileId } : {},
-            onTranscription: async (text: string) => {
+            onTranscription: async (text, sttResult) => {
               return orchestrator.chatForChannel(text, `voice-${agentId}`, {
                 excludedTools: [],
                 platform: 'voice',
+                voiceContext: {
+                  sttConfidence: sttResult.confidence,
+                  sttProvider: stt.name,
+                  language: sttResult.language,
+                  audioDurationMs: sttResult.durationMs,
+                },
               });
             },
           });

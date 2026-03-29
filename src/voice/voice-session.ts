@@ -7,24 +7,29 @@
 import { EventEmitter } from 'node:events';
 import type { STTProvider, TTSProvider, VoiceSessionState, STTResult, TTSOptions } from './types.js';
 import type { MessagingChannel, ChannelType } from '../integrations/channel-types.js';
+import type { ExperienceStream } from '../brain/experience-stream.js';
 
 interface VoiceSessionConfig {
   sttProvider: STTProvider;
   ttsProvider: TTSProvider;
   /** Callback to send transcribed text to the orchestrator and get a response */
-  onTranscription: (text: string) => Promise<string>;
+  onTranscription: (text: string, sttResult: STTResult) => Promise<string>;
   /** Default TTS options (voice profile, etc.) */
   ttsOptions?: TTSOptions;
+  /** Optional experience stream for recording voice lifecycle events */
+  experienceStream?: ExperienceStream;
 }
 
 export class VoiceSession extends EventEmitter implements MessagingChannel {
   readonly type: ChannelType = 'tui'; // Voice is a TUI enhancement, not a separate channel
   private stt: STTProvider;
   private tts: TTSProvider;
-  private onTranscription: (text: string) => Promise<string>;
+  private onTranscription: (text: string, sttResult: STTResult) => Promise<string>;
   private ttsOptions: TTSOptions;
+  private experienceStream?: ExperienceStream;
   private _state: VoiceSessionState = 'idle';
   private _active = false;
+  private _startedAt = 0;
 
   constructor(config: VoiceSessionConfig) {
     super();
@@ -32,14 +37,27 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
     this.tts = config.ttsProvider;
     this.onTranscription = config.onTranscription;
     this.ttsOptions = config.ttsOptions || {};
+    this.experienceStream = config.experienceStream;
   }
 
   get state(): VoiceSessionState {
     return this._state;
   }
 
+  getState(): VoiceSessionState {
+    return this._state;
+  }
+
   get isActive(): boolean {
     return this._active;
+  }
+
+  getSttProvider(): string {
+    return this.stt.name;
+  }
+
+  getTtsProvider(): string {
+    return this.tts.name;
   }
 
   private setState(state: VoiceSessionState): void {
@@ -64,14 +82,22 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
       return { transcription };
     }
 
-    // Step 2: Send to orchestrator
+    // Step 2: Send to orchestrator (with STT result for voice context)
     this.setState('processing');
-    const responseText = await this.onTranscription(transcription.text);
+    const responseText = await this.onTranscription(transcription.text, transcription);
     this.emit('response', responseText);
 
     // Step 3: Text to Speech
     this.setState('speaking');
     const ttsResult = await this.tts.synthesize(responseText);
+
+    // Record voice processing experience
+    this.experienceStream?.append('voice_processed', {
+      sttConfidence: transcription.confidence,
+      sttProvider: this.stt.name,
+      responseLength: responseText.length,
+      ttsDurationMs: ttsResult.durationMs,
+    }, 'voice');
 
     this.setState('idle');
     return {
@@ -101,9 +127,9 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
       return { transcription, responseText: '' };
     }
 
-    // Step 2: Send to orchestrator
+    // Step 2: Send to orchestrator (with STT result for voice context)
     this.setState('processing');
-    const responseText = await this.onTranscription(transcription.text);
+    const responseText = await this.onTranscription(transcription.text, transcription);
     this.emit('response', responseText);
 
     // Step 3: Chunked TTS (sentence by sentence)
@@ -129,6 +155,14 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
       }
     }
 
+    // Record voice processing experience
+    this.experienceStream?.append('voice_processed', {
+      sttConfidence: transcription.confidence,
+      sttProvider: this.stt.name,
+      responseLength: responseText.length,
+      sentenceCount: sentences.length,
+    }, 'voice');
+
     this.setState('idle');
     return { transcription, responseText };
   }
@@ -143,10 +177,22 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
     if (!ttsOk) throw new Error(`TTS provider "${this.tts.name}" is not available`);
 
     this._active = true;
+    this._startedAt = Date.now();
     this.setState('idle');
+    this.experienceStream?.append('voice_session_started', {
+      sttProvider: this.stt.name,
+      ttsProvider: this.tts.name,
+    }, 'voice');
   }
 
   stop(): void {
+    if (this._active) {
+      this.experienceStream?.append('voice_session_ended', {
+        durationMs: Date.now() - this._startedAt,
+        sttProvider: this.stt.name,
+        ttsProvider: this.tts.name,
+      }, 'voice');
+    }
     this._active = false;
     this.setState('idle');
   }
