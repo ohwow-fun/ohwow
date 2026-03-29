@@ -310,6 +310,7 @@ export class LocalOrchestrator {
       await this.desktopService.close();
       this.desktopService = null;
       this.desktopActivated = false;
+      this.syncOrganToBody();
     }
   }
 
@@ -516,6 +517,15 @@ export class LocalOrchestrator {
             systemPrompt = staticPart + '\n\n' + dynamicPart;
             budget.setSystemPrompt(systemPrompt);
             logger.debug(`[orchestrator] Text-only: switched to compact prompt (${budget.getState().systemPromptTokens} tokens)`);
+          }
+
+          // Body Awareness for text-only Ollama path
+          const textProprio = this.brain?.getProprioception();
+          if (textProprio && textProprio.organs.length > 0) {
+            const activeOrgans = textProprio.organs.filter(o => o.health !== 'dormant');
+            if (activeOrgans.length > 0) {
+              systemPrompt += `\n\n## Body Awareness\nActive capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`;
+            }
           }
 
           const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
@@ -1142,6 +1152,22 @@ export class LocalOrchestrator {
     let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
     if (initialPromptMode) {
       logger.debug(`[orchestrator] Model tier: ${paramTier} (${modelSizeGB}GB) → ${initialPromptMode === 'micro' ? 'micro' : 'compact'} prompt (${estimateTokens(systemPrompt)} tokens)`);
+    }
+
+    // Body Awareness + System Warnings for Ollama path (same as Anthropic path)
+    const ollamaProprio = this.brain?.getProprioception();
+    if (ollamaProprio && ollamaProprio.organs.length > 0) {
+      const activeOrgans = ollamaProprio.organs.filter(o => o.health !== 'dormant');
+      if (activeOrgans.length > 0) {
+        const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
+        const lines = [`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`];
+        if (degraded.length > 0) lines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
+        systemPrompt += `\n\n## Body Awareness\n${lines.join('\n')}`;
+      }
+    }
+    const ollamaWarnings = this.brain?.workspace.getConscious(3, { types: ['failure', 'warning'], minSalience: 0.5 }) ?? [];
+    if (ollamaWarnings.length > 0) {
+      systemPrompt += `\n\n## System Warnings\n${ollamaWarnings.map(w => w.content).join('\n')}`;
     }
 
     // Convert Anthropic tool definitions to OpenAI format (with priority filtering)

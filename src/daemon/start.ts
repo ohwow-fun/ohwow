@@ -431,8 +431,18 @@ export async function startDaemon(): Promise<DaemonHandle> {
   }
 
   // 10b. Bootstrap digital body (Merleau-Ponty: embodiment)
+  // Mutable voice state tracker — updated by server.ts when voice sessions start/stop
+  const voiceState = { state: 'idle' as 'idle' | 'listening' | 'processing' | 'speaking', stt: null as string | null, tts: null as string | null };
+  const voiceAdapter: VoiceServiceLike = {
+    isActive: () => voiceState.state !== 'idle',
+    getState: () => voiceState.state,
+    getSttProvider: () => voiceState.stt,
+    getTtsProvider: () => voiceState.tts,
+  };
+
   const digitalBody = new DigitalBody({
     channels: channelRegistry,
+    voice: voiceAdapter,
     workingDirectory: process.cwd(),
   });
 
