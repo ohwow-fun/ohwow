@@ -23,7 +23,7 @@ import type {
   ReflexRule,
   OrganHealth,
 } from './types.js';
-import type { DigitalBody } from './digital-body.js';
+import type { DigitalBody, VoiceServiceLike } from './digital-body.js';
 import type { ExperienceStream } from '../brain/experience-stream.js';
 import type { GlobalWorkspace } from '../brain/global-workspace.js';
 
@@ -39,6 +39,7 @@ const DEFAULT_INTERVALS: Record<string, number> = {
   mcp: 15000,
   peers: 30000,
   filesystem: 60000,
+  voice: 2000,           // Auditory modality: fast polling for voice state changes
 };
 
 /** Salience scores for different signal types. */
@@ -64,6 +65,8 @@ export interface DigitalNervousSystemOptions {
   workspace?: GlobalWorkspace;
   /** Override monitoring intervals per organ ID. */
   intervals?: Record<string, number>;
+  /** Voice service for auditory modality monitoring. */
+  voiceService?: VoiceServiceLike;
 }
 
 export class DigitalNervousSystem {
@@ -77,6 +80,8 @@ export class DigitalNervousSystem {
   private listeners: Array<(signal: NervousSignal) => void> = [];
   private lastHealthState: Map<string, OrganHealth> = new Map();
   private lastAffordanceCount: Map<string, number> = new Map();
+  private lastVoiceState: string = 'idle';
+  private voiceService: VoiceServiceLike | null;
   private running = false;
 
   constructor(options: DigitalNervousSystemOptions) {
@@ -84,6 +89,7 @@ export class DigitalNervousSystem {
     this.experienceStream = options.experienceStream ?? null;
     this.workspace = options.workspace ?? null;
     this.intervals = { ...DEFAULT_INTERVALS, ...options.intervals };
+    this.voiceService = options.voiceService ?? null;
   }
 
   // --------------------------------------------------------------------------
@@ -178,6 +184,42 @@ export class DigitalNervousSystem {
       this.emitSignal(signal);
       this.lastAffordanceCount.set(organ.id, currentAffordanceCount);
     }
+
+    // Voice-specific: detect state transitions (auditory modality)
+    if (organ.id === 'voice' && this.voiceService) {
+      const currentVoiceState = this.voiceService.getState();
+      if (currentVoiceState !== this.lastVoiceState) {
+        const signal = this.createSignal(
+          'sensation',
+          'voice',
+          {
+            previousState: this.lastVoiceState,
+            currentState: currentVoiceState,
+            sttProvider: this.voiceService.getSttProvider(),
+            ttsProvider: this.voiceService.getTtsProvider(),
+          },
+          // Elevate salience for active voice transitions
+          currentVoiceState === 'listening' ? 0.4 : SIGNAL_SALIENCE.sensation,
+        );
+        this.emitSignal(signal);
+        this.lastVoiceState = currentVoiceState;
+      }
+    }
+  }
+
+  /**
+   * Emit a voice-specific pain signal (e.g., low STT confidence).
+   * Called externally by the voice pipeline when confidence drops.
+   */
+  emitVoicePain(data: { sttConfidence: number; text: string }): void {
+    if (!this.running) return;
+    const signal = this.createSignal(
+      'pain',
+      'voice',
+      { ...data, threshold: 0.5 },
+      0.7, // High salience: auditory pain
+    );
+    this.emitSignal(signal);
   }
 
   // --------------------------------------------------------------------------

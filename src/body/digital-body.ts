@@ -230,6 +230,70 @@ class FilesystemOrgan extends BaseOrgan {
   }
 }
 
+// --------------------------------------------------------------------------
+// Voice Organ — wraps the voice pipeline (Auditory Modality)
+// --------------------------------------------------------------------------
+
+/**
+ * Minimal interface for voice pipeline state.
+ * "A WhatsApp connection is a voice. A microphone is an ear."
+ * — Body README
+ */
+export interface VoiceServiceLike {
+  isActive(): boolean;
+  getState(): 'idle' | 'listening' | 'processing' | 'speaking';
+  getSttProvider(): string | null;
+  getTtsProvider(): string | null;
+}
+
+class VoiceOrgan extends BaseOrgan {
+  readonly id = 'voice';
+  readonly name = 'Voice Pipeline';
+
+  constructor(private service: VoiceServiceLike) { super(); }
+
+  isActive(): boolean { return this.service.isActive(); }
+
+  getHealth(): OrganHealth {
+    if (!this.service.isActive()) return 'dormant';
+    const hasStt = !!this.service.getSttProvider();
+    const hasTts = !!this.service.getTtsProvider();
+    if (hasStt && hasTts) return 'healthy';
+    if (hasStt || hasTts) return 'degraded';
+    return 'failed';
+  }
+
+  getAffordances(): Affordance[] {
+    const hasStt = !!this.service.getSttProvider();
+    const hasTts = !!this.service.getTtsProvider();
+
+    const affordances: Affordance[] = [];
+
+    if (hasStt) {
+      affordances.push(
+        { action: 'listen', organId: this.id, domain: 'digital', readiness: this.service.getState() === 'idle' ? 1 : 0.3, estimatedLatencyMs: 500, risk: 'none', prerequisites: [] },
+        { action: 'transcribe', organId: this.id, domain: 'digital', readiness: hasStt ? 0.9 : 0, estimatedLatencyMs: 2000, risk: 'none', prerequisites: ['audio_input'] },
+      );
+    }
+
+    if (hasTts) {
+      affordances.push(
+        { action: 'speak', organId: this.id, domain: 'digital', readiness: this.service.getState() === 'idle' ? 1 : 0.3, estimatedLatencyMs: 300, risk: 'none', prerequisites: [] },
+        { action: 'synthesize', organId: this.id, domain: 'digital', readiness: hasTts ? 0.9 : 0, estimatedLatencyMs: 1000, risk: 'none', prerequisites: ['text_input'] },
+      );
+    }
+
+    return affordances;
+  }
+
+  getUmwelt(): UmweltDimension[] {
+    return [
+      { modality: 'acoustic_input', organId: this.id, currentValue: this.service.getState(), lastUpdated: Date.now(), updateFrequencyMs: 2000 },
+      { modality: 'speech_output', organId: this.id, currentValue: { stt: this.service.getSttProvider(), tts: this.service.getTtsProvider() }, lastUpdated: Date.now(), updateFrequencyMs: 10000 },
+    ];
+  }
+}
+
 // ============================================================================
 // DIGITAL BODY — Unified organ collection
 // ============================================================================
@@ -241,6 +305,7 @@ export interface DigitalBodyOptions {
   channels?: ChannelRegistryLike;
   mcp?: McpManagerLike;
   workingDirectory?: string;
+  voice?: VoiceServiceLike;
 }
 
 /**
@@ -261,6 +326,7 @@ export class DigitalBody {
     if (options?.desktop) this.organs.set('desktop', new DesktopOrgan(options.desktop));
     if (options?.channels) this.organs.set('channels', new ChannelsOrgan(options.channels));
     if (options?.mcp) this.organs.set('mcp', new McpOrgan(options.mcp));
+    if (options?.voice) this.organs.set('voice', new VoiceOrgan(options.voice));
   }
 
   /** Get all organs. */
@@ -344,4 +410,9 @@ export function createChannelsOrgan(registry: ChannelRegistryLike): BodyPart {
 /** Create an McpOrgan from any manager with getToolDefinitions(). */
 export function createMcpOrgan(manager: McpManagerLike): BodyPart {
   return new McpOrgan(manager);
+}
+
+/** Create a VoiceOrgan from any service implementing VoiceServiceLike. */
+export function createVoiceOrgan(service: VoiceServiceLike): BodyPart {
+  return new VoiceOrgan(service);
 }
