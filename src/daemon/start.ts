@@ -188,6 +188,47 @@ export async function startDaemon(): Promise<DaemonHandle> {
   bus.on('ollama:model-changed', (payload: { model: string }) => {
     modelRouter.setOllamaModel(payload.model);
     logger.info(`[daemon] Active Ollama model changed to: ${payload.model}`);
+
+    // Restart llama-server with the new model if TurboQuant is active
+    if (llamaCppManager && config.turboQuantBits > 0) {
+      (async () => {
+        try {
+          const { resolveGgufPath } = await import('../lib/llama-cpp-gguf.js');
+          const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
+          const modelPath = await resolveGgufPath(payload.model, config.llamaCppModelPath || undefined);
+          const device = (await import('../lib/device-info.js')).detectDevice();
+          const { computeDynamicNumCtx } = await import('../lib/ollama-models.js');
+          const contextSize = computeDynamicNumCtx(payload.model, device, config.turboQuantBits as 2 | 3 | 4);
+
+          await llamaCppManager!.stop();
+          await llamaCppManager!.start({
+            binaryPath: config.llamaCppBinaryPath || await LlamaCppManager.ensureBinary(),
+            modelPath,
+            contextSize,
+            cacheTypeK: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
+            cacheTypeV: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
+            gpuLayers: 99,
+            flashAttention: true,
+            port: parseInt(new URL(config.llamaCppUrl).port || '8085', 10),
+            host: '127.0.0.1',
+          });
+
+          const caps = llamaCppManager!.getCapabilities();
+          if (caps && orchestrator) {
+            orchestrator.setInferenceCapabilities(caps);
+            bus.emit('inference:capabilities-changed', caps);
+          }
+          logger.info({ model: payload.model }, '[daemon] llama-server restarted with new model');
+        } catch (err) {
+          logger.warn({ err: err instanceof Error ? err.message : err, model: payload.model },
+            '[daemon] llama-server restart failed for new model, falling back to Ollama');
+          const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+          const defaultCaps = createDefaultCapabilities();
+          if (orchestrator) orchestrator.setInferenceCapabilities(defaultCaps);
+          bus.emit('inference:capabilities-changed', defaultCaps);
+        }
+      })();
+    }
   });
 
   // Update ModelRouter when user changes OpenRouter key or model via the dashboard
@@ -977,6 +1018,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     orchestrator?.closeBrowser().catch(() => {});
     orchestrator?.closeDesktop().catch(() => {});
     orchestrator?.closeMcp().catch(() => {});
+    llamaCppManager?.stop().catch(() => {});
     ollamaMonitor?.stop();
     processMonitor.stop();
     tunnel?.stop();

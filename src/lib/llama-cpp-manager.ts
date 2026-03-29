@@ -10,9 +10,10 @@
 
 import { spawn, execSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
-import { existsSync, openSync, closeSync } from 'fs';
+import { existsSync, openSync, closeSync, mkdirSync, writeFileSync, chmodSync, createWriteStream, unlinkSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, platform, arch } from 'os';
+import { pipeline } from 'stream/promises';
 import { logger } from './logger.js';
 import type { CompressionBits } from './turboquant/types.js';
 import type { InferenceCapabilities } from './inference-capabilities.js';
@@ -279,11 +280,16 @@ export class LlamaCppManager {
   }
 
   /**
-   * Find the llama-server binary. Checks:
-   * 1. ~/.ohwow/bin/llama-server
-   * 2. System PATH (which llama-server)
+   * Find or download the llama-server binary.
    *
-   * Returns the path if found, throws if not.
+   * Search order:
+   * 1. Explicit config path
+   * 2. ~/.ohwow/bin/llama-server (previously downloaded)
+   * 3. System PATH
+   * 4. Auto-download from GitHub releases
+   *
+   * The auto-download fetches a prebuilt binary for the current platform
+   * from the llama.cpp releases (or turboquant fork when available).
    */
   static async ensureBinary(configBinaryPath?: string): Promise<string> {
     // 1. Explicit config path
@@ -292,26 +298,144 @@ export class LlamaCppManager {
     }
 
     // 2. ohwow bin directory
-    const ohwowBin = join(homedir(), '.ohwow', 'bin', 'llama-server');
+    const ohwowBinDir = join(homedir(), '.ohwow', 'bin');
+    const ohwowBin = join(ohwowBinDir, 'llama-server');
     if (existsSync(ohwowBin)) return ohwowBin;
 
     // 3. System PATH
     try {
-      const which = execSync('which llama-server', { stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
-      const path = which.toString().trim();
-      if (path && existsSync(path)) return path;
+      const whichCmd = platform() === 'win32' ? 'where llama-server' : 'which llama-server';
+      const which = execSync(whichCmd, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
+      const foundPath = which.toString().trim().split('\n')[0];
+      if (foundPath && existsSync(foundPath)) return foundPath;
     } catch {
       // Not in PATH
     }
 
-    throw new Error(
-      'llama-server binary not found. To use TurboQuant KV cache compression, ' +
-      'build llama-server from the turboquant fork:\n' +
-      '  git clone https://github.com/TheTom/llama-cpp-turboquant.git\n' +
-      '  cd llama-cpp-turboquant && git checkout feature/turboquant-kv-cache\n' +
-      '  cmake -B build -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON && cmake --build build --target llama-server -j\n' +
-      '  cp build/bin/llama-server ~/.ohwow/bin/llama-server',
-    );
+    // 4. Auto-download
+    logger.info('[llama-cpp-manager] llama-server not found, attempting auto-download');
+    return LlamaCppManager.downloadBinary(ohwowBinDir);
+  }
+
+  /**
+   * Download a prebuilt llama-server binary from GitHub releases.
+   * Fetches the latest release, finds the asset for the current platform,
+   * downloads and extracts it to the target directory.
+   */
+  private static async downloadBinary(targetDir: string): Promise<string> {
+    const os = platform();
+    const cpuArch = arch();
+
+    // Map to llama.cpp release asset naming conventions
+    const platformKey = LlamaCppManager.getPlatformKey(os, cpuArch);
+    if (!platformKey) {
+      throw new Error(
+        `No prebuilt llama-server available for ${os}-${cpuArch}. ` +
+        'Build from source: https://github.com/ggml-org/llama.cpp#build',
+      );
+    }
+
+    // Fetch latest release info from llama.cpp (or turboquant fork)
+    const releaseUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest';
+    logger.info({ url: releaseUrl }, '[llama-cpp-manager] Fetching latest release info');
+
+    const releaseRes = await fetch(releaseUrl, {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'ohwow-runtime' },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!releaseRes.ok) {
+      throw new Error(`GitHub API returned ${releaseRes.status} fetching release info`);
+    }
+
+    const release = await releaseRes.json() as {
+      tag_name: string;
+      assets: Array<{ name: string; browser_download_url: string; size: number }>;
+    };
+
+    // Find the matching asset for this platform
+    const asset = release.assets.find(a => a.name.includes(platformKey) && a.name.endsWith('.zip'));
+    if (!asset) {
+      const available = release.assets.map(a => a.name).join(', ');
+      throw new Error(
+        `No llama-server binary found for ${platformKey} in release ${release.tag_name}. ` +
+        `Available assets: ${available}`,
+      );
+    }
+
+    logger.info({ asset: asset.name, size: asset.size, release: release.tag_name },
+      '[llama-cpp-manager] Downloading llama-server binary');
+
+    // Download the zip
+    const downloadRes = await fetch(asset.browser_download_url, {
+      signal: AbortSignal.timeout(300_000), // 5 min timeout for large files
+      headers: { 'User-Agent': 'ohwow-runtime' },
+    });
+
+    if (!downloadRes.ok || !downloadRes.body) {
+      throw new Error(`Download failed: ${downloadRes.status}`);
+    }
+
+    // Ensure target directory exists
+    mkdirSync(targetDir, { recursive: true });
+
+    // Write zip to temp file
+    const zipPath = join(targetDir, `llama-server-${release.tag_name}.zip`);
+    const fileStream = createWriteStream(zipPath);
+    // Convert web ReadableStream to Node.js stream via Readable.fromWeb
+    const { Readable } = await import('stream');
+    const nodeStream = Readable.fromWeb(downloadRes.body as import('stream/web').ReadableStream);
+    await pipeline(nodeStream, fileStream);
+
+    // Extract llama-server binary from the zip
+    const targetBin = join(targetDir, 'llama-server');
+    try {
+      // Use unzip CLI (available on macOS and most Linux)
+      execSync(`unzip -o -j "${zipPath}" "*/llama-server" -d "${targetDir}"`, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 30_000,
+      });
+
+      if (!existsSync(targetBin)) {
+        // Try alternative: some zips have the binary at root level
+        execSync(`unzip -o -j "${zipPath}" "llama-server" -d "${targetDir}"`, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 30_000,
+        });
+      }
+    } catch {
+      throw new Error(
+        `Failed to extract llama-server from ${zipPath}. ` +
+        'You may need to install unzip or extract manually.',
+      );
+    } finally {
+      // Clean up zip
+      try { unlinkSync(zipPath); } catch { /* */ }
+    }
+
+    if (!existsSync(targetBin)) {
+      throw new Error(`llama-server binary not found after extracting ${asset.name}`);
+    }
+
+    // Make executable
+    chmodSync(targetBin, 0o755);
+    logger.info({ path: targetBin, release: release.tag_name },
+      '[llama-cpp-manager] llama-server binary installed');
+
+    return targetBin;
+  }
+
+  /**
+   * Map OS/arch to the llama.cpp release asset naming convention.
+   * Returns null if no prebuilt binary is available.
+   */
+  private static getPlatformKey(os: string, cpuArch: string): string | null {
+    if (os === 'darwin' && cpuArch === 'arm64') return 'macos-arm64';
+    if (os === 'darwin' && cpuArch === 'x64') return 'macos-x64';
+    if (os === 'linux' && cpuArch === 'x64') return 'linux-x64';
+    if (os === 'linux' && cpuArch === 'arm64') return 'linux-arm64';
+    if (os === 'win32' && cpuArch === 'x64') return 'win-x64';
+    return null;
   }
 }
 
