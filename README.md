@@ -23,23 +23,64 @@ Running in under 5 minutes. A setup wizard connects to [Ollama](https://ollama.c
 
 ---
 
-## What a day looks like with ohwow
+## Introducing Vibe Working
 
-**7:45 AM** — You open your laptop. ohwow noticed you always start around this time. Your morning briefing is ready: "3 tasks completed overnight. 1 needs your eye (a customer contract with unusual terms). 2 leads replied to yesterday's outreach. Your Sales Agent's follow-up is queued for 9am."
+Vibe coding changed how we build software. You describe what you want, AI writes the code.
 
-**8:00 AM** — You say: "What should I focus on today?" ohwow knows you're at growth stage 2 (Attract). It responds: "You're over-indexing on content creation this week. Your growth stage needs more outreach. Your Sales Agent has 3 warm leads that haven't been contacted. Want me to draft follow-ups?"
+**Vibe working is the same leap, but for everything else.** Describe what your business needs. AI agents handle the sales, support, research, content, operations. You stay in the flow of the work that actually matters to you.
+
+This isn't automation. Automation is rigid. You build a workflow, it runs the same way forever, it breaks when anything changes. Vibe working is fluid. Your agents learn your patterns, adapt to your business stage, understand when to act and when to ask. They get better every day. They develop real expertise from practice, not from prompts.
+
+Under the hood, ohwow is built on a seven-layer cognitive architecture. Not seven microservices. Seven layers of how intelligence actually works: perception, reasoning, memory, embodiment, purpose, identity, and collaboration.
+
+Your agents don't just execute tasks. They perceive your intent and anticipate what you might need next. They challenge their own plans before acting, catching bad ideas before they cost you time. They predict which tools are likely to fail based on past experience, and route around problems before they happen. They track trust the way humans actually do: one failure weighs more than five successes. They detect your energy cycles, know when you're overloaded, and hold complex decisions until you're sharp enough to make them. They understand that a business at $1K/month needs fundamentally different work than one at $100K.
+
+And they have bodies. Not just chat interfaces. ohwow agents can see your screen, control your desktop, click through apps, fill out forms, export files from Figma, pull reports from dashboards. They send WhatsApp messages from your real number, not an API. They browse the web with a real browser, not a scraper. The architecture is ready for physical bodies too: Arduino sensors, ESP32 controllers, temperature monitors, hardware feedback loops with sub-10ms reflexes. A digital brain that can reach into the physical world.
+
+Your devices become one organism. ohwow discovers every machine on your network automatically, no configuration. Your MacBook, your Mac Mini, your home server. They share discoveries: when one device learns that a tool fails in a specific way, every device knows. Work routes to the best machine for the job. If one goes offline, another picks up seamlessly.
+
+This isn't a prompt chain. It's a system that reasons about work the way a great collaborator would, with hands that can actually do things in the world.
+
+The difference:
+
+| | Traditional Automation | Vibe Working |
+|---|---|---|
+| Setup | Build complex workflows | Say what you need |
+| Adaptability | Breaks when context changes | Learns and adjusts |
+| Intelligence | If/then rules | Practical wisdom about your business |
+| Trust | All or nothing | Earned incrementally, per domain |
+| Human awareness | None | Knows your energy, rhythm, capacity |
+| Ownership | Cloud vendor controls your data | Runs on your machine |
+
+## Why this matters now
+
+Three things converged to make this possible:
+
+1. **Local models got good enough.** Ollama runs capable models on a laptop. No API costs. No data leaving your machine. ohwow routes simple tasks to local models and complex ones to cloud APIs, only when you allow it.
+
+2. **AI agents can actually do things now.** Not just chat. Browse the web. Control your desktop. Send WhatsApp messages from your real number. Read emails. Update your CRM. 150+ tools, orchestrated by a single brain that understands context.
+
+3. **The missing piece was collaboration, not capability.** Every AI platform asks "how do we make AI do more?" ohwow asks "how do we make humans and AI work together naturally?" That means understanding your energy cycles, respecting your boundaries, earning trust gradually, and knowing when to act vs. when to wait.
+
+## A day of vibe working
+
+**7:45 AM** — You open your laptop. ohwow noticed you always start around this time. Your morning briefing is ready: 3 tasks completed overnight. 1 needs your eye. 2 leads replied to yesterday's outreach. Your Sales Agent's follow-up is queued for 9am.
+
+**8:00 AM** — You say: "What should I focus on today?" ohwow knows you're in growth stage 2 (Attract). It responds: "You're over-indexing on content this week. Your stage needs more outreach. 3 warm leads haven't been contacted. Want me to draft follow-ups?"
 
 **8:15 AM** — You approve the follow-ups. The Sales Agent sends personalized WhatsApp messages to each lead, referencing their specific context from your CRM. No templates. Each message reads like you wrote it.
 
-**10:30 AM** — You're deep in product work. A customer emails with a support question. ohwow detects it, routes it to the Support Agent, which drafts a response. Because your cognitive load is high (3 open approvals, deep work mode), it batches the notification instead of interrupting. You'll see it at your next natural break.
+**10:30 AM** — You're deep in product work. A customer emails with a support question. ohwow routes it to the Support Agent, which drafts a response. Because your cognitive load is high (3 open approvals, deep work mode), it batches the notification instead of interrupting. You'll see it at your next natural break.
 
-**2:00 PM** — ohwow notices your energy dips after lunch (it learned this from 30 days of watching your activity patterns). It holds the complex research report that just completed, knowing you'll evaluate it better in the morning. Instead, it surfaces a simple approval that takes 10 seconds.
+**2:00 PM** — ohwow notices your energy dips after lunch (it learned this from 30 days of watching your activity patterns). It holds the complex research report, knowing you'll evaluate it better in the morning. Instead, it surfaces a simple approval that takes 10 seconds.
 
-**4:00 PM** — A lead responds positively on WhatsApp. ohwow's Sales Agent wants to send a pricing proposal. It could auto-send (it's earned that trust after 47 successful outreach tasks with 94% approval), but the amount is above the auto-approve threshold. You get a one-line notification: "Ready to send pricing to Acme Corp. $4,500/mo proposal. Approve?"
+**4:00 PM** — A lead responds positively on WhatsApp. The Sales Agent wants to send a pricing proposal. It could auto-send (it earned that trust after 47 successful tasks with 94% approval), but the amount is above the auto-approve threshold. You get a one-line notification: "Ready to send pricing to Acme Corp. $4,500/mo. Approve?"
 
-**6:15 PM** — You close your laptop. ohwow stops all non-critical notifications. Your agents keep working: the Content Writer drafts tomorrow's blog post, the Researcher compiles a competitive analysis you asked for this morning. Results will be waiting when you open up tomorrow.
+**6:15 PM** — You close your laptop. ohwow stops all non-critical notifications. Your agents keep working: the Content Writer drafts tomorrow's blog post, the Researcher compiles a competitive analysis. Results will be waiting tomorrow morning.
 
 **End of day**: 12 tasks completed across 4 agents. 3 leads contacted. 1 support ticket resolved. 1 blog draft ready. You spent 20 minutes on approvals. The rest was your work.
+
+That's vibe working. You set the direction. Your AI team handles the rest.
 
 ---
 
