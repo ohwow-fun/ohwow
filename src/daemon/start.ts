@@ -36,7 +36,7 @@ import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
 import { VoiceboxService } from '../voice/voicebox-service.js';
-import { DigitalBody } from '../body/digital-body.js';
+import { DigitalBody, type VoiceServiceLike } from '../body/digital-body.js';
 import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { OllamaMonitor } from '../lib/ollama-monitor.js';
 import { ProcessMonitor } from '../lib/process-monitor.js';
@@ -163,6 +163,16 @@ export async function startDaemon(): Promise<DaemonHandle> {
       });
       llamaCppUrl = llamaCppManager.getUrl();
       inferenceCapabilities = llamaCppManager.getCapabilities();
+
+      // Notify TUI and orchestrator if llama-server crashes and auto-restart fails
+      llamaCppManager.setOnCrash(async () => {
+        const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+        const defaultCaps = createDefaultCapabilities();
+        orchestrator?.setInferenceCapabilities(defaultCaps);
+        bus.emit('inference:capabilities-changed', defaultCaps);
+        logger.warn('[daemon] llama-server permanently down, TurboQuant disabled');
+      });
+
       logger.info({ url: llamaCppUrl, bits: config.turboQuantBits, turboActive: !!inferenceCapabilities?.turboQuantActive }, '[daemon] llama-server started with TurboQuant compression');
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] llama-server not available, falling back to Ollama');
@@ -416,6 +426,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
     if (inferenceCapabilities) {
       orchestrator.setInferenceCapabilities(inferenceCapabilities);
+      bus.emit('inference:capabilities-changed', inferenceCapabilities);
     }
   }
 
@@ -973,6 +984,19 @@ export async function startDaemon(): Promise<DaemonHandle> {
     const statuses = processMonitor.getStatuses();
     const capacity = processMonitor.estimateCapacity();
     res.json({ statuses, capacity });
+  });
+
+  // TurboQuant capabilities endpoint
+  app.get('/api/turboquant/status', (_req, res) => {
+    const caps = llamaCppManager?.getCapabilities() ?? null;
+    res.json({
+      active: caps?.turboQuantActive ?? false,
+      bits: caps?.turboQuantBits ?? 0,
+      cacheTypeK: caps?.cacheTypeK ?? null,
+      cacheTypeV: caps?.cacheTypeV ?? null,
+      provider: caps?.provider ?? 'ollama',
+      llamaServerRunning: llamaCppManager ? true : false,
+    });
   });
 
   // Queue status endpoint (used by auto-updater to wait for active tasks)

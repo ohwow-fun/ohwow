@@ -9,6 +9,8 @@ import { Box, Text } from 'ink';
 import type { ProcessStatus, CapacityEstimate } from '../../../lib/process-monitor.js';
 import type { DeviceInfo } from '../../../lib/device-info.js';
 import { detectDevice, formatDeviceCompact } from '../../../lib/device-info.js';
+import type { InferenceCapabilities } from '../../../lib/inference-capabilities.js';
+import { useEvent } from '../../hooks/use-event-bus.js';
 
 interface ResourcesTabProps {
   port: number;
@@ -41,6 +43,12 @@ export function ResourcesTab({ port }: ResourcesTabProps) {
   const [statuses, setStatuses] = useState<ProcessStatus[]>([]);
   const [capacity, setCapacity] = useState<CapacityEstimate | null>(null);
   const [device] = useState<DeviceInfo>(() => detectDevice());
+  const capabilitiesEvent = useEvent('inference:capabilities-changed');
+  const [capabilities, setCapabilities] = useState<InferenceCapabilities | null>(null);
+
+  useEffect(() => {
+    if (capabilitiesEvent) setCapabilities(capabilitiesEvent);
+  }, [capabilitiesEvent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +80,19 @@ export function ResourcesTab({ port }: ResourcesTabProps) {
       <Text>  {formatDeviceCompact(device)}</Text>
       <Text>  RAM: <Text color="gray">{device.totalMemoryGB}GB</Text>  CPU: <Text color="gray">{device.cpuCores} cores</Text></Text>
       {device.gpuName && <Text>  GPU: <Text color="gray">{device.gpuName}</Text></Text>}
+
+      {/* TurboQuant Status */}
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="cyan">KV Cache Compression</Text>
+        {capabilities?.turboQuantActive ? (
+          <>
+            <Text>  <Text color="green">●</Text> TurboQuant {capabilities.turboQuantBits}-bit active via {capabilities.provider}</Text>
+            <Text color="gray">  Cache: K={capabilities.cacheTypeK}  V={capabilities.cacheTypeV}</Text>
+          </>
+        ) : (
+          <Text>  <Text color="gray">○</Text> <Text color="gray">Not active. Set turboQuantBits in config and install llama-server.</Text></Text>
+        )}
+      </Box>
 
       {/* Process Table */}
       <Box flexDirection="column" marginTop={1}>

@@ -8,6 +8,7 @@ import { Box, Text, useInput } from 'ink';
 import type { ModelSource } from '../../config.js';
 import { updateConfigFile } from '../../config.js';
 import { validateAnthropicApiKey } from '../../lib/anthropic-auth.js';
+import { getModelTurboQuantInfo } from '../../lib/ollama-models.js';
 
 interface InstalledModelInfo {
   tag: string;
@@ -617,6 +618,8 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
             const badges: string[] = [];
             if (model.isActive) badges.push('★ Active');
             if (model.isOrchestrator) badges.push('◆ Orchestrator');
+            const tqInfo = getModelTurboQuantInfo(model.tag);
+            if (tqInfo.compatible) badges.push(`⚡ TQ ${tqInfo.ratio4bit}x`);
 
             return (
               <Box key={model.tag}>
@@ -627,7 +630,7 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
                   {'  '}
                   <Text color="gray">{model.status.padEnd(12)}</Text>
                   {badges.map(b => (
-                    <Text key={b} color={b.startsWith('★') ? 'yellow' : 'magenta'}>{' '}{b}</Text>
+                    <Text key={b} color={b.startsWith('★') ? 'yellow' : b.startsWith('⚡') ? 'cyan' : 'magenta'}>{' '}{b}</Text>
                   ))}
                 </Text>
               </Box>

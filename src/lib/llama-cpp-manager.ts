@@ -53,6 +53,9 @@ export class LlamaCppManager {
   private config: LlamaCppLaunchConfig | null = null;
   private logFd: number | null = null;
   private capabilities: InferenceCapabilities | null = null;
+  private watchdogInterval: ReturnType<typeof setInterval> | null = null;
+  private restartCount = 0;
+  private onCrash: (() => void) | null = null;
 
   /**
    * Map TurboQuant compression bits to llama-server cache type names.
@@ -160,6 +163,56 @@ export class LlamaCppManager {
     }
 
     logger.info('[llama-cpp-manager] llama-server is ready');
+
+    // Start watchdog: monitors health every 30s, auto-restarts on crash (up to 3 times)
+    this.startWatchdog();
+  }
+
+  /**
+   * Set a callback to be invoked when llama-server crashes and auto-restart fails.
+   * Use this to emit capabilities-changed events to the bus.
+   */
+  setOnCrash(cb: () => void): void {
+    this.onCrash = cb;
+  }
+
+  private startWatchdog(): void {
+    this.stopWatchdog();
+    this.watchdogInterval = setInterval(async () => {
+      if (!this.config || !this.process) return;
+
+      const healthy = await this.isRunning();
+      if (healthy) return;
+
+      // Process died — attempt auto-restart
+      if (this.restartCount >= 3) {
+        logger.error('[llama-cpp-manager] llama-server crashed 3 times, giving up');
+        this.stopWatchdog();
+        this.capabilities = null;
+        this.onCrash?.();
+        return;
+      }
+
+      this.restartCount++;
+      logger.warn({ attempt: this.restartCount }, '[llama-cpp-manager] llama-server crashed, attempting restart');
+
+      try {
+        this.process = null; // Clear dead process ref
+        await this.start(this.config);
+        this.restartCount = 0; // Reset on successful restart
+        logger.info('[llama-cpp-manager] llama-server auto-restarted successfully');
+      } catch (err) {
+        logger.error({ err: err instanceof Error ? err.message : err },
+          '[llama-cpp-manager] Auto-restart failed');
+      }
+    }, 30_000);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = null;
+    }
   }
 
   /**
@@ -167,6 +220,8 @@ export class LlamaCppManager {
    * Sends SIGTERM, waits up to 5 seconds, then SIGKILL.
    */
   async stop(): Promise<void> {
+    this.stopWatchdog();
+
     if (!this.process) return;
 
     const pid = this.process.pid;
