@@ -6,7 +6,9 @@
 [![npm downloads](https://img.shields.io/npm/dm/ohwow)](https://www.npmjs.com/package/ohwow)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2)](https://discord.gg/WUGnGqceeY)
 
-**An AI team that runs on your laptop. Agents that learn your patterns, message your customers, automate your operations, and actually understand what your business needs right now. Free. Open source. Your data stays on your machine.**
+**The open source human+AI operating system.** Your computer learns how you work, assembles a team of AI agents around you, and runs your business alongside you. Not for you. With you.
+
+**Local. Free. Yours.**
 
 <p align="center">
   <img src="docs/demo.gif" alt="ohwow demo" width="800">
