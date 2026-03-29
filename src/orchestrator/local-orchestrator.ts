@@ -585,6 +585,7 @@ export class LocalOrchestrator {
         tokenBudgetRemaining: 4096,
         limitations: this.anthropicApiKey ? [] : ['ollama_only'],
         currentLoad: 0,
+        bodyProprioception: this.brain?.getProprioception(),
       };
       perception = this.brain.perceive(stimulus, classified, selfModelDeps);
     }

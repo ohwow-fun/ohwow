@@ -36,6 +36,8 @@ import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
 import { VoiceboxService } from '../voice/voicebox-service.js';
+import { DigitalBody } from '../body/digital-body.js';
+import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { OllamaMonitor } from '../lib/ollama-monitor.js';
 import { ProcessMonitor } from '../lib/process-monitor.js';
 import { acquireLock, releaseLock } from '../lib/instance-lock.js';
@@ -371,6 +373,27 @@ export async function startDaemon(): Promise<DaemonHandle> {
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
     orchestrator.setTurboQuantBits(config.turboQuantBits);
   }
+
+  // 10b. Bootstrap digital body (Merleau-Ponty: embodiment)
+  const digitalBody = new DigitalBody({
+    channels: channelRegistry,
+    workingDirectory: process.cwd(),
+  });
+
+  const digitalNS = new DigitalNervousSystem({
+    body: digitalBody,
+    experienceStream: orchestrator?.getBrain()?.experienceStream,
+    workspace: orchestrator?.getBrain()?.workspace,
+  });
+  digitalNS.start();
+
+  // Wire body into brain(s) for proprioceptive awareness
+  if (orchestrator?.getBrain()) {
+    orchestrator.getBrain()!.setDigitalBody(digitalBody);
+  }
+  engine.getBrain().setDigitalBody(digitalBody);
+
+  logger.info(`[body] Digital body created with ${digitalBody.getOrgans().length} organs, nervous system started`);
 
   let messageRouter: MessageRouter | null = null;
   if (!isWorker) {
@@ -949,6 +972,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     proactiveEngine?.stop();
     scraplingService.stop().catch(() => {});
     voiceboxService.stop().catch(() => {});
+    digitalNS.stop();
     tgClient?.disconnect();
     waClient?.disconnect();
     peerDiscovery?.stop();

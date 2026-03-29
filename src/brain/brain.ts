@@ -89,6 +89,7 @@ export class Brain {
 
   private modelRouter: ModelRouter | null;
   private nervousSystem: NervousSystem | null;
+  private digitalBody: import('../body/digital-body.js').DigitalBody | null = null;
 
   constructor(deps: BrainDependencies) {
     this.modelRouter = deps.modelRouter;
@@ -106,6 +107,20 @@ export class Brain {
       this.predictiveEngine,
     );
     this.workspace = new GlobalWorkspace();
+  }
+
+  // --------------------------------------------------------------------------
+  // BODY INTEGRATION — Wire embodiment layer post-construction
+  // --------------------------------------------------------------------------
+
+  /** Inject the digital body for proprioceptive awareness. */
+  setDigitalBody(body: import('../body/digital-body.js').DigitalBody): void {
+    this.digitalBody = body;
+  }
+
+  /** Get the current proprioceptive snapshot, if body is available. */
+  getProprioception(): import('../body/types.js').Proprioception | undefined {
+    return this.digitalBody?.getProprioception();
   }
 
   // --------------------------------------------------------------------------

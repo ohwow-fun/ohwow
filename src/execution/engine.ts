@@ -215,6 +215,11 @@ export class RuntimeEngine {
     this.semaphore = new Semaphore(config.anthropicApiKey ? 3 : 1);
   }
 
+  /** Get the Brain instance for body integration. */
+  getBrain(): Brain {
+    return this.brain;
+  }
+
   /** Set the task distributor for peer delegation. */
   setTaskDistributor(distributor: import('../peers/task-distributor.js').TaskDistributor): void {
     this.taskDistributor = distributor;
