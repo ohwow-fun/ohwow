@@ -133,6 +133,38 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // 5. Create ModelRouter
   const mainModelHasVision = MODEL_CATALOG.some(m => m.tag === config.ollamaModel && m.vision);
+  // Auto-start llama-server when TurboQuant is enabled for local inference
+  let llamaCppUrl: string | undefined;
+  let llamaCppManager: import('../lib/llama-cpp-manager.js').LlamaCppManager | null = null;
+  if (config.turboQuantBits > 0 && (config.modelSource === 'local' || config.preferLocalModel)) {
+    try {
+      const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
+      const { resolveGgufPath } = await import('../lib/llama-cpp-gguf.js');
+      const binaryPath = await LlamaCppManager.ensureBinary(config.llamaCppBinaryPath || undefined);
+      const modelPath = await resolveGgufPath(config.ollamaModel, config.llamaCppModelPath || undefined);
+      const device = (await import('../lib/device-info.js')).detectDevice();
+      const { computeDynamicNumCtx } = await import('../lib/ollama-models.js');
+      const contextSize = computeDynamicNumCtx(config.ollamaModel, device, config.turboQuantBits as 2 | 3 | 4);
+
+      llamaCppManager = new LlamaCppManager();
+      await llamaCppManager.start({
+        binaryPath,
+        modelPath,
+        contextSize,
+        cacheTypeK: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
+        cacheTypeV: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
+        gpuLayers: 99,
+        flashAttention: true,
+        port: parseInt(new URL(config.llamaCppUrl).port || '8085', 10),
+        host: '127.0.0.1',
+      });
+      llamaCppUrl = llamaCppManager.getUrl();
+      logger.info({ url: llamaCppUrl, bits: config.turboQuantBits }, '[daemon] llama-server started with TurboQuant compression');
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] llama-server not available, falling back to Ollama');
+    }
+  }
+
   const modelRouter = new ModelRouter({
     anthropicApiKey: config.anthropicApiKey || undefined,
     ollamaUrl: config.ollamaUrl,
@@ -144,6 +176,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
     mainModelHasVision,
     openRouterApiKey: config.openRouterApiKey || undefined,
     openRouterModel: config.openRouterModel || undefined,
+    llamaCppUrl,
+    turboQuantBits: config.turboQuantBits,
   });
 
   // Update ModelRouter when user changes active model via the dashboard

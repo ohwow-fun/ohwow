@@ -209,6 +209,9 @@ export class OnboardingService {
         maxExecutionTimeMs: 30_000,
       },
       turboQuantBits: 4,
+      llamaCppUrl: 'http://localhost:8085',
+      llamaCppBinaryPath: '',
+      llamaCppModelPath: '',
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

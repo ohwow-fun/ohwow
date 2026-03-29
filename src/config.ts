@@ -90,6 +90,12 @@ export interface RuntimeConfig {
   openclaw: import('./integrations/openclaw/types.js').OpenClawConfig;
   /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. Default: 4. */
   turboQuantBits: 0 | 2 | 3 | 4;
+  /** URL for llama-server with TurboQuant support (default: http://localhost:8085) */
+  llamaCppUrl: string;
+  /** Path to llama-server binary (empty = auto-detect in ~/.ohwow/bin/ or PATH) */
+  llamaCppBinaryPath: string;
+  /** Direct path to a .gguf model file for llama-server (empty = resolve from Ollama blobs) */
+  llamaCppModelPath: string;
 }
 
 interface ConfigFile {
@@ -137,6 +143,9 @@ interface ConfigFile {
   mcpServerEnabled?: boolean;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
+  llamaCppUrl?: string;
+  llamaCppBinaryPath?: string;
+  llamaCppModelPath?: string;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -222,6 +231,9 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 4);
       return val as 0 | 2 | 3 | 4;
     })(),
+    llamaCppUrl: process.env.OHWOW_LLAMA_CPP_URL || fileConfig.llamaCppUrl || 'http://localhost:8085',
+    llamaCppBinaryPath: process.env.OHWOW_LLAMA_CPP_BINARY || fileConfig.llamaCppBinaryPath || '',
+    llamaCppModelPath: process.env.OHWOW_LLAMA_CPP_MODEL || fileConfig.llamaCppModelPath || '',
   };
 
 

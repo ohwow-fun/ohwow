@@ -13,6 +13,7 @@ import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
 import type { OperationType, ExecutionPolicy } from './execution-policy.js';
 import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
+import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import type {
   TextBlock,
   MessageParam,
@@ -43,7 +44,7 @@ export interface ModelResponse {
   inputTokens: number;
   outputTokens: number;
   model: string;
-  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code';
+  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp';
 }
 
 // ============================================================================
@@ -1011,6 +1012,7 @@ export class ModelRouter {
   private quickOllama: OllamaProvider | null;
   private openrouter: OpenRouterProvider | null;
   private claudeCode: ClaudeCodeProvider | null;
+  private llamaCpp: LlamaCppProvider | null;
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
@@ -1030,6 +1032,10 @@ export class ModelRouter {
     modelSource?: ModelSourceOption;
     mainModelHasVision?: boolean;
     onOllamaResponse?: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void;
+    /** URL for llama-server with TurboQuant support */
+    llamaCppUrl?: string;
+    /** TurboQuant bits (>0 enables llama-cpp provider) */
+    turboQuantBits?: 0 | 2 | 3 | 4;
   }) {
     this.anthropic = opts.anthropicApiKey
       ? new AnthropicProvider(opts.anthropicApiKey)
@@ -1048,16 +1054,20 @@ export class ModelRouter {
       ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'openrouter/optimus-alpha')
       : null;
     this.claudeCode = this.modelSource === 'claude-code' ? new ClaudeCodeProvider() : null;
+    this.llamaCpp = (opts.llamaCppUrl && opts.turboQuantBits && opts.turboQuantBits > 0)
+      ? new LlamaCppProvider(opts.llamaCppUrl, opts.ollamaModel || 'qwen3:4b')
+      : null;
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
     this._onOllamaResponse = opts.onOllamaResponse ?? null;
 
-    // Wire response callback to all Ollama providers
+    // Wire response callback to all local providers
     if (this._onOllamaResponse) {
       const cb = this._onOllamaResponse;
       this.ollama?.setResponseCallback(cb);
       this.ocrOllama?.setResponseCallback(cb);
       this.quickOllama?.setResponseCallback(cb);
+      this.llamaCpp?.setResponseCallback(cb);
     }
   }
 
@@ -1183,15 +1193,19 @@ export class ModelRouter {
       throw new Error('Cloud mode selected but no Anthropic API key configured. Add an API key or switch to local mode.');
     }
 
-    // Local mode: always prefer Ollama for all task types
+    // Local mode: prefer llama-cpp (TurboQuant) → Ollama → Anthropic
     if (this.modelSource === 'local') {
+      if (this.llamaCpp) {
+        const available = await this.llamaCpp.isAvailable();
+        if (available) return this.llamaCpp;
+      }
       if (this.ollama) {
         const available = await this.ollama.isAvailable();
         if (available) return this.ollama;
       }
       // Fall back to Anthropic
       if (this.anthropic) return this.anthropic;
-      throw new Error('Local mode selected but Ollama is not running. Start Ollama or switch to cloud mode.');
+      throw new Error('Local mode selected but neither llama-server nor Ollama is running. Start a local server or switch to cloud mode.');
     }
 
     // Auto mode: difficulty-aware routing
@@ -1207,14 +1221,21 @@ export class ModelRouter {
     }
 
     // Auto mode: route by task type (original behavior)
-    const useLocal = this.preferLocal && this.ollama && (
+    const useLocal = this.preferLocal && (this.llamaCpp || this.ollama) && (
       taskType === 'orchestrator' || taskType === 'memory_extraction'
     );
 
-    if (useLocal && this.ollama) {
-      const available = await this.ollama.isAvailable();
-      if (available) return this.ollama;
-      // Fall back to Anthropic
+    if (useLocal) {
+      // Prefer llama-cpp (TurboQuant) when available, then Ollama
+      if (this.llamaCpp) {
+        const available = await this.llamaCpp.isAvailable();
+        if (available) return this.llamaCpp;
+      }
+      if (this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      // Fall back to cloud providers
     }
 
     // Try OpenRouter as middle tier (free, cloud-quality)
