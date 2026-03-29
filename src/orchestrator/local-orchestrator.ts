@@ -117,6 +117,7 @@ export class LocalOrchestrator {
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
   private skipMediaCostConfirmation = false;
+  private turboQuantBits: 0 | 2 | 3 | 4 = 0;
   private pendingElicitations = new Map<string, (response: Record<string, unknown> | null) => void>();
   private lastIntentBySession = new Map<string, ClassifiedIntent>();
   private circuitBreaker = new CircuitBreaker();
@@ -249,6 +250,11 @@ export class LocalOrchestrator {
   /** Set whether to skip cost confirmation for cloud media tools. */
   setSkipMediaCostConfirmation(skip: boolean): void {
     this.skipMediaCostConfirmation = skip;
+  }
+
+  /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */
+  setTurboQuantBits(bits: 0 | 2 | 3 | 4): void {
+    this.turboQuantBits = bits;
   }
 
   /** Set the Anthropic API key at runtime (e.g. after user enters it in model picker). */
@@ -466,7 +472,8 @@ export class LocalOrchestrator {
           let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage, textPromptMode || undefined);
           let systemPrompt = staticPart + '\n\n' + dynamicPart;
           const device = detectDevice();
-          const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
+          const tqBits = this.turboQuantBits || undefined;
+          const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBits as 2 | 3 | 4 | undefined);
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
 
@@ -1038,7 +1045,8 @@ export class LocalOrchestrator {
 
     // Determine model capability tier for prompt/tool selection
     const device = detectDevice();
-    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device);
+    const tqBitsToolLoop = this.turboQuantBits || undefined;
+    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBitsToolLoop as 2 | 3 | 4 | undefined);
     const paramTier = getParameterTier(this.orchestratorModel || '');
     const modelEntry = MODEL_CATALOG.find(m => m.tag === (this.orchestratorModel || ''));
     const modelSizeGB = modelEntry?.sizeGB ?? 2.5;

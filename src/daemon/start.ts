@@ -335,6 +335,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   if (orchestrator) {
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
+    if (config.turboQuantBits) {
+      orchestrator.setTurboQuantBits(config.turboQuantBits);
+    }
   }
 
   let messageRouter: MessageRouter | null = null;

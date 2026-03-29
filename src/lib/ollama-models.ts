@@ -5,6 +5,8 @@
 
 import type { DeviceInfo, MemoryTier } from './device-info.js';
 import { getMemoryTier } from './device-info.js';
+import type { CompressionBits } from './turboquant/types.js';
+import { getFamilyCompressionRatio } from './turboquant/context-advisor.js';
 
 export type ParameterTier = 'micro' | 'small' | 'medium' | 'large';
 
@@ -42,6 +44,15 @@ export interface OllamaModelInfo {
   vision?: boolean;
   /** Context window size in tokens (e.g. 262144 for 256K). Used by getModelContextSize(). */
   contextSize?: number;
+  /** TurboQuant KV cache compression compatibility */
+  turboQuant?: {
+    /** Whether this model's architecture supports KV cache compression */
+    compatible: boolean;
+    /** Estimated compression ratio at 4-bit (e.g. 3.8x for GQA transformers) */
+    ratio4bit?: number;
+    /** Estimated compression ratio at 2-bit (e.g. 7.0x) */
+    ratio2bit?: number;
+  };
 }
 
 /** Full model catalog spanning multiple families and tiers. */
@@ -538,8 +549,16 @@ export function getModelContextSize(tag: string): number {
  * Uses freeMemoryGB (from os.freemem) which reflects real-time availability,
  * with a floor of 50% of total RAM to avoid being too conservative when the
  * OS reports low free memory due to disk cache (which is reclaimable).
+ *
+ * When `turboQuantBits` is provided and the model family supports KV cache
+ * compression, the tokens-per-MB estimate is multiplied by the family's
+ * compression ratio, enabling larger context windows in the same RAM.
  */
-export function computeDynamicNumCtx(tag: string, device: DeviceInfo): number {
+export function computeDynamicNumCtx(
+  tag: string,
+  device: DeviceInfo,
+  turboQuantBits?: CompressionBits,
+): number {
   const entry = MODEL_CATALOG.find(m => m.tag === tag);
   const modelSize = entry?.sizeGB ?? 2.5; // conservative fallback
   const nativeContext = getModelContextSize(tag);
@@ -552,27 +571,73 @@ export function computeDynamicNumCtx(tag: string, device: DeviceInfo): number {
   const availableForContext = availableForModel - modelSize;
   if (availableForContext <= 0) return 4096; // barely fits, use minimum
 
-  // Conservative KV cache estimate: ~500 tokens per MB for Q4 quantized models
-  const tokensFromRAM = Math.floor(availableForContext * 1024 * 500);
+  // Base estimate: ~500 tokens per MB for Q4 quantized models
+  const baseTokensPerMB = 500;
 
-  // Safety cap for low-RAM machines to avoid Ollama OOM
-  const ramSafetyCap = device.totalMemoryGB < 16 ? 65_536 : 131_072;
+  // Apply TurboQuant compression multiplier when enabled for a supported family
+  let effectiveTokensPerMB = baseTokensPerMB;
+  if (turboQuantBits && entry?.family) {
+    const ratio = getFamilyCompressionRatio(entry.family, turboQuantBits);
+    // 0.85 safety margin accounts for compression metadata overhead
+    effectiveTokensPerMB = baseTokensPerMB * ratio * 0.85;
+  }
+
+  const tokensFromRAM = Math.floor(availableForContext * 1024 * effectiveTokensPerMB);
+
+  // Safety cap: doubled when TurboQuant is active (compressed KV cache uses less RAM)
+  let ramSafetyCap: number;
+  if (turboQuantBits) {
+    ramSafetyCap = device.totalMemoryGB < 16 ? 131_072 : 262_144;
+  } else {
+    ramSafetyCap = device.totalMemoryGB < 16 ? 65_536 : 131_072;
+  }
 
   return Math.max(4096, Math.min(nativeContext, tokensFromRAM, ramSafetyCap));
 }
 
 /** Returns a practical num_ctx to request from Ollama.
  *  When `device` is provided, computes a hardware-aware context window.
- *  Otherwise caps at `maxNumCtx` (default 16384) for backward compatibility. */
-export function getWorkingNumCtx(tag: string, maxNumCtx?: number, device?: DeviceInfo): number {
+ *  Otherwise caps at `maxNumCtx` (default 16384) for backward compatibility.
+ *  Pass `turboQuantBits` to enable TurboQuant-aware context sizing. */
+export function getWorkingNumCtx(
+  tag: string,
+  maxNumCtx?: number,
+  device?: DeviceInfo,
+  turboQuantBits?: CompressionBits,
+): number {
   const full = getModelContextSize(tag);
 
   if (device) {
-    return computeDynamicNumCtx(tag, device);
+    return computeDynamicNumCtx(tag, device, turboQuantBits);
   }
 
   const cap = maxNumCtx ?? 16_384;
   return Math.min(full, cap);
+}
+
+/**
+ * Get TurboQuant compression info for a model, derived from its family.
+ * Returns compatibility info and estimated compression ratios.
+ */
+export function getModelTurboQuantInfo(tag: string): {
+  compatible: boolean;
+  ratio4bit: number;
+  ratio2bit: number;
+  family: string;
+} {
+  const entry = MODEL_CATALOG.find(m => m.tag === tag);
+  if (!entry) return { compatible: false, ratio4bit: 1, ratio2bit: 1, family: 'unknown' };
+
+  // All standard transformer families support TurboQuant
+  const ratio4bit = getFamilyCompressionRatio(entry.family, 4);
+  const ratio2bit = getFamilyCompressionRatio(entry.family, 2);
+
+  return {
+    compatible: true,
+    ratio4bit,
+    ratio2bit,
+    family: entry.family,
+  };
 }
 
 /** Format model info for display. */

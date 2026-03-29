@@ -88,6 +88,8 @@ export interface RuntimeConfig {
   mcpServerEnabled: boolean;
   /** OpenClaw integration configuration */
   openclaw: import('./integrations/openclaw/types.js').OpenClawConfig;
+  /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. */
+  turboQuantBits: 0 | 2 | 3 | 4;
 }
 
 interface ConfigFile {
@@ -134,6 +136,7 @@ interface ConfigFile {
   mcpServers?: McpServerConfig[];
   mcpServerEnabled?: boolean;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
+  turboQuantBits?: 0 | 2 | 3 | 4;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -214,6 +217,11 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       sandboxAllowNetwork: fileConfig.openclaw?.sandboxAllowNetwork ?? false,
       maxExecutionTimeMs: fileConfig.openclaw?.maxExecutionTimeMs ?? 30_000,
     },
+    turboQuantBits: (() => {
+      const env = parseInt(process.env.OHWOW_TURBOQUANT_BITS || '', 10);
+      const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 0);
+      return val as 0 | 2 | 3 | 4;
+    })(),
   };
 
 
