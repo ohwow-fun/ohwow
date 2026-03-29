@@ -88,6 +88,7 @@ import { Brain } from '../brain/brain.js';
 import { enrichIntent } from '../brain/intentionality.js';
 import type { Stimulus, Perception } from '../brain/types.js';
 import type { SelfModelDeps } from '../brain/self-model.js';
+import { createBrowserOrgan, createDesktopOrgan, type DigitalBody } from '../body/digital-body.js';
 import { Soul } from '../persona/soul.js';
 import crypto from 'crypto';
 
@@ -128,6 +129,8 @@ export class LocalOrchestrator {
   private brain: Brain | null = null;
   /** Soul: deep human persona awareness (Aristotle's Psyche). */
   private soul = new Soul();
+  /** Digital Body: the agent's embodied capabilities (Merleau-Ponty). */
+  private digitalBody: DigitalBody | null = null;
 
   private get sessionDeps(): SessionDeps {
     return { db: this.db, workspaceId: this.workspaceId };
@@ -229,6 +232,23 @@ export class LocalOrchestrator {
     return this.brain;
   }
 
+  /** Set the digital body for dynamic organ wiring. */
+  setDigitalBody(body: DigitalBody): void {
+    this.digitalBody = body;
+    // Wire currently active organs
+    if (this.browserService) this.digitalBody.setOrgan('browser', createBrowserOrgan(this.browserService));
+    if (this.desktopService) this.digitalBody.setOrgan('desktop', createDesktopOrgan(this.desktopService));
+  }
+
+  /** Sync a newly activated service to the digital body. */
+  private syncOrganToBody(): void {
+    if (!this.digitalBody) return;
+    if (this.browserService) this.digitalBody.setOrgan('browser', createBrowserOrgan(this.browserService));
+    else this.digitalBody.removeOrgan('browser');
+    if (this.desktopService) this.digitalBody.setOrgan('desktop', createDesktopOrgan(this.desktopService));
+    else this.digitalBody.removeOrgan('desktop');
+  }
+
   /** Get the active model name (resolved from Anthropic constant or orchestratorModel). */
   getActiveModel(): string {
     if (!this.anthropicApiKey) {
@@ -270,6 +290,7 @@ export class LocalOrchestrator {
       await this.browserService.close().catch(() => {});
       this.browserService = null;
       this.browserActivated = false;
+      this.syncOrganToBody();
     }
   }
 
@@ -605,12 +626,14 @@ export class LocalOrchestrator {
       logger.debug('[browser] Browser process no longer active — nullifying');
       this.browserService = null;
       this.browserActivated = false;
+      this.syncOrganToBody();
     }
     if (browserPreActivated && !this.browserActivated) {
       yield { type: 'status', message: `[debug] Browser launching (pre-activation) — headless: ${this.browserHeadless}` };
       logger.debug(`[browser] Pre-activating browser — headless: ${this.browserHeadless}`);
       this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
       this.browserActivated = true;
+      this.syncOrganToBody();
     }
 
     // Auto-activate desktop when intent is 'desktop'
@@ -620,6 +643,7 @@ export class LocalOrchestrator {
       logger.debug('[desktop] Pre-activating desktop control');
       this.desktopService = new LocalDesktopService();
       this.desktopActivated = true;
+      this.syncOrganToBody();
     }
 
     // Build targeted system prompt (only fetches context for relevant sections)
@@ -658,6 +682,29 @@ export class LocalOrchestrator {
         systemBlocks.push({ type: 'text' as const, text: `\n\n## Soul Awareness\n${soulContext}` });
       }
     } catch { /* non-fatal: soul is best-effort enrichment */ }
+
+    // Body Awareness: inject proprioceptive context (Merleau-Ponty: embodied self-knowledge)
+    const proprioception = this.brain?.getProprioception();
+    if (proprioception && proprioception.organs.length > 0) {
+      const activeOrgans = proprioception.organs.filter(o => o.health !== 'dormant');
+      const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
+      const affordances = proprioception.affordances.filter(a => a.readiness > 0.5);
+
+      const lines: string[] = [];
+      if (activeOrgans.length > 0) {
+        lines.push(`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`);
+      }
+      if (degraded.length > 0) {
+        lines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
+      }
+      if (affordances.length > 0) {
+        lines.push(`Available actions: ${affordances.map(a => a.action).join(', ')}`);
+      }
+
+      if (lines.length > 0) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Body Awareness\n${lines.join('\n')}` });
+      }
+    }
 
     // Build tool list (conditionally includes filesystem tools, filtered by intent for Anthropic)
     // Apply tool embodiment: compress descriptions for mastered tools (Merleau-Ponty)
@@ -1039,12 +1086,14 @@ export class LocalOrchestrator {
       logger.debug('[browser] Browser process no longer active — nullifying (ollama)');
       this.browserService = null;
       this.browserActivated = false;
+      this.syncOrganToBody();
     }
     if (browserPreActivated && !this.browserActivated) {
       yield { type: 'status', message: `[debug] Browser launching (pre-activation) — headless: ${this.browserHeadless}` };
       logger.debug(`[browser] Pre-activating browser (ollama) — headless: ${this.browserHeadless}`);
       this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
       this.browserActivated = true;
+      this.syncOrganToBody();
     }
 
     // Auto-activate desktop when intent is 'desktop' (skip two-step gateway for small models)
@@ -1054,6 +1103,7 @@ export class LocalOrchestrator {
       logger.debug('[desktop] Pre-activating desktop control (ollama)');
       this.desktopService = new LocalDesktopService();
       this.desktopActivated = true;
+      this.syncOrganToBody();
     }
 
     // Determine model capability tier for prompt/tool selection

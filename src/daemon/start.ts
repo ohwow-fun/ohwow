@@ -387,9 +387,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
   });
   digitalNS.start();
 
-  // Wire body into brain(s) for proprioceptive awareness
-  if (orchestrator?.getBrain()) {
-    orchestrator.getBrain()!.setDigitalBody(digitalBody);
+  // Wire body into brain(s) and orchestrator for proprioceptive awareness
+  if (orchestrator) {
+    orchestrator.getBrain()?.setDigitalBody(digitalBody);
+    orchestrator.setDigitalBody(digitalBody);
   }
   engine.getBrain().setDigitalBody(digitalBody);
 
