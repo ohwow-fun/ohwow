@@ -208,7 +208,7 @@ export class OnboardingService {
         sandboxAllowNetwork: false,
         maxExecutionTimeMs: 30_000,
       },
-      turboQuantBits: 4,
+      turboQuantBits: 0,
       llamaCppUrl: 'http://localhost:8085',
       llamaCppBinaryPath: '',
       llamaCppModelPath: '',

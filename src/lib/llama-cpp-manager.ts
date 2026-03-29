@@ -15,6 +15,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from './logger.js';
 import type { CompressionBits } from './turboquant/types.js';
+import type { InferenceCapabilities } from './inference-capabilities.js';
+import { createLlamaCppCapabilities } from './inference-capabilities.js';
 
 const DEFAULT_PORT = 8085;
 const DEFAULT_HOST = '127.0.0.1';
@@ -49,6 +51,7 @@ export class LlamaCppManager {
   private process: ChildProcess | null = null;
   private config: LlamaCppLaunchConfig | null = null;
   private logFd: number | null = null;
+  private capabilities: InferenceCapabilities | null = null;
 
   /**
    * Map TurboQuant compression bits to llama-server cache type names.
@@ -148,6 +151,13 @@ export class LlamaCppManager {
 
     // Wait for health check
     await this.waitForReady(`http://${config.host}:${config.port}`, HEALTH_TIMEOUT_MS);
+
+    // Record confirmed capabilities — we set the flags, so we know them
+    const bits = this.inferBitsFromCacheType(config.cacheTypeK);
+    if (bits) {
+      this.capabilities = createLlamaCppCapabilities(bits, config.cacheTypeK, config.cacheTypeV);
+    }
+
     logger.info('[llama-cpp-manager] llama-server is ready');
   }
 
@@ -193,10 +203,27 @@ export class LlamaCppManager {
   }
 
   private cleanup(): void {
+    this.capabilities = null;
     if (this.logFd !== null) {
       try { closeSync(this.logFd); } catch { /* */ }
       this.logFd = null;
     }
+  }
+
+  /**
+   * Get the confirmed inference capabilities.
+   * Returns null if llama-server is not running or hasn't started.
+   */
+  getCapabilities(): InferenceCapabilities | null {
+    return this.capabilities;
+  }
+
+  /** Infer compression bits from cache type string. */
+  private inferBitsFromCacheType(cacheType: string): 2 | 3 | 4 | null {
+    if (cacheType === 'turbo2') return 2;
+    if (cacheType === 'turbo3') return 3;
+    if (cacheType === 'turbo4') return 4;
+    return null;
   }
 
   /**

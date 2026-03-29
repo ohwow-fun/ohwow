@@ -25,6 +25,10 @@ interface OllamaPsModel {
   details?: {
     family?: string;
     quantization_level?: string;
+    /** Future: Ollama may expose KV cache quantization type (e.g., 'turbo4', 'q4_0') */
+    cache_type_k?: string;
+    /** Future: Ollama may expose KV cache quantization type for values */
+    cache_type_v?: string;
   };
   expires_at?: string;
 }

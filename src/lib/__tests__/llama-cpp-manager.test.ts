@@ -30,4 +30,9 @@ describe('LlamaCppManager', () => {
     const manager = new LlamaCppManager();
     await expect(manager.stop()).resolves.toBeUndefined();
   });
+
+  it('getCapabilities returns null before start', () => {
+    const manager = new LlamaCppManager();
+    expect(manager.getCapabilities()).toBeNull();
+  });
 });

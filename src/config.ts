@@ -88,7 +88,7 @@ export interface RuntimeConfig {
   mcpServerEnabled: boolean;
   /** OpenClaw integration configuration */
   openclaw: import('./integrations/openclaw/types.js').OpenClawConfig;
-  /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. Default: 4. */
+  /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. Default: 0 (auto-enabled when turbo-capable server detected). */
   turboQuantBits: 0 | 2 | 3 | 4;
   /** URL for llama-server with TurboQuant support (default: http://localhost:8085) */
   llamaCppUrl: string;
@@ -228,7 +228,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     },
     turboQuantBits: (() => {
       const env = parseInt(process.env.OHWOW_TURBOQUANT_BITS || '', 10);
-      const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 4);
+      const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 0);
       return val as 0 | 2 | 3 | 4;
     })(),
     llamaCppUrl: process.env.OHWOW_LLAMA_CPP_URL || fileConfig.llamaCppUrl || 'http://localhost:8085',

@@ -169,6 +169,9 @@ export interface RuntimeEvents {
   'ollama:models-changed': Record<string, never>;
   'ollama:model-changed': { model: string };
 
+  // Inference capabilities (TurboQuant detection)
+  'inference:capabilities-changed': import('../lib/inference-capabilities.js').InferenceCapabilities;
+
   // OpenRouter
   'openrouter:key-changed': { key: string };
   'openrouter:model-changed': { model: string };

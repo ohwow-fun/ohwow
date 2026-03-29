@@ -138,6 +138,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // Auto-start llama-server when TurboQuant is enabled for local inference
   let llamaCppUrl: string | undefined;
   let llamaCppManager: import('../lib/llama-cpp-manager.js').LlamaCppManager | null = null;
+  let inferenceCapabilities: import('../lib/inference-capabilities.js').InferenceCapabilities | null = null;
   if (config.turboQuantBits > 0 && (config.modelSource === 'local' || config.preferLocalModel)) {
     try {
       const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
@@ -161,7 +162,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
         host: '127.0.0.1',
       });
       llamaCppUrl = llamaCppManager.getUrl();
-      logger.info({ url: llamaCppUrl, bits: config.turboQuantBits }, '[daemon] llama-server started with TurboQuant compression');
+      inferenceCapabilities = llamaCppManager.getCapabilities();
+      logger.info({ url: llamaCppUrl, bits: config.turboQuantBits, turboActive: !!inferenceCapabilities?.turboQuantActive }, '[daemon] llama-server started with TurboQuant compression');
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] llama-server not available, falling back to Ollama');
     }
@@ -371,7 +373,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   if (orchestrator) {
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
-    orchestrator.setTurboQuantBits(config.turboQuantBits);
+    if (inferenceCapabilities) {
+      orchestrator.setInferenceCapabilities(inferenceCapabilities);
+    }
   }
 
   // 10b. Bootstrap digital body (Merleau-Ponty: embodiment)
