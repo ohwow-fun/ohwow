@@ -208,7 +208,7 @@ export class OnboardingService {
         sandboxAllowNetwork: false,
         maxExecutionTimeMs: 30_000,
       },
-      turboQuantBits: 0,
+      turboQuantBits: 4,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

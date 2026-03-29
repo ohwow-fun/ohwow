@@ -88,7 +88,7 @@ export interface RuntimeConfig {
   mcpServerEnabled: boolean;
   /** OpenClaw integration configuration */
   openclaw: import('./integrations/openclaw/types.js').OpenClawConfig;
-  /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. */
+  /** TurboQuant KV cache compression bits (2, 3, or 4). 0 = disabled. Default: 4. */
   turboQuantBits: 0 | 2 | 3 | 4;
 }
 
@@ -219,7 +219,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     },
     turboQuantBits: (() => {
       const env = parseInt(process.env.OHWOW_TURBOQUANT_BITS || '', 10);
-      const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 0);
+      const val = [2, 3, 4].includes(env) ? env : (fileConfig.turboQuantBits ?? 4);
       return val as 0 | 2 | 3 | 4;
     })(),
   };

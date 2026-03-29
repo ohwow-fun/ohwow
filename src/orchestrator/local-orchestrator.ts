@@ -117,7 +117,7 @@ export class LocalOrchestrator {
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
   private skipMediaCostConfirmation = false;
-  private turboQuantBits: 0 | 2 | 3 | 4 = 0;
+  private turboQuantBits: 0 | 2 | 3 | 4 = 4;
   private pendingElicitations = new Map<string, (response: Record<string, unknown> | null) => void>();
   private lastIntentBySession = new Map<string, ClassifiedIntent>();
   private circuitBreaker = new CircuitBreaker();
