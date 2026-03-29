@@ -566,7 +566,19 @@ export class LocalOrchestrator {
     // Brain.perceive() enriches intent with horizons, builds temporal frame, and self-model
     let perception: Perception | null = null;
     if (this.brain) {
-      const stimulus: Stimulus = { type: 'user_message', content: userMessage, source: 'orchestrator', timestamp: Date.now() };
+      const isVoice = options?.platform === 'voice';
+      const stimulus: Stimulus = {
+        type: isVoice ? 'auditory_input' : 'user_message',
+        content: userMessage,
+        source: isVoice ? 'voice' : 'orchestrator',
+        timestamp: Date.now(),
+        voiceContext: options?.voiceContext ? {
+          sttConfidence: options.voiceContext.sttConfidence,
+          sttProvider: options.voiceContext.sttProvider,
+          language: options.voiceContext.language,
+          durationMs: options.voiceContext.audioDurationMs,
+        } : undefined,
+      };
       const selfModelDeps: SelfModelDeps = {
         activeModel: this.getActiveModel(),
         modelCapabilities: this.anthropicApiKey ? ['tool_calling'] : [],

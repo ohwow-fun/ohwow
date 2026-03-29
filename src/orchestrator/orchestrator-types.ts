@@ -55,6 +55,13 @@ export interface ChannelChatOptions {
   excludedTools: string[];
   transformToolInput?: (name: string, input: Record<string, unknown>) => Record<string, unknown>;
   platform?: ChannelType;
+  /** Voice metadata passed from VoiceSession for auditory stimulus enrichment. */
+  voiceContext?: {
+    sttConfidence: number;
+    sttProvider: string;
+    language?: string;
+    audioDurationMs: number;
+  };
 }
 
 // ============================================================================

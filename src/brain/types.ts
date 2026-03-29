@@ -17,6 +17,7 @@ import type { ClassifiedIntent, OrchestratorEvent } from '../orchestrator/orches
 import type { IntentSection } from '../orchestrator/tool-definitions.js';
 import type { ToolResult } from '../orchestrator/local-tool-types.js';
 import type { RagMemory } from '../lib/rag/retrieval.js';
+import type { TranscriptionSegment } from '../voice/types.js';
 
 // ============================================================================
 // STIMULUS — Raw input (Empiricism)
@@ -29,7 +30,8 @@ export type StimulusSource =
   | 'self_improvement'  // pattern miner, signal evaluator, etc.
   | 'cron'              // scheduled triggers
   | 'channel'           // Telegram, WhatsApp, etc.
-  | 'peer';             // A2A / peer workspace
+  | 'peer'              // A2A / peer workspace
+  | 'voice';            // voice/audio input (auditory modality)
 
 /** Classification of what kind of input this is. */
 export type StimulusType =
@@ -38,7 +40,8 @@ export type StimulusType =
   | 'agent_event'
   | 'timer'
   | 'signal'
-  | 'memory_recall';
+  | 'memory_recall'
+  | 'auditory_input';   // speech/audio stimulus (voice modality)
 
 /**
  * A Stimulus is anything that enters the brain from the outside world.
@@ -52,6 +55,14 @@ export interface Stimulus {
   timestamp: number;
   /** Optional trace ID for correlating with orchestrator/engine execution. */
   traceId?: string;
+  /** Voice-specific metadata (only present for auditory stimuli). */
+  voiceContext?: {
+    sttConfidence: number;
+    sttProvider: string;
+    language?: string;
+    durationMs: number;
+    segments?: TranscriptionSegment[];
+  };
 }
 
 // ============================================================================
@@ -77,7 +88,11 @@ export type ExperienceType =
   | 'body_sensation'          // Raw sensor data or digital state change
   | 'body_reflex'             // A reflex was triggered (bypassed brain)
   | 'body_health_change'      // An organ's health status changed
-  | 'body_affordance_change'; // Available actions changed
+  | 'body_affordance_change'  // Available actions changed
+  // Voice experience types (Auditory Modality)
+  | 'voice_session_started'   // Voice session opened (mic + speaker active)
+  | 'voice_session_ended'     // Voice session closed
+  | 'voice_processed';        // Complete STT → orchestrator → TTS cycle
 
 /**
  * An Experience is the atomic unit of the brain's process ontology.
