@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+transformers>=4.40
+torch
+torchaudio
+huggingface_hub
+soundfile
+numpy

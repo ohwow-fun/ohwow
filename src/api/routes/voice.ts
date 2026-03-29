@@ -16,6 +16,8 @@ import { WhisperLocalProvider, WhisperAPIProvider } from '../../voice/stt-provid
 import { PiperProvider, OpenAITTSProvider } from '../../voice/tts-providers.js';
 import { VoiceboxSTTProvider } from '../../voice/voicebox-stt-provider.js';
 import { VoiceboxTTSProvider } from '../../voice/voicebox-tts-provider.js';
+import { VibeVoiceSTTProvider } from '../../voice/vibevoice-stt-provider.js';
+import { VibeVoiceTTSProvider } from '../../voice/vibevoice-tts-provider.js';
 import type { VoiceboxService } from '../../voice/voicebox-service.js';
 
 function getBaseUrl(): string {
@@ -49,14 +51,18 @@ export function createVoiceRouter(voiceboxService?: VoiceboxService): Router {
     const baseUrl = getBaseUrl();
     const openaiKey = process.env.OPENAI_API_KEY || '';
 
+    const vibevoiceUrl = (process.env.VIBEVOICE_URL || 'http://localhost:8001').replace(/\/$/, '');
+
     const sttProviders = [
       { instance: new VoiceboxSTTProvider(baseUrl), label: 'Voicebox (Whisper)' },
+      { instance: new VibeVoiceSTTProvider(vibevoiceUrl), label: 'VibeVoice ASR (Local)' },
       { instance: new WhisperLocalProvider(), label: 'Whisper Local (Ollama)' },
       { instance: new WhisperAPIProvider(openaiKey), label: 'Whisper API (OpenAI)' },
     ];
 
     const ttsProviders = [
       { instance: new VoiceboxTTSProvider(baseUrl), label: 'Voicebox (TTS)' },
+      { instance: new VibeVoiceTTSProvider(vibevoiceUrl), label: 'VibeVoice Realtime (Local)' },
       { instance: new PiperProvider(), label: 'Piper (Local)' },
       { instance: new OpenAITTSProvider(openaiKey), label: 'OpenAI TTS' },
     ];

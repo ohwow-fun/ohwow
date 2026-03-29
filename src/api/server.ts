@@ -27,6 +27,7 @@ import { createSchedulesRouter } from './routes/schedules.js';
 import { createSystemRouter } from './routes/system.js';
 import { createOrchestratorRouter } from './routes/orchestrator.js';
 import { createVoiceRouter } from './routes/voice.js';
+import { createPodcastRouter } from './routes/podcast.js';
 import { createSettingsRouter } from './routes/settings.js';
 import { createOnboardingRouter } from './routes/onboarding.js';
 import { attachWebSocket } from './websocket.js';
@@ -58,9 +59,12 @@ import { VoiceboxSTTProvider } from '../voice/voicebox-stt-provider.js';
 import { VoiceboxTTSProvider } from '../voice/voicebox-tts-provider.js';
 import { WhisperLocalProvider, WhisperAPIProvider } from '../voice/stt-providers.js';
 import { PiperProvider, OpenAITTSProvider } from '../voice/tts-providers.js';
+import { VibeVoiceSTTProvider } from '../voice/vibevoice-stt-provider.js';
+import { VibeVoiceTTSProvider } from '../voice/vibevoice-tts-provider.js';
 import type { STTProvider, TTSProvider } from '../voice/types.js';
 import type { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import type { VoiceboxService } from '../voice/voicebox-service.js';
+import type { VibeVoiceService } from '../voice/vibevoice-service.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { WhatsAppClient } from '../whatsapp/client.js';
 import { VERSION } from '../version.js';
@@ -78,6 +82,7 @@ export interface ServerDeps {
   triggerEvaluator?: LocalTriggerEvaluator | null;
   workspaceId?: string;
   voiceboxService?: VoiceboxService | null;
+  vibeVoiceService?: VibeVoiceService | null;
   modelRouter?: ModelRouter | null;
   getWhatsAppClient?: () => WhatsAppClient | null;
   channelRegistry?: import('../integrations/channel-registry.js').ChannelRegistry;
@@ -103,7 +108,7 @@ export function createServer(deps: ServerDeps): {
   app: express.Application;
   attachWs: (server: Server) => void;
 } {
-  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange } = deps;
+  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, vibeVoiceService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange } = deps;
   const app = express();
 
   // CORS — restrict to known origins (localhost and cloud app)
@@ -254,6 +259,7 @@ export function createServer(deps: ServerDeps): {
     app.use(createOrchestratorRouter(orchestrator));
   }
   app.use(createVoiceRouter(voiceboxService || undefined));
+  app.use(createPodcastRouter(vibeVoiceService || undefined));
   app.use(createSettingsRouter(db));
   app.use(createModelsRouter(db, eventBus, orchestrator));
   app.use(createTriggersRouter(db, triggerEvaluator || undefined, onScheduleChange));
@@ -341,17 +347,20 @@ export function createServer(deps: ServerDeps): {
           const dbProfileId = !voiceProfileId ? await resolveVoiceProfile(agentId) : null;
           const profileId = voiceProfileId || dbProfileId || 'default';
 
-          // Try providers in order: Voicebox > Whisper Local > Whisper API
+          // Try providers in order: Voicebox > VibeVoice > Whisper Local > Whisper API
           const openaiKey = process.env.OPENAI_API_KEY || '';
+          const vibevoiceUrl = process.env.VIBEVOICE_URL || 'http://localhost:8001';
           const sttCandidates: STTProvider[] = [
             new VoiceboxSTTProvider(voiceboxUrl),
+            new VibeVoiceSTTProvider(vibevoiceUrl),
             new WhisperLocalProvider(),
             ...(openaiKey ? [new WhisperAPIProvider(openaiKey)] : []),
           ];
 
-          // Try providers in order: Voicebox > Piper > OpenAI TTS
+          // Try providers in order: Voicebox > VibeVoice > Piper > OpenAI TTS
           const ttsCandidates: TTSProvider[] = [
             new VoiceboxTTSProvider(voiceboxUrl, profileId),
+            new VibeVoiceTTSProvider(vibevoiceUrl),
             new PiperProvider(),
             ...(openaiKey ? [new OpenAITTSProvider(openaiKey)] : []),
           ];
@@ -386,6 +395,12 @@ export function createServer(deps: ServerDeps): {
       fetch(`${voiceboxUrl}/models/load`, { method: 'POST', signal: AbortSignal.timeout(60000) })
         .then(() => logger.info('[voice] Voicebox model preloaded'))
         .catch(() => { /* Voicebox not running, that's fine */ });
+
+      // Detect VibeVoice server (non-blocking)
+      const vibevoiceDetectUrl = process.env.VIBEVOICE_URL || 'http://localhost:8001';
+      fetch(`${vibevoiceDetectUrl}/health`, { signal: AbortSignal.timeout(5000) })
+        .then(() => logger.info('[voice] VibeVoice server detected'))
+        .catch(() => { /* VibeVoice not running, that's fine */ });
     }
   };
 

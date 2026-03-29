@@ -3,11 +3,21 @@
  * Interfaces for speech-to-text, text-to-speech, and voice sessions.
  */
 
+export interface TranscriptionSegment {
+  speaker: string;
+  text: string;
+  startMs: number;
+  endMs: number;
+  confidence?: number;
+}
+
 export interface STTResult {
   text: string;
   confidence: number;
   language?: string;
   durationMs: number;
+  /** Speaker-diarized segments (only populated by providers that support diarization) */
+  segments?: TranscriptionSegment[];
 }
 
 export interface TTSResult {
@@ -56,6 +66,33 @@ export interface AudioChunk {
   total: number;
   sentence: string;
   isLast: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Podcast types (VibeVoice multi-speaker TTS 1.5B)
+// ---------------------------------------------------------------------------
+
+export interface PodcastSpeaker {
+  id: string;
+  name: string;
+  voice?: string;
+}
+
+export interface PodcastSegment {
+  speakerId: string;
+  text: string;
+}
+
+export interface PodcastRequest {
+  speakers: PodcastSpeaker[];
+  segments: PodcastSegment[];
+  format?: 'wav' | 'mp3';
+}
+
+export interface PodcastResult {
+  audio: Buffer;
+  durationMs: number;
+  segments: Array<{ speakerId: string; startMs: number; endMs: number }>;
 }
 
 export interface VoiceSessionEvents {
