@@ -1,0 +1,40 @@
+name: Agent Template
+description: Contribute a new agent preset
+labels: [agent-template]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Agent name
+      placeholder: "Invoice Manager"
+    validations:
+      required: true
+  - type: dropdown
+    id: business_type
+    attributes:
+      label: Business type
+      options:
+        - SaaS
+        - Ecommerce
+        - Agency
+        - Freelancer
+        - Service Business
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: system_prompt
+    attributes:
+      label: System prompt
+      description: The full system prompt for this agent. Be specific about role, tone, and focus areas.
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example tasks
+      description: "Give 2-3 example tasks this agent would handle well."
+      value: |
+        1.
+        2.
+        3.

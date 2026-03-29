@@ -1,0 +1,16 @@
+{
+  "name": "ohwow",
+  "version": "0.2.0",
+  "description": "AI business OS: 25 tools for agents, CRM, workflows, research, messaging, and desktop control. All running locally on your machine.",
+  "author": {
+    "name": "Jesus David Oñoro Delgado",
+    "email": "ogsus@ohwow.fun",
+    "url": "https://ohwow.fun"
+  },
+  "homepage": "https://ohwow.fun",
+  "repository": "https://github.com/ohwow-fun/ohwow",
+  "license": "MIT",
+  "keywords": ["agents", "crm", "automation", "mcp", "business", "local-first", "desktop-control"],
+  "mcpServers": "../.mcp.json",
+  "skills": "../skills/"
+}

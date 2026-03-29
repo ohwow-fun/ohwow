@@ -1,0 +1,1206 @@
+/**
+ * Control Plane Client
+ * Manages communication between the local runtime and the cloud.
+ *
+ * - connect() — Authenticates with cloud, receives agent configs
+ * - startPolling() — Long-polls for commands (task_dispatch, config_sync, etc.)
+ * - sendHeartbeat() — Periodic health metrics
+ * - reportTask() — Sends task operational data (titles, status, costs — no prompts or outputs) to cloud
+ * - disconnect() — Graceful shutdown
+ *
+ * Device locking: handles 409 conflicts on connect (device change detection)
+ * and 'replaced' signals on poll/heartbeat (another device took over).
+ */
+
+import { hostname, cpus } from 'os';
+import { statSync } from 'fs';
+import { VERSION } from '../version.js';
+import type { TypedEventBus } from '../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../tui/types.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type {
+  ConnectRequest,
+  ConnectResponse,
+  DeviceLimitResponse,
+  PollMessage,
+  PollResponse,
+  HeartbeatPayload,
+  LocalModelSummary,
+  TaskReportPayload,
+  AgentConfigPayload,
+  ExecuteDeferredActionRequest,
+  ExecuteDeferredActionResponse,
+  WebhookRelayPayload,
+  DeviceCapabilities,
+  MemorySyncPayload,
+  StateSyncEntry,
+} from './types.js';
+import { dirname } from 'path';
+import type { OllamaMonitor } from '../lib/ollama-monitor.js';
+import type { RuntimeConfig } from '../config.js';
+import { writeReplacedMarker } from '../daemon/lifecycle.js';
+import { logger } from '../lib/logger.js';
+import { detectDevice, getMemoryTier } from '../lib/device-info.js';
+import { getMachineId } from '../lib/machine-id.js';
+import { OutboundQueue } from './outbound-queue.js';
+import type { OutboundQueueItem } from './outbound-queue.js';
+
+export interface ControlPlaneCallbacks {
+  onTaskDispatch: (agentId: string, taskId: string, taskPayload: Record<string, unknown>) => void;
+  onConfigSync: (agents: AgentConfigPayload[]) => void;
+  onTaskCancel: (taskId: string) => void;
+  onWebhookRelay?: (payload: WebhookRelayPayload) => void;
+  onWorkflowExecute?: (workflowId: string, variables?: Record<string, unknown>) => void;
+  onReplaced?: () => Promise<void>;
+  onDesktopEmergencyStop?: () => void;
+  onDesktopConfirmationRequired?: (agentId: string, agentName: string) => void;
+}
+
+export class ControlPlaneClient {
+  private sessionToken: string | null = null;
+  private workspaceId: string | null = null;
+  private deviceId: string | null = null;
+
+  /** Public accessor for the connected workspace ID */
+  get connectedWorkspaceId(): string | null {
+    return this.workspaceId;
+  }
+
+  /** Public accessor for the connected device ID (local_runtime_status row UUID) */
+  get connectedDeviceId(): string | null {
+    return this.deviceId;
+  }
+  private polling = false;
+  private replaced = false;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private startTime: number;
+  private lastSequence = 0;
+  private emitter: TypedEventBus<RuntimeEvents> | null;
+  private tunnelUrl: string | null = null;
+  private ollamaMonitor: OllamaMonitor | null = null;
+  private prevCpuTimes: { idle: number; total: number } | null = null;
+  private _contentPublicKey: JsonWebKey | null = null;
+  /** Public key for verifying content tokens (ES256). Received from cloud during connect. */
+  get contentPublicKey(): JsonWebKey | null {
+    return this._contentPublicKey;
+  }
+  private outboundQueue: OutboundQueue;
+
+  constructor(
+    private config: RuntimeConfig,
+    private db: DatabaseAdapter,
+    private callbacks: ControlPlaneCallbacks,
+    emitter?: TypedEventBus<RuntimeEvents>,
+  ) {
+    this.startTime = Date.now();
+    this.emitter = emitter ?? null;
+    this.outboundQueue = new OutboundQueue(db);
+  }
+
+  /**
+   * Set the tunnel URL so heartbeats report it to the cloud.
+   */
+  setTunnelUrl(url: string): void {
+    this.tunnelUrl = url;
+  }
+
+  /**
+   * Set the OllamaMonitor so heartbeats include local model summaries.
+   */
+  setOllamaMonitor(monitor: OllamaMonitor): void {
+    this.ollamaMonitor = monitor;
+  }
+
+  /**
+   * Connect to the cloud control plane.
+   * Validates license, receives session token and agent configs.
+   * On 409 device limit, throws with a descriptive error message.
+   * Multiple devices coexist; no force-switch needed.
+   */
+  async connect(): Promise<ConnectResponse> {
+    // Detect device capabilities for cloud registration
+    const device = detectDevice();
+    const memoryTier = getMemoryTier(device);
+    const deviceCapabilities: DeviceCapabilities = {
+      totalMemoryGb: device.totalMemoryGB,
+      cpuCores: device.cpuCores,
+      cpuModel: device.cpuModel,
+      isAppleSilicon: device.isAppleSilicon,
+      hasNvidiaGpu: device.hasNvidiaGpu,
+      gpuName: device.gpuName,
+      memoryTier,
+    };
+
+    const body: ConnectRequest = {
+      licenseKey: this.config.licenseKey,
+      runtimeVersion: VERSION,
+      hostname: hostname(),
+      osPlatform: process.platform,
+      nodeVersion: process.version,
+      localUrl: this.config.localUrl,
+      machineId: getMachineId(),
+      deviceCapabilities,
+    };
+
+    const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    // Handle device limit (multi-device: 409 now means "at capacity")
+    if (response.status === 409) {
+      const limitResponse = await response.json() as DeviceLimitResponse;
+
+      if (limitResponse.error === 'device_limit') {
+        const deviceNames = limitResponse.connectedDevices
+          .map((d) => d.deviceName || d.hostname || d.id)
+          .join(', ');
+        logger.warn(`[ControlPlane] Device limit reached (${limitResponse.maxRuntimes}). Connected: ${deviceNames}`);
+        throw new Error(
+          `You've reached the device limit (${limitResponse.connectedDevices.length}/${limitResponse.maxRuntimes}). Disconnect one from the dashboard first.`
+        );
+      }
+    }
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(`Connect failed (${response.status}): ${(error as Record<string, string>).error}`);
+    }
+
+    const data = await response.json() as ConnectResponse;
+    this.sessionToken = data.sessionToken;
+    this.workspaceId = data.workspaceId;
+    this.deviceId = data.deviceId;
+    this._contentPublicKey = data.contentPublicKey ?? null;
+
+    // Sync agent configs to local DB
+    await this.syncAgentConfigs(data.agents);
+
+    // Sync memories from cloud if memory sync is enabled
+    if (data.memorySyncEnabled && data.memories?.byAgent) {
+      await this.syncMemoriesFromCloud(data.memories.byAgent);
+    }
+
+    // Sync agent state from cloud for multi-device continuity
+    if (data.stateSync?.byAgent) {
+      await this.syncStateFromCloud(data.stateSync.byAgent);
+    }
+
+    // Store memory sync setting locally
+    if (data.memorySyncEnabled !== undefined) {
+      await this.db.from('runtime_settings').update({
+        value: String(data.memorySyncEnabled),
+        updated_at: new Date().toISOString(),
+      }).eq('key', 'memory_sync_enabled').then(() => {}, () => {});
+    }
+
+    logger.info(`[ControlPlane] Connected. Workspace: ${data.workspaceId}, Device: ${data.deviceId}, Agents: ${data.agents.length}${data.memorySyncEnabled ? ', Memory sync: on' : ''}`);
+
+    // Drain any reports that were queued while offline
+    this.drainOutboundQueue().catch(() => {});
+
+    return data;
+  }
+
+  /**
+   * Start long-polling for commands from cloud.
+   */
+  startPolling(): void {
+    if (this.polling) return;
+    this.polling = true;
+    this.pollLoop();
+  }
+
+  /**
+   * Stop polling and heartbeats.
+   */
+  stop(): void {
+    this.polling = false;
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  /**
+   * Send a single heartbeat immediately (e.g., after tunnel URL changes).
+   */
+  async sendHeartbeatNow(): Promise<void> {
+    return this.sendHeartbeat();
+  }
+
+  /** Whether a desktop control session is currently active */
+  private _desktopSessionActive = false;
+  private _desktopActiveAgentId: string | null = null;
+
+  /**
+   * Start sending periodic heartbeats (every 15s, or 5s during active desktop).
+   */
+  startHeartbeats(): void {
+    // Send first heartbeat immediately
+    this.sendHeartbeat().catch(err => {
+      logger.error(`[ControlPlane] Heartbeat failed: ${err}`);
+    });
+
+    this.heartbeatTimer = setInterval(() => {
+      this.sendHeartbeat().catch(err => {
+        logger.error(`[ControlPlane] Heartbeat failed: ${err}`);
+      });
+    }, this._desktopSessionActive ? 5_000 : 15_000);
+  }
+
+  /**
+   * Set the desktop session state (active/inactive) and adjust heartbeat interval.
+   * Called by the orchestrator when desktop control is activated/deactivated.
+   */
+  setDesktopSessionActive(active: boolean, agentId?: string): void {
+    const changed = this._desktopSessionActive !== active;
+    this._desktopSessionActive = active;
+    this._desktopActiveAgentId = active ? (agentId ?? null) : null;
+
+    if (changed && this.heartbeatTimer) {
+      // Restart heartbeat with new interval
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = setInterval(() => {
+        this.sendHeartbeat().catch(err => {
+          logger.error(`[ControlPlane] Heartbeat failed: ${err}`);
+        });
+      }, active ? 5_000 : 15_000);
+      logger.info(`[ControlPlane] Heartbeat interval adjusted to ${active ? '5s' : '15s'} (desktop ${active ? 'active' : 'inactive'})`);
+    }
+  }
+
+  /**
+   * Confirm desktop access for an agent after local user approval.
+   * Updates the local config to enable desktop_enabled.
+   */
+  async confirmDesktopAccess(agentId: string, confirmed: boolean): Promise<void> {
+    if (!confirmed) {
+      logger.info({ agentId }, '[ControlPlane] Desktop access denied locally');
+      return;
+    }
+
+    // Enable desktop in local agent config
+    const { data: configRow } = await this.db
+      .from('local_agent_configs')
+      .select('config')
+      .eq('id', agentId)
+      .limit(1);
+
+    if (configRow && configRow.length > 0) {
+      const row = configRow[0] as { config: string };
+      const config = typeof row.config === 'string' ? JSON.parse(row.config) : row.config;
+      config.desktop_enabled = true;
+      await this.db.from('local_agent_configs').update({
+        config: JSON.stringify(config),
+      }).eq('id', agentId);
+
+      // Also update the agents table
+      await this.db.from('agent_workforce_agents').update({
+        config: JSON.stringify(config),
+      }).eq('id', agentId);
+    }
+
+    logger.info({ agentId }, '[ControlPlane] Desktop access confirmed locally');
+  }
+
+  /**
+   * Report task operational data to cloud (no prompts or outputs).
+   * Always sent even if replaced — in-flight work shouldn't be lost.
+   */
+  async reportTask(report: TaskReportPayload): Promise<void> {
+    if (!this.sessionToken) {
+      logger.warn('[ControlPlane] Not connected, queuing report');
+      await this.outboundQueue.enqueue('task_report', report);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/report`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify(report),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        logger.error(`[ControlPlane] Report failed: ${response.status} ${JSON.stringify(error)}`);
+        await this.outboundQueue.enqueue('task_report', report);
+      }
+    } catch (err) {
+      logger.error(`[ControlPlane] Report error (queued): ${err}`);
+      await this.outboundQueue.enqueue('task_report', report);
+    }
+  }
+
+  /**
+   * Execute a deferred action via the cloud control plane.
+   * The cloud has OAuth tokens and integration tool pipelines; the runtime delegates.
+   */
+  async executeDeferredAction(
+    taskId: string,
+    deferredAction: ExecuteDeferredActionRequest['deferredAction'],
+  ): Promise<ExecuteDeferredActionResponse> {
+    if (!this.sessionToken) {
+      return { success: false, error: 'Not connected to cloud' };
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/execute-deferred-action`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify({ taskId, deferredAction } satisfies ExecuteDeferredActionRequest),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+        return { success: false, error: (error as Record<string, string>).error || `HTTP ${response.status}` };
+      }
+
+      return await response.json() as ExecuteDeferredActionResponse;
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Network error' };
+    }
+  }
+
+  /**
+   * Sync workspace settings (e.g., notification channel preferences) to cloud.
+   */
+  async reportSettings(settings: Record<string, unknown>): Promise<void> {
+    if (!this.sessionToken) {
+      logger.warn('[ControlPlane] Not connected, skipping settings sync');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/settings`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify(settings),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        logger.error(`[ControlPlane] Settings sync failed: ${response.status} ${JSON.stringify(error)}`);
+      }
+    } catch (err) {
+      logger.error(`[ControlPlane] Settings sync error: ${err}`);
+    }
+  }
+
+  /**
+   * Proxy a GET request to the cloud API.
+   * Used by daemon routes that need to fetch data from ohwow.fun on behalf of MCP clients.
+   */
+  async proxyCloudGet(path: string): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+    if (!this.sessionToken) {
+      return { ok: false, error: 'Not connected to cloud' };
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}${path}`, {
+        headers: {
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        return { ok: false, error: `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      return { ok: true, data };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
+    }
+  }
+
+  /**
+   * Graceful disconnect — notifies cloud, cancels pending commands.
+   */
+  async disconnect(): Promise<void> {
+    if (!this.sessionToken) return;
+
+    try {
+      await fetch(`${this.config.cloudUrl}/api/local-runtime/disconnect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+      });
+      logger.info('[ControlPlane] Disconnected gracefully');
+    } catch (err) {
+      logger.error(`[ControlPlane] Disconnect error: ${err}`);
+    }
+
+    this.stop();
+  }
+
+  // ==========================================================================
+  // PRIVATE
+  // ==========================================================================
+
+  private async handleReplaced(sameDevice = false): Promise<void> {
+    if (this.replaced) return;
+    this.replaced = true;
+
+    this.stop();
+
+    // Only write the marker when a *different* device took over.
+    // Same-device replacement (restart, crash recovery) is benign — the TUI
+    // should be free to respawn the daemon immediately.
+    if (!sameDevice) {
+      const dataDir = dirname(this.config.dbPath);
+      writeReplacedMarker(dataDir);
+    }
+
+    // TUI mode: emit event so UI can show the replacement notice
+    if (this.emitter) {
+      this.emitter.emit('cloud:replaced', { sameDevice });
+      return;
+    }
+
+    // Headless mode: log and exit
+    if (sameDevice) {
+      logger.warn('');
+      logger.warn('[ControlPlane] Replaced by a new session on this device. Shutting down...');
+      logger.warn('');
+    } else {
+      logger.warn('');
+      logger.warn('⚠️  This runtime has been replaced by another device.');
+      logger.warn('   Finishing in-flight tasks, then shutting down...');
+      logger.warn('');
+    }
+
+    if (this.callbacks.onReplaced) {
+      await this.callbacks.onReplaced();
+    }
+
+    process.exit(0);
+  }
+
+  private async pollLoop(): Promise<void> {
+    let backoff = 1000;
+    const maxBackoff = 30_000;
+    let consecutiveAuthFailures = 0;
+
+    while (this.polling) {
+      try {
+        if (!this.sessionToken) {
+          // Try reconnecting
+          await this.connect();
+        }
+
+        const response = await fetch(
+          `${this.config.cloudUrl}/api/local-runtime/poll`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.sessionToken}`,
+            },
+            body: JSON.stringify({ lastSequence: this.lastSequence }),
+            signal: AbortSignal.timeout(30_000), // 30s timeout (server holds for 25s)
+          },
+        );
+
+        if (response.status === 401) {
+          const body = await response.json().catch(() => ({}));
+          consecutiveAuthFailures++;
+          if (consecutiveAuthFailures >= 5) {
+            logger.warn('[ControlPlane] 5 auth failures, cooling down for 5 minutes...');
+            if (this.emitter) {
+              this.emitter.emit('cloud:error', { error: 'Auth failed, retrying in 5 minutes' });
+            }
+            await this.sleep(300_000); // 5 minutes
+            consecutiveAuthFailures = 0;
+            this.sessionToken = null; // Force reconnect
+            continue;
+          }
+          logger.warn(`[ControlPlane] Poll auth failed (${consecutiveAuthFailures}/5): ${JSON.stringify(body)}`);
+          this.sessionToken = null;
+          await this.sleep(backoff);
+          backoff = Math.min(backoff * 2, maxBackoff);
+          continue;
+        }
+
+        if (!response.ok) {
+          throw new Error(`Poll failed: ${response.status}`);
+        }
+
+        const data = await response.json() as PollResponse;
+
+        // Check for replaced signal
+        if (data.signal === 'replaced') {
+          await this.handleReplaced(data.sameDevice ?? false);
+          return;
+        }
+
+        // Track sequence for next poll
+        if (data.lastSequence != null) {
+          this.lastSequence = data.lastSequence;
+        }
+
+        // Process messages (skip stale commands older than 1 hour)
+        const COMMAND_TTL_MS = 60 * 60 * 1000;
+        for (const msg of data.messages) {
+          if (msg.createdAt) {
+            const age = Date.now() - new Date(msg.createdAt).getTime();
+            if (age > COMMAND_TTL_MS) {
+              logger.warn(`[ControlPlane] Skipping stale command ${msg.commandType} (${Math.round(age / 60000)}m old)`);
+              continue;
+            }
+          }
+          await this.handleCommand(msg);
+        }
+
+        // Reset backoff on success
+        backoff = 1000;
+        consecutiveAuthFailures = 0;
+      } catch (err) {
+        if (!this.polling) break;
+
+        // Timeout is normal for long-poll
+        if (err instanceof Error && err.name === 'TimeoutError') {
+          continue;
+        }
+
+        logger.error(`[ControlPlane] Poll error: ${err}`);
+        await this.sleep(backoff);
+        backoff = Math.min(backoff * 2, maxBackoff);
+      }
+    }
+  }
+
+  private async handleCommand(msg: PollMessage): Promise<void> {
+    logger.info(`[ControlPlane] Command: ${msg.commandType} (seq: ${msg.sequenceNumber})`);
+
+    switch (msg.commandType) {
+      case 'task_dispatch': {
+        const { agentId, taskId, task, ...rest } = msg.payload as {
+          agentId: string;
+          taskId: string;
+          task?: { title: string; description?: string; input?: string; priority?: string; status?: string; goal_id?: string; goal_context?: string };
+        };
+        // Sync task to local SQLite before dispatching so the engine can find it
+        if (task) {
+          await this.syncTaskToLocal(taskId, agentId, task);
+        }
+        this.callbacks.onTaskDispatch(agentId, taskId, rest);
+        break;
+      }
+      case 'config_sync': {
+        const { agents } = msg.payload as { agents: AgentConfigPayload[] };
+        this.callbacks.onConfigSync(agents);
+        break;
+      }
+      case 'task_cancel': {
+        const { taskId } = msg.payload as { taskId: string };
+        this.callbacks.onTaskCancel(taskId);
+        break;
+      }
+      case 'webhook_relay': {
+        const relayPayload: WebhookRelayPayload = {
+          webhookType: msg.payload.webhookType as 'ghl' | 'custom',
+          webhookToken: msg.payload.webhookToken as string | undefined,
+          rawBody: msg.payload.rawBody as string,
+          headers: msg.payload.headers as Record<string, string>,
+        };
+        if (this.callbacks.onWebhookRelay) {
+          this.callbacks.onWebhookRelay(relayPayload);
+        } else {
+          logger.warn('[ControlPlane] Received webhook_relay but no handler registered');
+        }
+        break;
+      }
+      case 'workflow_execute': {
+        const { workflowId, variables } = msg.payload as {
+          workflowId: string;
+          variables?: Record<string, unknown>;
+        };
+        if (this.callbacks.onWorkflowExecute) {
+          this.callbacks.onWorkflowExecute(workflowId, variables);
+        } else {
+          logger.warn('[ControlPlane] Received workflow_execute but no handler registered');
+        }
+        break;
+      }
+      case 'desktop_emergency_stop': {
+        logger.warn('[ControlPlane] Desktop emergency stop command received');
+        if (this.callbacks.onDesktopEmergencyStop) {
+          this.callbacks.onDesktopEmergencyStop();
+        } else {
+          logger.warn('[ControlPlane] No desktop emergency stop handler registered');
+        }
+        break;
+      }
+      case 'runtime_replaced': {
+        // runtime_replaced is only queued during a different-device force-connect,
+        // so sameDevice is always false here. Explicit for clarity.
+        await this.handleReplaced(false);
+        break;
+      }
+      default:
+        logger.warn(`[ControlPlane] Unknown command: ${msg.commandType}`);
+    }
+  }
+
+  /**
+   * Verify the Cloudflare tunnel is reachable by hitting its /health endpoint.
+   * Returns true if the tunnel responds with an OK status, false otherwise.
+   */
+  private async checkTunnelHealth(): Promise<boolean> {
+    if (!this.tunnelUrl) return false;
+
+    try {
+      const response = await fetch(`${this.tunnelUrl}/health`, {
+        signal: AbortSignal.timeout(5_000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private async sendHeartbeat(): Promise<void> {
+    if (!this.sessionToken) return;
+
+    const uptimeSeconds = Math.round((Date.now() - this.startTime) / 1000);
+
+    // Get basic metrics
+    const memUsage = process.memoryUsage();
+    const memoryPercent = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
+
+    // Get local model summaries if monitor is available
+    let localModels: LocalModelSummary[] | undefined;
+    if (this.ollamaMonitor) {
+      try {
+        const summaries = await this.ollamaMonitor.getModelSummaries();
+        localModels = summaries.map(s => ({
+          modelName: s.modelName,
+          status: s.status,
+          processor: s.processor,
+          family: s.family,
+          totalRequests: s.totalRequests,
+          totalInputTokens: s.totalInputTokens,
+          totalOutputTokens: s.totalOutputTokens,
+          avgDurationMs: s.avgDurationMs,
+        }));
+      } catch {
+        // Non-critical
+      }
+    }
+
+    // Verify tunnel health before reporting it
+    const tunnelHealthy = this.tunnelUrl ? await this.checkTunnelHealth() : undefined;
+
+    const payload: HeartbeatPayload = {
+      uptimeSeconds,
+      cpuPercent: this.getCpuPercent(),
+      memoryPercent,
+      dbSizeMb: this.getDbSizeMb(),
+      totalTasksExecuted: 0,
+      totalTokensUsed: 0,
+      activeTaskCount: 0,
+      ...(this.tunnelUrl ? { tunnelUrl: this.tunnelUrl, tunnelHealthy } : {}),
+      ...(localModels && localModels.length > 0 ? { localModels } : {}),
+      browserAvailable: true,
+      desktopAvailable: process.platform === 'darwin',
+      desktopSessionActive: this._desktopSessionActive,
+      desktopActiveAgentId: this._desktopActiveAgentId ?? undefined,
+    };
+
+    // Try to get stats from DB
+    try {
+      const { count: totalCount } = await this.db
+        .from('agent_workforce_tasks')
+        .select('*', { count: 'exact', head: true });
+
+      const { count: activeCount } = await this.db
+        .from('agent_workforce_tasks')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'in_progress');
+
+      payload.totalTasksExecuted = totalCount ?? 0;
+      payload.activeTaskCount = activeCount ?? 0;
+
+      // Sum tokens from completed tasks
+      const { data: tokenData } = await this.db
+        .from('agent_workforce_tasks')
+        .select('total_tokens');
+
+      if (tokenData) {
+        const rows = tokenData as Array<{ total_tokens: number | null }>;
+        payload.totalTokensUsed = rows.reduce((sum, r) => sum + (r.total_tokens || 0), 0);
+      }
+    } catch {
+      // Stats not critical
+    }
+
+    const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.sessionToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    // Handle replaced signal from heartbeat
+    if (response.status === 410) {
+      const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+      if (data.signal === 'replaced') {
+        await this.handleReplaced(!!data.sameDevice);
+      }
+    }
+
+    // Sync session metadata every 5th heartbeat (~75s)
+    this.heartbeatCount++;
+    if (this.heartbeatCount % 5 === 0) {
+      this.syncSessionMetadata().catch(() => {});
+    }
+
+    // Piggyback drain on successful heartbeats
+    this.drainOutboundQueue().catch(() => {});
+  }
+
+  private async syncAgentConfigs(agents: AgentConfigPayload[]): Promise<void> {
+    // Batch: fetch all existing IDs in one query per table to avoid N check queries
+    const agentIds = agents.map(a => a.id);
+
+    const { data: existingConfigs } = await this.db
+      .from('local_agent_configs')
+      .select('id')
+      .in('id', agentIds);
+    const existingConfigIds = new Set(
+      ((existingConfigs || []) as Array<{ id: string }>).map(r => r.id)
+    );
+
+    const { data: existingAgents } = await this.db
+      .from('agent_workforce_agents')
+      .select('id')
+      .in('id', agentIds);
+    const existingAgentIds = new Set(
+      ((existingAgents || []) as Array<{ id: string }>).map(r => r.id)
+    );
+
+    const now = new Date().toISOString();
+
+    // Load existing configs to detect desktop_enabled changes
+    const { data: existingFullConfigs } = await this.db
+      .from('local_agent_configs')
+      .select('id, config')
+      .in('id', agentIds);
+    const existingConfigMap = new Map<string, Record<string, unknown>>();
+    for (const row of (existingFullConfigs || []) as Array<{ id: string; config: string }>) {
+      try {
+        existingConfigMap.set(row.id, typeof row.config === 'string' ? JSON.parse(row.config) : row.config as Record<string, unknown>);
+      } catch { /* skip */ }
+    }
+
+    for (const agent of agents) {
+      // Desktop confirmation: if desktop_enabled changed to true, check local confirmation
+      const prevConfig = existingConfigMap.get(agent.id);
+      const prevDesktopEnabled = (prevConfig as Record<string, unknown> | undefined)?.desktop_enabled === true;
+      const newDesktopEnabled = agent.config.desktop_enabled === true;
+
+      if (newDesktopEnabled && !prevDesktopEnabled) {
+        // Desktop was just enabled from cloud — emit event for TUI confirmation
+        logger.info({ agentId: agent.id, agentName: agent.name }, '[ControlPlane] Desktop enabled for agent, awaiting local confirmation');
+        if (this.callbacks.onDesktopConfirmationRequired) {
+          this.callbacks.onDesktopConfirmationRequired(agent.id, agent.name);
+        }
+        // Override: keep desktop_enabled as false locally until confirmed
+        agent.config.desktop_enabled = false;
+      }
+
+      const configPayload = {
+        name: agent.name,
+        role: agent.role,
+        description: agent.description || null,
+        system_prompt: agent.systemPrompt,
+        config: JSON.stringify(agent.config),
+        memory_sync_policy: agent.memorySyncPolicy || 'none',
+      };
+
+      // Upsert into local_agent_configs
+      if (existingConfigIds.has(agent.id)) {
+        await this.db.from('local_agent_configs').update({
+          ...configPayload,
+          synced_at: now,
+        }).eq('id', agent.id);
+      } else {
+        await this.db.from('local_agent_configs').insert({
+          id: agent.id,
+          workspace_id: this.workspaceId!,
+          ...configPayload,
+        });
+      }
+
+      // Upsert into agent_workforce_agents
+      if (existingAgentIds.has(agent.id)) {
+        await this.db.from('agent_workforce_agents').update({
+          ...configPayload,
+          updated_at: now,
+        }).eq('id', agent.id);
+      } else {
+        await this.db.from('agent_workforce_agents').insert({
+          id: agent.id,
+          workspace_id: this.workspaceId!,
+          ...configPayload,
+          status: 'idle',
+          stats: '{}',
+        });
+      }
+
+      // Sync file access paths if provided
+      if (agent.fileAccessPaths) {
+        await this.db.from('agent_file_access_paths')
+          .delete()
+          .eq('agent_id', agent.id)
+          .eq('workspace_id', this.workspaceId!);
+
+        // Batch insert all paths for this agent
+        for (const p of agent.fileAccessPaths) {
+          await this.db.from('agent_file_access_paths').insert({
+            agent_id: agent.id,
+            workspace_id: this.workspaceId!,
+            path: p.path,
+            label: p.label || null,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Import memories received from cloud during connect.
+   * Performs dedup check to avoid re-inserting memories that already exist locally.
+   */
+  private async syncMemoriesFromCloud(
+    memoriesByAgent: Record<string, MemorySyncPayload[]>,
+  ): Promise<void> {
+    let totalImported = 0;
+
+    for (const [agentId, memories] of Object.entries(memoriesByAgent)) {
+      if (!memories || memories.length === 0) continue;
+
+      // Get existing memory contents for this agent to dedup
+      const { data: existingData } = await this.db
+        .from('agent_workforce_agent_memory')
+        .select('id, content')
+        .eq('agent_id', agentId)
+        .eq('is_active', 1);
+
+      const existingContents = new Set(
+        ((existingData || []) as Array<{ content: string }>).map(
+          (m) => m.content.toLowerCase().trim(),
+        ),
+      );
+
+      for (const mem of memories) {
+        // Skip if already exists locally (exact match)
+        if (existingContents.has(mem.content.toLowerCase().trim())) {
+          continue;
+        }
+
+        try {
+          await this.db.from('agent_workforce_agent_memory').insert({
+            id: mem.id,
+            agent_id: agentId,
+            workspace_id: this.workspaceId!,
+            memory_type: mem.memoryType,
+            content: mem.content,
+            source_type: mem.sourceType,
+            relevance_score: mem.relevanceScore,
+            times_used: mem.timesUsed,
+            token_count: mem.tokenCount,
+            trust_level: mem.trustLevel,
+            confidentiality_level: mem.confidentialityLevel,
+            source_device_id: mem.sourceDeviceId || null,
+            is_active: 1,
+            is_local_only: 0,
+          });
+          existingContents.add(mem.content.toLowerCase().trim());
+          totalImported++;
+        } catch {
+          // Likely duplicate ID, skip
+        }
+      }
+    }
+
+    if (totalImported > 0) {
+      logger.info(`[ControlPlane] Imported ${totalImported} memories from cloud`);
+    }
+  }
+
+  /**
+   * Sync agent state from cloud for multi-device continuity.
+   * Cloud wins when its updatedAt is newer than local; local wins otherwise.
+   */
+  private async syncStateFromCloud(
+    byAgent: Record<string, StateSyncEntry[]>,
+  ): Promise<void> {
+    let totalImported = 0;
+
+    for (const [agentId, entries] of Object.entries(byAgent)) {
+      if (!entries || entries.length === 0) continue;
+
+      for (const entry of entries) {
+        try {
+          // Check if key exists locally
+          const { data: existing } = await this.db
+            .from('agent_workforce_task_state')
+            .select('id, updated_at')
+            .eq('workspace_id', this.workspaceId!)
+            .eq('agent_id', agentId)
+            .eq('scope', entry.scope)
+            .eq('key', entry.key)
+            .maybeSingle();
+
+          if (existing) {
+            const local = existing as { id: string; updated_at: string };
+            // Cloud wins only if its data is newer
+            if (entry.updatedAt > local.updated_at) {
+              await this.db
+                .from('agent_workforce_task_state')
+                .update({
+                  value: entry.value,
+                  value_type: entry.valueType,
+                  updated_at: entry.updatedAt,
+                })
+                .eq('id', local.id);
+              totalImported++;
+            }
+          } else {
+            // Insert new entry from cloud
+            const { randomUUID } = await import('node:crypto');
+            await this.db
+              .from('agent_workforce_task_state')
+              .insert({
+                id: randomUUID(),
+                workspace_id: this.workspaceId!,
+                agent_id: agentId,
+                scope: entry.scope,
+                scope_id: entry.scopeId || null,
+                key: entry.key,
+                value: entry.value,
+                value_type: entry.valueType,
+                created_at: entry.updatedAt,
+                updated_at: entry.updatedAt,
+              });
+            totalImported++;
+          }
+        } catch {
+          // Non-fatal: skip individual entries that fail
+        }
+      }
+    }
+
+    if (totalImported > 0) {
+      logger.info(`[ControlPlane] Synced ${totalImported} state entries from cloud`);
+    }
+  }
+
+  private async syncTaskToLocal(
+    taskId: string,
+    agentId: string,
+    task: { title: string; description?: string; input?: string; priority?: string; status?: string; goal_id?: string; goal_context?: string },
+  ): Promise<void> {
+    try {
+      const { data: existing } = await this.db
+        .from('agent_workforce_tasks')
+        .select('id')
+        .eq('id', taskId)
+        .maybeSingle();
+
+      const now = new Date().toISOString();
+
+      if (existing) {
+        await this.db.from('agent_workforce_tasks').update({
+          title: task.title,
+          description: task.description || null,
+          input: task.input || null,
+          priority: task.priority || 'normal',
+          status: task.status || 'pending',
+          goal_id: task.goal_id || null,
+          updated_at: now,
+        }).eq('id', taskId);
+      } else {
+        await this.db.from('agent_workforce_tasks').insert({
+          id: taskId,
+          workspace_id: this.workspaceId!,
+          agent_id: agentId,
+          title: task.title,
+          description: task.description || null,
+          input: task.input || null,
+          priority: task.priority || 'normal',
+          status: task.status || 'pending',
+          goal_id: task.goal_id || null,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+
+      // If a goal_id was dispatched, ensure the goal exists locally
+      if (task.goal_id && task.goal_context) {
+        const { data: existingGoal } = await this.db
+          .from('agent_workforce_goals')
+          .select('id')
+          .eq('id', task.goal_id)
+          .maybeSingle();
+
+        if (!existingGoal) {
+          // Create a minimal local goal record for prompt injection
+          await this.db.from('agent_workforce_goals').insert({
+            id: task.goal_id,
+            workspace_id: this.workspaceId!,
+            title: task.goal_context,
+            status: 'active',
+            priority: 'normal',
+            color: '#6366f1',
+            position: 0,
+            created_at: now,
+            updated_at: now,
+          });
+        }
+      }
+
+      logger.info(`[ControlPlane] Synced task ${taskId} ("${task.title}") to local DB`);
+    } catch (err) {
+      logger.error(`[ControlPlane] Failed to sync task ${taskId} to local DB: ${err}`);
+    }
+  }
+
+  private heartbeatCount = 0;
+
+  /**
+   * Sync recent session metadata to cloud for offline visibility.
+   * Sends titles, message counts, and device names (no message content).
+   */
+  private async syncSessionMetadata(): Promise<void> {
+    try {
+      const { data } = await this.db
+        .from('orchestrator_chat_sessions')
+        .select('id, title, message_count, device_name, target_type, target_id, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(20);
+
+      if (!data || (data as unknown[]).length === 0) return;
+
+      const sessionsPayload = { sessions: data };
+      try {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-sessions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: JSON.stringify(sessionsPayload),
+        });
+        if (!response.ok) {
+          await this.outboundQueue.enqueue('session_sync', sessionsPayload);
+        }
+      } catch {
+        await this.outboundQueue.enqueue('session_sync', sessionsPayload);
+      }
+    } catch {
+      // DB query failed, nothing to enqueue
+    }
+  }
+
+  /**
+   * Compute CPU usage percentage since last call using os.cpus() delta.
+   * Returns null on first call (no previous sample to compare against).
+   */
+  private getCpuPercent(): number | null {
+    const cores = cpus();
+    let idle = 0;
+    let total = 0;
+    for (const core of cores) {
+      idle += core.times.idle;
+      total += core.times.user + core.times.nice + core.times.sys + core.times.irq + core.times.idle;
+    }
+
+    if (!this.prevCpuTimes) {
+      this.prevCpuTimes = { idle, total };
+      return null;
+    }
+
+    const idleDelta = idle - this.prevCpuTimes.idle;
+    const totalDelta = total - this.prevCpuTimes.total;
+    this.prevCpuTimes = { idle, total };
+
+    if (totalDelta === 0) return 0;
+    return Math.round(((totalDelta - idleDelta) / totalDelta) * 100);
+  }
+
+  /**
+   * Get the SQLite database file size in megabytes.
+   */
+  private getDbSizeMb(): number {
+    try {
+      const stats = statSync(this.config.dbPath);
+      return Math.round((stats.size / (1024 * 1024)) * 100) / 100;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Drain the outbound queue, sending buffered reports to cloud.
+   * Called after successful connect() and on each successful heartbeat.
+   */
+  private async drainOutboundQueue(): Promise<void> {
+    if (!this.sessionToken) return;
+
+    const pending = await this.outboundQueue.pendingCount();
+    if (pending === 0) return;
+
+    logger.info(`[ControlPlane] Draining outbound queue (${pending} pending)`);
+
+    await this.outboundQueue.drain(async (type: OutboundQueueItem['type'], payload: string) => {
+      if (type === 'task_report') {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/report`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: payload,
+        });
+        return response.ok;
+      }
+
+      if (type === 'session_sync') {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-sessions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: payload,
+        });
+        return response.ok;
+      }
+
+      logger.warn(`[OutboundQueue] Unknown queue item type: ${type}`);
+      return false;
+    });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}

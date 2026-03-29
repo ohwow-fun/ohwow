@@ -1,0 +1,565 @@
+/**
+ * Orchestrator Tools — Knowledge Base
+ * Local runtime handlers for knowledge document management.
+ */
+
+import type { LocalToolContext } from '../local-tool-types.js';
+import type { ToolResult } from '../local-tool-types.js';
+import { readFile, stat } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { retrieveKnowledgeChunks } from '../../lib/rag/retrieval.js';
+
+// ============================================================================
+// LIST KNOWLEDGE
+// ============================================================================
+
+export async function listKnowledge(
+  ctx: LocalToolContext,
+  input?: Record<string, unknown>
+): Promise<ToolResult> {
+  let query = ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .select('id, title, filename, file_type, file_size, processing_status, chunk_count, compiled_token_count, agent_id, source_type, created_at')
+    .eq('workspace_id', ctx.workspaceId)
+    .eq('is_active', 1)
+    .order('created_at', { ascending: false });
+
+  if (input?.agent_id) {
+    query = query.or(`agent_id.eq.${input.agent_id},agent_id.is.null`);
+  }
+
+  const { data, error } = await query;
+  if (error) return { success: false, error: error.message };
+
+  const docs = (data || []).map((d: Record<string, unknown>) => ({
+    id: d.id,
+    title: d.title,
+    filename: d.filename,
+    fileType: d.file_type,
+    fileSize: d.file_size,
+    status: d.processing_status,
+    chunks: d.chunk_count,
+    tokens: d.compiled_token_count,
+    scope: d.agent_id ? `agent:${d.agent_id}` : 'workspace',
+    source: d.source_type,
+    createdAt: d.created_at,
+  }));
+
+  if (docs.length === 0) {
+    return { success: true, data: { message: 'No knowledge base documents yet.', documents: [] } };
+  }
+
+  return { success: true, data: { documents: docs } };
+}
+
+// ============================================================================
+// UPLOAD KNOWLEDGE (from local file path)
+// ============================================================================
+
+export async function uploadKnowledge(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const filePath = input.file_path as string;
+  if (!filePath) return { success: false, error: 'file_path is required' };
+
+  // Check file exists
+  let fileStats;
+  try {
+    fileStats = await stat(filePath);
+  } catch {
+    return { success: false, error: `File not found: ${filePath}` };
+  }
+
+  if (!fileStats.isFile()) {
+    return { success: false, error: `Not a file: ${filePath}` };
+  }
+
+  const maxSize = 50 * 1024 * 1024; // 50MB
+  if (fileStats.size > maxSize) {
+    return { success: false, error: `File is too large (${Math.round(fileStats.size / 1024 / 1024)}MB). Max: 50MB.` };
+  }
+
+  const filename = basename(filePath);
+  const ext = extname(filePath).toLowerCase();
+  const allowedTypes = ['.txt', '.md', '.csv', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.png', '.jpg', '.jpeg', '.webp', '.json', '.html', '.xml'];
+
+  if (!allowedTypes.includes(ext)) {
+    return { success: false, error: `File type ${ext} is not supported. Allowed: ${allowedTypes.join(', ')}` };
+  }
+
+  // Read file
+  const buffer = await readFile(filePath);
+  const title = (input.title as string) || filename.replace(/\.[^/.]+$/, '');
+  const agentId = (input.agent_id as string) || null;
+
+  // Generate a document ID
+  const docId = createHash('sha256').update(`${Date.now()}-${filePath}`).digest('hex').slice(0, 32);
+  const storagePath = `local://${filePath}`;
+
+  // Create document record
+  const { error: insertError } = await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .insert({
+      id: docId,
+      workspace_id: ctx.workspaceId,
+      agent_id: agentId,
+      title,
+      filename,
+      file_type: ext,
+      file_size: fileStats.size,
+      storage_path: storagePath,
+      source_type: 'upload',
+      processing_status: 'processing',
+    });
+
+  if (insertError) return { success: false, error: insertError.message };
+
+  // Process the file (extract + chunk)
+  try {
+    const text = await extractTextLocal(buffer, ext, filename);
+    if (!text || text.trim().length === 0) {
+      await ctx.db
+        .from('agent_workforce_knowledge_documents')
+        .update({ processing_status: 'failed', processing_error: 'No text could be extracted.' })
+        .eq('id', docId);
+      return { success: false, error: 'No text could be extracted from this file.' };
+    }
+
+    const chunks = chunkTextLocal(text);
+    const contentHash = createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+    // Save chunks
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+      await ctx.db
+        .from('agent_workforce_knowledge_chunks')
+        .insert({
+          id: chunkId,
+          document_id: docId,
+          workspace_id: ctx.workspaceId,
+          chunk_index: i,
+          content: chunk.content,
+          token_count: chunk.tokenCount,
+          keywords: JSON.stringify(chunk.keywords),
+        });
+    }
+
+    // Update document
+    await ctx.db
+      .from('agent_workforce_knowledge_documents')
+      .update({
+        processing_status: 'ready',
+        processed_at: new Date().toISOString(),
+        compiled_text: text,
+        compiled_token_count: Math.ceil(text.length / 4),
+        chunk_count: chunks.length,
+        content_hash: contentHash,
+      })
+      .eq('id', docId);
+
+    return {
+      success: true,
+      data: {
+        message: `Added "${title}" to the knowledge base (${chunks.length} chunks, ~${Math.ceil(text.length / 4)} tokens).`,
+        documentId: docId,
+      },
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Processing failed';
+    await ctx.db
+      .from('agent_workforce_knowledge_documents')
+      .update({ processing_status: 'failed', processing_error: errorMsg })
+      .eq('id', docId);
+    return { success: false, error: errorMsg };
+  }
+}
+
+// ============================================================================
+// ADD KNOWLEDGE FROM URL
+// ============================================================================
+
+export async function addKnowledgeFromUrl(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const url = input.url as string;
+  if (!url) return { success: false, error: 'url is required' };
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return { success: false, error: 'Invalid URL' };
+  }
+
+  // Scrape URL
+  if (!ctx.scraplingService) {
+    return { success: false, error: 'Web scraping service is not available.' };
+  }
+
+  const scrapeResult = await ctx.scraplingService.fetch(url);
+  if (!scrapeResult.html || scrapeResult.error) {
+    return { success: false, error: scrapeResult.error || "Couldn't fetch that URL." };
+  }
+
+  // Extract text from HTML (strip tags, decode entities)
+  const text = scrapeResult.html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, '\n')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!text || text.length < 50) {
+    return { success: false, error: "Couldn't extract any text from that URL." };
+  }
+
+  const title = (input.title as string) || scrapeResult.title || parsedUrl.hostname;
+  const agentId = (input.agent_id as string) || null;
+  const filename = `${parsedUrl.hostname}.txt`;
+
+  const docId = createHash('sha256').update(`${Date.now()}-${url}`).digest('hex').slice(0, 32);
+
+  const { error: insertError } = await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .insert({
+      id: docId,
+      workspace_id: ctx.workspaceId,
+      agent_id: agentId,
+      title,
+      description: `Scraped from ${url}`,
+      filename,
+      file_type: '.txt',
+      file_size: Buffer.byteLength(text, 'utf-8'),
+      storage_path: `url://${url}`,
+      source_type: 'url',
+      source_url: url,
+      processing_status: 'processing',
+    });
+
+  if (insertError) return { success: false, error: insertError.message };
+
+  // Process
+  const chunks = chunkTextLocal(text);
+  const contentHash = createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+    await ctx.db
+      .from('agent_workforce_knowledge_chunks')
+      .insert({
+        id: chunkId,
+        document_id: docId,
+        workspace_id: ctx.workspaceId,
+        chunk_index: i,
+        content: chunk.content,
+        token_count: chunk.tokenCount,
+        keywords: JSON.stringify(chunk.keywords),
+      });
+  }
+
+  await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .update({
+      processing_status: 'ready',
+      processed_at: new Date().toISOString(),
+      compiled_text: text,
+      compiled_token_count: Math.ceil(text.length / 4),
+      chunk_count: chunks.length,
+      content_hash: contentHash,
+    })
+    .eq('id', docId);
+
+  return {
+    success: true,
+    data: {
+      message: `Added "${title}" from ${parsedUrl.hostname} (${chunks.length} chunks, ~${Math.ceil(text.length / 4)} tokens).`,
+      documentId: docId,
+    },
+  };
+}
+
+// ============================================================================
+// ASSIGN KNOWLEDGE
+// ============================================================================
+
+export async function assignKnowledge(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const documentId = input.document_id as string;
+  const agentId = input.agent_id as string;
+  if (!documentId || !agentId) {
+    return { success: false, error: 'document_id and agent_id are required' };
+  }
+
+  // Verify document exists
+  const { data: doc } = await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .select('id, title')
+    .eq('id', documentId)
+    .eq('workspace_id', ctx.workspaceId)
+    .single();
+
+  if (!doc) return { success: false, error: 'Document not found' };
+
+  // Check if config already exists
+  const { data: existing } = await ctx.db
+    .from('agent_workforce_knowledge_agent_config')
+    .select('id')
+    .eq('document_id', documentId)
+    .eq('agent_id', agentId)
+    .single();
+
+  const configId = existing
+    ? (existing as Record<string, unknown>).id as string
+    : createHash('sha256').update(`${documentId}-${agentId}`).digest('hex').slice(0, 32);
+
+  const updates: Record<string, unknown> = {};
+  if (input.opted_out !== undefined) updates.opted_out = input.opted_out ? 1 : 0;
+  if (input.injection_mode !== undefined) updates.injection_mode = input.injection_mode;
+
+  if (existing) {
+    await ctx.db
+      .from('agent_workforce_knowledge_agent_config')
+      .update(updates)
+      .eq('document_id', documentId)
+      .eq('agent_id', agentId);
+  } else {
+    await ctx.db
+      .from('agent_workforce_knowledge_agent_config')
+      .insert({
+        id: configId,
+        document_id: documentId,
+        agent_id: agentId,
+        workspace_id: ctx.workspaceId,
+        opted_out: input.opted_out ? 1 : 0,
+        injection_mode: (input.injection_mode as string) || 'auto',
+        priority: 0,
+      });
+  }
+
+  return {
+    success: true,
+    data: {
+      message: `Updated knowledge config for "${(doc as Record<string, unknown>).title}" on agent ${agentId}.`,
+    },
+  };
+}
+
+// ============================================================================
+// DELETE KNOWLEDGE
+// ============================================================================
+
+export async function deleteKnowledge(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const documentId = input.document_id as string;
+  if (!documentId) return { success: false, error: 'document_id is required' };
+
+  const { data: doc } = await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .select('id, title')
+    .eq('id', documentId)
+    .eq('workspace_id', ctx.workspaceId)
+    .single();
+
+  if (!doc) return { success: false, error: 'Document not found' };
+
+  // Delete chunks first (SQLite may not cascade)
+  await ctx.db
+    .from('agent_workforce_knowledge_chunks')
+    .delete()
+    .eq('document_id', documentId);
+
+  // Delete agent configs
+  await ctx.db
+    .from('agent_workforce_knowledge_agent_config')
+    .delete()
+    .eq('document_id', documentId);
+
+  // Delete document
+  await ctx.db
+    .from('agent_workforce_knowledge_documents')
+    .delete()
+    .eq('id', documentId);
+
+  return {
+    success: true,
+    data: { message: `Deleted "${(doc as Record<string, unknown>).title}" from the knowledge base.` },
+  };
+}
+
+// ============================================================================
+// LOCAL TEXT EXTRACTION (simplified, no heavy deps)
+// ============================================================================
+
+async function extractTextLocal(buffer: Buffer, ext: string, _filename: string): Promise<string> {
+  const type = ext.replace('.', '').toLowerCase();
+
+  switch (type) {
+    case 'txt':
+    case 'md':
+    case 'html':
+    case 'xml':
+    case 'csv':
+    case 'json':
+      return buffer.toString('utf-8');
+
+    case 'pdf': {
+      try {
+        const pdfParse = (await import('pdf-parse')).default;
+        const result = await pdfParse(buffer, { max: 200 });
+        return result.text?.trim() || '';
+      } catch {
+        return '';
+      }
+    }
+
+    default:
+      // Try as plain text
+      return buffer.toString('utf-8');
+  }
+}
+
+// ============================================================================
+// LOCAL CHUNKING (simplified inline version)
+// ============================================================================
+
+interface LocalChunk {
+  content: string;
+  tokenCount: number;
+  keywords: string[];
+}
+
+function chunkTextLocal(text: string): LocalChunk[] {
+  if (!text || text.trim().length === 0) return [];
+
+  const targetChars = 4000; // ~1000 tokens
+
+  if (text.length <= targetChars * 1.2) {
+    return [{
+      content: text.trim(),
+      tokenCount: Math.ceil(text.length / 4),
+      keywords: extractKeywordsLocal(text),
+    }];
+  }
+
+  const paragraphs = text.split(/\n{2,}|(?=^#{1,6}\s)/m)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  const chunks: LocalChunk[] = [];
+  let current = '';
+
+  for (const paragraph of paragraphs) {
+    const combined = current + (current ? '\n\n' : '') + paragraph;
+
+    if (combined.length > targetChars && current.length > 0) {
+      const finalChunk = current.trim();
+      if (finalChunk.length > 0) {
+        chunks.push({
+          content: finalChunk,
+          tokenCount: Math.ceil(finalChunk.length / 4),
+          keywords: extractKeywordsLocal(finalChunk),
+        });
+      }
+      current = paragraph;
+    } else {
+      current = combined;
+    }
+  }
+
+  const finalChunk = current.trim();
+  if (finalChunk.length > 0) {
+    chunks.push({
+      content: finalChunk,
+      tokenCount: Math.ceil(finalChunk.length / 4),
+      keywords: extractKeywordsLocal(finalChunk),
+    });
+  }
+
+  return chunks;
+}
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+  'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+  'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+  'could', 'should', 'it', 'its', 'this', 'that', 'not', 'you', 'they',
+]);
+
+function extractKeywordsLocal(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+
+  const freq = new Map<string, number>();
+  for (const word of words) {
+    freq.set(word, (freq.get(word) || 0) + 1);
+  }
+
+  return Array.from(freq.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => word);
+}
+
+// ============================================================================
+// SEARCH KNOWLEDGE
+// ============================================================================
+
+export async function searchKnowledge(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const query = input.query as string | undefined;
+  if (!query?.trim()) {
+    return { success: false, error: 'A query is required.' };
+  }
+
+  const maxResults = Math.min(Number(input.max_results) || 5, 10);
+
+  const chunks = await retrieveKnowledgeChunks({
+    db: ctx.db,
+    workspaceId: ctx.workspaceId,
+    agentId: '__orchestrator__',
+    query,
+    tokenBudget: 6000,
+    maxChunks: maxResults,
+  });
+
+  if (chunks.length === 0) {
+    return {
+      success: true,
+      data: { message: 'Nothing in the knowledge base matched that query.', results: [] },
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      query,
+      resultCount: chunks.length,
+      results: chunks.map((c) => ({
+        documentTitle: c.documentTitle,
+        content: c.content,
+        score: Math.round(c.score * 100) / 100,
+        tokens: c.tokenCount,
+      })),
+    },
+  };
+}

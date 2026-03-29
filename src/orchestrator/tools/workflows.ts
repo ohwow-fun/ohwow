@@ -1,0 +1,320 @@
+/**
+ * Workflow orchestrator tools: list, run, get detail, create, update, delete
+ */
+
+import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import { logger } from '../../lib/logger.js';
+
+export async function listWorkflows(ctx: LocalToolContext): Promise<ToolResult> {
+  const { data, error } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id, name, description, status, created_at, run_count')
+    .eq('workspace_id', ctx.workspaceId)
+    .order('created_at', { ascending: false })
+    .limit(20);
+
+  if (error) return { success: false, error: error.message };
+
+  return { success: true, data: data || [] };
+}
+
+export async function runWorkflow(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const workflowId = input.workflow_id as string;
+  if (!workflowId) return { success: false, error: 'workflow_id is required' };
+
+  const { data: workflow } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id, name, workspace_id, steps, run_count')
+    .eq('id', workflowId)
+    .single();
+
+  if (!workflow) return { success: false, error: 'Workflow not found' };
+  const w = workflow as { id: string; name: string; workspace_id: string; steps: string | unknown[]; run_count: number | null };
+  if (w.workspace_id !== ctx.workspaceId) return { success: false, error: 'Workflow not in your workspace' };
+
+  const steps = typeof w.steps === 'string' ? JSON.parse(w.steps) : w.steps;
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return { success: false, error: 'Workflow has no steps' };
+  }
+
+  // Execute workflow steps sequentially, passing context between steps
+  const executeWorkflow = async () => {
+    const contextParts: string[] = [];
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepType = step.step_type || step.type;
+      const stepAction = step.action || step.prompt;
+      if ((stepType === 'agent_prompt' || stepType === 'agent_task' || !stepType) && step.agent_id && stepAction) {
+        // Build input with prior step context
+        const fullInput = contextParts.length > 0
+          ? `${stepAction}\n\n## Context from prior steps\n${contextParts.join('\n')}`
+          : stepAction;
+
+        const { data: task } = await ctx.db
+          .from('agent_workforce_tasks')
+          .insert({
+            workspace_id: ctx.workspaceId,
+            agent_id: step.agent_id,
+            title: stepAction.slice(0, 100),
+            input: fullInput,
+            status: 'pending',
+          })
+          .select('id')
+          .single();
+
+        if (task) {
+          const result = await ctx.engine.executeTask(step.agent_id, (task as { id: string }).id);
+
+          if (!result.success) {
+            logger.error(`[orchestrator:run_workflow] Step ${i + 1} failed: ${result.error}`);
+            break; // Stop workflow on step failure
+          }
+
+          // Accumulate context for subsequent steps
+          const output = (typeof result.output === 'string' ? result.output : '').slice(0, 2000);
+          if (output) {
+            const title = step.title || stepAction.slice(0, 60);
+            contextParts.push(`Step ${i + 1} (${title}): ${output}`);
+          }
+        }
+      }
+    }
+
+    // Increment run count
+    await ctx.db.from('agent_workforce_workflows').update({
+      run_count: (w.run_count || 0) + 1,
+      updated_at: new Date().toISOString(),
+    }).eq('id', workflowId);
+  };
+
+  // Run async
+  executeWorkflow().catch((err) => {
+    logger.error(`[orchestrator:run_workflow] Execution failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+
+  return { success: true, data: { message: `Workflow "${w.name}" execution started.` } };
+}
+
+export async function getWorkflowDetail(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const workflowId = input.workflow_id as string;
+  if (!workflowId) return { success: false, error: 'workflow_id is required' };
+
+  const { data: workflow } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id, name, description, status, steps, created_at, updated_at, run_count')
+    .eq('id', workflowId)
+    .eq('workspace_id', ctx.workspaceId)
+    .single();
+
+  if (!workflow) return { success: false, error: 'Workflow not found' };
+
+  return { success: true, data: workflow };
+}
+
+export async function createWorkflow(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const name = input.name as string;
+  if (!name) return { success: false, error: 'name is required' };
+
+  const definition = input.definition as { steps: unknown[] } | undefined;
+  if (!definition?.steps || !Array.isArray(definition.steps)) {
+    return { success: false, error: 'definition with steps array is required' };
+  }
+
+  const { data, error } = await ctx.db
+    .from('agent_workforce_workflows')
+    .insert({
+      id: crypto.randomUUID(),
+      workspace_id: ctx.workspaceId,
+      name,
+      description: (input.description as string) || '',
+      status: 'active',
+      steps: JSON.stringify(definition.steps),
+      run_count: 0,
+    })
+    .select('id, name')
+    .single();
+
+  if (error) return { success: false, error: error.message };
+
+  return { success: true, data: { message: `Created workflow: ${(data as { name: string }).name}`, workflow: data } };
+}
+
+export async function updateWorkflow(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const workflowId = input.workflow_id as string;
+  if (!workflowId) return { success: false, error: 'workflow_id is required' };
+
+  const { data: existing } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id')
+    .eq('id', workflowId)
+    .eq('workspace_id', ctx.workspaceId)
+    .single();
+
+  if (!existing) return { success: false, error: 'Workflow not found' };
+
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (input.name) updates.name = input.name;
+  if (input.description !== undefined) updates.description = input.description;
+  if (input.status) updates.status = input.status;
+  if (input.definition) {
+    const def = input.definition as { steps: unknown[] };
+    if (def.steps) updates.steps = JSON.stringify(def.steps);
+  }
+
+  const { error } = await ctx.db
+    .from('agent_workforce_workflows')
+    .update(updates)
+    .eq('id', workflowId);
+
+  if (error) return { success: false, error: error.message };
+
+  return { success: true, data: { message: 'Workflow updated' } };
+}
+
+export async function deleteWorkflow(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const workflowId = input.workflow_id as string;
+  if (!workflowId) return { success: false, error: 'workflow_id is required' };
+
+  const { data: existing } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id, name')
+    .eq('id', workflowId)
+    .eq('workspace_id', ctx.workspaceId)
+    .single();
+
+  if (!existing) return { success: false, error: 'Workflow not found' };
+
+  const { error } = await ctx.db
+    .from('agent_workforce_workflows')
+    .delete()
+    .eq('id', workflowId);
+
+  if (error) return { success: false, error: error.message };
+
+  return { success: true, data: { message: `Deleted workflow: ${(existing as { name: string }).name}` } };
+}
+
+export async function generateWorkflow(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const description = input.description as string;
+  if (!description) return { success: false, error: 'description is required' };
+
+  // Need Anthropic API key or model router for generation
+  if (!ctx.anthropicApiKey && !ctx.modelRouter) {
+    return { success: false, error: 'Workflow generation requires an AI model. Set up a local model or API key.' };
+  }
+
+  // Load available agents for context
+  const { data: agents } = await ctx.db
+    .from('agent_workforce_agents')
+    .select('id, name, role, status')
+    .eq('workspace_id', ctx.workspaceId)
+    .neq('status', 'paused');
+
+  const agentList = (agents || []).map((a: Record<string, unknown>) =>
+    `- ${a.name} (${a.role}) [id: ${a.id}]`
+  ).join('\n');
+
+  const prompt = `Generate a workflow definition based on this description: "${description}"
+
+Available agents:
+${agentList || 'No agents available'}
+
+Respond with ONLY a JSON object with this structure:
+{
+  "name": "Workflow Name",
+  "description": "What this workflow does",
+  "steps": [
+    {
+      "title": "Step title",
+      "agent_id": "agent-uuid",
+      "step_type": "agent_prompt",
+      "action": "What the agent should do"
+    }
+  ]
+}`;
+
+  try {
+    let responseText: string;
+
+    if (ctx.modelRouter) {
+      const provider = await ctx.modelRouter.getProvider('orchestrator');
+      const result = await provider.createMessage({
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 2048,
+        temperature: 0.3,
+      });
+      responseText = result.content;
+    } else if (ctx.anthropicApiKey) {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const client = new Anthropic({ apiKey: ctx.anthropicApiKey });
+      const result = await client.messages.create({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 2048,
+        temperature: 0.3,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      responseText = result.content
+        .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+    } else {
+      return { success: false, error: 'No model available' };
+    }
+
+    // Extract JSON from response
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { success: false, error: 'Couldn\'t generate a valid workflow. Try rephrasing.' };
+
+    const generated = JSON.parse(jsonMatch[0]);
+
+    // Auto-save if requested (default true)
+    const autoSave = input.auto_save !== false;
+    if (autoSave && generated.steps) {
+      const { data: saved } = await ctx.db
+        .from('agent_workforce_workflows')
+        .insert({
+          id: crypto.randomUUID(),
+          workspace_id: ctx.workspaceId,
+          name: generated.name || 'Generated Workflow',
+          description: generated.description || description,
+          status: 'active',
+          steps: JSON.stringify(generated.steps),
+          run_count: 0,
+        })
+        .select('id, name')
+        .single();
+
+      return {
+        success: true,
+        data: {
+          message: `Generated and saved workflow: ${generated.name || 'Generated Workflow'}`,
+          workflow: saved,
+          definition: generated,
+        },
+      };
+    }
+
+    return { success: true, data: { message: 'Workflow generated', definition: generated } };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Workflow generation failed' };
+  }
+}

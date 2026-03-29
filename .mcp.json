@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ohwow": {
+      "command": "npx",
+      "args": ["-y", "ohwow", "mcp-server"]
+    }
+  }
+}
