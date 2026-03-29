@@ -391,6 +391,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
   });
   digitalNS.start();
 
+  // Subscribe to high-salience nervous signals for logging
+  digitalNS.onSignal((signal) => {
+    if (signal.salience >= 0.5) {
+      logger.info({ organ: signal.organId, type: signal.type, salience: signal.salience }, '[body] Nervous signal');
+    }
+  });
+
   // Wire body into brain(s) and orchestrator for proprioceptive awareness
   if (orchestrator) {
     orchestrator.getBrain()?.setDigitalBody(digitalBody);

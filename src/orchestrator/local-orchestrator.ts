@@ -88,7 +88,7 @@ import { Brain } from '../brain/brain.js';
 import { enrichIntent } from '../brain/intentionality.js';
 import type { Stimulus, Perception } from '../brain/types.js';
 import type { SelfModelDeps } from '../brain/self-model.js';
-import { createBrowserOrgan, createDesktopOrgan, type DigitalBody } from '../body/digital-body.js';
+import { createBrowserOrgan, createDesktopOrgan, createMcpOrgan, type DigitalBody } from '../body/digital-body.js';
 import { Soul } from '../persona/soul.js';
 import crypto from 'crypto';
 
@@ -248,6 +248,8 @@ export class LocalOrchestrator {
     else this.digitalBody.removeOrgan('browser');
     if (this.desktopService) this.digitalBody.setOrgan('desktop', createDesktopOrgan(this.desktopService));
     else this.digitalBody.removeOrgan('desktop');
+    if (this.mcpClients) this.digitalBody.setOrgan('mcp', createMcpOrgan(this.mcpClients));
+    else this.digitalBody.removeOrgan('mcp');
   }
 
   /** Get the active model name (resolved from Anthropic constant or orchestratorModel). */
@@ -372,6 +374,7 @@ export class LocalOrchestrator {
     if (toolCount > 0) {
       logger.info(`[mcp] Orchestrator connected — ${toolCount} tool(s) available`);
     }
+    this.syncOrganToBody();
   }
 
   /** Resolve a pending MCP elicitation request. */
@@ -711,6 +714,16 @@ export class LocalOrchestrator {
       if (lines.length > 0) {
         systemBlocks.push({ type: 'text' as const, text: `\n\n## Body Awareness\n${lines.join('\n')}` });
       }
+    }
+
+    // System Warnings: surface high-salience nervous signals (Baars: conscious items)
+    const healthWarnings = this.brain?.workspace.getConscious(3, {
+      types: ['failure', 'warning'],
+      minSalience: 0.5,
+    }) ?? [];
+    if (healthWarnings.length > 0) {
+      const warningText = healthWarnings.map(w => w.content).join('\n');
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## System Warnings\n${warningText}` });
     }
 
     // Build tool list (conditionally includes filesystem tools, filtered by intent for Anthropic)

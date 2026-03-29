@@ -230,6 +230,11 @@ export class McpClientManager {
     return this.toolDefinitions;
   }
 
+  /** Check whether any MCP tools are available. */
+  hasTools(): boolean {
+    return this.toolDefinitions.length > 0;
+  }
+
   /** Check whether a namespaced tool name belongs to a connected MCP server. */
   hasTool(name: string): boolean {
     return this.toolMap.has(name);
