@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock child_process for getFrontmostApp (uses execSync osascript)
 vi.mock('child_process', () => ({
@@ -16,8 +16,16 @@ import type { DesktopAction } from '../desktop-types.js';
 const mockExecSync = vi.mocked(execSync);
 
 describe('safety-guard', () => {
+  const originalPlatform = process.platform;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    // Ensure tests run as if on macOS so getFrontmostApp() doesn't bail early
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
   });
 
   describe('classifyActionRisk', () => {
