@@ -33,6 +33,7 @@ import { ModelRouter } from '../execution/model-router.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
+import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
@@ -674,6 +675,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
     const heartbeatCoordinator = new HeartbeatCoordinator(db, engine, workspaceId);
     heartbeatCoordinator.start().catch(err => {
       logger.warn(`[daemon] Heartbeat coordinator failed: ${err instanceof Error ? err.message : err}`);
+    });
+
+    // Self-improvement scheduler: runs daily, gates LLM phases on task volume
+    const improvementScheduler = new ImprovementScheduler(db, modelRouter, workspaceId);
+    improvementScheduler.start().catch(err => {
+      logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
   }
 
