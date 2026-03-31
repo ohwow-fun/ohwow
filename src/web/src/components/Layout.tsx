@@ -26,6 +26,12 @@ import {
   Webhook,
   Target,
   CurrencyDollar,
+  ChatCircleDots,
+  ShareNetwork,
+  UsersThree,
+  Browser,
+  Newspaper,
+  Microphone,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -33,7 +39,7 @@ interface NavItem {
   path: string;
   label: string;
   icon: PhosphorIcon;
-  group: 'primary' | 'manage' | 'configure';
+  group: 'primary' | 'manage' | 'connect' | 'configure';
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -53,9 +59,16 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/approvals', label: 'Approvals', icon: ShieldCheck, group: 'manage' },
   { path: '/goals', label: 'Goals', icon: Target, group: 'manage' },
   { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'manage' },
+  // Connect
+  { path: '/messaging', label: 'Messaging', icon: ChatCircleDots, group: 'connect' },
+  { path: '/peers', label: 'Peers', icon: ShareNetwork, group: 'connect' },
+  { path: '/team', label: 'Team', icon: UsersThree, group: 'connect' },
+  { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'connect' },
   // Configure
-  { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'configure' },
   { path: '/webhook-events', label: 'Webhooks', icon: Webhook, group: 'configure' },
+  { path: '/browser', label: 'Browser', icon: Browser, group: 'configure' },
+  { path: '/briefings', label: 'Briefings', icon: Newspaper, group: 'configure' },
+  { path: '/podcast', label: 'Podcast', icon: Microphone, group: 'configure' },
   { path: '/knowledge', label: 'Knowledge', icon: BookOpen, group: 'configure' },
   { path: '/settings', label: 'Settings', icon: GearSix, group: 'configure' },
 ];
@@ -141,6 +154,7 @@ function SidebarContent({
   const groups: { key: NavItem['group']; label?: string }[] = [
     { key: 'primary' },
     { key: 'manage', label: 'Manage' },
+    { key: 'connect', label: 'Connect' },
     { key: 'configure', label: 'Configure' },
   ];
 

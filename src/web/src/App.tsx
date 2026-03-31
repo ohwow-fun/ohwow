@@ -29,6 +29,12 @@ import { WorkflowsHub } from './pages/WorkflowsHub';
 import { WebhookEventsPage } from './pages/WebhookEvents';
 import { GoalsPage } from './pages/Goals';
 import { RevenuePage } from './pages/Revenue';
+import { MessagingPage } from './pages/Messaging';
+import { PeersPage } from './pages/Peers';
+import { TeamPage } from './pages/Team';
+import { BrowserViewerPage } from './pages/BrowserViewer';
+import { BriefingsPage } from './pages/Briefings';
+import { PodcastPage } from './pages/Podcast';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -74,6 +80,12 @@ export function App() {
           <Route path="webhook-events" element={<WebhookEventsPage />} />
           <Route path="goals" element={<GoalsPage />} />
           <Route path="revenue" element={<RevenuePage />} />
+          <Route path="messaging" element={<MessagingPage />} />
+          <Route path="peers" element={<PeersPage />} />
+          <Route path="team" element={<TeamPage />} />
+          <Route path="browser" element={<BrowserViewerPage />} />
+          <Route path="briefings" element={<BriefingsPage />} />
+          <Route path="podcast" element={<PodcastPage />} />
           <Route path="chat" element={<Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
