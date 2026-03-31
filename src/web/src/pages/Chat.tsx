@@ -1,15 +1,59 @@
 import { useState, useRef, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
-import { PaperPlaneRight, Microphone, MicrophoneSlash, CaretDown, Plus } from '@phosphor-icons/react';
+import { PaperPlaneRight, Microphone, MicrophoneSlash, CaretDown, CaretRight, Plus, Wrench } from '@phosphor-icons/react';
 import { streamChat, api } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
 import { useVoiceChat } from '../hooks/useVoiceChat';
 import { useTier } from '../hooks/useTier';
 import { VoiceChatOverlay } from '../components/VoiceChatOverlay';
 
+interface ToolCall {
+  name: string;
+  input?: Record<string, unknown>;
+  output?: string;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  toolCalls?: ToolCall[];
+}
+
+function ToolCallChip({ toolCall }: { toolCall: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="bg-white/[0.04] border border-white/[0.08] rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 px-3 py-1.5 text-xs text-neutral-300 hover:text-white transition-colors w-full text-left"
+      >
+        <Wrench size={14} className="text-neutral-400 shrink-0" />
+        <span className="font-medium truncate">{toolCall.name}</span>
+        {expanded ? <CaretDown size={12} className="ml-auto shrink-0" /> : <CaretRight size={12} className="ml-auto shrink-0" />}
+      </button>
+      {expanded && (
+        <div className="border-t border-white/[0.06] px-3 py-2 space-y-2 text-xs">
+          {toolCall.input && Object.keys(toolCall.input).length > 0 && (
+            <div>
+              <span className="text-neutral-500 block mb-1">Input</span>
+              <pre className="text-neutral-300 whitespace-pre-wrap break-words font-mono text-[11px] bg-white/[0.03] rounded px-2 py-1.5">
+                {JSON.stringify(toolCall.input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {toolCall.output && (
+            <div>
+              <span className="text-neutral-500 block mb-1">Output</span>
+              <pre className="text-neutral-300 whitespace-pre-wrap break-words font-mono text-[11px] bg-white/[0.03] rounded px-2 py-1.5">
+                {toolCall.output}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ModelInfo {
@@ -112,6 +156,7 @@ export function ChatPage() {
     setStreaming(true);
 
     let assistantContent = '';
+    let toolCalls: ToolCall[] = [];
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     try {
@@ -120,16 +165,40 @@ export function ChatPage() {
           assistantContent += event.content as string;
           setMessages(prev => {
             const updated = [...prev];
-            updated[updated.length - 1] = { role: 'assistant', content: assistantContent };
+            updated[updated.length - 1] = { role: 'assistant', content: assistantContent, toolCalls: toolCalls.length > 0 ? [...toolCalls] : undefined };
             return updated;
           });
+        } else if (event.type === 'tool_use' || event.type === 'tool_call') {
+          const tc: ToolCall = {
+            name: (event as Record<string, unknown>).name as string,
+            input: (event as Record<string, unknown>).input as Record<string, unknown> | undefined,
+          };
+          toolCalls = [...toolCalls, tc];
+          setMessages(prev => {
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: 'assistant', content: assistantContent, toolCalls: [...toolCalls] };
+            return updated;
+          });
+        } else if (event.type === 'tool_result') {
+          if (toolCalls.length > 0) {
+            toolCalls = [...toolCalls];
+            toolCalls[toolCalls.length - 1] = {
+              ...toolCalls[toolCalls.length - 1],
+              output: (event as Record<string, unknown>).content as string | undefined,
+            };
+            setMessages(prev => {
+              const updated = [...prev];
+              updated[updated.length - 1] = { role: 'assistant', content: assistantContent, toolCalls: [...toolCalls] };
+              return updated;
+            });
+          }
         }
       }
     } catch {
       assistantContent += '\n\n[Connection lost. Try sending your message again.]';
       setMessages(prev => {
         const updated = [...prev];
-        updated[updated.length - 1] = { role: 'assistant', content: assistantContent };
+        updated[updated.length - 1] = { role: 'assistant', content: assistantContent, toolCalls: toolCalls.length > 0 ? [...toolCalls] : undefined };
         return updated;
       });
     } finally {
@@ -257,6 +326,13 @@ export function ChatPage() {
               }`}
             >
               <pre className="whitespace-pre-wrap break-words font-sans">{msg.content || (streaming && i === messages.length - 1 ? '...' : '')}</pre>
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {msg.toolCalls.map((tc, j) => (
+                    <ToolCallChip key={j} toolCall={tc} />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
