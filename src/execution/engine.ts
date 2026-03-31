@@ -2125,7 +2125,25 @@ export class RuntimeEngine {
     desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[] }> {
-    const provider = await this.modelRouter!.getProvider('agent_task', opts.difficulty);
+    // Query routing stats for adaptive model selection
+    let routingHistory: import('./model-router.js').RoutingHistory | undefined;
+    try {
+      const { data: stats } = await this.db
+        .from('agent_workforce_routing_stats')
+        .select('avg_truth_score, attempts')
+        .eq('agent_id', opts.agentId)
+        .order('attempts', { ascending: false })
+        .limit(1);
+      if (stats && stats.length > 0) {
+        const row = stats[0] as Record<string, unknown>;
+        routingHistory = {
+          avgTruthScore: (row.avg_truth_score as number) || 0,
+          attempts: (row.attempts as number) || 0,
+        };
+      }
+    } catch { /* routing stats table may not exist yet */ }
+
+    const provider = await this.modelRouter!.getProvider('agent_task', opts.difficulty, undefined, routingHistory);
 
     // Filter to client tools only (exclude Anthropic server-side tools like web_search)
     const clientTools = opts.tools.filter(

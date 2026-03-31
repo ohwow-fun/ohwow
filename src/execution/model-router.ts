@@ -1005,6 +1005,18 @@ export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agen
 
 export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'claude-code-cli' | 'auto';
 
+/**
+ * Routing history for adaptive model selection.
+ * Compatible with cloud dashboard's RoutingHistory interface.
+ * When provided to getProvider(), influences model tier:
+ * - Low truth score (<60 with N≥5): escalate to higher-capability model
+ * - High truth score (>85 with N≥10): allow downgrade to cheaper model
+ */
+export interface RoutingHistory {
+  avgTruthScore: number;
+  attempts: number;
+}
+
 export class ModelRouter {
   private anthropic: AnthropicProvider | null;
   private ollama: OllamaProvider | null;
@@ -1099,7 +1111,21 @@ export class ModelRouter {
    * When operationType is provided, the execution policy may override the modelSource
    * for that specific operation (e.g., planning always prefers cloud, memory extraction always local).
    */
-  async getProvider(taskType: TaskType, difficulty?: 'simple' | 'moderate' | 'complex', operationType?: OperationType): Promise<ModelProvider> {
+  async getProvider(taskType: TaskType, difficulty?: 'simple' | 'moderate' | 'complex', operationType?: OperationType, routingHistory?: RoutingHistory): Promise<ModelProvider> {
+    // Adaptive model routing: if routing history shows low quality, escalate to cloud
+    if (routingHistory && this.modelSource === 'auto') {
+      const { avgTruthScore, attempts } = routingHistory;
+      if (attempts >= 5 && avgTruthScore < 60 && this.anthropic) {
+        // Low quality with sufficient data: escalate to Anthropic
+        return this.anthropic;
+      }
+      if (attempts >= 10 && avgTruthScore > 85 && this.ollama) {
+        // Consistently high quality: allow downgrade to local
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+    }
+
     // OCR and vision tasks: try dedicated OCR model → vision-capable main model → Anthropic
     if (taskType === 'ocr' || taskType === 'vision') {
       // 1. Dedicated OCR model (best for OCR/vision tasks)
