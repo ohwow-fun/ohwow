@@ -92,6 +92,7 @@ import { CircuitBreaker } from '../orchestrator/error-recovery.js';
 import { Brain } from '../brain/brain.js';
 import crypto from 'crypto';
 import { classifyError, isRetryableFailure } from '../lib/error-classification.js';
+import { classifyRootCause } from '../lib/failure-root-cause.js';
 import { getToolReversibility } from '../lib/tool-reversibility.js';
 import { LocalActionJournalService } from '../lib/action-journal.js';
 import { validateOutputSafety } from '../lib/output-validator.js';
@@ -2024,6 +2025,30 @@ export class RuntimeEngine {
           });
         } catch { /* non-fatal */ }
       })();
+
+      // Fire-and-forget: enrich failure with semantic root-cause classification
+      if (this.modelRouter && failureCategory !== 'model_error' && failureCategory !== 'timeout') {
+        (async () => {
+          try {
+            // Read task input from DB since it may not be in scope
+            const { data: failedTaskRow } = await this.db.from('agent_workforce_tasks')
+              .select('input').eq('id', taskId).single();
+            const input = failedTaskRow
+              ? String((failedTaskRow as Record<string, unknown>).input ?? '').slice(0, 300)
+              : '';
+            const rootCause = await classifyRootCause(this.modelRouter!, {
+              taskTitle: taskTitle || '',
+              taskInput: input,
+              errorMessage,
+            });
+            if (rootCause !== 'unknown') {
+              await this.db.from('agent_workforce_tasks')
+                .update({ failure_category: rootCause })
+                .eq('id', taskId);
+            }
+          } catch { /* non-fatal enrichment */ }
+        })();
+      }
 
       // If Ollama is the only provider and it's down, drain queued tasks immediately
       // instead of letting them each timeout serially
