@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.2] — 2026-03-31
+
+### Added
+- Zero-config voice mode with automatic tier detection: browser-native (Web Speech API) as instant fallback, Voicebox auto-start when Python is available
+- Browser-native STT/TTS via Web Speech API for zero-install voice
+- Auto-start Voicebox on daemon boot if Python is detected
+- `/api/voice/providers` now returns `recommendedMode` for client auto-detection
+
 ## [0.4.1] — 2026-03-31
 
 ### Added
