@@ -7,6 +7,7 @@
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { AgentScore, RoutingDecision, TaskRoutingContext } from './types.js';
+import { proportionTest, wilsonInterval } from '../stats/significance.js';
 import { logger } from '../logger.js';
 
 // ============================================================================
@@ -149,7 +150,10 @@ function scoreHistoricalSuccess(
     return { score: sampleBeta(stats.successes, failures), explorationUsed: true };
   }
 
-  return { score: stats.successRate, explorationUsed: false };
+  // Use Wilson interval for a conservative point estimate
+  // instead of raw success rate (better with small samples)
+  const interval = wilsonInterval(stats.successes, stats.attempts);
+  return { score: interval.center, explorationUsed: false };
 }
 
 function scoreWorkload(status: string, activeTasks: number): number {
@@ -240,9 +244,31 @@ export class TaskRouter {
     scores.sort((a, b) => b.totalScore - a.totalScore);
     scores[0].selected = true;
 
+    // When not using Thompson Sampling (pure exploitation mode),
+    // require statistical significance before committing to the top agent.
+    // If the top two agents aren't significantly different, mark as exploration
+    // so the system keeps gathering data rather than prematurely converging.
+    let significanceNote = '';
+    if (!useThompson && scores.length >= 2) {
+      const topId = scores[0].agentId;
+      const runnerId = scores[1].agentId;
+      const topStats = statsMap.get(topId);
+      const runnerStats = statsMap.get(runnerId);
+      if (topStats && runnerStats && topStats.attempts >= 5 && runnerStats.attempts >= 5) {
+        const test = proportionTest(
+          topStats.successes, topStats.attempts,
+          runnerStats.successes, runnerStats.attempts,
+        );
+        if (!test.significant) {
+          explorationUsed = true;
+          significanceNote = ` (p=${test.pValue.toFixed(3)}, not yet significant)`;
+        }
+      }
+    }
+
     logger.info(
       { taskType, selectedAgent: scores[0].agentName, score: scores[0].totalScore.toFixed(3), explorationUsed },
-      '[TaskRouter] Routing decision made',
+      `[TaskRouter] Routing decision made${significanceNote}`,
     );
 
     return {
