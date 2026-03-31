@@ -32,6 +32,7 @@ import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ModelRouter } from '../execution/model-router.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
+import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
@@ -659,6 +660,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
     proactiveEngine = new ProactiveEngine(db, workspaceId, bus);
     proactiveEngine.start().catch(err => {
       logger.warn(`[daemon] Proactive engine failed: ${err instanceof Error ? err.message : err}`);
+    });
+
+    // Heartbeat coordinator: wakes agents on a configurable cadence
+    const heartbeatCoordinator = new HeartbeatCoordinator(db, engine, workspaceId);
+    heartbeatCoordinator.start().catch(err => {
+      logger.warn(`[daemon] Heartbeat coordinator failed: ${err instanceof Error ? err.message : err}`);
     });
   }
 

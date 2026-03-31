@@ -171,6 +171,26 @@ export function IntegrationsTab({ config, whatsappStatus, ollamaConnected, ollam
         )}
       </Box>
 
+      {/* Claude Code CLI Executor */}
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="cyan">Claude Code CLI</Text>
+        <Text>
+          {'  Auto-delegate: '}
+          <Text color={config.claudeCodeCliAutodetect ? 'green' : 'gray'}>
+            {config.claudeCodeCliAutodetect ? 'Enabled' : 'Disabled'}
+          </Text>
+        </Text>
+        {config.claudeCodeCliAutodetect ? (
+          <Text color="gray">{'  Code-capable agents use Claude Code for full task execution'}</Text>
+        ) : (
+          <Text color="gray">{'  Agents use built-in Anthropic/Ollama tool loop'}</Text>
+        )}
+        <Text color="gray">
+          {'  Press '}<Text bold color="white">y</Text>
+          {config.claudeCodeCliAutodetect ? ' to disable' : ' to enable'}
+        </Text>
+      </Box>
+
       {/* Voice */}
       <Box flexDirection="column" marginTop={1}>
         <Text bold color="cyan">Voice</Text>

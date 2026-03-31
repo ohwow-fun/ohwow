@@ -81,6 +81,20 @@ export function Settings({ config, health, cloudConnected, whatsappStatus, ollam
       return;
     }
 
+    // Toggle Claude Code CLI autodetect in Integrations tab
+    if ((input === 'y' || input === 'Y') && subTab === 'integrations') {
+      const newAutodetect = !config.claudeCodeCliAutodetect;
+      updateConfigFile({ claudeCodeCliAutodetect: newAutodetect });
+      // Trigger re-detection when enabling
+      if (newAutodetect) {
+        import('../../execution/adapters/claude-code-detection.js')
+          .then(m => m.detectClaudeCode(config.claudeCodeCliPath || undefined))
+          .catch(() => {});
+      }
+      onConfigChange?.({ ...config, claudeCodeCliAutodetect: newAutodetect });
+      return;
+    }
+
     // Toggle QR code display in General tab
     if ((input === 'q' || input === 'Q') && subTab === 'general') {
       setShowQr(prev => !prev);
