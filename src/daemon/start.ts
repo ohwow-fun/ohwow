@@ -390,6 +390,19 @@ export async function startDaemon(): Promise<DaemonHandle> {
     }
   }
 
+  // 7.5 Detect Claude Code CLI availability
+  if (config.claudeCodeCliAutodetect) {
+    try {
+      const { detectClaudeCode } = await import('../execution/adapters/claude-code-detection.js');
+      const ccStatus = await detectClaudeCode(config.claudeCodeCliPath || undefined);
+      if (ccStatus.available) {
+        logger.info({ version: ccStatus.version, path: ccStatus.binaryPath }, '[daemon] Claude Code CLI detected');
+      }
+    } catch (err) {
+      logger.debug({ err }, '[daemon] Claude Code CLI detection failed (non-fatal)');
+    }
+  }
+
   // 8. Create RuntimeEngine
   const engine = new RuntimeEngine(db, {
     anthropicApiKey: config.anthropicApiKey,
@@ -398,6 +411,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
     browserHeadless: config.browserHeadless,
     dataDir,
     mcpServers: config.mcpServers,
+    claudeCodeCliPath: config.claudeCodeCliPath || undefined,
+    claudeCodeCliModel: config.claudeCodeCliModel || undefined,
+    claudeCodeCliMaxTurns: config.claudeCodeCliMaxTurns,
+    claudeCodeCliPermissionMode: config.claudeCodeCliPermissionMode,
+    claudeCodeCliAutodetect: config.claudeCodeCliAutodetect,
+    modelSource: config.modelSource,
+    daemonPort: config.port,
+    daemonToken: sessionToken,
   }, {
     reportToCloud: controlPlane ? (report) => controlPlane!.reportTask(report) : () => Promise.resolve(),
   }, businessContext, bus, modelRouter, scraplingService);

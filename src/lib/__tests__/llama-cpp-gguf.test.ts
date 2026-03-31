@@ -13,6 +13,7 @@ describe('parseModelTag', () => {
 
   it('handles complex tags', () => {
     expect(parseModelTag('gemma3:12b-it-qat')).toEqual({ name: 'gemma3', variant: '12b-it-qat' });
-    expect(parseModelTag('qwen3.5:27b-q4_K_M')).toEqual({ name: 'qwen3.5', variant: '27b-q4_K_M' });
+    expect(parseModelTag('qwen3.5:27b')).toEqual({ name: 'qwen3.5', variant: '27b' });
+    expect(parseModelTag('qwen3.5:35b')).toEqual({ name: 'qwen3.5', variant: '35b' });
   });
 });

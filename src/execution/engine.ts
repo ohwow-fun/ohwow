@@ -32,6 +32,13 @@ import {
 // MemorySyncPayload moved to ./memory-sync.js
 import { logger } from '../lib/logger.js';
 import {
+  executeWithClaudeCodeCli,
+  isClaudeCodeCliAvailable,
+  buildSkillsDir,
+  createSessionStore,
+  type ClaudeCodeSessionStore,
+} from './adapters/index.js';
+import {
   LocalBrowserService,
   BROWSER_TOOL_DEFINITIONS,
   BROWSER_SYSTEM_PROMPT,
@@ -195,6 +202,7 @@ export class RuntimeEngine {
   /** Brain: unified cognitive coordinator for agent task execution. */
   private brain = new Brain({ modelRouter: null });
   private taskDistributor: import('../peers/task-distributor.js').TaskDistributor | null = null;
+  private ccSessionStore: ClaudeCodeSessionStore | null = null;
 
   constructor(
     private db: DatabaseAdapter,
@@ -213,6 +221,8 @@ export class RuntimeEngine {
     this.scraplingService = scraplingService ?? new ScraplingService();
     // Ollama processes one inference at a time; Anthropic can handle concurrent requests
     this.semaphore = new Semaphore(config.anthropicApiKey ? 3 : 1);
+    // Claude Code session store for --resume support
+    this.ccSessionStore = createSessionStore(db);
   }
 
   /** Get the Brain instance for body integration. */
@@ -279,6 +289,302 @@ export class RuntimeEngine {
     if (resolve) {
       this.pendingElicitations.delete(requestId);
       resolve(result);
+    }
+  }
+
+  // ==========================================================================
+  // CLAUDE CODE CLI EXECUTION PATH
+  // ==========================================================================
+
+  /**
+   * Determine whether this agent/task should use Claude Code CLI for full delegation.
+   * Priority: per-agent override > global config > autodetect.
+   */
+  private async shouldUseClaudeCodeCli(agentConfig: Record<string, unknown>): Promise<boolean> {
+    // Per-agent explicit override
+    if (agentConfig.execution_backend === 'claude-code-cli') return isClaudeCodeCliAvailable();
+    if (agentConfig.execution_backend === 'native') return false;
+
+    // Global config explicit mode
+    if (this.config.modelSource === 'claude-code-cli') return isClaudeCodeCliAvailable();
+
+    // Autodetect: only for agents with code/file capabilities
+    const autodetect = this.config.claudeCodeCliAutodetect !== false;
+    if (autodetect && isClaudeCodeCliAvailable()) {
+      const hasCodeCapabilities = agentConfig.bash_enabled === true
+        || agentConfig.local_files_enabled === true;
+      return hasCodeCapabilities;
+    }
+
+    return false;
+  }
+
+  /**
+   * Execute a task by delegating entirely to Claude Code CLI.
+   * Spawns `claude` as a child process with agent context injected via --add-dir.
+   * Claude Code handles the full tool loop (file editing, bash, search, etc.).
+   */
+  private async executeWithClaudeCodeCliPath(opts: {
+    agentId: string;
+    taskId: string;
+    workspaceId: string;
+    agent: AgentRow;
+    agentConfig: Record<string, unknown>;
+    task: TaskRow;
+    startTime: number;
+    traceId: string;
+  }): Promise<ExecuteAgentResult> {
+    const { agentId, taskId, workspaceId, agent, agentConfig, task, startTime, traceId } = opts;
+
+    logger.info({ agentId, taskId }, '[RuntimeEngine] Executing via Claude Code CLI');
+
+    // 1. Compile memory + knowledge
+    const [memoryDoc, knowledgeDoc] = await Promise.all([
+      this.compileMemory(agentId, workspaceId, task.title),
+      this.compileKnowledge(agentId, workspaceId, task.title, task.description),
+    ]);
+
+    // 2. Resolve working directory from agent file access paths
+    let workingDir: string | undefined;
+    try {
+      const { data: pathData } = await this.db
+        .from('agent_file_access_paths')
+        .select('path')
+        .eq('agent_id', agentId)
+        .limit(1);
+      if (pathData && (pathData as Array<{ path: string }>).length > 0) {
+        workingDir = (pathData as Array<{ path: string }>)[0].path;
+      }
+    } catch { /* non-fatal, use undefined (claude's cwd) */ }
+
+    // 3. Load goal context if linked
+    let goalContext: string | undefined;
+    if (task.goal_id) {
+      try {
+        const { data: goalData } = await this.db
+          .from('agent_workforce_goals')
+          .select('title, description, target_metric, target_value, current_value, unit')
+          .eq('id', task.goal_id)
+          .single();
+        if (goalData) {
+          const g = goalData as { title: string; description?: string; target_metric?: string; target_value?: number; current_value?: number; unit?: string };
+          goalContext = `Goal: ${g.title}${g.description ? `\n${g.description}` : ''}${g.target_metric ? `\nMetric: ${g.target_metric} (${g.current_value ?? 0}/${g.target_value ?? '?'} ${g.unit || ''})` : ''}`;
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // 4. Build skills directory with agent context
+    const taskInput = typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? '');
+    const skillsDir = await buildSkillsDir({
+      agentId,
+      agentName: agent.name,
+      agentRole: agent.role,
+      systemPrompt: agent.system_prompt || '',
+      memoryDocument: memoryDoc || undefined,
+      knowledgeDocument: knowledgeDoc || undefined,
+      taskId,
+      taskTitle: task.title,
+      taskDescription: task.description || undefined,
+      taskInput,
+      goalContext,
+      workspaceId,
+      daemonPort: this.config.daemonPort || 7700,
+      daemonToken: this.config.daemonToken || '',
+    });
+
+    try {
+      // 5. Look up existing session for resume
+      const sessionId = await this.ccSessionStore?.getActiveSession(agentId, workingDir) ?? undefined;
+
+      // 6. Execute via Claude Code CLI
+      const result = await executeWithClaudeCodeCli(
+        taskInput,
+        {
+          binaryPath: this.config.claudeCodeCliPath || undefined,
+          model: (this.config.claudeCodeCliModel || agentConfig.claude_code_model as string) || undefined,
+          maxTurns: this.config.claudeCodeCliMaxTurns || 25,
+          permissionMode: this.config.claudeCodeCliPermissionMode || 'skip',
+          workingDirectory: workingDir,
+          sessionId,
+          timeout: 300_000, // 5 min
+          envVars: {
+            OHWOW_AGENT_ID: agentId,
+            OHWOW_TASK_ID: taskId,
+            OHWOW_WORKSPACE_ID: workspaceId,
+          },
+          skillsDirs: [skillsDir.dir],
+        },
+        (progress) => {
+          this.emit('task:progress', { taskId, tokensUsed: progress.tokensUsed });
+        },
+      );
+
+      // 7. Persist session for next run
+      if (result.sessionId) {
+        await this.ccSessionStore?.saveSession(agentId, workspaceId, result.sessionId, workingDir);
+      } else if (sessionId) {
+        // Session resume failed or no session returned — mark stale
+        await this.ccSessionStore?.markStale(agentId);
+      }
+
+      // 8. Post-execution: save results and run all post-processing
+      const content = result.content || '';
+      const totalTokens = result.inputTokens + result.outputTokens;
+      const costCents = result.costCents;
+      const durationSeconds = Math.round((Date.now() - startTime) / 1000);
+
+      // Parse response classification
+      const { type: responseType, cleanContent } = this.parseResponseMeta(content);
+
+      // Autonomy-level status routing
+      const autonomyLevel = (agentConfig.autonomy_level as number | undefined) ?? 2;
+      let finalStatus: 'completed' | 'needs_approval' = 'completed';
+      if (autonomyLevel === 1 && responseType !== 'informational') {
+        finalStatus = 'needs_approval';
+      }
+
+      // Save output to DB
+      await this.db.from('agent_workforce_tasks').update({
+        status: finalStatus,
+        output: cleanContent,
+        response_type: responseType || null,
+        model_used: result.model || 'claude-code-cli',
+        tokens_used: totalTokens,
+        cost_cents: costCents,
+        completed_at: new Date().toISOString(),
+        duration_seconds: durationSeconds,
+        updated_at: new Date().toISOString(),
+      }).eq('id', taskId);
+
+      // Save assistant message
+      await this.db.from('agent_workforce_task_messages').insert({
+        task_id: taskId,
+        role: 'assistant',
+        content: cleanContent,
+        metadata: JSON.stringify({
+          model: result.model,
+          tokensUsed: totalTokens,
+          costCents,
+          executionBackend: 'claude-code-cli',
+          toolsUsed: result.toolsUsed,
+          numTurns: result.numTurns,
+        }),
+      });
+
+      // Update agent stats
+      const currentStats = typeof agent.stats === 'string' ? JSON.parse(agent.stats as string) : (agent.stats || {});
+      const newTotal = (currentStats.total_tasks || 0) + 1;
+      const prevAvgDuration = currentStats.avg_duration_seconds || 0;
+      const prevAvgTokens = currentStats.avg_tokens || 0;
+      await this.db.from('agent_workforce_agents').update({
+        status: 'idle',
+        stats: JSON.stringify({
+          total_tasks: newTotal,
+          completed_tasks: (currentStats.completed_tasks || 0) + (finalStatus === 'completed' ? 1 : 0),
+          failed_tasks: currentStats.failed_tasks || 0,
+          tokens_used: (currentStats.tokens_used || 0) + totalTokens,
+          cost_cents: (currentStats.cost_cents || 0) + costCents,
+          avg_duration_seconds: Math.round(prevAvgDuration + (durationSeconds - prevAvgDuration) / newTotal),
+          avg_tokens: Math.round(prevAvgTokens + (totalTokens - prevAvgTokens) / newTotal),
+          last_task_at: new Date().toISOString(),
+        }),
+        updated_at: new Date().toISOString(),
+      }).eq('id', agentId);
+
+      // Log activity
+      await this.db.rpc('create_agent_activity', {
+        p_workspace_id: workspaceId,
+        p_activity_type: 'task_completed',
+        p_title: `${task.title} — ${finalStatus}`,
+        p_description: `${totalTokens} tokens, ${durationSeconds}s (Claude Code CLI)`,
+        p_agent_id: agentId,
+        p_task_id: taskId,
+        p_metadata: { runtime: true, model: result.model, executionBackend: 'claude-code-cli' },
+      });
+
+      // Emit completion events
+      if (finalStatus === 'needs_approval') {
+        this.emit('task:needs_approval', {
+          taskId, agentId, agentName: agent.name, taskTitle: task.title, workspaceId,
+        });
+      }
+      this.emit('task:completed', { taskId, agentId, status: finalStatus, tokensUsed: totalTokens, costCents });
+
+      // Goal progress (auto-increment on completion)
+      if (task.goal_id && finalStatus === 'completed') {
+        try {
+          const { data: goalData } = await this.db
+            .from('agent_workforce_goals')
+            .select('current_value, target_value, status')
+            .eq('id', task.goal_id)
+            .single();
+          if (goalData) {
+            const goal = goalData as { current_value: number | null; target_value: number | null; status: string };
+            const newValue = (goal.current_value ?? 0) + 1;
+            const updateData: Record<string, unknown> = { current_value: newValue, updated_at: new Date().toISOString() };
+            if (goal.target_value && newValue >= goal.target_value && goal.status === 'active') {
+              updateData.status = 'completed';
+              updateData.completed_at = new Date().toISOString();
+            }
+            await this.db.from('agent_workforce_goals').update(updateData).eq('id', task.goal_id);
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Trigger child tasks
+      if (finalStatus === 'completed') {
+        (async () => {
+          try {
+            const { data: childTasks } = await this.db
+              .from('agent_workforce_tasks')
+              .select('id, agent_id')
+              .eq('parent_task_id', taskId)
+              .eq('status', 'pending');
+            if (childTasks && (childTasks as unknown[]).length > 0) {
+              for (const child of childTasks as Array<{ id: string; agent_id: string }>) {
+                this.executeTask(child.agent_id, child.id).catch(() => {});
+              }
+            }
+          } catch { /* non-fatal */ }
+        })();
+      }
+
+      // Memory extraction (async, fire-and-forget)
+      extractMemoriesFromTask(
+        { agentId, taskId, workspaceId, taskTitle: task.title, taskInput, taskOutput: cleanContent, toolsUsed: result.toolsUsed },
+        { db: this.db, anthropic: this.anthropic, modelRouter: this.modelRouter, onMemoryExtracted: (aid, count) => this.emit('memory:extracted', { agentId: aid, count }) },
+      ).catch((err) => {
+        logger.error({ err }, '[RuntimeEngine] Memory extraction failed (Claude Code CLI path)');
+      });
+
+      // Cloud report (async)
+      const cloudReport: import('./types.js').TaskReport = {
+        runtimeTaskId: taskId,
+        agentId,
+        taskTitle: task.title,
+        status: finalStatus,
+        tokensUsed: totalTokens,
+        costCents,
+        durationSeconds,
+        modelUsed: result.model,
+        startedAt: new Date(startTime).toISOString(),
+        completedAt: new Date().toISOString(),
+      };
+      this.effects.reportToCloud(cloudReport).catch(() => {});
+
+      return {
+        success: result.success,
+        taskId,
+        status: finalStatus,
+        output: cleanContent,
+        tokensUsed: totalTokens,
+        costCents,
+        responseType: responseType || undefined,
+        traceId,
+      };
+    } finally {
+      // Always clean up the skills directory
+      await skillsDir.cleanup();
     }
   }
 
@@ -429,6 +735,21 @@ export class RuntimeEngine {
       await this.db.from('agent_workforce_tasks').update({ status: 'in_progress', started_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', taskId);
 
       this.emit('task:started', { taskId, agentId, title: task.title });
+
+      // 2.5 Check for Claude Code CLI execution (full delegation)
+      const useClaudeCodeCli = await this.shouldUseClaudeCodeCli(agentConfig);
+      if (useClaudeCodeCli) {
+        try {
+          const ccResult = await this.executeWithClaudeCodeCliPath({
+            agentId, taskId, workspaceId, agent, agentConfig, task, startTime, traceId,
+          });
+          this.semaphore.release();
+          return ccResult;
+        } catch (ccError) {
+          // Fall through to native execution on failure
+          logger.warn({ err: ccError }, '[RuntimeEngine] Claude Code CLI failed, falling through to native path');
+        }
+      }
 
       // 3. Compile memory + knowledge documents
       const [memoryDoc, knowledgeDoc] = await Promise.all([

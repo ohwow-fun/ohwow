@@ -1003,7 +1003,7 @@ export class OpenRouterProvider implements ModelProvider {
 
 export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision';
 
-export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'auto';
+export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'claude-code-cli' | 'auto';
 
 export class ModelRouter {
   private anthropic: AnthropicProvider | null;

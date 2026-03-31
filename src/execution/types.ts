@@ -5,6 +5,7 @@
 
 import type { ClaudeModel } from './ai-types.js';
 import type { McpServerConfig } from '../mcp/types.js';
+import type { ClaudeCodeCliPermissionMode } from '../config.js';
 
 // ============================================================================
 // ENGINE CONFIG
@@ -23,6 +24,22 @@ export interface EngineConfig {
   dataDir?: string;
   /** Global MCP server defaults available to all agents */
   mcpServers?: McpServerConfig[];
+  /** Path to claude CLI binary (empty = auto-detect from PATH) */
+  claudeCodeCliPath?: string;
+  /** Model override for Claude Code CLI executor */
+  claudeCodeCliModel?: string;
+  /** Max tool iterations for Claude Code CLI (default: 25) */
+  claudeCodeCliMaxTurns?: number;
+  /** Permission mode for Claude Code CLI (default: 'skip') */
+  claudeCodeCliPermissionMode?: ClaudeCodeCliPermissionMode;
+  /** Auto-detect and prefer Claude Code CLI for code-capable agents (default: true) */
+  claudeCodeCliAutodetect?: boolean;
+  /** Model source from global config */
+  modelSource?: string;
+  /** Daemon port for API callbacks from Claude Code */
+  daemonPort?: number;
+  /** Daemon auth token for API callbacks */
+  daemonToken?: string;
 }
 
 // ============================================================================

@@ -212,6 +212,11 @@ export class OnboardingService {
       llamaCppUrl: 'http://localhost:8085',
       llamaCppBinaryPath: '',
       llamaCppModelPath: '',
+      claudeCodeCliPath: '',
+      claudeCodeCliModel: '',
+      claudeCodeCliMaxTurns: 25,
+      claudeCodeCliPermissionMode: 'skip',
+      claudeCodeCliAutodetect: true,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

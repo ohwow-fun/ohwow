@@ -13,7 +13,9 @@ import { logger } from './lib/logger.js';
 
 export type RuntimeTier = 'free' | 'connected';
 
-export type ModelSource = 'local' | 'cloud' | 'auto' | 'claude-code';
+export type ModelSource = 'local' | 'cloud' | 'auto' | 'claude-code' | 'claude-code-cli';
+
+export type ClaudeCodeCliPermissionMode = 'skip' | 'allowedTools' | 'interactive';
 
 export type DeviceRole = 'hybrid' | 'worker' | 'coordinator';
 
@@ -96,6 +98,16 @@ export interface RuntimeConfig {
   llamaCppBinaryPath: string;
   /** Direct path to a .gguf model file for llama-server (empty = resolve from Ollama blobs) */
   llamaCppModelPath: string;
+  /** Path to claude CLI binary for full-delegation execution (empty = auto-detect from PATH) */
+  claudeCodeCliPath: string;
+  /** Model override for Claude Code CLI executor (empty = Claude Code default) */
+  claudeCodeCliModel: string;
+  /** Max tool iterations for Claude Code CLI (default: 25) */
+  claudeCodeCliMaxTurns: number;
+  /** Permission mode for Claude Code CLI: skip (default), allowedTools, or interactive */
+  claudeCodeCliPermissionMode: ClaudeCodeCliPermissionMode;
+  /** Auto-detect and prefer Claude Code CLI for code-capable agents (default: true) */
+  claudeCodeCliAutodetect: boolean;
 }
 
 interface ConfigFile {
@@ -146,6 +158,11 @@ interface ConfigFile {
   llamaCppUrl?: string;
   llamaCppBinaryPath?: string;
   llamaCppModelPath?: string;
+  claudeCodeCliPath?: string;
+  claudeCodeCliModel?: string;
+  claudeCodeCliMaxTurns?: number;
+  claudeCodeCliPermissionMode?: ClaudeCodeCliPermissionMode;
+  claudeCodeCliAutodetect?: boolean;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -234,6 +251,11 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     llamaCppUrl: process.env.OHWOW_LLAMA_CPP_URL || fileConfig.llamaCppUrl || 'http://localhost:8085',
     llamaCppBinaryPath: process.env.OHWOW_LLAMA_CPP_BINARY || fileConfig.llamaCppBinaryPath || '',
     llamaCppModelPath: process.env.OHWOW_LLAMA_CPP_MODEL || fileConfig.llamaCppModelPath || '',
+    claudeCodeCliPath: process.env.OHWOW_CLAUDE_CODE_CLI_PATH || fileConfig.claudeCodeCliPath || '',
+    claudeCodeCliModel: process.env.OHWOW_CLAUDE_CODE_CLI_MODEL || fileConfig.claudeCodeCliModel || '',
+    claudeCodeCliMaxTurns: parseInt(process.env.OHWOW_CLAUDE_CODE_CLI_MAX_TURNS || '', 10) || fileConfig.claudeCodeCliMaxTurns || 25,
+    claudeCodeCliPermissionMode: (process.env.OHWOW_CLAUDE_CODE_CLI_PERMISSION_MODE as ClaudeCodeCliPermissionMode) || fileConfig.claudeCodeCliPermissionMode || 'skip',
+    claudeCodeCliAutodetect: process.env.OHWOW_CLAUDE_CODE_CLI_AUTODETECT === 'false' ? false : (fileConfig.claudeCodeCliAutodetect !== false),
   };
 
 
