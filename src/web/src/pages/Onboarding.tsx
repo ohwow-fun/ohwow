@@ -7,11 +7,13 @@ import { useEffect } from 'react';
 import { useOnboarding } from '../hooks/useOnboarding';
 import { setToken } from '../api/client';
 import { SplashScreen } from './onboarding/SplashScreen';
+import { TierChoiceScreen } from './onboarding/TierChoiceScreen';
 import { ModelScreen } from './onboarding/ModelScreen';
 import { BusinessInfoScreen } from './onboarding/BusinessInfoScreen';
 import { FounderStageScreen } from './onboarding/FounderStageScreen';
 import { AgentDiscoveryScreen } from './onboarding/AgentDiscoveryScreen';
 import { AgentSelectionScreen } from './onboarding/AgentSelectionScreen';
+import { IntegrationSetupScreen } from './onboarding/IntegrationSetupScreen';
 import { ReadyScreen } from './onboarding/ReadyScreen';
 
 interface OnboardingPageProps {
@@ -40,7 +42,20 @@ export function OnboardingPage({ sessionToken }: OnboardingPageProps) {
 
   switch (onboarding.screen) {
     case 'splash':
-      return <SplashScreen onGetStarted={onboarding.goToModel} />;
+      return <SplashScreen onGetStarted={onboarding.goToTierChoice} />;
+
+    case 'tier_choice':
+      return (
+        <TierChoiceScreen
+          licenseKey={onboarding.licenseKey}
+          onChangeLicenseKey={onboarding.setLicenseKey}
+          onValidate={onboarding.validateLicenseKey}
+          onSkip={onboarding.skipTierChoice}
+          onBack={() => { /* go back to splash would be odd, just stay */ }}
+          validating={onboarding.licenseValidating}
+          error={onboarding.licenseError}
+        />
+      );
 
     case 'model':
       return (
@@ -109,8 +124,21 @@ export function OnboardingPage({ sessionToken }: OnboardingPageProps) {
           presets={onboarding.presets}
           selectedIds={onboarding.selectedAgentIds}
           onToggle={onboarding.toggleAgent}
-          onContinue={onboarding.goToReady}
+          onContinue={onboarding.goToIntegrationSetup}
           onBack={onboarding.goToAgentDiscovery}
+        />
+      );
+
+    case 'integration_setup':
+      return (
+        <IntegrationSetupScreen
+          integrations={onboarding.integrations}
+          integrationValues={onboarding.integrationValues}
+          onSetValue={onboarding.setIntegrationValue}
+          onSkipIntegration={onboarding.skipIntegration}
+          skippedIds={onboarding.skippedIntegrationIds}
+          onContinue={onboarding.goToReady}
+          onBack={onboarding.goToAgentSelection}
         />
       );
 

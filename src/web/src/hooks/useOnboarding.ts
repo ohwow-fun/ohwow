@@ -8,11 +8,13 @@ import { parseDiscoveryResult } from '../../../lib/onboarding-parsers.js';
 
 export type OnboardingScreen =
   | 'splash'
+  | 'tier_choice'
   | 'model'
   | 'business_info'
   | 'founder_stage'
   | 'agent_discovery'
   | 'agent_selection'
+  | 'integration_setup'
   | 'ready';
 
 interface DeviceInfo {
@@ -73,6 +75,18 @@ interface ChatMessage {
   content: string;
 }
 
+interface McpEnvVar {
+  key: string;
+  label: string;
+}
+
+interface McpIntegration {
+  id: string;
+  name: string;
+  description: string;
+  envVarsRequired: McpEnvVar[];
+}
+
 export interface OnboardingState {
   screen: OnboardingScreen;
   status: OnboardingStatus | null;
@@ -84,6 +98,10 @@ export interface OnboardingState {
   setupMessage: string;
   error: string | null;
   completed: boolean;
+  // Tier choice
+  licenseKey: string;
+  licenseValidating: boolean;
+  licenseError: string | null;
   // Business info
   businessName: string;
   businessType: string;
@@ -98,6 +116,10 @@ export interface OnboardingState {
   // Agent selection
   presets: AgentPreset[];
   selectedAgentIds: Set<string>;
+  // Integration setup
+  integrations: McpIntegration[];
+  integrationValues: Record<string, Record<string, string>>;
+  skippedIntegrationIds: Set<string>;
   // Goal discovery
   discoveredGoal: { title: string; metric?: string; target?: number; unit?: string } | null;
 }
@@ -114,6 +136,9 @@ export function useOnboarding() {
     setupMessage: '',
     error: null,
     completed: false,
+    licenseKey: '',
+    licenseValidating: false,
+    licenseError: null,
     businessName: '',
     businessType: '',
     businessDescription: '',
@@ -124,6 +149,9 @@ export function useOnboarding() {
     chatStreaming: false,
     presets: [],
     selectedAgentIds: new Set(),
+    integrations: [],
+    integrationValues: {},
+    skippedIntegrationIds: new Set(),
     discoveredGoal: null,
   });
 
@@ -157,6 +185,34 @@ export function useOnboarding() {
       return null;
     }
   }, []);
+
+  /** Move to the tier choice screen (first step after splash). */
+  const goToTierChoice = useCallback(() => {
+    setState(s => ({ ...s, screen: 'tier_choice' }));
+  }, []);
+
+  /** Set license key. */
+  const setLicenseKey = useCallback((value: string) => {
+    setState(s => ({ ...s, licenseKey: value, licenseError: null }));
+  }, []);
+
+  /** Validate license key. */
+  const validateLicenseKey = useCallback(async () => {
+    // For now, just skip validation and proceed to model screen
+    // In the future this would call the cloud API
+    setState(s => ({ ...s, licenseValidating: false, screen: 'model' }));
+    if (!state.status) {
+      await fetchStatus();
+    }
+  }, [state.status, fetchStatus]);
+
+  /** Skip tier choice (continue in local mode). */
+  const skipTierChoice = useCallback(async () => {
+    setState(s => ({ ...s, screen: 'model', licenseKey: '' }));
+    if (!state.status) {
+      await fetchStatus();
+    }
+  }, [state.status, fetchStatus]);
 
   /** Move to the model screen. */
   const goToModel = useCallback(async () => {
@@ -455,6 +511,32 @@ export function useOnboarding() {
     });
   }, []);
 
+  // ── Integration Setup ────────────────────────────────────────────────
+
+  const goToIntegrationSetup = useCallback(() => {
+    // TODO: In the future, derive integrations from selected agent presets
+    // For now, show empty (no integrations needed) and auto-advance to ready
+    setState(s => ({ ...s, screen: 'integration_setup' }));
+  }, []);
+
+  const setIntegrationValue = useCallback((serverId: string, envKey: string, value: string) => {
+    setState(s => ({
+      ...s,
+      integrationValues: {
+        ...s.integrationValues,
+        [serverId]: { ...(s.integrationValues[serverId] || {}), [envKey]: value },
+      },
+    }));
+  }, []);
+
+  const skipIntegration = useCallback((serverId: string) => {
+    setState(s => {
+      const next = new Set(s.skippedIntegrationIds);
+      next.add(serverId);
+      return { ...s, skippedIntegrationIds: next };
+    });
+  }, []);
+
   // ── Ready / Complete ─────────────────────────────────────────────────
 
   const goToReady = useCallback(() => {
@@ -510,6 +592,12 @@ export function useOnboarding() {
   return {
     ...state,
     fetchStatus,
+    // Tier choice
+    goToTierChoice,
+    setLicenseKey,
+    validateLicenseKey,
+    skipTierChoice,
+    // Model
     goToModel,
     selectModel,
     startDownload,
@@ -529,6 +617,10 @@ export function useOnboarding() {
     // Selection
     goToAgentSelection,
     toggleAgent,
+    // Integration
+    goToIntegrationSetup,
+    setIntegrationValue,
+    skipIntegration,
     // Ready
     goToReady,
     completeOnboarding,
