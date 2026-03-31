@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] — 2026-03-31
+
+### Added
+- feat(web): add Tier Choice and Integration Setup to web onboarding
+- feat(tui): add experience choice gate for terminal vs web onboarding
+- feat(web): add Phase 3 pages for existing backend capabilities
+- feat(web): add weekly calendar view to schedules page
+- feat(web): add kanban board view to project detail page
+- feat(web): add Activity and Performance tabs to agent detail page
+- feat(web): add timeline, richer metadata, and collapsible sections to task detail
+- feat(web): show tool calls in chat stream with expandable chips
+- feat(dashboard): add task activity chart and quick stats row
+- feat(web): add Phase 1 pages and enrich existing UI
+
+### Fixed
+- fix(web): replace Webhook icon with Plug (not in phosphor-icons)
+
+### Changed
+- chore(web): update package-lock.json peer dependency flags
+
 ## [0.4.0] — 2026-03-31
 
 ### Added
