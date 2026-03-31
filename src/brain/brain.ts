@@ -54,6 +54,7 @@ import { TemporalFrameBuilder, buildTemporalReflection } from './temporal-frame.
 import { applyToolEmbodiment } from './tool-embodiment.js';
 import { dialecticCheck, formatDialecticWarning } from './dialectic.js';
 import { GlobalWorkspace } from './global-workspace.js';
+import type { ConsciousnessBridge } from './consciousness-bridge.js';
 import type { ClassifiedIntent } from '../orchestrator/orchestrator-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
@@ -89,6 +90,7 @@ export class Brain {
 
   private modelRouter: ModelRouter | null;
   private nervousSystem: NervousSystem | null;
+  private consciousnessBridge: ConsciousnessBridge | null = null;
   private digitalBody: import('../body/digital-body.js').DigitalBody | null = null;
 
   constructor(deps: BrainDependencies) {
@@ -121,6 +123,20 @@ export class Brain {
   /** Get the current proprioceptive snapshot, if body is available. */
   getProprioception(): import('../body/types.js').Proprioception | undefined {
     return this.digitalBody?.getProprioception();
+  }
+
+  // --------------------------------------------------------------------------
+  // CONSCIOUSNESS BRIDGE — Persist and sync Global Workspace items
+  // --------------------------------------------------------------------------
+
+  /** Wire the consciousness bridge for persistence and cloud sync. */
+  setConsciousnessBridge(bridge: ConsciousnessBridge): void {
+    this.consciousnessBridge = bridge;
+  }
+
+  /** Get the consciousness bridge (for external sync triggers). */
+  getConsciousnessBridge(): ConsciousnessBridge | null {
+    return this.consciousnessBridge;
   }
 
   // --------------------------------------------------------------------------
@@ -334,9 +350,10 @@ export class Brain {
   }
 
   /**
-   * Flush the experience stream to persistence.
+   * Flush the experience stream and consciousness items to persistence.
    */
   async flush(): Promise<void> {
     await this.experienceStream.flush();
+    await this.consciousnessBridge?.persist();
   }
 }

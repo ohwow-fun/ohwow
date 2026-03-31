@@ -34,6 +34,7 @@ import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
@@ -497,6 +498,18 @@ export async function startDaemon(): Promise<DaemonHandle> {
     orchestrator.setDigitalBody(digitalBody);
   }
   engine.getBrain().setDigitalBody(digitalBody);
+
+  // Wire consciousness bridge for persistence and cloud sync
+  if (orchestrator) {
+    const orchBrain = orchestrator.getBrain();
+    if (orchBrain) {
+      const consciousnessBridge = new ConsciousnessBridge(db, orchBrain.workspace, workspaceId);
+      orchBrain.setConsciousnessBridge(consciousnessBridge);
+      consciousnessBridge.hydrate().catch(err => {
+        logger.debug({ err }, '[daemon] Consciousness hydration failed');
+      });
+    }
+  }
 
   logger.info(`[body] Digital body created with ${digitalBody.getOrgans().length} organs, nervous system started`);
 
