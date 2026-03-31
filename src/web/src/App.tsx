@@ -25,6 +25,10 @@ import { AutomationBuilderPage } from './pages/AutomationBuilderPage';
 import { ConnectionsPage } from './pages/Connections';
 import { KnowledgePage } from './pages/Knowledge';
 import { TemplatesPage } from './pages/TemplatesPage';
+import { WorkflowsHub } from './pages/WorkflowsHub';
+import { WebhookEventsPage } from './pages/WebhookEvents';
+import { GoalsPage } from './pages/Goals';
+import { RevenuePage } from './pages/Revenue';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -66,6 +70,10 @@ export function App() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="workflows" element={<WorkflowsHub />} />
+          <Route path="webhook-events" element={<WebhookEventsPage />} />
+          <Route path="goals" element={<GoalsPage />} />
+          <Route path="revenue" element={<RevenuePage />} />
           <Route path="chat" element={<Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

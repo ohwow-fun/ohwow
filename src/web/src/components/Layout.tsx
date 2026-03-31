@@ -22,6 +22,10 @@ import {
   List,
   X,
   Cube,
+  FlowArrow,
+  Webhook,
+  Target,
+  CurrencyDollar,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -42,12 +46,16 @@ const NAV_ITEMS: NavItem[] = [
   // Manage
   { path: '/agents', label: 'Agents', icon: Robot, group: 'manage' },
   { path: '/projects', label: 'Projects', icon: Kanban, group: 'manage' },
+  { path: '/workflows', label: 'Workflows', icon: FlowArrow, group: 'manage' },
   { path: '/automations', label: 'Automations', icon: Lightning, group: 'manage' },
   { path: '/templates', label: 'Templates', icon: Cube, group: 'manage' },
   { path: '/schedules', label: 'Schedules', icon: CalendarBlank, group: 'manage' },
   { path: '/approvals', label: 'Approvals', icon: ShieldCheck, group: 'manage' },
+  { path: '/goals', label: 'Goals', icon: Target, group: 'manage' },
+  { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'manage' },
   // Configure
   { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'configure' },
+  { path: '/webhook-events', label: 'Webhooks', icon: Webhook, group: 'configure' },
   { path: '/knowledge', label: 'Knowledge', icon: BookOpen, group: 'configure' },
   { path: '/settings', label: 'Settings', icon: GearSix, group: 'configure' },
 ];

@@ -37,6 +37,7 @@ import { createAutomationsRouter } from './routes/automations.js';
 import { createDashboardRouter } from './routes/dashboard.js';
 import { createContactsRouter } from './routes/contacts.js';
 import { createRevenueRouter } from './routes/revenue.js';
+import { createGoalsRouter } from './routes/goals.js';
 import { createDepartmentsRouter } from './routes/departments.js';
 import { createTeamMembersRouter } from './routes/team-members.js';
 import { createProjectsRouter } from './routes/projects.js';
@@ -268,6 +269,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createDashboardRouter(db));
   app.use(createContactsRouter(db, eventBus));
   app.use(createRevenueRouter(db, eventBus));
+  app.use(createGoalsRouter(db, eventBus));
   app.use(createDepartmentsRouter(db, eventBus));
   app.use(createTeamMembersRouter(db, eventBus));
   app.use(createProjectsRouter(db, eventBus));
