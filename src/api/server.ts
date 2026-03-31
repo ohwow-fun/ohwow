@@ -54,6 +54,7 @@ import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createBrowserSessionRouter } from './routes/browser-session.js';
+import { createDesktopSessionRouter } from './routes/desktop-session.js';
 import { errorHandler } from './error-handler.js';
 import { VoiceSession } from '../voice/voice-session.js';
 import { VoiceboxSTTProvider } from '../voice/voicebox-stt-provider.js';
@@ -244,10 +245,16 @@ export function createServer(deps: ServerDeps): {
   // /browser/health is public; /browser/session/* require auth
   app.use(createBrowserSessionRouter());
 
+  // Desktop session routes (cloud dashboard calls these for live desktop viewer)
+  // /desktop/health is public; /desktop/screenshot and /desktop/action require auth
+  app.use(createDesktopSessionRouter());
+
   // Authenticated routes (content token or local session token required)
   const auth = createAuthMiddleware(config.jwtSecret, sessionToken, config.contentPublicKey, db);
   app.use('/api', auth);
   app.use('/browser/session', auth);
+  app.use('/desktop/screenshot', auth);
+  app.use('/desktop/action', auth);
 
   // Register all API routes
   app.use(createTasksRouter(db, engine));
