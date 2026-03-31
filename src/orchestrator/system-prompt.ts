@@ -56,6 +56,10 @@ export interface BuildLocalSystemPromptArgs {
   desktopDisplayLayout?: string;
   hasMcpTools?: boolean;
   platform?: ChannelType;
+  /** Learned principles from self-improvement cycle (top 5 by utility) */
+  learnedPrinciples?: { id: string; rule: string; category: string }[];
+  /** Learned skills/procedures from self-improvement cycle */
+  learnedSkills?: { id: string; name: string; description: string }[];
 }
 
 /**
@@ -480,6 +484,15 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     ? `\n## Project Instructions\n${projectInstructions}`
     : '';
 
+  // --- Learned Principles & Skills (from self-improvement cycle) ---
+  const principlesSection = args.learnedPrinciples && args.learnedPrinciples.length > 0
+    ? `\n## Learned Principles\nStrategic guidelines distilled from past experience. Follow these when relevant:\n${args.learnedPrinciples.map(p => `- [${p.category}] ${p.rule}`).join('\n')}`
+    : '';
+
+  const skillsSection = args.learnedSkills && args.learnedSkills.length > 0
+    ? `\n## Learned Procedures\nReusable procedures synthesized from successful task patterns:\n${args.learnedSkills.map(s => `- **${s.name}**: ${s.description}`).join('\n')}`
+    : '';
+
   // --- Today's Pulse Section (skip when all zeros — fresh workspace) ---
   let pulseSection = '';
   if (businessPulse) {
@@ -659,6 +672,8 @@ ${businessCtx}
 ${memorySection}
 ${ragSection}
 ${projectInstructionsSection}
+${principlesSection}
+${skillsSection}
 
 ## Available Agents
 ${agentList || 'No agents created yet. The user can create agents from the web UI.'}
@@ -743,8 +758,12 @@ export function buildCompactDynamicContext(args: BuildLocalSystemPromptArgs): st
     ? `\n## Projects\n${projects.map(p => `- ${p.name} (${p.status}) [id: ${p.id}]`).join('\n')}`
     : '';
 
+  const compactPrinciples = args.learnedPrinciples && args.learnedPrinciples.length > 0
+    ? `\n## Principles\n${args.learnedPrinciples.map(p => `- ${p.rule}`).join('\n')}`
+    : '';
+
   return `${lines.join('\n')}
-${memorySection}${ragSection}${projectInstructionsSection}
+${memorySection}${ragSection}${projectInstructionsSection}${compactPrinciples}
 ## Agents
 ${agentList || 'No agents yet.'}
 ${projectSection}${buildLocalPlatformAddendum(args.platform)}`;

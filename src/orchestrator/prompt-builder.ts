@@ -13,6 +13,7 @@ import type { ChannelType } from '../integrations/channel-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import { retrieveRelevantMemories, retrieveKnowledgeChunks, formatRelevantMemories, formatRagChunks } from '../lib/rag/retrieval.js';
 import { loadOrchestratorMemory } from './session-store.js';
+import { logger } from '../lib/logger.js';
 
 export interface PromptBuilderDeps {
   db: DatabaseAdapter;
@@ -119,6 +120,20 @@ export async function buildTargetedPrompt(
     })();
   }
 
+  // --- Learned principles & skills from self-improvement cycle ---
+  type PrincipleRow = { id: string; rule: string; category: string };
+  type SkillRow = { id: string; name: string; description: string };
+
+  const principlesPromise = deps.db.from('agent_workforce_principles')
+    .select('id, rule, category')
+    .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
+    .order('utility_score', { ascending: false }).limit(5);
+
+  const skillsPromise = deps.db.from('agent_workforce_skills')
+    .select('id, name, description')
+    .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
+    .order('pattern_support', { ascending: false }).limit(5);
+
   const memoryRagPromise: Promise<{ memory?: string; rag?: string }> = (async () => {
     if (!need('memory') && !need('rag')) return {};
 
@@ -144,8 +159,8 @@ export async function buildTargetedPrompt(
     return {};
   })();
 
-  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag] =
-    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise]);
+  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag, principlesResult, skillsResult] =
+    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise, principlesPromise, skillsPromise]);
 
   const agents = ((agentsResult.data || []) as AgentRow[]).map((a) => {
     const raw = typeof a.stats === 'string' ? JSON.parse(a.stats as string) : (a.stats || {}) as Record<string, unknown>;
@@ -235,7 +250,27 @@ export async function buildTargetedPrompt(
     desktopDisplayLayout,
     hasMcpTools,
     platform,
+    learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
+    learnedSkills: (skillsResult.data || []) as SkillRow[],
   };
+
+  // Fire-and-forget: increment times_applied for principles injected into the prompt
+  const principleIds = ((principlesResult.data || []) as PrincipleRow[]).map(p => p.id);
+  if (principleIds.length > 0) {
+    (async () => {
+      for (const id of principleIds) {
+        try {
+          const { data } = await deps.db.from('agent_workforce_principles')
+            .select('times_applied').eq('id', id).single();
+          if (data) {
+            const current = (data as Record<string, unknown>).times_applied as number || 0;
+            await deps.db.from('agent_workforce_principles')
+              .update({ times_applied: current + 1 }).eq('id', id);
+          }
+        } catch { /* best-effort tracking */ }
+      }
+    })().catch(err => logger.debug({ err }, 'Failed to increment principle usage'));
+  }
 
   let staticPart: string;
   let dynamicPart: string;
