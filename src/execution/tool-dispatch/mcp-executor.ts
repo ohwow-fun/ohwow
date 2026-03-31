@@ -52,8 +52,15 @@ export const mcpExecutor: ToolExecutor = {
       }
 
       ctx.circuitBreaker.recordFailure(toolName);
+
+      // Hint: suggest browser as fallback when MCP fails
+      let errorContent = `Error: ${msg}`;
+      if (ctx.browserService || ctx.browserActivated) {
+        errorContent += '\n\nHint: This MCP tool failed. If the task can be done through a web interface, consider using browser_* tools instead.';
+      }
+
       return {
-        content: `Error: ${msg}`,
+        content: errorContent,
         is_error: true,
       };
     }

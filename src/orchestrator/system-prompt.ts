@@ -54,6 +54,7 @@ export interface BuildLocalSystemPromptArgs {
   hasDesktopTools?: boolean;
   desktopPreActivated?: boolean;
   desktopDisplayLayout?: string;
+  hasMcpTools?: boolean;
   platform?: ChannelType;
 }
 
@@ -621,6 +622,28 @@ You can control the user's macOS desktop when needed. Call \`request_desktop\` f
 Always call \`request_desktop\` before using any desktop_ tool.`
       : '';
 
+  // Tool priority section: emitted when 2+ interactive backends are available
+  const interactiveBackendCount =
+    (args.hasMcpTools || false ? 1 : 0) +
+    (args.hasBrowserTools || args.browserPreActivated ? 1 : 0) +
+    (args.hasDesktopTools || args.desktopPreActivated ? 1 : 0);
+
+  const toolPrioritySection = interactiveBackendCount >= 2
+    ? `\n## Tool Selection Priority
+When multiple approaches can accomplish a task, prefer this order:
+1. MCP tools (mcp__*) — structured APIs, most reliable, no UI interaction needed
+2. Browser tools (browser_*) — web interactions via Chromium
+3. Desktop tools (desktop_*) — full OS control for native apps, file dialogs, system interactions
+
+Only escalate to a less precise tool when the higher-priority tool fails or cannot accomplish the specific task.`
+    : '';
+
+  // Browser ↔ Desktop handoff section
+  const handoffSection = (args.hasBrowserTools || args.browserPreActivated) && (args.hasDesktopTools || args.desktopPreActivated)
+    ? `\n## Browser and Desktop Handoff
+Browser tools handle web content inside Chromium. If you encounter native OS interactions (file pickers, system permission prompts, desktop app launches, save/print dialogs, or OAuth flows that open native apps), switch to desktop_* tools. Take a \`desktop_screenshot\` first to see what the OS is showing, then interact via \`desktop_click\`/\`desktop_type\`.`
+    : '';
+
   const now = new Date();
 
   return `You are the Orchestrator — an AI business success strategist and operations partner for ${business?.name || 'the business'}, running locally in the user's terminal.
@@ -648,6 +671,8 @@ ${a2aSection}
 ${visionSection}
 ${browserSection}
 ${desktopSection}
+${toolPrioritySection}
+${handoffSection}
 ${channelSections.join('')}${buildLocalPlatformAddendum(args.platform)}`;
 }
 

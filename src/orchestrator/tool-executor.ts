@@ -250,11 +250,19 @@ export async function* executeToolCall(
     }
 
     // Build Ollama-compatible text content (for models that can't process images)
-    const ollamaContent = formatted
+    let ollamaContent = formatted
       .map(b => (b.type === 'text' ? b.text : (screenshotPath
         ? `Screenshot saved to ${screenshotPath}. The image shows the current browser viewport at ${browserResult.currentUrl || 'the current page'}.`
         : '[image]')))
       .join('\n');
+
+    // Hint: suggest desktop tools when browser hits a native boundary
+    if (browserResult.error && ctx.desktopState) {
+      const err = browserResult.error.toLowerCase();
+      if (/file.*(upload|picker|dialog)|native.*(popup|dialog)|system.*(dialog|prompt)|permission.*prompt|save.*as|print.*dialog|open.*with/.test(err)) {
+        ollamaContent += '\n\nHint: This looks like a native OS interaction. Consider using desktop_* tools (desktop_screenshot, desktop_click, desktop_type) to handle file pickers, system dialogs, or native app prompts.';
+      }
+    }
 
     return {
       toolName: request.name,
@@ -446,10 +454,17 @@ export async function* executeToolCall(
       const errorMsg = err instanceof Error ? err.message : 'MCP tool call failed';
       const errorResult: ToolResult = { success: false, error: errorMsg };
       yield { type: 'tool_done', name: request.name, result: errorResult };
+
+      // Hint: suggest browser as fallback when MCP fails
+      let mcpErrorContent = `Error: ${errorMsg}`;
+      if (ctx.browserState.service || ctx.browserState.activated) {
+        mcpErrorContent += '\n\nHint: This MCP tool failed. If the task can be done through a web interface, consider using browser_* tools instead.';
+      }
+
       return {
         toolName: request.name,
         result: errorResult,
-        resultContent: `Error: ${errorMsg}`,
+        resultContent: mcpErrorContent,
         isError: true,
       };
     }

@@ -33,6 +33,7 @@ export async function buildTargetedPrompt(
   desktopPreActivated?: boolean,
   compact?: boolean | 'micro',
   desktopDisplayLayout?: string,
+  hasMcpTools?: boolean,
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const need = (s: IntentSection) => sections.has(s);
 
@@ -232,6 +233,7 @@ export async function buildTargetedPrompt(
     hasDesktopTools: need('desktop'),
     desktopPreActivated,
     desktopDisplayLayout,
+    hasMcpTools,
     platform,
   };
 

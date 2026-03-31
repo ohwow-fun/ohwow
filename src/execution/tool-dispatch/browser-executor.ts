@@ -34,6 +34,17 @@ export const browserExecutor: ToolExecutor = {
       } catch { /* non-fatal */ }
     }
 
+    // Hint: suggest desktop tools when browser hits a native boundary
+    if (result.error && (ctx.desktopService || ctx.desktopActivated)) {
+      const err = result.error.toLowerCase();
+      if (/file.*(upload|picker|dialog)|native.*(popup|dialog)|system.*(dialog|prompt)|permission.*prompt|save.*as|print.*dialog|open.*with/.test(err)) {
+        formatted.push({
+          type: 'text',
+          text: 'Hint: This looks like a native OS interaction. Consider using desktop_* tools (desktop_screenshot, desktop_click, desktop_type) to handle file pickers, system dialogs, or native app prompts.',
+        });
+      }
+    }
+
     return { content: formatted };
   },
 };
