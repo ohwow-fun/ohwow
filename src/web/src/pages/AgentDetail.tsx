@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Pause, Play, ListChecks, Gear } from '@phosphor-icons/react';
+import { ArrowLeft, Pause, Play, ListChecks, Gear, CheckCircle, XCircle, Pulse, CircleNotch } from '@phosphor-icons/react';
 import { Toggle } from '../components/Toggle';
 import { TabSwitcher } from '../components/TabSwitcher';
 import { McpServersSection } from './agent/McpServersSection';
@@ -39,7 +39,18 @@ interface AgentTask {
   title: string;
   status: string;
   tokens_used: number | null;
+  cost_cents: number | null;
+  duration_seconds: number | null;
   priority: string | null;
+  created_at: string;
+}
+
+interface ActivityEntry {
+  id: string;
+  activity_type: string;
+  title: string;
+  description: string | null;
+  agent_id: string | null;
   created_at: string;
 }
 
@@ -68,6 +79,8 @@ function getTimeAgo(dateStr: string): string {
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'tasks', label: 'Tasks' },
+  { id: 'activity', label: 'Activity' },
+  { id: 'performance', label: 'Performance' },
   { id: 'config', label: 'Config' },
 ];
 
@@ -77,6 +90,25 @@ export function AgentDetailPage() {
   const { data: agent, loading, refetch } = useApi<Agent>(id ? `/api/agents/${id}` : null, [wsTick]);
   const { data: memories } = useApi<Memory[]>(id ? `/api/agents/${id}/memory` : null);
   const { data: tasks } = useApi<AgentTask[]>(id ? `/api/tasks?agentId=${id}&limit=50` : null, [wsTick]);
+  const { data: allActivity } = useApi<ActivityEntry[]>('/api/activity', [wsTick]);
+
+  const agentActivity = useMemo(() => {
+    if (!allActivity || !id) return [];
+    return allActivity.filter(a => a.agent_id === id);
+  }, [allActivity, id]);
+
+  const performanceMetrics = useMemo(() => {
+    if (!tasks?.length) return null;
+    const completed = tasks.filter(t => t.status === 'completed').length;
+    const failed = tasks.filter(t => t.status === 'failed').length;
+    const successRate = completed + failed > 0 ? completed / (completed + failed) : 0;
+    const durations = tasks.filter(t => t.duration_seconds != null).map(t => t.duration_seconds as number);
+    const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+    const totalTokens = tasks.reduce((sum, t) => sum + (t.tokens_used || 0), 0);
+    const totalCostCents = tasks.reduce((sum, t) => sum + (t.cost_cents || 0), 0);
+    const avgTokens = tasks.length > 0 ? Math.round(totalTokens / tasks.length) : 0;
+    return { completed, failed, successRate, avgDuration, totalTokens, totalCostCents, avgTokens };
+  }, [tasks]);
 
   const [tab, setTab] = useState('overview');
 
@@ -376,6 +408,94 @@ export function AgentDetailPage() {
                   </Link>
                 ))}
               </div>
+            )}
+          </>
+        )}
+
+        {/* Activity Tab */}
+        {tab === 'activity' && (
+          <>
+            {!agentActivity.length ? (
+              <EmptyState
+                icon={<Pulse size={32} />}
+                title="No activity yet"
+                description="Activity will appear here as this agent works on tasks."
+              />
+            ) : (
+              <div className="border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
+                {agentActivity.map(entry => (
+                  <div key={entry.id} className="flex items-start gap-3 px-4 py-3">
+                    <div className="mt-0.5">
+                      {entry.activity_type === 'task_completed' && <CheckCircle size={16} weight="fill" className="text-success" />}
+                      {entry.activity_type === 'task_failed' && <XCircle size={16} weight="fill" className="text-critical" />}
+                      {entry.activity_type === 'task_started' && <CircleNotch size={16} className="text-white animate-spin" />}
+                      {!['task_completed', 'task_failed', 'task_started'].includes(entry.activity_type) && <Pulse size={16} className="text-neutral-400" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{entry.title}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-neutral-500 shrink-0">
+                          {entry.activity_type.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                      {entry.description && (
+                        <p className="text-xs text-neutral-500 mt-0.5 truncate">{entry.description}</p>
+                      )}
+                      <p className="text-xs text-neutral-600 mt-1">{getTimeAgo(entry.created_at)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Performance Tab */}
+        {tab === 'performance' && (
+          <>
+            {!performanceMetrics ? (
+              <EmptyState
+                icon={<Pulse size={32} />}
+                title="No performance data"
+                description="Complete some tasks first to see performance metrics."
+              />
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-3 mb-6">
+                  <MetricCard label="Success rate" value={`${(performanceMetrics.successRate * 100).toFixed(0)}%`} />
+                  <MetricCard label="Avg duration" value={performanceMetrics.avgDuration > 0 ? `${performanceMetrics.avgDuration.toFixed(1)}s` : 'N/A'} />
+                  <MetricCard label="Total tokens" value={performanceMetrics.totalTokens.toLocaleString()} />
+                </div>
+                <div className="grid grid-cols-3 gap-3 mb-8">
+                  <MetricCard label="Total cost" value={`$${(performanceMetrics.totalCostCents / 100).toFixed(2)}`} />
+                  <MetricCard label="Avg tokens/task" value={performanceMetrics.avgTokens.toLocaleString()} />
+                  <MetricCard label="Tasks evaluated" value={performanceMetrics.completed + performanceMetrics.failed} />
+                </div>
+
+                <h2 className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider mb-3">Task outcomes</h2>
+                <div className="border border-white/[0.08] rounded-lg p-4">
+                  <svg viewBox="0 0 300 80" className="w-full max-w-sm" role="img" aria-label="Task outcome chart">
+                    {(() => {
+                      const total = performanceMetrics.completed + performanceMetrics.failed;
+                      if (total === 0) return null;
+                      const cW = (performanceMetrics.completed / total) * 260;
+                      const fW = (performanceMetrics.failed / total) * 260;
+                      return (
+                        <>
+                          <rect x={20} y={10} width={cW} height={24} rx={4} fill="#22c55e" />
+                          <text x={20} y={52} className="text-[10px]" fill="#a3a3a3" fontSize="10">
+                            Completed: {performanceMetrics.completed}
+                          </text>
+                          <rect x={20} y={56} width={fW} height={24} rx={4} fill="#ef4444" />
+                          <text x={20 + fW + 8} y={72} className="text-[10px]" fill="#a3a3a3" fontSize="10">
+                            Failed: {performanceMetrics.failed}
+                          </text>
+                        </>
+                      );
+                    })()}
+                  </svg>
+                </div>
+              </>
             )}
           </>
         )}
