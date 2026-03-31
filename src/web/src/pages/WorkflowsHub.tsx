@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { CalendarBlank, Lightning, ArrowRight, Timer, ClockCounterClockwise, Webhook, GitBranch } from '@phosphor-icons/react';
+import { CalendarBlank, Lightning, ArrowRight, Timer, ClockCounterClockwise, Plug, GitBranch } from '@phosphor-icons/react';
 import { PageHeader } from '../components/PageHeader';
 
 const cards = [
@@ -22,7 +22,7 @@ const cards = [
     title: 'Automations',
     description: 'Build event-driven flows triggered by webhooks, schedules, or manual input. Chain multiple steps together.',
     features: [
-      { icon: Webhook, label: 'Webhook triggers' },
+      { icon: Plug, label: 'Webhook triggers' },
       { icon: GitBranch, label: 'Visual builder' },
     ],
   },

@@ -23,7 +23,7 @@ import {
   X,
   Cube,
   FlowArrow,
-  Webhook,
+  Plug,
   Target,
   CurrencyDollar,
   ChatCircleDots,
@@ -65,7 +65,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/team', label: 'Team', icon: UsersThree, group: 'connect' },
   { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'connect' },
   // Configure
-  { path: '/webhook-events', label: 'Webhooks', icon: Webhook, group: 'configure' },
+  { path: '/webhook-events', label: 'Webhooks', icon: Plug, group: 'configure' },
   { path: '/browser', label: 'Browser', icon: Browser, group: 'configure' },
   { path: '/briefings', label: 'Briefings', icon: Newspaper, group: 'configure' },
   { path: '/podcast', label: 'Podcast', icon: Microphone, group: 'configure' },

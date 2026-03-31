@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Webhook, Eye, ArrowClockwise, Funnel } from '@phosphor-icons/react';
+import { Plug, Eye, ArrowClockwise, Funnel } from '@phosphor-icons/react';
 import { useApi } from '../hooks/useApi';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -87,7 +87,7 @@ export function WebhookEventsPage() {
         <RowSkeleton count={6} />
       ) : !filtered.length ? (
         <EmptyState
-          icon={<Webhook size={32} />}
+          icon={<Plug size={32} />}
           title="No webhook events yet"
           description="Events will appear here when webhooks are received by your triggers."
         />
