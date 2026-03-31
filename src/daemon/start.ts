@@ -37,6 +37,7 @@ import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
 import { VoiceboxService } from '../voice/voicebox-service.js';
+import { findPythonCommand } from '../lib/platform-utils.js';
 import { DigitalBody, type VoiceServiceLike } from '../body/digital-body.js';
 import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { OllamaMonitor } from '../lib/ollama-monitor.js';
@@ -326,6 +327,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
   });
 
   const voiceboxService = new VoiceboxService();
+
+  // Auto-start Voicebox if Python is available (non-blocking)
+  if (findPythonCommand()) {
+    voiceboxService.start()
+      .then(() => logger.info('[daemon] Voicebox auto-started'))
+      .catch((err) => logger.debug(`[daemon] Voicebox auto-start skipped: ${(err as Error).message}`));
+  }
 
   // 7. Connect to cloud (connected tier only)
   let controlPlane: ControlPlaneClient | null = null;

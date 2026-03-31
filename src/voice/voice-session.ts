@@ -167,6 +167,31 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
     return { transcription, responseText };
   }
 
+  /**
+   * Process pre-transcribed text directly (browser-native mode).
+   * Skips STT and TTS — both are handled in the browser via Web Speech API.
+   */
+  async processTextDirect(text: string): Promise<{ responseText: string }> {
+    if (!this._active) throw new Error('Voice session is not active');
+    if (!text.trim()) {
+      return { responseText: '' };
+    }
+
+    this.setState('processing');
+    const dummyResult: STTResult = { text, confidence: 1.0, durationMs: 0 };
+    const responseText = await this.onTranscription(text, dummyResult);
+    this.emit('response', responseText);
+
+    this.experienceStream?.append('voice_processed', {
+      sttProvider: 'browser-native',
+      sttConfidence: 1.0,
+      responseLength: responseText.length,
+    }, 'voice');
+
+    this.setState('idle');
+    return { responseText };
+  }
+
   async start(): Promise<void> {
     const [sttOk, ttsOk] = await Promise.all([
       this.stt.isAvailable(),

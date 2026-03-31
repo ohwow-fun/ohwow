@@ -91,12 +91,15 @@ export function createVoiceRouter(voiceboxService?: VoiceboxService): Router {
     const anyTtsAvailable = tts.some((p) => p.available);
     const voiceboxAvailable = stt.some((p) => p.name === 'voicebox-whisper' && p.available);
 
+    const recommendedMode = (anySttAvailable && anyTtsAvailable) ? 'full' : 'browser-native';
+
     res.json({
       data: {
         stt,
         tts,
         anyAvailable: anySttAvailable && anyTtsAvailable,
         voiceboxAvailable,
+        recommendedMode,
       },
     });
   });

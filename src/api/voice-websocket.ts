@@ -7,8 +7,9 @@
  * - Server → Browser: JSON state/event messages + binary WAV audio chunks
  *
  * Control messages (JSON):
- *   { type: 'start', agentId: string, voiceProfileId?: string }
+ *   { type: 'start', agentId: string, voiceProfileId?: string, mode?: 'full' | 'browser-native' }
  *   { type: 'stop' }
+ *   { type: 'transcript', text: string }  (browser-native mode only)
  *
  * Event messages (JSON):
  *   { type: 'state', state: 'idle' | 'listening' | 'processing' | 'speaking' }
@@ -24,17 +25,20 @@ import type { Server } from 'http';
 import type { VoiceSession } from '../voice/voice-session.js';
 import type { VoiceSessionState, AudioChunk } from '../voice/types.js';
 
+export type VoiceMode = 'full' | 'browser-native';
+
 export interface VoiceWebSocketDeps {
   server: Server;
   sessionToken: string;
   /** Factory to create a VoiceSession for a given agent/profile */
-  createVoiceSession: (agentId: string, voiceProfileId?: string) => VoiceSession | Promise<VoiceSession>;
+  createVoiceSession: (agentId: string, voiceProfileId?: string, mode?: VoiceMode) => VoiceSession | Promise<VoiceSession>;
 }
 
 interface VoiceClient extends WebSocket {
   isAlive?: boolean;
   activeSession?: VoiceSession;
   agentId?: string;
+  voiceMode?: VoiceMode;
 }
 
 /**
@@ -95,7 +99,7 @@ async function handleControlMessage(
   raw: string,
   createVoiceSession: VoiceWebSocketDeps['createVoiceSession'],
 ): Promise<void> {
-  let msg: { type: string; agentId?: string; voiceProfileId?: string };
+  let msg: { type: string; agentId?: string; voiceProfileId?: string; mode?: VoiceMode; text?: string };
   try {
     msg = JSON.parse(raw);
   } catch {
@@ -115,9 +119,11 @@ async function handleControlMessage(
         ws.activeSession.stop();
       }
 
-      const session = await createVoiceSession(msg.agentId, msg.voiceProfileId);
+      const mode = msg.mode || 'full';
+      const session = await createVoiceSession(msg.agentId, msg.voiceProfileId, mode);
       ws.activeSession = session;
       ws.agentId = msg.agentId;
+      ws.voiceMode = mode;
 
       // Wire session events to WebSocket
       session.on('state:changed', (state: VoiceSessionState) => {
@@ -130,6 +136,9 @@ async function handleControlMessage(
         sendJson(ws, { type: 'response', text });
       });
       session.on('audio_chunk', (chunk: AudioChunk) => {
+        // Browser-native mode: TTS handled in browser, skip audio frames
+        if (ws.voiceMode === 'browser-native') return;
+
         // Send audio as binary frame
         if (Buffer.isBuffer(chunk.audio)) {
           if (ws.readyState === WebSocket.OPEN) {
@@ -150,6 +159,21 @@ async function handleControlMessage(
       }).catch((err: Error) => {
         sendJson(ws, { type: 'error', message: `Couldn't start voice session: ${err.message}` });
         ws.activeSession = undefined;
+      });
+      break;
+    }
+
+    case 'transcript': {
+      // Browser-native mode: browser did STT, send text directly to orchestrator
+      const session = ws.activeSession;
+      if (!session || !session.isActive) {
+        sendJson(ws, { type: 'error', message: 'No active voice session. Send { type: "start" } first.' });
+        return;
+      }
+      if (!msg.text?.trim()) return;
+
+      session.processTextDirect(msg.text).catch((err: Error) => {
+        sendJson(ws, { type: 'error', message: err.message });
       });
       break;
     }

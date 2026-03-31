@@ -344,40 +344,53 @@ export function createServer(deps: ServerDeps): {
       attachVoiceWebSocket({
         server,
         sessionToken,
-        createVoiceSession: async (agentId: string, voiceProfileId?: string) => {
+        createVoiceSession: async (agentId: string, voiceProfileId?: string, mode?: string) => {
           // Client-provided profile takes priority, then DB lookup, then 'default'
           const dbProfileId = !voiceProfileId ? await resolveVoiceProfile(agentId) : null;
           const profileId = voiceProfileId || dbProfileId || 'default';
 
-          // Try providers in order: Voicebox > VibeVoice > Whisper Local > Whisper API
-          const openaiKey = process.env.OPENAI_API_KEY || '';
-          const vibevoiceUrl = process.env.VIBEVOICE_URL || 'http://localhost:8001';
-          const sttCandidates: STTProvider[] = [
-            new VoiceboxSTTProvider(voiceboxUrl),
-            new VibeVoiceSTTProvider(vibevoiceUrl),
-            new WhisperLocalProvider(),
-            ...(openaiKey ? [new WhisperAPIProvider(openaiKey)] : []),
-          ];
+          let stt: STTProvider;
+          let tts: TTSProvider;
 
-          // Try providers in order: Voicebox > VibeVoice > Piper > OpenAI TTS
-          const ttsCandidates: TTSProvider[] = [
-            new VoiceboxTTSProvider(voiceboxUrl, profileId),
-            new VibeVoiceTTSProvider(vibevoiceUrl),
-            new PiperProvider(),
-            ...(openaiKey ? [new OpenAITTSProvider(openaiKey)] : []),
-          ];
+          if (mode === 'browser-native') {
+            // Browser handles STT/TTS via Web Speech API — use null providers
+            const { BrowserNativeSTT, BrowserNativeTTS } = await import('../voice/null-providers.js');
+            stt = new BrowserNativeSTT();
+            tts = new BrowserNativeTTS();
+          } else {
+            // Try providers in order: Voicebox > VibeVoice > Whisper Local > Whisper API
+            const openaiKey = process.env.OPENAI_API_KEY || '';
+            const vibevoiceUrl = process.env.VIBEVOICE_URL || 'http://localhost:8001';
+            const sttCandidates: STTProvider[] = [
+              new VoiceboxSTTProvider(voiceboxUrl),
+              new VibeVoiceSTTProvider(vibevoiceUrl),
+              new WhisperLocalProvider(),
+              ...(openaiKey ? [new WhisperAPIProvider(openaiKey)] : []),
+            ];
 
-          let stt: STTProvider | null = null;
-          for (const candidate of sttCandidates) {
-            if (await candidate.isAvailable()) { stt = candidate; break; }
+            // Try providers in order: Voicebox > VibeVoice > Piper > OpenAI TTS
+            const ttsCandidates: TTSProvider[] = [
+              new VoiceboxTTSProvider(voiceboxUrl, profileId),
+              new VibeVoiceTTSProvider(vibevoiceUrl),
+              new PiperProvider(),
+              ...(openaiKey ? [new OpenAITTSProvider(openaiKey)] : []),
+            ];
+
+            let foundStt: STTProvider | null = null;
+            for (const candidate of sttCandidates) {
+              if (await candidate.isAvailable()) { foundStt = candidate; break; }
+            }
+            if (!foundStt) throw new Error('No STT provider available');
+
+            let foundTts: TTSProvider | null = null;
+            for (const candidate of ttsCandidates) {
+              if (await candidate.isAvailable()) { foundTts = candidate; break; }
+            }
+            if (!foundTts) throw new Error('No TTS provider available');
+
+            stt = foundStt;
+            tts = foundTts;
           }
-          if (!stt) throw new Error('No STT provider available');
-
-          let tts: TTSProvider | null = null;
-          for (const candidate of ttsCandidates) {
-            if (await candidate.isAvailable()) { tts = candidate; break; }
-          }
-          if (!tts) throw new Error('No TTS provider available');
 
           return new VoiceSession({
             sttProvider: stt,

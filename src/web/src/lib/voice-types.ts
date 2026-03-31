@@ -7,11 +7,15 @@
 /** Voice call states */
 export type VoiceCallState = 'idle' | 'listening' | 'processing' | 'speaking';
 
+/** Voice mode: full (backend STT/TTS) or browser-native (Web Speech API) */
+export type VoiceMode = 'full' | 'browser-native';
+
 /** Voice WebSocket control messages (browser → server) */
 export type VoiceControlMessage =
-  | { type: 'start'; agentId: string; voiceProfileId?: string }
+  | { type: 'start'; agentId: string; voiceProfileId?: string; mode?: VoiceMode }
   | { type: 'stop' }
-  | { type: 'mute'; muted: boolean };
+  | { type: 'mute'; muted: boolean }
+  | { type: 'transcript'; text: string };
 
 /** Voice WebSocket event messages (server → browser) */
 export type VoiceEventMessage =
