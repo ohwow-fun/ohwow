@@ -307,6 +307,23 @@ export interface Perception {
   humanSoul?: import('../soul/types.js').HumanSoul;
   /** Relationship soul: the bond between this human-agent pair. */
   relationshipSoul?: import('../soul/types.js').RelationshipSoul;
+
+  // ---- New philosophical layers ----
+
+  /** Affective state: current emotional reading (Damasio). */
+  affectiveState?: import('../affect/types.js').AffectState;
+  /** Endocrine profile: current hormone levels (Spinoza). */
+  endocrineProfile?: import('../endocrine/types.js').HormoneProfile;
+  /** Homeostasis state: current deviations and corrections (Cannon). */
+  homeostasisState?: import('../homeostasis/types.js').HomeostasisState;
+  /** Immune alert level: current threat status (Maturana & Varela). */
+  immuneState?: import('../immune/types.js').InflammatoryState;
+  /** Habit matches: recognized patterns for current context (Aristotle). */
+  habitMatches?: import('../hexis/types.js').HabitMatch[];
+  /** Narrative context: current story arc (Ricoeur). */
+  narrativeContext?: import('../narrative/types.js').NarrativeState;
+  /** Ethical constraints active for this perception (Kant). */
+  ethicalConstraints?: import('../ethos/types.js').MoralConstraint[];
 }
 
 // ============================================================================
@@ -379,7 +396,8 @@ export interface WorkspaceItem {
   /** Who published this. */
   source: string;
   /** Classification of the insight. */
-  type: 'discovery' | 'failure' | 'skill' | 'pattern' | 'warning' | 'signal';
+  type: 'discovery' | 'failure' | 'skill' | 'pattern' | 'warning' | 'signal'
+    | 'affect' | 'hormonal' | 'immune' | 'dream' | 'narrative' | 'ethical' | 'habit';
   /** Human-readable content. */
   content: string;
   /** Salience score (0-1). Decays over time. Higher = more attention-worthy. */

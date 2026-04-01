@@ -35,6 +35,14 @@ const TYPE_TO_CATEGORY: Record<string, ConsciousnessCategory> = {
   pattern: 'insight',
   skill: 'milestone',
   signal: 'prediction',
+  // New philosophical layers
+  affect: 'insight',
+  hormonal: 'insight',
+  immune: 'alert',
+  dream: 'insight',
+  narrative: 'milestone',
+  ethical: 'alert',
+  habit: 'insight',
 };
 
 const CATEGORY_TO_TYPE: Record<ConsciousnessCategory, WorkspaceItem['type']> = {

@@ -140,6 +140,76 @@ export class Brain {
   }
 
   // --------------------------------------------------------------------------
+  // NEW PHILOSOPHICAL LAYERS — Post-construction wiring
+  // --------------------------------------------------------------------------
+
+  private affectEngine: import('../affect/affect-engine.js').AffectEngine | null = null;
+  private endocrineSystem: import('../endocrine/endocrine-system.js').EndocrineSystem | null = null;
+  private homeostasisController: import('../homeostasis/homeostasis-controller.js').HomeostasisController | null = null;
+  private immuneSystem: import('../immune/immune-system.js').ImmuneSystem | null = null;
+  private narrativeEngine: import('../narrative/narrative-engine.js').NarrativeEngine | null = null;
+  private ethicsEngine: import('../ethos/ethics-engine.js').EthicsEngine | null = null;
+  private habitEngine: import('../hexis/habit-engine.js').HabitEngine | null = null;
+  private sleepCycle: import('../oneiros/sleep-cycle.js').SleepCycle | null = null;
+
+  /** Wire the affect (emotion) engine (Damasio). */
+  setAffectEngine(engine: import('../affect/affect-engine.js').AffectEngine): void {
+    this.affectEngine = engine;
+  }
+
+  /** Wire the endocrine system (Spinoza). */
+  setEndocrineSystem(system: import('../endocrine/endocrine-system.js').EndocrineSystem): void {
+    this.endocrineSystem = system;
+  }
+
+  /** Wire the homeostasis controller (Cannon). */
+  setHomeostasisController(controller: import('../homeostasis/homeostasis-controller.js').HomeostasisController): void {
+    this.homeostasisController = controller;
+  }
+
+  /** Wire the immune system (Maturana & Varela). */
+  setImmuneSystem(system: import('../immune/immune-system.js').ImmuneSystem): void {
+    this.immuneSystem = system;
+  }
+
+  /** Wire the narrative engine (Ricoeur). */
+  setNarrativeEngine(engine: import('../narrative/narrative-engine.js').NarrativeEngine): void {
+    this.narrativeEngine = engine;
+  }
+
+  /** Wire the ethics engine (Aristotle + Kant). */
+  setEthicsEngine(engine: import('../ethos/ethics-engine.js').EthicsEngine): void {
+    this.ethicsEngine = engine;
+  }
+
+  /** Wire the habit engine (Aristotle's hexis). */
+  setHabitEngine(engine: import('../hexis/habit-engine.js').HabitEngine): void {
+    this.habitEngine = engine;
+  }
+
+  /** Wire the sleep cycle (Oneiros). */
+  setSleepCycle(cycle: import('../oneiros/sleep-cycle.js').SleepCycle): void {
+    this.sleepCycle = cycle;
+  }
+
+  /** Get the affect engine for external access. */
+  getAffectEngine(): import('../affect/affect-engine.js').AffectEngine | null { return this.affectEngine; }
+  /** Get the endocrine system for external access. */
+  getEndocrineSystem(): import('../endocrine/endocrine-system.js').EndocrineSystem | null { return this.endocrineSystem; }
+  /** Get the homeostasis controller for external access. */
+  getHomeostasisController(): import('../homeostasis/homeostasis-controller.js').HomeostasisController | null { return this.homeostasisController; }
+  /** Get the immune system for external access. */
+  getImmuneSystem(): import('../immune/immune-system.js').ImmuneSystem | null { return this.immuneSystem; }
+  /** Get the narrative engine for external access. */
+  getNarrativeEngine(): import('../narrative/narrative-engine.js').NarrativeEngine | null { return this.narrativeEngine; }
+  /** Get the ethics engine for external access. */
+  getEthicsEngine(): import('../ethos/ethics-engine.js').EthicsEngine | null { return this.ethicsEngine; }
+  /** Get the habit engine for external access. */
+  getHabitEngine(): import('../hexis/habit-engine.js').HabitEngine | null { return this.habitEngine; }
+  /** Get the sleep cycle for external access. */
+  getSleepCycle(): import('../oneiros/sleep-cycle.js').SleepCycle | null { return this.sleepCycle; }
+
+  // --------------------------------------------------------------------------
   // PERCEIVE — Transform raw stimulus into structured perception (Husserl)
   // --------------------------------------------------------------------------
 
