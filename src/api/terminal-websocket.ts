@@ -23,12 +23,14 @@
 
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
-import * as pty from 'node-pty';
-import type { IPty } from 'node-pty';
 import os from 'node:os';
 import { createWsAuthVerifier, type WsAuthDeps } from './ws-auth.js';
 import { scrubEnvironment } from '../lib/env-scrub.js';
 import { logger } from '../lib/logger.js';
+
+// node-pty is optional — native addon that may fail to install on some systems
+type IPty = import('node-pty').IPty;
+const pty = await import('node-pty').catch(() => null);
 
 const MAX_SESSIONS_PER_CLIENT = 5;
 const DEFAULT_COLS = 80;
@@ -172,6 +174,11 @@ function handleCreate(ws: TerminalClient, msg: Record<string, unknown>): void {
 
   const cols = Math.min(Math.max(Number(msg.cols) || DEFAULT_COLS, 10), 500);
   const rows = Math.min(Math.max(Number(msg.rows) || DEFAULT_ROWS, 2), 200);
+
+  if (!pty) {
+    sendJson(ws, { type: 'error', message: 'Terminal sessions are not available (node-pty not installed)', id });
+    return;
+  }
 
   const shell = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : 'bash');
 
