@@ -21,6 +21,7 @@ const MAX_MEMORIES_PER_PASS = 50;
 const MIN_GROUP_SIZE = 3;
 const MAX_PRINCIPLES_PER_RUN = 5;
 const SEMANTIC_TYPES = ['fact', 'skill'];
+const FAILURE_CATEGORIES = ['wrong_tool', 'bad_input', 'integration_error', 'prompt_insufficient', 'impossible_task'] as const;
 
 // ============================================================================
 // TYPES
@@ -83,10 +84,83 @@ function groupMemories(memories: MemoryRow[]): MemoryGroup[] {
 }
 
 // ============================================================================
+// FAILURE PATTERN AGGREGATION
+// ============================================================================
+
+interface FailurePattern {
+  category: string;
+  count: number;
+  recentTitles: string[];
+}
+
+/**
+ * Aggregate failure patterns for an agent into synthetic memory rows
+ * that can be fed into the grouping and distillation pipeline.
+ */
+async function getFailurePatterns(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  agentId: string,
+): Promise<MemoryRow[]> {
+  const syntheticMemories: MemoryRow[] = [];
+
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Query failed tasks grouped by failure_category
+    const { data: failedTasks } = await db
+      .from('agent_workforce_tasks')
+      .select('failure_category, title')
+      .eq('workspace_id', workspaceId)
+      .eq('agent_id', agentId)
+      .eq('status', 'failed')
+      .gte('completed_at', thirtyDaysAgo)
+      .limit(100);
+
+    if (!failedTasks || failedTasks.length === 0) return [];
+
+    // Aggregate by category
+    const patterns = new Map<string, FailurePattern>();
+    for (const row of failedTasks) {
+      const r = row as Record<string, unknown>;
+      const cat = (r.failure_category as string) || 'unknown';
+      if (!FAILURE_CATEGORIES.includes(cat as typeof FAILURE_CATEGORIES[number]) && cat !== 'unknown') continue;
+
+      const existing = patterns.get(cat) || { category: cat, count: 0, recentTitles: [] };
+      existing.count++;
+      if (existing.recentTitles.length < 3) {
+        existing.recentTitles.push((r.title as string || '').slice(0, 80));
+      }
+      patterns.set(cat, existing);
+    }
+
+    // Convert patterns with 3+ occurrences into synthetic memory rows
+    for (const pattern of patterns.values()) {
+      if (pattern.count < 3) continue;
+
+      const titles = pattern.recentTitles.filter(Boolean).join('; ');
+      const content = `Failure pattern: ${pattern.count} tasks failed with root cause "${pattern.category}" in the last 30 days. Examples: ${titles}`;
+
+      syntheticMemories.push({
+        id: `failure_${pattern.category}`,
+        content,
+        memory_type: 'failure_pattern',
+        is_active: 1,
+        relevance_score: Math.min(1, pattern.count / 10), // More failures = more relevant
+      });
+    }
+  } catch {
+    // Non-critical: failure patterns are optional enrichment
+  }
+
+  return syntheticMemories;
+}
+
+// ============================================================================
 // PROMPTS
 // ============================================================================
 
-const DISTILLATION_SYSTEM_PROMPT = `You are a strategic principle extractor. Given a group of related semantic memories from an AI agent, extract 1-2 abstract strategic principles.
+const DISTILLATION_SYSTEM_PROMPT = `You are a strategic principle extractor. Given a group of related semantic memories and failure patterns from an AI agent, extract 1-2 abstract strategic principles.
 
 Respond with ONLY a JSON array of objects:
 [{"rule": "principle text", "category": "category_name"}]
@@ -98,7 +172,10 @@ Rules:
 - "Always verify before acting" is better than "Check email addresses before sending"
 - Each principle should be 1 sentence, actionable, and universally applicable
 - If the memories don't share a meaningful strategic pattern, return []
-- Maximum 2 principles per group`;
+- Maximum 2 principles per group
+- Failure patterns indicate recurring problems. Extract principles that prevent them.
+- "prompt_insufficient" failures suggest the agent needs clearer guidance in that domain
+- "wrong_tool" failures suggest better tool selection heuristics are needed`;
 
 function buildDistillationPrompt(group: MemoryGroup): string {
   const memories = group.memories
@@ -139,11 +216,15 @@ export async function distillPrinciples(
     (m) => SEMANTIC_TYPES.includes(m.memory_type)
   );
 
-  if (semantic.length < MIN_MEMORIES_FOR_DISTILLATION) {
-    return { memoriesAnalyzed: semantic.length, groupsFormed: 0, principlesCreated: 0, duplicatesSkipped: 0, tokensUsed: 0, costCents: 0 };
+  // Enrich with failure pattern data (synthetic memories from task failures)
+  const failurePatterns = await getFailurePatterns(db, workspaceId, agentId);
+  const enriched = [...semantic, ...failurePatterns];
+
+  if (enriched.length < MIN_MEMORIES_FOR_DISTILLATION) {
+    return { memoriesAnalyzed: enriched.length, groupsFormed: 0, principlesCreated: 0, duplicatesSkipped: 0, tokensUsed: 0, costCents: 0 };
   }
 
-  const toProcess = semantic.slice(0, MAX_MEMORIES_PER_PASS);
+  const toProcess = enriched.slice(0, MAX_MEMORIES_PER_PASS);
   const groups = groupMemories(toProcess);
 
   if (groups.length === 0) {
