@@ -14,6 +14,7 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import { runImprovementCycle } from '../lib/self-improvement/improve.js';
+import { enforceMemoryCap, archiveOldExperiments } from '../lib/memory-maintenance.js';
 import { logger } from '../lib/logger.js';
 
 /** Minimum completed tasks since last run to justify LLM phases */
@@ -109,6 +110,10 @@ export class ImprovementScheduler {
       await this.upsertSetting(LAST_RUN_KEY, now);
       await this.upsertSetting(LAST_RUN_TASK_COUNT_KEY, String(currentTaskCount));
 
+      // Post-cycle: enforce memory cap and archive old experiments
+      const memoriesDeactivated = await enforceMemoryCap(this.db, this.workspaceId);
+      const archiveResult = await archiveOldExperiments(this.db, this.workspaceId);
+
       logger.info(
         {
           durationMs: result.durationMs,
@@ -116,6 +121,9 @@ export class ImprovementScheduler {
           principles: result.principleDistillation?.principlesCreated ?? 0,
           skills: result.skillSynthesis?.skillsCreated ?? 0,
           patterns: result.patternMining?.patternsFound ?? 0,
+          memoriesDeactivated,
+          principlesArchived: archiveResult.principlesArchived,
+          skillsArchived: archiveResult.skillsArchived,
           skipLLM,
         },
         '[ImprovementScheduler] Cycle completed',

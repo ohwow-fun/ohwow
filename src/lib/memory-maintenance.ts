@@ -181,3 +181,176 @@ async function deactivate(
     .update({ is_active: 0, updated_at: new Date().toISOString() })
     .eq('id', id);
 }
+
+// ============================================================================
+// MEMORY HARD CAP (cloud-compatible: 1000 active memories per agent)
+// ============================================================================
+
+const MEMORY_CAP_PER_AGENT = 1000;
+
+/**
+ * Enforce the 1000 active memory hard cap per agent.
+ * Deactivates memories with the lowest relevance_score when over the cap.
+ * Returns the number of memories deactivated.
+ */
+export async function enforceMemoryCap(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  agentId?: string,
+): Promise<number> {
+  let totalDeactivated = 0;
+
+  try {
+    // Get all agent IDs to process
+    let agentIds: string[];
+    if (agentId) {
+      agentIds = [agentId];
+    } else {
+      const { data: agents } = await db.from('agent_workforce_agents')
+        .select('id').eq('workspace_id', workspaceId);
+      agentIds = (agents ?? []).map((a) => (a as Record<string, unknown>).id as string);
+    }
+
+    for (const aid of agentIds) {
+      // Count active memories for this agent
+      const { count } = await db.from('agent_workforce_agent_memory')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspaceId)
+        .eq('agent_id', aid)
+        .eq('is_active', 1);
+
+      const activeCount = count ?? 0;
+      if (activeCount <= MEMORY_CAP_PER_AGENT) continue;
+
+      const excess = activeCount - MEMORY_CAP_PER_AGENT;
+
+      // Fetch the lowest-relevance memories to deactivate
+      const { data: toDeactivate } = await db
+        .from<{ id: string }>('agent_workforce_agent_memory')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .eq('agent_id', aid)
+        .eq('is_active', 1)
+        .order('relevance_score', { ascending: true })
+        .limit(excess);
+
+      if (toDeactivate) {
+        for (const row of toDeactivate) {
+          await deactivate(db, 'agent_workforce_agent_memory', row.id);
+          totalDeactivated++;
+        }
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+
+  return totalDeactivated;
+}
+
+// ============================================================================
+// EXPERIMENT ARCHIVAL (cloud-compatible: 90-day compression)
+// ============================================================================
+
+export interface ArchiveResult {
+  principlesArchived: number;
+  skillsArchived: number;
+  processesArchived: number;
+  practiceSessionsArchived: number;
+}
+
+/**
+ * Archive old experiment data (principles, skills, discovered processes,
+ * practice sessions) older than the specified number of days.
+ * Deactivates rather than deletes, preserving audit trail.
+ * Compatible with cloud's archiveOldExperiments(90).
+ */
+export async function archiveOldExperiments(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  maxAgeDays = 90,
+): Promise<ArchiveResult> {
+  const result: ArchiveResult = {
+    principlesArchived: 0,
+    skillsArchived: 0,
+    processesArchived: 0,
+    practiceSessionsArchived: 0,
+  };
+
+  const cutoff = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    // Archive low-utility principles older than cutoff
+    const { data: oldPrinciples } = await db
+      .from<{ id: string }>('agent_workforce_principles')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('is_active', 1)
+      .lt('created_at', cutoff)
+      .lt('utility_score', 1); // Keep high-utility principles regardless of age
+
+    if (oldPrinciples) {
+      for (const row of oldPrinciples) {
+        await db.from('agent_workforce_principles')
+          .update({ is_active: 0, updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+        result.principlesArchived++;
+      }
+    }
+
+    // Archive old skills with low support
+    const { data: oldSkills } = await db
+      .from<{ id: string }>('agent_workforce_skills')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('is_active', 1)
+      .lt('created_at', cutoff)
+      .lt('pattern_support', 5); // Keep well-supported skills
+
+    if (oldSkills) {
+      for (const row of oldSkills) {
+        await db.from('agent_workforce_skills')
+          .update({ is_active: 0, updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+        result.skillsArchived++;
+      }
+    }
+
+    // Archive old discovered processes that weren't validated
+    const { data: oldProcesses } = await db
+      .from<{ id: string }>('agent_workforce_discovered_processes')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('status', 'discovered') // Only archive unvalidated ones
+      .lt('created_at', cutoff);
+
+    if (oldProcesses) {
+      for (const row of oldProcesses) {
+        await db.from('agent_workforce_discovered_processes')
+          .update({ status: 'archived' })
+          .eq('id', row.id);
+        result.processesArchived++;
+      }
+    }
+
+    // Archive old practice sessions
+    const { data: oldSessions } = await db
+      .from<{ id: string }>('agent_workforce_practice_sessions')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .lt('created_at', cutoff);
+
+    if (oldSessions) {
+      for (const row of oldSessions) {
+        await db.from('agent_workforce_practice_sessions')
+          .update({ status: 'archived' })
+          .eq('id', row.id);
+        result.practiceSessionsArchived++;
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+
+  return result;
+}
