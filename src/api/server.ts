@@ -71,6 +71,7 @@ import type { ModelRouter } from '../execution/model-router.js';
 import type { WhatsAppClient } from '../whatsapp/client.js';
 import { VERSION } from '../version.js';
 import { logger } from '../lib/logger.js';
+import { attachTerminalWebSocket } from './terminal-websocket.js';
 
 export interface ServerDeps {
   config: ServerConfig;
@@ -430,6 +431,13 @@ export function createServer(deps: ServerDeps): {
         .then(() => logger.info('[voice] VibeVoice server detected'))
         .catch(() => { /* VibeVoice not running, that's fine */ });
     }
+
+    // Terminal WebSocket at /ws/terminal (PTY sessions for remote shell access)
+    attachTerminalWebSocket({
+      server,
+      sessionToken,
+      cloudPublicKey: config.contentPublicKey,
+    });
   };
 
   return { app, attachWs };

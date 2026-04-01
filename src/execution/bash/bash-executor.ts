@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { FileAccessGuard } from '../filesystem/filesystem-guard.js';
+import { scrubEnvironment } from '../../lib/env-scrub.js';
 
 // ============================================================================
 // TYPES
@@ -61,33 +62,9 @@ const BLOCKED_COMMAND_PATTERNS_WIN32: Array<{ pattern: RegExp; reason: string }>
   { pattern: /\bIEX\b.*\bIWR\b/i, reason: 'Piping web content to eval is blocked' },
 ];
 
-/** Environment variable patterns to scrub from the child process. */
-const SECRET_ENV_PATTERNS = [
-  /API_KEY/i,
-  /SECRET/i,
-  /TOKEN/i,
-  /PASSWORD/i,
-  /ANTHROPIC_API_KEY/i,
-  /SSH_AUTH_SOCK/i,
-  /AWS_SECRET/i,
-  /PRIVATE_KEY/i,
-];
-
 // ============================================================================
 // HELPERS
 // ============================================================================
-
-function scrubEnvironment(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    const isSecret = SECRET_ENV_PATTERNS.some((p) => p.test(key));
-    if (!isSecret) {
-      env[key] = value;
-    }
-  }
-  return env;
-}
 
 function checkBlockedCommand(command: string): string | null {
   const patterns = process.platform === 'win32'
