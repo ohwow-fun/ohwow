@@ -508,6 +508,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
       consciousnessBridge.hydrate().catch(err => {
         logger.debug({ err }, '[daemon] Consciousness hydration failed');
       });
+      // Wire to control plane for cloud sync (if connected)
+      if (controlPlane) {
+        controlPlane.setConsciousnessBridge(consciousnessBridge);
+      }
     }
   }
 

@@ -44,6 +44,7 @@ import { detectDevice, getMemoryTier } from '../lib/device-info.js';
 import { getMachineId } from '../lib/machine-id.js';
 import { OutboundQueue } from './outbound-queue.js';
 import type { OutboundQueueItem } from './outbound-queue.js';
+import type { ConsciousnessBridge, CloudConsciousnessItem } from '../brain/consciousness-bridge.js';
 
 export interface ControlPlaneCallbacks {
   onTaskDispatch: (agentId: string, taskId: string, taskPayload: Record<string, unknown>) => void;
@@ -85,6 +86,7 @@ export class ControlPlaneClient {
     return this._contentPublicKey;
   }
   private outboundQueue: OutboundQueue;
+  private consciousnessBridge: ConsciousnessBridge | null = null;
 
   constructor(
     private config: RuntimeConfig,
@@ -109,6 +111,14 @@ export class ControlPlaneClient {
    */
   setOllamaMonitor(monitor: OllamaMonitor): void {
     this.ollamaMonitor = monitor;
+  }
+
+  /**
+   * Set the ConsciousnessBridge for bidirectional consciousness sync.
+   * Items broadcast locally are sent to cloud; cloud items are merged locally.
+   */
+  setConsciousnessBridge(bridge: ConsciousnessBridge): void {
+    this.consciousnessBridge = bridge;
   }
 
   /**
@@ -771,8 +781,51 @@ export class ControlPlaneClient {
       this.syncSessionMetadata().catch(() => {});
     }
 
+    // Sync consciousness items every 3rd heartbeat (~45s)
+    if (this.consciousnessBridge && this.heartbeatCount % 3 === 0) {
+      this.syncConsciousness().catch(() => {});
+    }
+
     // Piggyback drain on successful heartbeats
     this.drainOutboundQueue().catch(() => {});
+  }
+
+  /**
+   * Bidirectional consciousness sync:
+   * 1. Send unsynced local items to cloud
+   * 2. Receive cloud items and merge locally
+   */
+  private async syncConsciousness(): Promise<void> {
+    if (!this.consciousnessBridge || !this.sessionToken) return;
+
+    try {
+      // Outbound: send unsynced local items
+      const unsynced = await this.consciousnessBridge.getUnsyncedItems();
+      if (unsynced.length > 0) {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/consciousness`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: JSON.stringify({ items: unsynced }),
+        });
+
+        if (response.ok) {
+          await this.consciousnessBridge.markSynced(unsynced.map(i => i.id));
+          logger.debug({ count: unsynced.length }, '[ControlPlane] Consciousness items synced to cloud');
+        }
+
+        // Inbound: cloud may return its own items in the response
+        const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const cloudItems = data.items as CloudConsciousnessItem[] | undefined;
+        if (cloudItems && cloudItems.length > 0) {
+          await this.consciousnessBridge.mergeCloudItems(cloudItems);
+        }
+      }
+    } catch (err) {
+      logger.debug({ err }, '[ControlPlane] Consciousness sync failed');
+    }
   }
 
   private async syncAgentConfigs(agents: AgentConfigPayload[]): Promise<void> {
