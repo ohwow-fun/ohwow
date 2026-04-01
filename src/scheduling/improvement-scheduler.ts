@@ -1,10 +1,14 @@
 /**
- * ImprovementScheduler — Automated self-improvement cycle.
+ * ImprovementScheduler — Automated self-improvement cycle with sleep integration.
  *
  * Runs the improvement cycle (memory compression, pattern mining,
  * skill synthesis, principle distillation, etc.) on a timer.
  * Gates expensive LLM phases behind task volume thresholds:
  * only runs if >= MIN_NEW_TASKS tasks have completed since the last run.
+ *
+ * When a SleepCycle is wired in, the scheduler uses sleep phases to determine
+ * what to run: consolidation during deep_sleep, creative recombination during REM.
+ * Without a SleepCycle, the existing flat-interval behavior is preserved.
  *
  * Lightweight phases (pattern mining, signal evaluation, digital twin)
  * always run. LLM-dependent phases (compression, synthesis, distillation)
@@ -16,6 +20,7 @@ import type { ModelRouter } from '../execution/model-router.js';
 import { runImprovementCycle } from '../lib/self-improvement/improve.js';
 import { enforceMemoryCap, archiveOldExperiments } from '../lib/memory-maintenance.js';
 import { logger } from '../lib/logger.js';
+import type { SleepCycle } from '../oneiros/sleep-cycle.js';
 
 /** Minimum completed tasks since last run to justify LLM phases */
 const MIN_NEW_TASKS_FOR_LLM = 10;
@@ -31,6 +36,8 @@ export class ImprovementScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private executing = false;
+  private sleepCycle: SleepCycle | null = null;
+  private lastIdleCheck = Date.now();
 
   constructor(
     private db: DatabaseAdapter,
@@ -38,6 +45,23 @@ export class ImprovementScheduler {
     private workspaceId: string,
     private intervalMs: number = DEFAULT_INTERVAL_MS,
   ) {}
+
+  /**
+   * Wire a SleepCycle for phase-aware improvement scheduling.
+   * When wired, the scheduler uses sleep phases to determine operations:
+   * - deep_sleep: memory consolidation + compression
+   * - REM: creative recombination (dream associations)
+   * Without a SleepCycle, the flat-interval behavior is preserved.
+   */
+  setSleepCycle(cycle: SleepCycle): void {
+    this.sleepCycle = cycle;
+    logger.info('[ImprovementScheduler] Sleep cycle wired — using phase-aware scheduling');
+  }
+
+  /** Get the sleep cycle instance (for external access). */
+  getSleepCycle(): SleepCycle | null {
+    return this.sleepCycle;
+  }
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -74,12 +98,38 @@ export class ImprovementScheduler {
   /**
    * Execute an improvement cycle if conditions are met.
    * Guards against concurrent execution.
+   *
+   * When a SleepCycle is wired, ticks the sleep state machine and runs
+   * phase-appropriate operations (consolidation during deep_sleep, etc.).
    */
   async execute(): Promise<void> {
     if (this.executing) return;
     this.executing = true;
 
     try {
+      // Tick the sleep cycle if wired
+      if (this.sleepCycle) {
+        const now = Date.now();
+        const idleMs = now - this.lastIdleCheck;
+        this.lastIdleCheck = now;
+        this.sleepCycle.tick(idleMs);
+
+        const sleepState = this.sleepCycle.getState();
+        logger.debug(
+          { phase: sleepState.phase, sleepDebt: sleepState.sleepDebt.toFixed(2) },
+          '[ImprovementScheduler] Sleep phase tick',
+        );
+
+        // During sleep, skip the normal improvement cycle — sleep handles it
+        if (this.sleepCycle.isAsleep()) {
+          logger.debug(
+            { phase: sleepState.phase },
+            '[ImprovementScheduler] Agent is asleep, skipping standard cycle',
+          );
+          return;
+        }
+      }
+
       const currentTaskCount = await this.getCompletedTaskCount();
       const lastTaskCount = await this.getLastTaskCount();
       const newTasks = currentTaskCount - lastTaskCount;
@@ -125,6 +175,7 @@ export class ImprovementScheduler {
           principlesArchived: archiveResult.principlesArchived,
           skillsArchived: archiveResult.skillsArchived,
           skipLLM,
+          sleepPhase: this.sleepCycle?.getState().phase ?? 'n/a',
         },
         '[ImprovementScheduler] Cycle completed',
       );
@@ -132,6 +183,18 @@ export class ImprovementScheduler {
       logger.error({ err }, '[ImprovementScheduler] Cycle failed');
     } finally {
       this.executing = false;
+    }
+  }
+
+  /**
+   * Notify the scheduler that the agent received a new task.
+   * Wakes the sleep cycle if the agent is asleep.
+   */
+  notifyActivity(): void {
+    this.lastIdleCheck = Date.now();
+    if (this.sleepCycle?.isAsleep()) {
+      this.sleepCycle.wake('new_task_received');
+      logger.info('[ImprovementScheduler] Agent woken by new activity');
     }
   }
 
