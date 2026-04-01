@@ -875,6 +875,16 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'get_body_state',
+    description:
+      'Get system health: organ status (which integrations are active), agent performance (recent success rates), memory pressure, task pipeline status, and cost trajectory. Use to understand overall system health.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'get_contact_pipeline',
     description:
       'Get sales funnel data: contacts by type (lead/customer/partner), recently added, stale leads with no activity in 14 days, and recent activity breakdown. Use when discussing sales, leads, or customer growth.',
@@ -1604,6 +1614,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
 
   // Business intelligence → 'business', 'pulse'
   get_business_pulse: ['business', 'pulse'],
+  get_body_state: ['business', 'pulse'],
   get_contact_pipeline: ['business'],
   get_daily_reps_status: ['business', 'pulse'],
 
@@ -1684,7 +1695,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   get_pending_approvals: 2, spawn_agents: 2, await_agent_results: 2,
   local_search_files: 2, local_search_content: 2, local_edit_file: 2,
   update_contact: 2, log_contact_event: 2,
-  get_business_pulse: 2, get_contact_pipeline: 2, get_daily_reps_status: 2,
+  get_business_pulse: 2, get_body_state: 2, get_contact_pipeline: 2, get_daily_reps_status: 2,
   get_whatsapp_status: 2, add_whatsapp_chat: 2, remove_whatsapp_chat: 2,
   get_whatsapp_messages: 2, disconnect_whatsapp: 2, update_whatsapp_chat: 2,
   list_whatsapp_connections: 2, list_telegram_connections: 2,

@@ -89,6 +89,7 @@ import { enrichIntent } from '../brain/intentionality.js';
 import type { Stimulus, Perception } from '../brain/types.js';
 import type { SelfModelDeps } from '../brain/self-model.js';
 import { createBrowserOrgan, createDesktopOrgan, createMcpOrgan, type DigitalBody } from '../body/digital-body.js';
+import { BodyStateService } from '../body/body-state.js';
 import { Soul } from '../persona/soul.js';
 import crypto from 'crypto';
 
@@ -132,6 +133,8 @@ export class LocalOrchestrator {
   private soul = new Soul();
   /** Digital Body: the agent's embodied capabilities (Merleau-Ponty). */
   private digitalBody: DigitalBody | null = null;
+  /** Body State Service: unified system health reporting. */
+  private bodyStateService: BodyStateService | null = null;
 
   private get sessionDeps(): SessionDeps {
     return { db: this.db, workspaceId: this.workspaceId };
@@ -706,25 +709,37 @@ export class LocalOrchestrator {
 
     // Body Awareness: inject proprioceptive context (Merleau-Ponty: embodied self-knowledge)
     const proprioception = this.brain?.getProprioception();
+    const bodyLines: string[] = [];
+
     if (proprioception && proprioception.organs.length > 0) {
       const activeOrgans = proprioception.organs.filter(o => o.health !== 'dormant');
       const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
       const affordances = proprioception.affordances.filter(a => a.readiness > 0.5);
 
-      const lines: string[] = [];
       if (activeOrgans.length > 0) {
-        lines.push(`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`);
+        bodyLines.push(`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`);
       }
       if (degraded.length > 0) {
-        lines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
+        bodyLines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
       }
       if (affordances.length > 0) {
-        lines.push(`Available actions: ${affordances.map(a => a.action).join(', ')}`);
+        bodyLines.push(`Available actions: ${affordances.map(a => a.action).join(', ')}`);
       }
+    }
 
-      if (lines.length > 0) {
-        systemBlocks.push({ type: 'text' as const, text: `\n\n## Body Awareness\n${lines.join('\n')}` });
+    // Enrich with body state service (pipeline, memory pressure, failures)
+    try {
+      if (!this.bodyStateService) {
+        this.bodyStateService = new BodyStateService(this.db, this.workspaceId, this.digitalBody ?? undefined);
       }
+      const summary = await this.bodyStateService.getProprioceptiveSummary();
+      if (summary) {
+        bodyLines.push(summary);
+      }
+    } catch { /* non-fatal */ }
+
+    if (bodyLines.length > 0) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Body Awareness\n${bodyLines.join('\n')}` });
     }
 
     // System Warnings: surface high-salience nervous signals (Baars: conscious items)

@@ -16,6 +16,7 @@ import { listA2AConnections, sendA2ATask, testA2AConnection } from './a2a.js';
 import { connectWhatsApp, disconnectWhatsApp, getWhatsAppStatus, updateWhatsAppChat, sendWhatsAppMessage, listWhatsAppChats, addWhatsAppChat, removeWhatsAppChat, getWhatsAppMessages, listWhatsAppConnections } from './whatsapp.js';
 import { sendTelegramMessage, listTelegramChats, listTelegramConnections } from './telegram.js';
 import { getBusinessPulse } from './business-pulse.js';
+import { getBodyState } from './body-state-tool.js';
 import { getContactPipeline } from './contact-pipeline.js';
 import { getDailyRepsStatus } from './daily-reps.js';
 import { listContacts, createContact, updateContact, logContactEvent, searchContacts } from './crm.js';
@@ -113,6 +114,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Business intelligence
   ['get_business_pulse', (ctx) => getBusinessPulse(ctx)],
+  ['get_body_state', (ctx) => getBodyState(ctx)],
   ['get_contact_pipeline', (ctx) => getContactPipeline(ctx)],
   ['get_daily_reps_status', (ctx) => getDailyRepsStatus(ctx)],
 
