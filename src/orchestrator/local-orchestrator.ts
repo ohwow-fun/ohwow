@@ -86,7 +86,7 @@ import { logger } from '../lib/logger.js';
 import { hashToolCall, detectStagnation, STAGNATION_PROMPT } from '../lib/stagnation.js';
 import { Brain } from '../brain/brain.js';
 import { enrichIntent } from '../brain/intentionality.js';
-import type { Stimulus, Perception } from '../brain/types.js';
+import type { Stimulus, Perception, WorkspaceItem } from '../brain/types.js';
 import type { SelfModelDeps } from '../brain/self-model.js';
 import { createBrowserOrgan, createDesktopOrgan, createMcpOrgan, type DigitalBody } from '../body/digital-body.js';
 import { BodyStateService } from '../body/body-state.js';
@@ -135,6 +135,16 @@ export class LocalOrchestrator {
   private digitalBody: DigitalBody | null = null;
   /** Body State Service: unified system health reporting. */
   private bodyStateService: BodyStateService | null = null;
+
+  // ---- New philosophical layers (lazy init) ----
+  private affectEngine: import('../affect/affect-engine.js').AffectEngine | null = null;
+  private endocrineSystem: import('../endocrine/endocrine-system.js').EndocrineSystem | null = null;
+  private homeostasisController: import('../homeostasis/homeostasis-controller.js').HomeostasisController | null = null;
+  private immuneSystem: import('../immune/immune-system.js').ImmuneSystem | null = null;
+  private narrativeEngine: import('../narrative/narrative-engine.js').NarrativeEngine | null = null;
+  private ethicsEngine: import('../ethos/ethics-engine.js').EthicsEngine | null = null;
+  private habitEngine: import('../hexis/habit-engine.js').HabitEngine | null = null;
+  private sleepCycle: import('../oneiros/sleep-cycle.js').SleepCycle | null = null;
 
   private get sessionDeps(): SessionDeps {
     return { db: this.db, workspaceId: this.workspaceId };
@@ -229,6 +239,55 @@ export class LocalOrchestrator {
 
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
+
+    // Initialize philosophical layers and wire into Brain
+    this.initPhilosophicalLayers();
+  }
+
+  /**
+   * Initialize the 8 philosophical layers and wire them into the Brain.
+   * All layers are optional — Brain works without them.
+   */
+  private initPhilosophicalLayers(): void {
+    import('../affect/affect-engine.js').then(({ AffectEngine }) => {
+      this.affectEngine = new AffectEngine(this.db, this.workspaceId);
+      this.brain?.setAffectEngine(this.affectEngine);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../endocrine/endocrine-system.js').then(({ EndocrineSystem }) => {
+      this.endocrineSystem = new EndocrineSystem(this.db, this.workspaceId);
+      this.brain?.setEndocrineSystem(this.endocrineSystem);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../homeostasis/homeostasis-controller.js').then(({ HomeostasisController }) => {
+      this.homeostasisController = new HomeostasisController(this.db, this.workspaceId);
+      this.brain?.setHomeostasisController(this.homeostasisController);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../immune/immune-system.js').then(({ ImmuneSystem }) => {
+      this.immuneSystem = new ImmuneSystem(this.db, this.workspaceId);
+      this.brain?.setImmuneSystem(this.immuneSystem);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../narrative/narrative-engine.js').then(({ NarrativeEngine }) => {
+      this.narrativeEngine = new NarrativeEngine(this.db, this.workspaceId);
+      this.brain?.setNarrativeEngine(this.narrativeEngine);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../ethos/ethics-engine.js').then(({ EthicsEngine }) => {
+      this.ethicsEngine = new EthicsEngine(this.db, this.workspaceId);
+      this.brain?.setEthicsEngine(this.ethicsEngine);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../hexis/habit-engine.js').then(({ HabitEngine }) => {
+      this.habitEngine = new HabitEngine(this.db, this.workspaceId);
+      this.brain?.setHabitEngine(this.habitEngine);
+    }).catch(() => { /* non-fatal */ });
+
+    import('../oneiros/sleep-cycle.js').then(({ SleepCycle }) => {
+      this.sleepCycle = new SleepCycle();
+      this.brain?.setSleepCycle(this.sleepCycle);
+    }).catch(() => { /* non-fatal */ });
   }
 
   /** Get the Brain instance (for external access if needed). */
@@ -752,6 +811,66 @@ export class LocalOrchestrator {
       systemBlocks.push({ type: 'text' as const, text: `\n\n## System Warnings\n${warningText}` });
     }
 
+    // ---- NEW PHILOSOPHICAL LAYERS: Prompt injection ----
+
+    // Emotional Context (Damasio's somatic markers)
+    const affectContext = this.affectEngine?.buildPromptContext();
+    if (affectContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Emotional Context\n${affectContext}` });
+    }
+
+    // Internal State (Spinoza's endocrine integration bus)
+    const endocrineContext = this.endocrineSystem?.buildPromptContext();
+    if (endocrineContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Internal State\n${endocrineContext}` });
+    }
+
+    // Self-Regulation (Cannon's homeostasis — only when corrective actions active)
+    const homeostasisContext = this.homeostasisController?.buildPromptContext();
+    if (homeostasisContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Self-Regulation\n${homeostasisContext}` });
+    }
+
+    // Security Alert (Maturana & Varela's immune system — only during elevated+ alert)
+    const immuneContext = this.immuneSystem?.buildPromptContext();
+    if (immuneContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Security Alert\n${immuneContext}` });
+    }
+
+    // Your Story (Ricoeur's narrative identity)
+    const narrativeContext = this.narrativeEngine?.buildPromptContext();
+    if (narrativeContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Your Story\n${narrativeContext}` });
+    }
+
+    // Ethical Awareness (Aristotle + Kant — only when constraints or dilemma active)
+    // Ethics context is built from last evaluation; inject only if non-trivial
+    const ethicsContext = this.ethicsEngine?.buildPromptContext(null);
+    if (ethicsContext) {
+      systemBlocks.push({ type: 'text' as const, text: `\n\n## Ethical Awareness\n${ethicsContext}` });
+    }
+
+    // Available Shortcuts (Aristotle's hexis — habit-based shortcuts)
+    if (this.habitEngine) {
+      const habitMatches = this.habitEngine.checkCues(userMessage, []);
+      if (habitMatches.length > 0) {
+        const shortcutText = habitMatches.slice(0, 3).map(m => m.suggestedShortcut).join('\n');
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Available Shortcuts\n${shortcutText}` });
+      }
+    }
+
+    // Subconscious Insights (Oneiros — recent dream discoveries)
+    if (this.sleepCycle && !this.sleepCycle.isAsleep()) {
+      const dreamInsights = this.brain?.workspace.getConscious(2, {
+        types: ['dream' as WorkspaceItem['type']],
+        minSalience: 0.5,
+      }) ?? [];
+      if (dreamInsights.length > 0) {
+        const insightText = dreamInsights.map(d => d.content).join('\n');
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Subconscious Insights\n${insightText}` });
+      }
+    }
+
     // Build tool list (conditionally includes filesystem tools, filtered by intent for Anthropic)
     // Apply tool embodiment: compress descriptions for mastered tools (Merleau-Ponty)
     const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated);
@@ -955,6 +1074,27 @@ export class LocalOrchestrator {
           this.brain.recordToolExecution(block.name, block.input, toolResult.success);
         }
         orchToolCallHashes.push(hashToolCall(block.name, block.input));
+
+        // Affect: process tool result -> emotional response (Damasio)
+        if (toolResult && this.affectEngine) {
+          this.affectEngine.processToolResult(
+            block.name, userMessage, toolResult.success,
+          ).catch(() => { /* non-fatal */ });
+        }
+
+        // Endocrine: tool results trigger hormone responses (Spinoza)
+        if (toolResult && this.endocrineSystem) {
+          if (toolResult.success) {
+            this.endocrineSystem.stimulate({ hormone: 'dopamine', delta: 0.05, source: 'tool_execution', reason: `${block.name} succeeded` });
+          } else {
+            this.endocrineSystem.stimulate({ hormone: 'cortisol', delta: 0.1, source: 'tool_execution', reason: `${block.name} failed` });
+          }
+        }
+
+        // Habit: record execution for matching habits (Aristotle's hexis)
+        if (toolResult && this.habitEngine) {
+          // Habit tracking is handled at the pattern level, not individual tools
+        }
       }
 
       // Brain: inject enriched stagnation warning
