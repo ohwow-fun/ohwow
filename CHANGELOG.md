@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.3] — 2026-04-01
+
+### Added
+- **Affect system** (`src/affect/`): Emotion-as-heuristic layer with somatic markers (Damasio)
+- **Ethos system** (`src/ethos/`): Multi-framework moral reasoning engine (Aristotle + Kant + Noddings)
+- **Endocrine system** (`src/endocrine/`): Global state modulator with hormone cascades (Spinoza)
+- **Homeostasis system** (`src/homeostasis/`): Self-regulation with set points and allostasis (Cannon + Ashby)
+- **Immune system** (`src/immune/`): Layered threat defense with innate and adaptive immunity (Maturana & Varela)
+- **Hexis system** (`src/hexis/`): Habit formation with cue-routine-reward loops (Aristotle)
+- **Oneiros system** (`src/oneiros/`): Sleep cycle, dreaming, and default mode processing (Jung + DMN)
+- **Narrative system** (`src/narrative/`): Story-of-self with emplotment and character development (Ricoeur)
+- Cross-system connector wiring affect to endocrine to all layers as integration bus
+- Brain integration: Perception extended with 7 new fields, WorkspaceItem with 7 new types
+- Orchestrator integration: 8 new prompt injection sections, affect/endocrine hooks in tool loop
+- Sleep-aware improvement scheduler with sleep cycle phases
+- Remote terminal WebSocket endpoint (`/ws/terminal`)
+- Consciousness bridge for local-cloud persistence
+- Statistical significance module for task routing
+- Failure root-cause tagging via LLM classification
+- Adaptive model routing based on truth scores
+- Body state awareness service
+- Desktop session router for live screenshot streaming
+
+### Changed
+- Improvement scheduler now supports sleep cycle integration (backward compatible)
+- Principle distiller now incorporates failure patterns
+- Self-improvement cycle includes memory cap enforcement
+
 ## [0.4.2] — 2026-03-31
 
 ### Added
