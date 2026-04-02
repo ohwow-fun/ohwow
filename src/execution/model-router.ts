@@ -1001,7 +1001,7 @@ export class OpenRouterProvider implements ModelProvider {
 // MODEL ROUTER
 // ============================================================================
 
-export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision';
+export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision' | 'audio';
 
 export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'claude-code-cli' | 'auto';
 
@@ -1028,6 +1028,7 @@ export class ModelRouter {
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
+  private mainModelHasAudio: boolean;
   private _onOllamaResponse: ((model: string, inputTokens: number, outputTokens: number, durationMs: number) => void) | null = null;
   /** Cached credit balance percentage (0-100). Updated from heartbeat responses. */
   private _creditBalancePercent = 100;
@@ -1043,6 +1044,7 @@ export class ModelRouter {
     preferLocalModel?: boolean;
     modelSource?: ModelSourceOption;
     mainModelHasVision?: boolean;
+    mainModelHasAudio?: boolean;
     onOllamaResponse?: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void;
     /** URL for llama-server with TurboQuant support */
     llamaCppUrl?: string;
@@ -1071,6 +1073,7 @@ export class ModelRouter {
       : null;
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
+    this.mainModelHasAudio = opts.mainModelHasAudio ?? false;
     this._onOllamaResponse = opts.onOllamaResponse ?? null;
 
     // Wire response callback to all local providers
@@ -1142,6 +1145,16 @@ export class ModelRouter {
       if (this.anthropic) return this.anthropic;
 
       throw new Error('No vision-capable model available. Configure an OCR model, use a vision-capable local model, or add an Anthropic API key.');
+    }
+
+    // Audio tasks: try audio-capable main model → Anthropic fallback
+    if (taskType === 'audio') {
+      if (this.mainModelHasAudio && this.ollama) {
+        const available = await this.ollama.isAvailable();
+        if (available) return this.ollama;
+      }
+      if (this.anthropic) return this.anthropic;
+      throw new Error('No audio-capable model available. Install Gemma 4 E2B or E4B, or add an Anthropic API key.');
     }
 
     // Execution policy override: when an operationType is provided and modelSource is 'auto',
