@@ -42,6 +42,8 @@ export interface OllamaModelInfo {
   toolCalling?: boolean;
   /** Whether this model supports vision/image analysis */
   vision?: boolean;
+  /** Whether this model supports audio input (speech transcription and understanding) */
+  audio?: boolean;
   /** Context window size in tokens (e.g. 262144 for 256K). Used by getModelContextSize(). */
   contextSize?: number;
   /** TurboQuant KV cache compression compatibility */
@@ -145,6 +147,20 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     contextSize: 16_384,
   },
   {
+    tag: 'gemma4:e2b',
+    label: 'Gemma 4 E2B',
+    description: 'Google Gemma 4 (5.1B, 2.3B active). Vision, audio, and tool use.',
+    sizeGB: 7.2,
+    minRAM: 8,
+    features: ['text', 'vision', 'audio', '128K context'],
+    family: 'gemma',
+    tier: 'small',
+    toolCalling: true,
+    vision: true,
+    audio: true,
+    contextSize: 131_072,
+  },
+  {
     tag: 'gemma3:4b',
     label: 'Gemma 3 4B',
     description: 'Google\'s mid-size model. Strong reasoning and vision.',
@@ -167,7 +183,6 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     features: ['text', '256K context'],
     family: 'qwen',
     tier: 'medium',
-    recommended: true,
     toolCalling: true,
     contextSize: 262_144,
   },
@@ -242,6 +257,21 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     tier: 'medium',
     toolCalling: true,
     vision: true,
+    contextSize: 131_072,
+  },
+  {
+    tag: 'gemma4:e4b',
+    label: 'Gemma 4 E4B',
+    description: 'Google Gemma 4 (8B, 4.5B active). Vision, audio, tool use. Best value multimodal.',
+    sizeGB: 9.6,
+    minRAM: 12,
+    features: ['text', 'vision', 'audio', '128K context'],
+    family: 'gemma',
+    tier: 'medium',
+    recommended: true,
+    toolCalling: true,
+    vision: true,
+    audio: true,
     contextSize: 131_072,
   },
 
@@ -345,6 +375,19 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     vision: true,
     contextSize: 131_072,
   },
+  {
+    tag: 'gemma4:26b',
+    label: 'Gemma 4 26B MoE',
+    description: 'Google Gemma 4 MoE (26B total, 3.8B active). Fast inference with vision and tools.',
+    sizeGB: 18,
+    minRAM: 24,
+    features: ['text', 'vision', '256K context'],
+    family: 'gemma',
+    tier: 'large',
+    toolCalling: true,
+    vision: true,
+    contextSize: 262_144,
+  },
 
   // XLarge (32GB+)
   {
@@ -358,6 +401,20 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     tier: 'xlarge',
     toolCalling: true,
     contextSize: 40_960,
+  },
+  {
+    tag: 'gemma4:31b',
+    label: 'Gemma 4 31B Dense',
+    description: 'Google Gemma 4 dense 31B. Arena AI #3 open model. Vision and tool calling.',
+    sizeGB: 20,
+    minRAM: 32,
+    features: ['text', 'vision', '256K context'],
+    family: 'gemma',
+    tier: 'xlarge',
+    recommended: true,
+    toolCalling: true,
+    vision: true,
+    contextSize: 262_144,
   },
   {
     tag: 'gemma3:27b',
@@ -518,6 +575,11 @@ export function visionCapableModels(device: DeviceInfo): OllamaModelInfo[] {
   return recommendModels(device).filter(m => m.vision);
 }
 
+/** Returns audio-capable models that fit on this device. */
+export function audioCapableModels(device: DeviceInfo): OllamaModelInfo[] {
+  return recommendModels(device).filter(m => m.audio);
+}
+
 /** Estimate download time in minutes (rough, assumes 50 Mbps). */
 export function estimateDownloadMinutes(sizeGB: number): number {
   const sizeMb = sizeGB * 1024;
@@ -658,5 +720,6 @@ export function formatModelChoice(model: OllamaModelInfo, installed?: boolean): 
   const suffix = installed ? ' (installed)' : '';
   const tools = model.toolCalling ? ' [tools]' : '';
   const vision = model.vision ? ' [vision]' : '';
-  return `${model.label} (${model.sizeGB} GB) ${model.features.join(', ')}${tools}${vision}${suffix}`;
+  const audio = model.audio ? ' [audio]' : '';
+  return `${model.label} (${model.sizeGB} GB) ${model.features.join(', ')}${tools}${vision}${audio}${suffix}`;
 }
