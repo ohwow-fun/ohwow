@@ -52,7 +52,8 @@ export function ModelSelectionTable({
         const badges: string[] = [];
         if (model.toolCalling) badges.push('[tools]');
         if (model.vision) badges.push('[vision]');
-        const badgeStr = pad(badges.join(' '), 18);
+        if (model.audio) badges.push('[audio]');
+        const badgeStr = pad(badges.join(' '), 26);
 
         const time = installed ? 'ready' : `~${estimateDownloadMinutes(model.sizeGB)} min`;
 
@@ -63,7 +64,7 @@ export function ModelSelectionTable({
             {name}
             <Text color="gray">{size}</Text>
             <Text color="gray">{ctx}</Text>
-            <Text color={model.vision ? 'magenta' : model.toolCalling ? 'blue' : 'gray'}>{badgeStr}</Text>
+            <Text color={model.audio ? 'yellow' : model.vision ? 'magenta' : model.toolCalling ? 'blue' : 'gray'}>{badgeStr}</Text>
             <Text color={installed ? 'green' : 'gray'}>{time}</Text>
           </Text>
         );

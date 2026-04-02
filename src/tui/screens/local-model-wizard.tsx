@@ -298,7 +298,7 @@ export function LocalModelWizard({ configPath, ollamaUrl = 'http://localhost:114
         <Box flexDirection="column">
           <Text bold>Choose a Model</Text>
           <Text color="gray">Pick the model to download. Larger models are smarter but use more RAM.</Text>
-          <Text color="gray" dimColor>Models with [vision] can analyze images and documents.</Text>
+          <Text color="gray" dimColor>Models with [vision] can analyze images and documents. Models with [audio] can transcribe and understand speech.</Text>
           <Box flexDirection="column" marginTop={1}>
             <ModelSelectionTable
               models={models}
