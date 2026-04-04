@@ -208,6 +208,7 @@ export class LocalOrchestrator {
       mcpClients: this.mcpClients,
       waitForCostApproval: (id: string) => this.waitForCostApproval(id),
       skipMediaCostConfirmation: this.skipMediaCostConfirmation,
+      immuneSystem: this.immuneSystem,
     };
   }
 
@@ -928,6 +929,25 @@ export class LocalOrchestrator {
 
     // Load chat history from session (or use seed messages from cloud proxy)
     const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
+
+    // Immune system: scan user input for threats before processing
+    if (this.immuneSystem) {
+      try {
+        const userScan = this.immuneSystem.scan(userMessage, 'user_input');
+        if (userScan.detected) {
+          this.immuneSystem.respond(userScan);
+          if (userScan.recommendation === 'block' || userScan.recommendation === 'quarantine') {
+            logger.warn({ pathogen: userScan.pathogenType, confidence: userScan.confidence }, 'immune: blocked user input');
+            yield { type: 'text', content: 'This input was flagged by the immune system and cannot be processed.' };
+            yield { type: 'done', inputTokens: 0, outputTokens: 0 };
+            return;
+          }
+          if (userScan.recommendation === 'flag') {
+            logger.info({ pathogen: userScan.pathogenType, confidence: userScan.confidence }, 'immune: flagged user input');
+          }
+        }
+      } catch { /* immune scanning is non-fatal */ }
+    }
 
     // Add user message
     history.push({ role: 'user', content: userMessage });

@@ -42,14 +42,23 @@ const BACKOFF_MS = [1000, 3000];
 /**
  * Retry an async function with exponential backoff for transient errors only.
  * Returns the result on success, or throws the last error on exhaustion.
+ *
+ * When the immune system is at critical/quarantine alert level, retries are
+ * suppressed to prevent amplification of potential attacks.
  */
 export async function retryTransient<T>(
   fn: () => Promise<T>,
   maxRetries = DEFAULT_MAX_RETRIES,
+  immuneAlertLevel?: string,
 ): Promise<T> {
+  // Under high immune alert, suppress retries to avoid amplifying threats
+  const effectiveRetries = (immuneAlertLevel === 'critical' || immuneAlertLevel === 'quarantine')
+    ? 0
+    : maxRetries;
+
   let lastError: Error | undefined;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (let attempt = 0; attempt <= effectiveRetries; attempt++) {
     try {
       return await fn();
     } catch (err) {

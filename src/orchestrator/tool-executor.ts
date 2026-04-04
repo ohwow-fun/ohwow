@@ -32,6 +32,7 @@ import { saveMediaFile, saveMediaFromUrl } from '../media/storage.js';
 import { summarizeToolResult } from './result-summarizer.js';
 import { retryTransient, CircuitBreaker } from './error-recovery.js';
 import { estimateMediaCost } from '../media/media-router.js';
+import type { ImmuneSystem } from '../immune/immune-system.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -98,6 +99,8 @@ export interface ToolExecutionContext {
   waitForCostApproval?: (requestId: string) => Promise<boolean>;
   /** When true, skip cost confirmation dialogs for cloud media MCP calls. */
   skipMediaCostConfirmation?: boolean;
+  /** Immune system for threat scanning on tool inputs/outputs (Maturana & Varela). */
+  immuneSystem?: ImmuneSystem | null;
 }
 
 // ============================================================================
@@ -153,6 +156,25 @@ export async function* executeToolCall(
   }
 
   yield { type: 'tool_start', name: request.name, input: toolInput };
+
+  // --- Immune system: pre-tool threat scan (Maturana & Varela's autopoiesis) ---
+  if (ctx.immuneSystem) {
+    try {
+      const detection = ctx.immuneSystem.scan(JSON.stringify(toolInput), request.name);
+      if (detection.detected) {
+        ctx.immuneSystem.respond(detection);
+        if (detection.recommendation === 'block' || detection.recommendation === 'quarantine') {
+          logger.warn({ tool: request.name, pathogen: detection.pathogenType, confidence: detection.confidence }, 'immune: blocked tool input');
+          const blockedResult: ToolResult = { success: false, error: `Blocked by immune system: ${detection.reason}` };
+          yield { type: 'tool_done', name: request.name, result: blockedResult };
+          return { toolName: request.name, result: blockedResult, resultContent: `Blocked: ${detection.reason}`, isError: true };
+        }
+        if (detection.recommendation === 'flag') {
+          logger.info({ tool: request.name, pathogen: detection.pathogenType, confidence: detection.confidence }, 'immune: flagged tool input');
+        }
+      }
+    } catch { /* immune scanning is non-fatal */ }
+  }
 
   // --- Plan update ---
   if (request.name === 'update_plan') {
@@ -371,7 +393,15 @@ export async function* executeToolCall(
       const toolResult: ToolResult = mcpResult.is_error
         ? { success: false, error: resultContent }
         : { success: true, data: resultContent };
-      if (!mcpResult.is_error) cb?.recordSuccess(request.name);
+      if (!mcpResult.is_error) {
+        cb?.recordSuccess(request.name);
+        // Immune: de-escalate on successful MCP execution
+        if (ctx.immuneSystem) {
+          try {
+            ctx.immuneSystem.respond({ detected: false, pathogenType: null, confidence: 0, matchedSignature: null, recommendation: 'allow', reason: 'MCP tool succeeded' });
+          } catch { /* non-fatal */ }
+        }
+      }
       ctx.executedToolCalls.set(toolKey, toolResult);
       ctx.toolCache?.set(request.name, toolInput, toolResult);
       yield { type: 'tool_done', name: request.name, result: toolResult };
@@ -452,6 +482,14 @@ export async function* executeToolCall(
       }
 
       const errorMsg = err instanceof Error ? err.message : 'MCP tool call failed';
+
+      // Immune: scan MCP error for threat patterns
+      if (ctx.immuneSystem) {
+        try {
+          const failureDetection = ctx.immuneSystem.scan(errorMsg, request.name);
+          ctx.immuneSystem.respond(failureDetection);
+        } catch { /* non-fatal */ }
+      }
       const errorResult: ToolResult = { success: false, error: errorMsg };
       yield { type: 'tool_done', name: request.name, result: errorResult };
 
@@ -501,8 +539,9 @@ export async function* executeToolCall(
   }
 
   try {
-    // Wrap execution with retry for transient errors
-    let result = await retryTransient(async () => handler(ctx.toolCtx, toolInput));
+    // Wrap execution with retry for transient errors (immune-aware: suppress retries under threat)
+    const immuneAlert = ctx.immuneSystem?.getInflammatoryState().alertLevel;
+    let result = await retryTransient(async () => handler(ctx.toolCtx, toolInput), undefined, immuneAlert);
 
     // Handle permission request for out-of-scope paths
     if (result.needsPermission) {
@@ -511,13 +550,19 @@ export async function* executeToolCall(
       const granted = await ctx.waitForPermission(requestId);
       if (granted) {
         await ctx.addAllowedPath(result.needsPermission);
-        result = await retryTransient(async () => handler(ctx.toolCtx, toolInput));
+        result = await retryTransient(async () => handler(ctx.toolCtx, toolInput), undefined, immuneAlert);
       } else {
         result = { success: false, error: 'Access denied by user.' };
       }
     }
 
     cb?.recordSuccess(request.name);
+    // Immune: de-escalate on successful execution
+    if (ctx.immuneSystem) {
+      try {
+        ctx.immuneSystem.respond({ detected: false, pathogenType: null, confidence: 0, matchedSignature: null, recommendation: 'allow', reason: 'tool succeeded' });
+      } catch { /* non-fatal */ }
+    }
     ctx.executedToolCalls.set(toolKey, result);
     ctx.toolCache?.set(request.name, toolInput, result);
     yield { type: 'tool_done', name: request.name, result };
@@ -543,6 +588,14 @@ export async function* executeToolCall(
       if (tripped) {
         logger.warn(`[tool-executor] Circuit breaker tripped for "${request.name}" after repeated failures`);
       }
+    }
+
+    // Immune: scan error for threat patterns and escalate if warranted
+    if (ctx.immuneSystem) {
+      try {
+        const failureDetection = ctx.immuneSystem.scan(errorMsg, request.name);
+        ctx.immuneSystem.respond(failureDetection);
+      } catch { /* non-fatal */ }
     }
 
     // Enrich error message with alternatives
