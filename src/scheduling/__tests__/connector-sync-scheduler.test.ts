@@ -192,6 +192,7 @@ describe('ConnectorSyncScheduler', () => {
     const failConnector: DataSourceConnector = {
       type: 'github' as ConnectorType,
       name: 'Fail',
+      // eslint-disable-next-line require-yield
       async *load() {
         throw new Error('Connection refused');
       },
