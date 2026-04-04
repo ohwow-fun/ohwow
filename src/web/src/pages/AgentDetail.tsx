@@ -24,6 +24,7 @@ interface Agent {
   config: Record<string, unknown> | string | null;
   system_prompt: string | null;
   voice_profile_id: string | null;
+  autonomy_budget: string | null;
   created_at: string;
 }
 
@@ -127,6 +128,11 @@ export function AgentDetailPage() {
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [savingMcp, setSavingMcp] = useState(false);
 
+  // Budget state
+  const [budgetPerTask, setBudgetPerTask] = useState(0);
+  const [budgetDaily, setBudgetDaily] = useState(0);
+  const [budgetMonthly, setBudgetMonthly] = useState(0);
+
   useEffect(() => {
     api<{ status: string }>('/api/voice/health')
       .then(() => {
@@ -151,6 +157,17 @@ export function AgentDetailPage() {
     setMcpEnabled(config.mcp_enabled === true);
     setMcpServers(Array.isArray(config.mcp_servers) ? (config.mcp_servers as McpServerConfig[]) : []);
   }, [config]);
+
+  useEffect(() => {
+    if (agent?.autonomy_budget) {
+      try {
+        const b = JSON.parse(agent.autonomy_budget as string);
+        setBudgetPerTask(b.perTaskCents || 0);
+        setBudgetDaily(b.dailyCents || 0);
+        setBudgetMonthly(b.monthlyCents || 0);
+      } catch { /* ignore */ }
+    }
+  }, [agent?.autonomy_budget]);
 
   const deviceAccessEnabled = config.local_files_enabled === true && config.bash_enabled === true;
 
@@ -251,14 +268,18 @@ export function AgentDetailPage() {
           newConfig[field.key] = field.value;
         }
       }
+      const autonomyBudget = (budgetPerTask || budgetDaily || budgetMonthly)
+        ? JSON.stringify({ perTaskCents: budgetPerTask, dailyCents: budgetDaily, monthlyCents: budgetMonthly, warnAt: 0.8 })
+        : null;
+
       await api(`/api/agents/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ config: newConfig }),
+        body: JSON.stringify({ config: newConfig, autonomy_budget: autonomyBudget }),
       });
       setEditing(false);
       refetch();
     } catch { /* */ } finally { setSavingConfig(false); }
-  }, [id, editFields, refetch]);
+  }, [id, editFields, budgetPerTask, budgetDaily, budgetMonthly, refetch]);
 
   const saveMcp = useCallback(async (enabled: boolean, servers: McpServerConfig[]) => {
     if (!id) return;
@@ -597,6 +618,23 @@ export function AgentDetailPage() {
               </div>
             )}
 
+            {/* Budget Limits */}
+            <div className="mt-6 border-t border-zinc-800 pt-4">
+              <h4 className="text-sm font-medium text-zinc-400 mb-1">Budget Limits</h4>
+              <p className="text-xs text-zinc-500 mb-3">Cost caps for external API providers. Local models are always unlimited.</p>
+              <div className="text-sm text-zinc-400">
+                {budgetPerTask || budgetDaily || budgetMonthly ? (
+                  <div className="flex gap-4">
+                    {budgetPerTask > 0 && <span>Per task: {budgetPerTask}c</span>}
+                    {budgetDaily > 0 && <span>Daily: {budgetDaily}c</span>}
+                    {budgetMonthly > 0 && <span>Monthly: {budgetMonthly}c</span>}
+                  </div>
+                ) : (
+                  <span className="text-zinc-600">No budget limits set</span>
+                )}
+              </div>
+            </div>
+
             <div className="mt-4">
               <button
                 onClick={startEditing}
@@ -627,6 +665,33 @@ export function AgentDetailPage() {
                 </div>
               ))}
             </div>
+
+            {/* Budget Limits (editing) */}
+            <div className="mt-6 border-t border-zinc-800 pt-4">
+              <h4 className="text-sm font-medium text-zinc-400 mb-1">Budget Limits</h4>
+              <p className="text-xs text-zinc-500 mb-3">Cost caps for external API providers. Local models are always unlimited.</p>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs text-zinc-500 block mb-1">Per task (cents)</label>
+                  <input type="number" min="0" value={budgetPerTask}
+                    onChange={e => setBudgetPerTask(Number(e.target.value))}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200" />
+                </div>
+                <div>
+                  <label className="text-xs text-zinc-500 block mb-1">Daily (cents)</label>
+                  <input type="number" min="0" value={budgetDaily}
+                    onChange={e => setBudgetDaily(Number(e.target.value))}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200" />
+                </div>
+                <div>
+                  <label className="text-xs text-zinc-500 block mb-1">Monthly (cents)</label>
+                  <input type="number" min="0" value={budgetMonthly}
+                    onChange={e => setBudgetMonthly(Number(e.target.value))}
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-200" />
+                </div>
+              </div>
+            </div>
+
             <div className="flex gap-2 mt-4">
               <button
                 onClick={() => setEditing(false)}
