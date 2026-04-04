@@ -21,6 +21,15 @@ import type { RuntimeEvents } from '../tui/types.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
+import {
+  parseBudget,
+  checkPreFlight,
+  checkMidLoop,
+  isExternalProvider,
+  upsertDailyResourceUsage,
+  type AutonomyBudget,
+} from './budget-guard.js';
+import { strengthenSynapse } from '../symbiosis/synapse-dynamics.js';
 import type { EngineConfig, RuntimeEffects, ExecuteAgentResult, BusinessContext } from './types.js';
 import type { ModelRouter, ModelProvider, ModelResponseWithTools } from './model-router.js';
 import { convertToolsToOpenAI } from './tool-format.js';
@@ -164,6 +173,7 @@ interface AgentRow {
   config: string | Record<string, unknown>;
   status: string;
   stats: string | Record<string, unknown>;
+  autonomy_budget?: string | null;
 }
 
 interface TaskRow {
@@ -339,6 +349,41 @@ export class RuntimeEngine {
 
     logger.info({ agentId, taskId }, '[RuntimeEngine] Executing via Claude Code CLI');
 
+    // Budget guard: pre-flight check (Claude Code CLI is always an external provider)
+    const ccBudget = parseBudget(agent.autonomy_budget as string | null);
+    if (ccBudget) {
+      const preflight = await checkPreFlight(this.db, agentId, workspaceId, ccBudget);
+      if (!preflight.allowed) {
+        logger.warn({ agentId, taskId, reason: preflight.reason }, '[RuntimeEngine] Budget exceeded, rejecting Claude Code CLI task');
+        await this.db.from('agent_workforce_tasks').update({
+          status: 'failed',
+          output: preflight.reason,
+          updated_at: new Date().toISOString(),
+        }).eq('id', taskId);
+        await this.db.rpc('create_agent_activity', {
+          p_workspace_id: workspaceId,
+          p_activity_type: 'budget_exceeded',
+          p_title: `Budget limit reached for ${agent.name}`,
+          p_description: preflight.reason,
+          p_agent_id: agentId,
+          p_task_id: taskId,
+          p_metadata: { runtime: true, path: 'claude-code-cli' },
+        });
+        this.emit('budget:exceeded', { agentId, taskId, reason: preflight.reason });
+        return {
+          success: false,
+          taskId,
+          status: 'failed',
+          output: { text: preflight.reason || 'Budget exceeded' },
+          tokensUsed: 0,
+          costCents: 0,
+        };
+      }
+      if (preflight.warningPct) {
+        this.emit('budget:warning', { agentId, taskId, pct: preflight.warningPct });
+      }
+    }
+
     // 1. Compile memory + knowledge
     const [memoryDoc, knowledgeDoc] = await Promise.all([
       this.compileMemory(agentId, workspaceId, task.title),
@@ -491,6 +536,28 @@ export class RuntimeEngine {
         }),
         updated_at: new Date().toISOString(),
       }).eq('id', agentId);
+
+      // Track daily resource usage (for budget guard queries)
+      void upsertDailyResourceUsage(this.db, workspaceId, totalTokens, costCents);
+
+      // Auto-strengthen delegation synapses when a subtask completes for a different agent
+      if (task.parent_task_id) {
+        try {
+          const { data: parentTask } = await this.db
+            .from('agent_workforce_tasks')
+            .select('agent_id')
+            .eq('id', task.parent_task_id)
+            .maybeSingle();
+          const parentAgentId = (parentTask as { agent_id: string } | null)?.agent_id;
+          if (parentAgentId && parentAgentId !== agentId) {
+            void strengthenSynapse(this.db, workspaceId, parentAgentId, agentId, 'delegation', {
+              type: 'task_delegation',
+              detail: `Task "${task.title}" delegated from parent task ${task.parent_task_id}`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch { /* non-fatal synapse tracking */ }
+      }
 
       // Log activity
       await this.db.rpc('create_agent_activity', {
@@ -1068,6 +1135,45 @@ export class RuntimeEngine {
         throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentConfig.model || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
       }
 
+      // Budget guard: pre-flight check for external providers
+      const agentBudget = isExternalProvider(!!useOllama)
+        ? parseBudget(agent.autonomy_budget as string | null)
+        : null;
+
+      if (agentBudget) {
+        const preflight = await checkPreFlight(this.db, agentId, workspaceId, agentBudget);
+        if (!preflight.allowed) {
+          logger.warn({ agentId, taskId, reason: preflight.reason }, '[RuntimeEngine] Budget exceeded, rejecting task');
+          await this.db.from('agent_workforce_tasks').update({
+            status: 'failed',
+            output: preflight.reason,
+            updated_at: new Date().toISOString(),
+          }).eq('id', taskId);
+          await this.db.rpc('create_agent_activity', {
+            p_workspace_id: workspaceId,
+            p_activity_type: 'budget_exceeded',
+            p_title: `Budget limit reached for ${agent.name}`,
+            p_description: preflight.reason,
+            p_agent_id: agentId,
+            p_task_id: taskId,
+            p_metadata: { runtime: true },
+          });
+          this.emit('budget:exceeded', { agentId, taskId, reason: preflight.reason });
+          return {
+            success: false,
+            taskId,
+            status: 'failed',
+            output: { text: preflight.reason || 'Budget exceeded' },
+            tokensUsed: 0,
+            costCents: 0,
+          };
+        }
+        if (preflight.warningPct) {
+          logger.info({ agentId, pct: preflight.warningPct }, '[RuntimeEngine] Budget warning');
+          this.emit('budget:warning', { agentId, taskId, pct: preflight.warningPct });
+        }
+      }
+
       // Score task difficulty for model routing
       const difficulty = scoreDifficulty({
         taskDescription: task.description || task.title,
@@ -1168,6 +1274,31 @@ export class RuntimeEngine {
 
             const textBlocks = response.content.filter((b): b is TextBlock => b.type === 'text');
             const textContent = textBlocks.map(b => b.text).join('\n');
+
+            // Budget guard: mid-loop per-task cost check
+            if (agentBudget) {
+              const runningCost = calculateCostCents(
+                modelId as ClaudeModel,
+                totalInputTokens,
+                totalOutputTokens,
+              );
+              const midCheck = checkMidLoop(runningCost, agentBudget);
+              if (!midCheck.allowed) {
+                logger.warn({ agentId, taskId, runningCost, reason: midCheck.reason }, '[RuntimeEngine] Mid-loop budget hard stop');
+                await this.db.rpc('create_agent_activity', {
+                  p_workspace_id: workspaceId,
+                  p_activity_type: 'budget_hard_stop',
+                  p_title: `Per-task budget hit for ${agent.name}`,
+                  p_description: midCheck.reason,
+                  p_agent_id: agentId,
+                  p_task_id: taskId,
+                  p_metadata: { runtime: true, runningCost },
+                });
+                this.emit('budget:exceeded', { agentId, taskId, reason: midCheck.reason });
+                fullContent = textContent || fullContent;
+                break;
+              }
+            }
 
             if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
               // Cache end_turn responses for future reuse
@@ -1656,6 +1787,28 @@ export class RuntimeEngine {
         }),
         updated_at: new Date().toISOString(),
       }).eq('id', agentId);
+
+      // Track daily resource usage (for budget guard queries)
+      void upsertDailyResourceUsage(this.db, workspaceId, totalTokens, costCents);
+
+      // Auto-strengthen delegation synapses when a subtask completes for a different agent
+      if (task.parent_task_id) {
+        try {
+          const { data: parentTask } = await this.db
+            .from('agent_workforce_tasks')
+            .select('agent_id')
+            .eq('id', task.parent_task_id)
+            .maybeSingle();
+          const parentAgentId = (parentTask as { agent_id: string } | null)?.agent_id;
+          if (parentAgentId && parentAgentId !== agentId) {
+            void strengthenSynapse(this.db, workspaceId, parentAgentId, agentId, 'delegation', {
+              type: 'task_delegation',
+              detail: `Task "${task.title}" delegated from parent task ${task.parent_task_id}`,
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch { /* non-fatal synapse tracking */ }
+      }
 
       // Log activity
       await this.db.rpc('create_agent_activity', {

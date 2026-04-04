@@ -52,6 +52,7 @@ import { createWhatsAppRouter } from './routes/whatsapp.js';
 import { createPeerPublicRouter, createPeersRouter } from './routes/peers.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
+import { createOrgRouter } from './routes/org.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createBrowserSessionRouter } from './routes/browser-session.js';
 import { createDesktopSessionRouter } from './routes/desktop-session.js';
@@ -286,6 +287,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createPeersRouter(db, { messageRouter: messageRouter ?? undefined, rawDb }));
   app.use(createMcpRouter());
   app.use(createCloudProxyRouter(controlPlane ?? null));
+  app.use(createOrgRouter(db));
   app.use(createPdfToolsRouter());
   app.use(createFileAccessRouter(db));
   if (config.dataDir) {

@@ -31,7 +31,7 @@ export function createDepartmentsRouter(db: DatabaseAdapter, eventBus: TypedEven
   router.post('/api/departments', async (req, res) => {
     try {
       const { workspaceId } = req;
-      const { name, color, description, sort_order } = req.body;
+      const { name, color, description, sort_order, telos, parent_id, system_type } = req.body;
 
       if (!name) { res.status(400).json({ error: 'name is required' }); return; }
 
@@ -41,7 +41,11 @@ export function createDepartmentsRouter(db: DatabaseAdapter, eventBus: TypedEven
       const { error } = await db.from('agent_workforce_departments').insert({
         id, workspace_id: workspaceId, name,
         color: color || null, description: description || null,
-        sort_order: sort_order ?? 0, created_at: now, updated_at: now,
+        sort_order: sort_order ?? 0,
+        telos: telos || null,
+        parent_id: parent_id || null,
+        system_type: system_type || 'organ_system',
+        created_at: now, updated_at: now,
       });
 
       if (error) { res.status(500).json({ error: error.message }); return; }
