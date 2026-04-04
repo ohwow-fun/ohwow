@@ -873,6 +873,32 @@ export async function startDaemon(): Promise<DaemonHandle> {
     // Wire schedule change notifications to orchestrator
     if (orchestrator) {
       orchestrator.setScheduleChangeCallback(() => scheduler?.notify());
+
+      // Wire BPP modules into scheduler (deferred: philosophical layers load async)
+      setTimeout(async () => {
+        const bpp = orchestrator!.getBppModules();
+        if (bpp.homeostasis && scheduler) {
+          scheduler.setHomeostasis(bpp.homeostasis);
+          logger.debug('[daemon] Wired homeostasis -> scheduler');
+        }
+
+        // Wire bios boundary check: defer schedules during off-hours
+        try {
+          const { inferBoundary, isBoundaryActive } = await import('../bios/boundary-guardian.js');
+          // Gather recent activity timestamps for boundary inference
+          const { data: activity } = await db.from('agent_activity')
+            .select('created_at')
+            .eq('workspace_id', workspaceId)
+            .order('created_at', { ascending: false })
+            .limit(200);
+          const timestamps = (activity ?? []).map((r: Record<string, unknown>) => new Date(r.created_at as string).getTime());
+          const boundary = inferBoundary(timestamps);
+          if (scheduler) {
+            scheduler.setBiosDeferCheck(() => isBoundaryActive(boundary));
+            logger.debug('[daemon] Wired bios boundary -> scheduler');
+          }
+        } catch { /* bios wiring is non-fatal */ }
+      }, 2000);
     }
 
     // Proactive engine

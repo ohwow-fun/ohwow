@@ -312,6 +312,23 @@ export class LocalOrchestrator {
     return this.brain;
   }
 
+  /** Get BPP modules for external wiring (scheduler, health endpoint, etc.). */
+  getBppModules(): {
+    homeostasis: import('../homeostasis/homeostasis-controller.js').HomeostasisController | null;
+    affect: import('../affect/affect-engine.js').AffectEngine | null;
+    endocrine: import('../endocrine/endocrine-system.js').EndocrineSystem | null;
+    immune: import('../immune/immune-system.js').ImmuneSystem | null;
+    sleep: import('../oneiros/sleep-cycle.js').SleepCycle | null;
+  } {
+    return {
+      homeostasis: this.homeostasisController,
+      affect: this.affectEngine,
+      endocrine: this.endocrineSystem,
+      immune: this.immuneSystem,
+      sleep: this.sleepCycle,
+    };
+  }
+
   /** Set the digital body for dynamic organ wiring. */
   setDigitalBody(body: DigitalBody): void {
     this.digitalBody = body;

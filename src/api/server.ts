@@ -18,7 +18,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { createAuthMiddleware } from './middleware.js';
-import { createHealthRouter } from './routes/health.js';
+import { createHealthRouter, type HealthBppDeps } from './routes/health.js';
 import { createTasksRouter } from './routes/tasks.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createActivityRouter } from './routes/activity.js';
@@ -147,7 +147,19 @@ export function createServer(deps: ServerDeps): {
   }));
 
   // Public routes (no auth)
-  app.use(createHealthRouter(startTime, rawDb));
+  // BPP vitals: lazily resolve from orchestrator (philosophical layers load async)
+  const bppDepsLazy: HealthBppDeps = {};
+  if (orchestrator) {
+    // Defer access so BPP modules have time to initialize
+    setTimeout(() => {
+      const bpp = orchestrator!.getBppModules();
+      if (bpp.homeostasis) bppDepsLazy.homeostasis = bpp.homeostasis;
+      if (bpp.sleep) bppDepsLazy.sleepCycle = bpp.sleep;
+      if (bpp.affect) bppDepsLazy.affect = bpp.affect;
+      if (bpp.endocrine) bppDepsLazy.endocrine = bpp.endocrine;
+    }, 2000);
+  }
+  app.use(createHealthRouter(startTime, rawDb, bppDepsLazy));
   app.use(createOnboardingRouter(db));
 
   // Webhook routes (public, no auth — external services call these)

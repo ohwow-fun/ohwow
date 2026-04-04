@@ -48,6 +48,8 @@ export class LocalScheduler {
   private triggerEvaluator: LocalTriggerEvaluator | null = null;
   /** Homeostasis controller for metabolic gating of schedule execution. */
   private homeostasis: { check(): { correctiveActions: Array<{ type: string; urgency: number }> } } | null = null;
+  /** Bios boundary/stress check: returns true if schedule should be deferred (off-hours or human stressed). */
+  private biosDeferCheck: (() => boolean) | null = null;
 
   get isRunning(): boolean {
     return this.running;
@@ -71,6 +73,11 @@ export class LocalScheduler {
   /** Wire homeostasis controller for metabolic gating. */
   setHomeostasis(controller: { check(): { correctiveActions: Array<{ type: string; urgency: number }> } }): void {
     this.homeostasis = controller;
+  }
+
+  /** Wire bios boundary/stress check for human-aware scheduling. */
+  setBiosDeferCheck(check: () => boolean): void {
+    this.biosDeferCheck = check;
   }
 
   /**
@@ -143,6 +150,17 @@ export class LocalScheduler {
           return;
         }
       } catch { /* homeostasis check is non-fatal */ }
+    }
+
+    // Bios gate: defer if human is stressed or outside work hours
+    if (this.biosDeferCheck) {
+      try {
+        if (this.biosDeferCheck()) {
+          logger.info('scheduler: deferring all schedules due to bios boundary/stress');
+          await this.recalculate();
+          return;
+        }
+      } catch { /* bios check is non-fatal */ }
     }
 
     if (data) {
