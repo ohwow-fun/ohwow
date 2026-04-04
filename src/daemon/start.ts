@@ -29,7 +29,9 @@ import { TelegramClient } from '../integrations/telegram/client.js';
 import { ChannelRegistry } from '../integrations/channel-registry.js';
 import { ConnectorRegistry } from '../integrations/connector-registry.js';
 import { GitHubConnector } from '../integrations/connectors/github-connector.js';
+import { GoogleDriveConnector } from '../integrations/connectors/google-drive-connector.js';
 import { LocalFilesConnector } from '../integrations/connectors/local-files-connector.js';
+import { NotionConnector } from '../integrations/connectors/notion-connector.js';
 import { MessageRouter } from '../integrations/message-router.js';
 import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ModelRouter } from '../execution/model-router.js';
@@ -614,7 +616,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const channelRegistry = new ChannelRegistry();
   const connectorRegistry = new ConnectorRegistry();
   connectorRegistry.registerFactory('github', (cfg) => new GitHubConnector(cfg));
+  connectorRegistry.registerFactory('google-drive', (cfg) => new GoogleDriveConnector(cfg));
   connectorRegistry.registerFactory('local-files', (cfg) => new LocalFilesConnector(cfg));
+  connectorRegistry.registerFactory('notion', (cfg) => new NotionConnector(cfg));
   const triggerEvaluator = new LocalTriggerEvaluator(db, engine, workspaceId, channelRegistry);
   triggerEvaluatorRef.current = triggerEvaluator;
 
