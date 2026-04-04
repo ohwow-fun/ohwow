@@ -115,6 +115,10 @@ export class LocalOrchestrator {
   private desktopService: LocalDesktopService | null = null;
   private desktopActivated = false;
   private onScheduleChange?: () => void;
+  private _ollamaUrl?: string;
+  private _embeddingModel?: string;
+  private _ollamaModel?: string;
+  private _ragBm25Weight?: number;
   private exchangeCount = 0;
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
@@ -174,6 +178,10 @@ export class LocalOrchestrator {
       modelRouter: this.modelRouter,
       onScheduleChange: this.onScheduleChange,
       workingDirectory: this.workingDirectory || undefined,
+      ollamaUrl: this._ollamaUrl,
+      embeddingModel: this._embeddingModel,
+      ollamaModel: this._ollamaModel,
+      ragBm25Weight: this._ragBm25Weight,
     };
   }
 
@@ -335,6 +343,14 @@ export class LocalOrchestrator {
   /** Set whether to skip cost confirmation for cloud media tools. */
   setSkipMediaCostConfirmation(skip: boolean): void {
     this.skipMediaCostConfirmation = skip;
+  }
+
+  /** Set RAG embedding config (Ollama URL, models, weights). */
+  setRagConfig(opts: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string; ragBm25Weight?: number }): void {
+    this._ollamaUrl = opts.ollamaUrl;
+    this._embeddingModel = opts.embeddingModel;
+    this._ollamaModel = opts.ollamaModel;
+    this._ragBm25Weight = opts.ragBm25Weight;
   }
 
   /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */

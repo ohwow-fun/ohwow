@@ -34,6 +34,7 @@ import { discoverCapabilities, proposeAutomation, createAutomation } from './aut
 import { generateSlides, exportSlidesToPdf } from './media.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
 import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
+import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -144,6 +145,13 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['assign_knowledge', (ctx, input) => assignKnowledge(ctx, input)],
   ['delete_knowledge', (ctx, input) => deleteKnowledge(ctx, input)],
   ['search_knowledge', (ctx, input) => searchKnowledge(ctx, input)],
+
+  // Data source connector tools
+  ['list_connectors', (ctx) => listConnectors(ctx)],
+  ['add_connector', (ctx, input) => addConnector(ctx, input)],
+  ['remove_connector', (ctx, input) => removeConnector(ctx, input)],
+  ['sync_connector', (ctx, input) => syncConnector(ctx, input)],
+  ['test_connector', (ctx, input) => testConnector(ctx, input)],
 
   // Filesystem tools
   ['local_list_directory', (ctx, input) => localListDirectory(ctx, input)],

@@ -8,7 +8,8 @@ import type { ToolResult } from '../local-tool-types.js';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
-import { retrieveKnowledgeChunks } from '../../lib/rag/retrieval.js';
+import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
+import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 
 // ============================================================================
 // LIST KNOWLEDGE
@@ -147,6 +148,29 @@ export async function uploadKnowledge(
         });
     }
 
+    // Update corpus stats for IDF
+    await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
+
+    // Generate embeddings if Ollama is available
+    let embeddingModel: string | undefined;
+    if (ctx.ollamaUrl && ctx.embeddingModel) {
+      const chunkTexts = chunks.map((c) => c.content);
+      const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
+      let embeddedCount = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        const emb = embeddings[i];
+        if (emb) {
+          const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+          await ctx.db
+            .from('agent_workforce_knowledge_chunks')
+            .update({ embedding: serializeEmbedding(emb) })
+            .eq('id', chunkId);
+          embeddedCount++;
+        }
+      }
+      if (embeddedCount > 0) embeddingModel = ctx.embeddingModel;
+    }
+
     // Update document
     await ctx.db
       .from('agent_workforce_knowledge_documents')
@@ -157,6 +181,7 @@ export async function uploadKnowledge(
         compiled_token_count: Math.ceil(text.length / 4),
         chunk_count: chunks.length,
         content_hash: contentHash,
+        ...(embeddingModel ? { embedding_model: embeddingModel } : {}),
       })
       .eq('id', docId);
 
@@ -268,6 +293,29 @@ export async function addKnowledgeFromUrl(
       });
   }
 
+  // Update corpus stats for IDF
+  await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
+
+  // Generate embeddings if Ollama is available
+  let urlEmbeddingModel: string | undefined;
+  if (ctx.ollamaUrl && ctx.embeddingModel) {
+    const chunkTexts = chunks.map((c) => c.content);
+    const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
+    let embeddedCount = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const emb = embeddings[i];
+      if (emb) {
+        const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+        await ctx.db
+          .from('agent_workforce_knowledge_chunks')
+          .update({ embedding: serializeEmbedding(emb) })
+          .eq('id', chunkId);
+        embeddedCount++;
+      }
+    }
+    if (embeddedCount > 0) urlEmbeddingModel = ctx.embeddingModel;
+  }
+
   await ctx.db
     .from('agent_workforce_knowledge_documents')
     .update({
@@ -277,6 +325,7 @@ export async function addKnowledgeFromUrl(
       compiled_token_count: Math.ceil(text.length / 4),
       chunk_count: chunks.length,
       content_hash: contentHash,
+      ...(urlEmbeddingModel ? { embedding_model: urlEmbeddingModel } : {}),
     })
     .eq('id', docId);
 
@@ -376,6 +425,21 @@ export async function deleteKnowledge(
     .single();
 
   if (!doc) return { success: false, error: 'Document not found' };
+
+  // Fetch chunks before deletion for corpus stats decrement
+  const { data: chunkRows } = await ctx.db
+    .from<{ content: string }>('agent_workforce_knowledge_chunks')
+    .select('content')
+    .eq('document_id', documentId);
+
+  if (chunkRows && chunkRows.length > 0) {
+    const fakeChunks: LocalChunk[] = chunkRows.map((c) => ({
+      content: c.content,
+      tokenCount: 0,
+      keywords: [],
+    }));
+    await updateCorpusStats(ctx.db, ctx.workspaceId, fakeChunks, -1);
+  }
 
   // Delete chunks first (SQLite may not cascade)
   await ctx.db
@@ -519,6 +583,79 @@ function extractKeywordsLocal(text: string): string[] {
 }
 
 // ============================================================================
+// CORPUS STATS (IDF tracking)
+// ============================================================================
+
+/** Collect unique terms across all chunks and update rag_corpus_stats doc_frequency. */
+async function updateCorpusStats(
+  db: import('../../db/adapter-types.js').DatabaseAdapter,
+  workspaceId: string,
+  chunks: LocalChunk[],
+  delta: 1 | -1,
+): Promise<void> {
+  try {
+    // Collect unique terms across all chunks in this document
+    const docTerms = new Set<string>();
+    for (const chunk of chunks) {
+      for (const t of tokenize(chunk.content)) {
+        docTerms.add(t);
+      }
+    }
+
+    for (const term of docTerms) {
+      if (delta > 0) {
+        // Upsert: try insert, if conflict increment
+        const { error: insertErr } = await db
+          .from('rag_corpus_stats')
+          .insert({ workspace_id: workspaceId, term, doc_frequency: 1 });
+
+        if (insertErr) {
+          // Row exists — fetch current value and update
+          const { data: existing } = await db
+            .from<{ doc_frequency: number }>('rag_corpus_stats')
+            .select('doc_frequency')
+            .eq('workspace_id', workspaceId)
+            .eq('term', term)
+            .single();
+
+          if (existing) {
+            await db
+              .from('rag_corpus_stats')
+              .update({ doc_frequency: existing.doc_frequency + 1, updated_at: new Date().toISOString() })
+              .eq('workspace_id', workspaceId)
+              .eq('term', term);
+          }
+        }
+      } else {
+        // Decrement on delete
+        const { data: existing } = await db
+          .from<{ doc_frequency: number }>('rag_corpus_stats')
+          .select('doc_frequency')
+          .eq('workspace_id', workspaceId)
+          .eq('term', term)
+          .single();
+
+        if (existing) {
+          const newFreq = existing.doc_frequency - 1;
+          if (newFreq <= 0) {
+            await db.from('rag_corpus_stats').delete()
+              .eq('workspace_id', workspaceId)
+              .eq('term', term);
+          } else {
+            await db.from('rag_corpus_stats')
+              .update({ doc_frequency: newFreq, updated_at: new Date().toISOString() })
+              .eq('workspace_id', workspaceId)
+              .eq('term', term);
+          }
+        }
+      }
+    }
+  } catch {
+    // Best-effort: don't fail document operations if stats update fails
+  }
+}
+
+// ============================================================================
 // SEARCH KNOWLEDGE
 // ============================================================================
 
@@ -540,6 +677,11 @@ export async function searchKnowledge(
     query,
     tokenBudget: 6000,
     maxChunks: maxResults,
+    ollamaUrl: ctx.ollamaUrl,
+    embeddingModel: ctx.embeddingModel,
+    bm25Weight: ctx.ragBm25Weight,
+    expandQueries: !!ctx.ollamaUrl,
+    ollamaModel: ctx.ollamaModel,
   });
 
   if (chunks.length === 0) {

@@ -455,6 +455,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
   );
 
   if (orchestrator) {
+    orchestrator.setRagConfig({
+      ollamaUrl: config.ollamaUrl,
+      embeddingModel: config.embeddingModel,
+      ollamaModel: config.ollamaModel,
+      ragBm25Weight: config.ragBm25Weight,
+    });
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
     if (inferenceCapabilities) {
       orchestrator.setInferenceCapabilities(inferenceCapabilities);

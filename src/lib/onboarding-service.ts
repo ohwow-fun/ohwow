@@ -217,6 +217,8 @@ export class OnboardingService {
       claudeCodeCliMaxTurns: 25,
       claudeCodeCliPermissionMode: 'skip',
       claudeCodeCliAutodetect: true,
+      embeddingModel: 'nomic-embed-text',
+      ragBm25Weight: 0.5,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;
