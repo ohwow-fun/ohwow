@@ -16,6 +16,16 @@ import type {
 
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/** BPP context to enrich A2A messages with biological signals. */
+export interface A2ABppContext {
+  /** Trust score for this connection (0-1 from symbiosis trust dynamics). */
+  trustScore?: number;
+  /** Dominant affect state of the sending agent. */
+  affectState?: { dominant: string; valence: number };
+  /** Overall endocrine tone (stressed/alert/balanced/content/bonded). */
+  endocrineTone?: string;
+}
+
 // ============================================================================
 // Agent Card Discovery
 // ============================================================================
@@ -48,8 +58,17 @@ export async function sendTask(
   message: A2AMessage,
   db: DatabaseAdapter,
   metadata?: Record<string, unknown>,
+  bppContext?: A2ABppContext,
 ): Promise<{ task: A2ATask; rawResult: unknown }> {
   const taskId = `a2a_out_${crypto.randomUUID()}`;
+
+  // Merge BPP biological signals into metadata
+  const enrichedMetadata: Record<string, unknown> = {
+    ...metadata,
+    ...(bppContext?.trustScore !== undefined ? { bpp_trust: bppContext.trustScore } : {}),
+    ...(bppContext?.affectState ? { bpp_affect: bppContext.affectState } : {}),
+    ...(bppContext?.endocrineTone ? { bpp_tone: bppContext.endocrineTone } : {}),
+  };
 
   const request: A2AJsonRpcRequest = {
     jsonrpc: '2.0',
@@ -57,7 +76,7 @@ export async function sendTask(
     method: 'message/send',
     params: {
       message,
-      ...(metadata ? { metadata } : {}),
+      ...(Object.keys(enrichedMetadata).length > 0 ? { metadata: enrichedMetadata } : {}),
     },
   };
 
