@@ -33,11 +33,52 @@ export interface ExtractionResult {
 const VALID_ENTITY_TYPES = new Set(['person', 'org', 'concept', 'tool', 'location', 'event']);
 
 // ============================================================================
+// HEURISTIC NER
+// ============================================================================
+
+/** Minimum heuristic entity count to justify an LLM call. */
+const HEURISTIC_THRESHOLD = 3;
+
+/**
+ * Fast regex-based named-entity extraction. Runs in <1ms with zero network
+ * calls. Used as a pre-filter to decide whether the more expensive LLM
+ * extraction is worthwhile.
+ */
+export function extractEntitiesHeuristic(text: string): ExtractedEntity[] {
+  const seen = new Set<string>();
+  const entities: ExtractedEntity[] = [];
+
+  // Capitalized multi-word phrases → concept (e.g. "Machine Learning")
+  const multiWordRe = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+/g;
+  for (const match of text.matchAll(multiWordRe)) {
+    const key = match[0].toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      entities.push({ text: match[0], type: 'concept' });
+    }
+  }
+
+  // CamelCase identifiers → tool (e.g. "TensorFlow", "GraphQL")
+  const camelRe = /\b[A-Z][a-z]+(?:[A-Z][a-z]*)+\b/g;
+  for (const match of text.matchAll(camelRe)) {
+    const key = match[0].toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      entities.push({ text: match[0], type: 'tool' });
+    }
+  }
+
+  return entities;
+}
+
+// ============================================================================
 // EXTRACTION
 // ============================================================================
 
 /**
  * Extract entities and relationships from a chunk of text using a local LLM.
+ * Runs heuristic NER first; only calls Ollama when the text has enough
+ * extractable structure (>= HEURISTIC_THRESHOLD entities).
  * Returns empty results on any failure (best-effort).
  */
 export async function extractEntitiesAndRelations(
@@ -48,6 +89,12 @@ export async function extractEntitiesAndRelations(
   const empty: ExtractionResult = { entities: [], relations: [] };
 
   try {
+    // Fast heuristic pass — skip LLM for low-structure text
+    const heuristicEntities = extractEntitiesHeuristic(chunkContent);
+    if (heuristicEntities.length < HEURISTIC_THRESHOLD) {
+      return { entities: heuristicEntities, relations: [] };
+    }
+
     const truncated = chunkContent.slice(0, 2000);
 
     const response = await fetch(`${ollamaUrl}/v1/chat/completions`, {

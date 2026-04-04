@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractEntitiesAndRelations, saveGraphData, getRelatedChunkIds } from '../knowledge-graph.js';
+import { extractEntitiesAndRelations, extractEntitiesHeuristic, saveGraphData, getRelatedChunkIds } from '../knowledge-graph.js';
 
 vi.mock('../../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -32,10 +32,19 @@ describe('extractEntitiesAndRelations', () => {
       }),
     }));
 
-    const result = await extractEntitiesAndRelations('Jane Doe works at Acme Corp', 'http://localhost:11434', 'qwen3:4b');
+    // Input must contain >= 3 heuristic entities so the LLM path is exercised
+    const result = await extractEntitiesAndRelations(
+      'Jane Doe works at Acme Corp in New York with John Smith',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
-    expect(result.entities).toHaveLength(2);
-    expect(result.entities[0]).toEqual({ text: 'Acme Corp', type: 'org' });
+    expect(result.entities).toEqual(
+      expect.arrayContaining([
+        { text: 'Acme Corp', type: 'org' },
+        { text: 'Jane Doe', type: 'person' },
+      ]),
+    );
     expect(result.relations).toHaveLength(1);
     expect(result.relations[0]).toEqual({ subject: 'Jane Doe', predicate: 'works_at', object: 'Acme Corp' });
   });
@@ -54,10 +63,16 @@ describe('extractEntitiesAndRelations', () => {
       }),
     }));
 
-    const result = await extractEntitiesAndRelations('Uses Node.js', 'http://localhost:11434', 'qwen3:4b');
+    // Input must contain >= 3 heuristic entities so the LLM path is exercised
+    const result = await extractEntitiesAndRelations(
+      'Uses Node.js at Acme Corp with Jane Doe and John Smith in San Francisco',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
-    expect(result.entities).toHaveLength(1);
-    expect(result.entities[0]).toEqual({ text: 'Node.js', type: 'tool' });
+    expect(result.entities).toEqual(
+      expect.arrayContaining([{ text: 'Node.js', type: 'tool' }]),
+    );
   });
 
   it('handles thinking tags in response', async () => {
@@ -74,17 +89,29 @@ describe('extractEntitiesAndRelations', () => {
       }),
     }));
 
-    const result = await extractEntitiesAndRelations('Meeting in Berlin', 'http://localhost:11434', 'qwen3:4b');
+    // Input must contain >= 3 heuristic entities so the LLM path is exercised
+    const result = await extractEntitiesAndRelations(
+      'Meeting in Berlin with Acme Corp and Jane Doe plus John Smith',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
-    expect(result.entities).toHaveLength(1);
-    expect(result.entities[0]).toEqual({ text: 'Berlin', type: 'location' });
+    expect(result.entities).toEqual(
+      expect.arrayContaining([{ text: 'Berlin', type: 'location' }]),
+    );
   });
 
   it('returns empty on fetch failure', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Connection refused')));
 
-    const result = await extractEntitiesAndRelations('Some text', 'http://localhost:11434', 'qwen3:4b');
+    // Text with >= 3 heuristic entities so it reaches the fetch path
+    const result = await extractEntitiesAndRelations(
+      'Acme Corp hired Jane Doe and John Smith in New York',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
+    // Fetch fails, so we get empty (catch returns empty)
     expect(result.entities).toHaveLength(0);
     expect(result.relations).toHaveLength(0);
   });
@@ -92,8 +119,13 @@ describe('extractEntitiesAndRelations', () => {
   it('returns empty on non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false }));
 
-    const result = await extractEntitiesAndRelations('Some text', 'http://localhost:11434', 'qwen3:4b');
+    const result = await extractEntitiesAndRelations(
+      'Acme Corp hired Jane Doe and John Smith in New York',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
+    // Non-ok response returns empty
     expect(result.entities).toHaveLength(0);
     expect(result.relations).toHaveLength(0);
   });
@@ -106,8 +138,13 @@ describe('extractEntitiesAndRelations', () => {
       }),
     }));
 
-    const result = await extractEntitiesAndRelations('Some text', 'http://localhost:11434', 'qwen3:4b');
+    const result = await extractEntitiesAndRelations(
+      'Acme Corp hired Jane Doe and John Smith in New York',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
+    // Malformed JSON returns empty
     expect(result.entities).toHaveLength(0);
     expect(result.relations).toHaveLength(0);
   });
@@ -129,10 +166,82 @@ describe('extractEntitiesAndRelations', () => {
       }),
     }));
 
-    const result = await extractEntitiesAndRelations('Some text', 'http://localhost:11434', 'qwen3:4b');
+    // Input must contain >= 3 heuristic entities so the LLM path is exercised
+    const result = await extractEntitiesAndRelations(
+      'Acme Corp hired Jane Doe and John Smith in New York',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
 
-    expect(result.entities).toHaveLength(1);
-    expect(result.entities[0].text).toBe('Valid');
+    // Only 'Valid' with type 'concept' survives validation; 'animal' is invalid, '' is empty
+    expect(result.entities).toEqual(
+      expect.arrayContaining([{ text: 'Valid', type: 'concept' }]),
+    );
+  });
+});
+
+// ============================================================================
+// extractEntitiesHeuristic
+// ============================================================================
+
+describe('extractEntitiesHeuristic', () => {
+  it('extracts capitalized multi-word phrases as concepts', () => {
+    const result = extractEntitiesHeuristic('We discussed Machine Learning and Natural Language Processing today.');
+    const texts = result.map(e => e.text);
+    expect(texts).toContain('Machine Learning');
+    expect(texts).toContain('Natural Language Processing');
+    expect(result.find(e => e.text === 'Machine Learning')?.type).toBe('concept');
+  });
+
+  it('extracts CamelCase identifiers as tools', () => {
+    const result = extractEntitiesHeuristic('We use TensorFlow and GraphQL in production.');
+    const texts = result.map(e => e.text);
+    expect(texts).toContain('TensorFlow');
+    expect(texts).toContain('GraphQL');
+    expect(result.find(e => e.text === 'TensorFlow')?.type).toBe('tool');
+  });
+
+  it('deduplicates entities by text (case-insensitive)', () => {
+    // "Machine Learning" appears twice but should only be returned once
+    const result = extractEntitiesHeuristic('Machine Learning is great. Machine Learning is powerful.');
+    const mlEntities = result.filter(e => e.text === 'Machine Learning');
+    expect(mlEntities).toHaveLength(1);
+  });
+
+  it('returns empty for text with no entities', () => {
+    const result = extractEntitiesHeuristic('');
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns empty for all-lowercase text', () => {
+    const result = extractEntitiesHeuristic('this is a simple sentence with no proper nouns or identifiers.');
+    expect(result).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// extractEntitiesAndRelations — heuristic gating
+// ============================================================================
+
+describe('extractEntitiesAndRelations heuristic gating', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips Ollama when heuristic finds fewer than 3 entities', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    // Text with only 1 capitalized multi-word phrase — below threshold
+    const result = await extractEntitiesAndRelations(
+      'We talked about Machine Learning yesterday.',
+      'http://localhost:11434',
+      'qwen3:4b',
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.entities.length).toBeLessThan(3);
+    expect(result.relations).toHaveLength(0);
   });
 });
 

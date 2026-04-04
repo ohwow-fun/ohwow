@@ -226,21 +226,27 @@ export class DocumentWorker {
       }
 
       // 8b. Extract knowledge graph (best-effort, don't fail the job)
+      // Process in parallel batches of KG_CONCURRENCY to cut wall-clock time.
       if (this.config.ollamaUrl && this.config.ollamaModel) {
-        for (let i = 0; i < chunks.length; i++) {
-          const chunkId = createHash('sha256').update(`${job.document_id}-${i}`).digest('hex').slice(0, 32);
-          try {
-            const extraction = await extractEntitiesAndRelations(
-              chunks[i].content,
-              this.config.ollamaUrl,
-              this.config.ollamaModel,
-            );
-            if (extraction.entities.length > 0 || extraction.relations.length > 0) {
-              await saveGraphData(this.db, job.workspace_id, chunkId, extraction);
+        const KG_CONCURRENCY = 3;
+        for (let i = 0; i < chunks.length; i += KG_CONCURRENCY) {
+          const batch = chunks.slice(i, i + KG_CONCURRENCY);
+          await Promise.allSettled(batch.map(async (chunk, j) => {
+            const idx = i + j;
+            const chunkId = createHash('sha256').update(`${job.document_id}-${idx}`).digest('hex').slice(0, 32);
+            try {
+              const extraction = await extractEntitiesAndRelations(
+                chunk.content,
+                this.config.ollamaUrl!,
+                this.config.ollamaModel!,
+              );
+              if (extraction.entities.length > 0 || extraction.relations.length > 0) {
+                await saveGraphData(this.db, job.workspace_id, chunkId, extraction);
+              }
+            } catch {
+              // Skip — graph extraction is best-effort
             }
-          } catch {
-            // Skip — graph extraction is best-effort
-          }
+          }));
         }
       }
 
