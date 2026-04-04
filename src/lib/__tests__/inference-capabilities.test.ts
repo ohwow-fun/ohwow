@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createDefaultCapabilities,
   createLlamaCppCapabilities,
+  createMLXCapabilities,
   createOllamaCapabilities,
 } from '../inference-capabilities.js';
 
@@ -38,6 +39,25 @@ describe('createLlamaCppCapabilities', () => {
     expect(caps2.turboQuantBits).toBe(2);
 
     const caps3 = createLlamaCppCapabilities(3, 'turbo3', 'turbo3');
+    expect(caps3.turboQuantBits).toBe(3);
+  });
+});
+
+describe('createMLXCapabilities', () => {
+  it('returns turboQuantActive=true with mlx provider', () => {
+    const caps = createMLXCapabilities(4, 'turboquant-4bit', 'turboquant-4bit');
+    expect(caps.turboQuantActive).toBe(true);
+    expect(caps.provider).toBe('mlx');
+    expect(caps.turboQuantBits).toBe(4);
+    expect(caps.cacheTypeK).toBe('turboquant-4bit');
+    expect(caps.cacheTypeV).toBe('turboquant-4bit');
+  });
+
+  it('works with 2-bit and 3-bit', () => {
+    const caps2 = createMLXCapabilities(2, 'turboquant-2bit', 'turboquant-2bit');
+    expect(caps2.turboQuantBits).toBe(2);
+
+    const caps3 = createMLXCapabilities(3, 'turboquant-3bit', 'turboquant-3bit');
     expect(caps3.turboQuantBits).toBe(3);
   });
 });

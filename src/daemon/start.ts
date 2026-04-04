@@ -183,6 +183,55 @@ export async function startDaemon(): Promise<DaemonHandle> {
     }
   }
 
+  // Auto-start mlx-vlm server on Apple Silicon when local inference is preferred
+  let mlxServerUrl: string | undefined;
+  let mlxManager: import('../lib/mlx-manager.js').MLXManager | null = null;
+  let mlxEnabled = false;
+
+  if (config.mlxEnabled || config.modelSource === 'local' || config.preferLocalModel) {
+    try {
+      const device = (await import('../lib/device-info.js')).detectDevice();
+      if (device.mlxAvailable) {
+        const { getMLXModelId } = await import('../lib/ollama-models.js');
+        const mlxModelId = config.mlxModel || getMLXModelId(config.ollamaModel);
+        if (mlxModelId) {
+          const { MLXManager } = await import('../lib/mlx-manager.js');
+          mlxManager = new MLXManager();
+          const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
+          await mlxManager.start({
+            pythonPath: device.pythonPath || 'python3',
+            model: mlxModelId,
+            port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
+            host: '127.0.0.1',
+            kvBits,
+            kvQuantScheme: kvBits ? 'turboquant' : undefined,
+          });
+          mlxServerUrl = mlxManager.getUrl();
+          mlxEnabled = true;
+
+          // Update inference capabilities if TurboQuant active via MLX
+          if (kvBits) {
+            const mlxCaps = mlxManager.getCapabilities();
+            if (mlxCaps) inferenceCapabilities = mlxCaps;
+          }
+
+          // Crash handler
+          mlxManager.setOnCrash(async () => {
+            const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+            const defaultCaps = createDefaultCapabilities();
+            orchestrator?.setInferenceCapabilities(defaultCaps);
+            bus.emit('inference:capabilities-changed', defaultCaps);
+            logger.warn('[daemon] mlx-vlm server permanently down, MLX disabled');
+          });
+
+          logger.info({ url: mlxServerUrl, model: mlxModelId, kvBits }, '[daemon] mlx-vlm server started');
+        }
+      }
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] mlx-vlm not available, falling back');
+    }
+  }
+
   const modelRouter = new ModelRouter({
     anthropicApiKey: config.anthropicApiKey || undefined,
     ollamaUrl: config.ollamaUrl,
@@ -196,12 +245,49 @@ export async function startDaemon(): Promise<DaemonHandle> {
     openRouterModel: config.openRouterModel || undefined,
     llamaCppUrl,
     turboQuantBits: config.turboQuantBits,
+    mlxServerUrl,
+    mlxEnabled,
+    mlxModel: config.mlxModel || undefined,
   });
 
   // Update ModelRouter when user changes active model via the dashboard
   bus.on('ollama:model-changed', (payload: { model: string }) => {
     modelRouter.setOllamaModel(payload.model);
     logger.info(`[daemon] Active Ollama model changed to: ${payload.model}`);
+
+    // Restart mlx-vlm server with new model if MLX is active
+    if (mlxManager) {
+      (async () => {
+        try {
+          const { getMLXModelId } = await import('../lib/ollama-models.js');
+          const mlxModelId = getMLXModelId(payload.model);
+          if (mlxModelId) {
+            const device = (await import('../lib/device-info.js')).detectDevice();
+            const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
+            await mlxManager!.stop();
+            await mlxManager!.start({
+              pythonPath: device.pythonPath || 'python3',
+              model: mlxModelId,
+              port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
+              host: '127.0.0.1',
+              kvBits,
+              kvQuantScheme: kvBits ? 'turboquant' : undefined,
+            });
+            const caps = mlxManager!.getCapabilities();
+            if (caps && orchestrator) {
+              orchestrator.setInferenceCapabilities(caps);
+              bus.emit('inference:capabilities-changed', caps);
+            }
+            logger.info({ model: payload.model, mlxModel: mlxModelId }, '[daemon] mlx-vlm server restarted with new model');
+          } else {
+            logger.info({ model: payload.model }, '[daemon] No MLX mapping for model, keeping current MLX model');
+          }
+        } catch (err) {
+          logger.warn({ err: err instanceof Error ? err.message : err, model: payload.model },
+            '[daemon] mlx-vlm restart failed for new model');
+        }
+      })();
+    }
 
     // Restart llama-server with the new model if TurboQuant is active
     if (llamaCppManager && config.turboQuantBits > 0) {
@@ -1058,7 +1144,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // TurboQuant capabilities endpoint
   app.get('/api/turboquant/status', (_req, res) => {
-    const caps = llamaCppManager?.getCapabilities() ?? null;
+    const caps = mlxManager?.getCapabilities() ?? llamaCppManager?.getCapabilities() ?? null;
     res.json({
       active: caps?.turboQuantActive ?? false,
       bits: caps?.turboQuantBits ?? 0,
@@ -1066,6 +1152,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
       cacheTypeV: caps?.cacheTypeV ?? null,
       provider: caps?.provider ?? 'ollama',
       llamaServerRunning: llamaCppManager ? true : false,
+      mlxServerRunning: mlxManager ? true : false,
+      mlxModel: mlxManager?.getModel() ?? null,
     });
   });
 
@@ -1113,6 +1201,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     orchestrator?.closeDesktop().catch(() => {});
     orchestrator?.closeMcp().catch(() => {});
     llamaCppManager?.stop().catch(() => {});
+    mlxManager?.stop().catch(() => {});
     ollamaMonitor?.stop();
     processMonitor.stop();
     tunnel?.stop();

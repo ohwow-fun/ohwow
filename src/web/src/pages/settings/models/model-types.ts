@@ -9,6 +9,8 @@ export interface DeviceInfo {
   isAppleSilicon: boolean;
   hasNvidiaGpu: boolean;
   gpuName?: string;
+  mlxAvailable?: boolean;
+  pythonPath?: string;
 }
 
 export interface InstalledModel {

@@ -189,6 +189,7 @@ export class ProcessMonitor {
           isAppleSilicon: false,
           hasNvidiaGpu: !!peer.gpu_name,
           gpuName: peer.gpu_name,
+          mlxAvailable: false,
         };
         const peerProcesses = peer.processes || [];
         const peerUsedVram = peerProcesses.filter(p => p.running).reduce((s, p) => s + p.vramMB, 0);
