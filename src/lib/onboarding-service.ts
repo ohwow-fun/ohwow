@@ -223,6 +223,7 @@ export class OnboardingService {
       embeddingModel: 'nomic-embed-text',
       ragBm25Weight: 0.5,
       rerankerEnabled: false,
+      meshRagEnabled: false,
       openaiCompatibleUrl: '',
       openaiCompatibleApiKey: '',
     };

@@ -50,6 +50,7 @@ import { createTemplatesRouter } from './routes/templates.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createWhatsAppRouter } from './routes/whatsapp.js';
 import { createPeerPublicRouter, createPeersRouter } from './routes/peers.js';
+import { createRagPublicRouter } from './routes/rag.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createOrgRouter } from './routes/org.js';
@@ -93,6 +94,7 @@ export interface ServerDeps {
   messageRouter?: import('../integrations/message-router.js').MessageRouter;
   controlPlane?: import('../control-plane/client.js').ControlPlaneClient | null;
   onScheduleChange?: () => void;
+  ragConfig?: import('./routes/rag.js').RagRouterConfig;
 }
 
 export interface ServerConfig {
@@ -242,6 +244,9 @@ export function createServer(deps: ServerDeps): {
     legacyHeaders: false,
   }));
   app.use(createPeerPublicRouter(db));
+
+  // Peer RAG query route (peer-token auth, must be before session auth middleware)
+  app.use(createRagPublicRouter(db, deps.ragConfig ?? {}));
 
   // Browser session routes (cloud dashboard calls these for local browser automation)
   // /browser/health is public; /browser/session/* require auth

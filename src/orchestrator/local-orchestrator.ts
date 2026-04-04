@@ -121,6 +121,7 @@ export class LocalOrchestrator {
   private _ollamaModel?: string;
   private _ragBm25Weight?: number;
   private _rerankerEnabled?: boolean;
+  private _meshRagEnabled?: boolean;
   private exchangeCount = 0;
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
@@ -187,6 +188,7 @@ export class LocalOrchestrator {
       ollamaModel: this._ollamaModel,
       ragBm25Weight: this._ragBm25Weight,
       rerankerEnabled: this._rerankerEnabled,
+      meshRagEnabled: this._meshRagEnabled,
       connectorRegistry: this._connectorRegistry || undefined,
     };
   }
@@ -357,12 +359,13 @@ export class LocalOrchestrator {
   }
 
   /** Set RAG embedding config (Ollama URL, models, weights). */
-  setRagConfig(opts: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string; ragBm25Weight?: number; rerankerEnabled?: boolean }): void {
+  setRagConfig(opts: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string; ragBm25Weight?: number; rerankerEnabled?: boolean; meshRagEnabled?: boolean }): void {
     this._ollamaUrl = opts.ollamaUrl;
     this._embeddingModel = opts.embeddingModel;
     this._ollamaModel = opts.ollamaModel;
     this._ragBm25Weight = opts.ragBm25Weight;
     this._rerankerEnabled = opts.rerankerEnabled;
+    this._meshRagEnabled = opts.meshRagEnabled;
   }
 
   /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */

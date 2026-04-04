@@ -58,6 +58,7 @@ export interface LocalKnowledgeOptions {
   ollamaModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
+  meshRagEnabled?: boolean;
 }
 
 export interface ResearchResult {
@@ -140,6 +141,7 @@ export async function executeResearch(
         ollamaModel: localKnowledge.ollamaModel,
         bm25Weight: localKnowledge.ragBm25Weight,
         rerankerEnabled: localKnowledge.rerankerEnabled,
+        meshRagEnabled: localKnowledge.meshRagEnabled,
       });
 
       if (localChunks.length > 0) {

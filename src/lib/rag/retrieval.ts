@@ -51,6 +51,8 @@ export interface RetrieveKnowledgeOptions {
   ollamaModel?: string;
   /** Enable LLM-based reranking of top candidates */
   rerankerEnabled?: boolean;
+  /** Enable mesh-distributed retrieval across peers */
+  meshRagEnabled?: boolean;
 }
 
 export interface RetrieveMemoriesOptions {
@@ -377,6 +379,33 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
         }
       } catch {
         // Graph not available yet — skip
+      }
+    }
+
+    // 8c. Optional: merge results from mesh peers
+    if (opts.meshRagEnabled && opts.db) {
+      try {
+        const { retrieveFromMesh } = await import('./distributed-retrieval.js');
+        const meshResult = await retrieveFromMesh({
+          db: opts.db,
+          workspaceId,
+          query,
+          maxPeers: 3,
+          timeout: 10_000,
+          tokenBudget: Math.floor(tokenBudget / 3),
+          maxChunks: Math.floor(maxChunks / 2),
+        });
+
+        for (const chunk of meshResult.chunks) {
+          const isDupe = scored.some(s =>
+            s.content.slice(0, 100) === chunk.content.slice(0, 100)
+          );
+          if (!isDupe) {
+            scored.push(chunk);
+          }
+        }
+      } catch {
+        // Mesh unavailable — continue with local results only
       }
     }
 

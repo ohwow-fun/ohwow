@@ -696,6 +696,7 @@ export async function searchKnowledge(
     expandQueries: !!ctx.ollamaUrl,
     ollamaModel: ctx.ollamaModel,
     rerankerEnabled: ctx.rerankerEnabled,
+    meshRagEnabled: ctx.meshRagEnabled,
   });
 
   if (chunks.length === 0) {

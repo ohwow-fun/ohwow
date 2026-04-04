@@ -32,6 +32,8 @@ export interface LocalToolContext {
   ragBm25Weight?: number;
   /** Enable LLM-based reranking of RAG results (from config) */
   rerankerEnabled?: boolean;
+  /** Enable mesh-distributed RAG retrieval across peers (from config) */
+  meshRagEnabled?: boolean;
   /** Connector registry for data source sync */
   connectorRegistry?: ConnectorRegistry;
 }

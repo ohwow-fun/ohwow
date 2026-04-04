@@ -44,6 +44,7 @@ export async function deepResearch(
       ollamaModel: ctx.ollamaModel,
       ragBm25Weight: ctx.ragBm25Weight,
       rerankerEnabled: ctx.rerankerEnabled,
+      meshRagEnabled: ctx.meshRagEnabled,
     } : undefined;
 
     const result = await executeResearch(question, depth, apiKey, ctx.modelRouter, localKnowledge);

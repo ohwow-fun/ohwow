@@ -120,6 +120,8 @@ export interface RuntimeConfig {
   ragBm25Weight: number;
   /** Enable LLM-based reranking of RAG results (adds latency, default: false) */
   rerankerEnabled: boolean;
+  /** Enable mesh-distributed RAG retrieval across peer devices (default: false) */
+  meshRagEnabled: boolean;
   /** Base URL for OpenAI-compatible provider (e.g. http://localhost:8000). Empty to disable. */
   openaiCompatibleUrl: string;
   /** API key for OpenAI-compatible provider (optional) */
@@ -185,6 +187,7 @@ interface ConfigFile {
   embeddingModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
+  meshRagEnabled?: boolean;
   openaiCompatibleUrl?: string;
   openaiCompatibleApiKey?: string;
 }
@@ -289,6 +292,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       return !isNaN(env) ? env : (fileConfig.ragBm25Weight ?? 0.5);
     })(),
     rerankerEnabled: process.env.OHWOW_RERANKER_ENABLED === 'true' || (fileConfig.rerankerEnabled ?? false),
+    meshRagEnabled: process.env.OHWOW_MESH_RAG_ENABLED === 'true' || (fileConfig.meshRagEnabled ?? false),
     openaiCompatibleUrl: process.env.OHWOW_OPENAI_COMPATIBLE_URL ?? fileConfig.openaiCompatibleUrl ?? '',
     openaiCompatibleApiKey: process.env.OHWOW_OPENAI_COMPATIBLE_API_KEY ?? fileConfig.openaiCompatibleApiKey ?? '',
   };

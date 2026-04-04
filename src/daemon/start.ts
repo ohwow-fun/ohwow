@@ -636,6 +636,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       ollamaModel: config.ollamaModel,
       ragBm25Weight: config.ragBm25Weight,
       rerankerEnabled: config.rerankerEnabled,
+      meshRagEnabled: config.meshRagEnabled,
     });
     orchestrator.setConnectorRegistry(connectorRegistry);
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
@@ -732,6 +733,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
     messageRouter: messageRouter ?? undefined,
     controlPlane,
     onScheduleChange: () => scheduler?.notify(),
+    ragConfig: {
+      ollamaUrl: config.ollamaUrl,
+      embeddingModel: config.embeddingModel,
+      ollamaModel: config.ollamaModel,
+      ragBm25Weight: config.ragBm25Weight,
+      rerankerEnabled: config.rerankerEnabled,
+    },
   });
 
   // Bind port — only write PID lock and token AFTER successful bind
