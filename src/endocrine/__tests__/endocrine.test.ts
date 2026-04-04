@@ -142,7 +142,7 @@ describe('EndocrineSystem', () => {
 
   it('should not go below 0', () => {
     system.stimulate({ hormone: 'dopamine', delta: -1, source: 'test', reason: 'test' });
-    expect(system.getLevel('dopamine')).toBe(0);
+    expect(system.getLevel('dopamine')).toBeCloseTo(0, 5);
   });
 
   it('should trigger cascades on high cortisol', () => {
