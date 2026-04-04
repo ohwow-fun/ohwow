@@ -250,7 +250,6 @@ export function connectSystems(deps: CrossSystemDeps): () => void {
 
   // 11. Homeostasis corrective actions -> Workspace broadcast (for scheduler/rate-limiter)
   if (deps.homeostasis) {
-    const homeostasis = deps.homeostasis;
     const unsub = deps.workspace.subscribe(
       { types: ['warning'], minSalience: 0.5 },
       (item) => {

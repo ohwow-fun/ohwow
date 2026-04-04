@@ -262,7 +262,7 @@ describe('BPP integration: ContextBudget.setAggressiveTrimming()', () => {
     // Create enough messages to be between 70% and 100%
     const msgSize = 500; // each message ~125 tokens + 4 overhead
     const messageCount = Math.ceil((target70 + 200) / (Math.ceil(msgSize / 4) + 4));
-    const messages = Array.from({ length: messageCount }, (_, i) => ({
+    const messages = Array.from({ length: messageCount }, () => ({
       role: 'user' as const,
       content: 'a'.repeat(msgSize),
     }));
