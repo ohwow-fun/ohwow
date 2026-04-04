@@ -643,25 +643,28 @@ export async function updateCorpusStats(
       }
     }
 
-    // Execute batched inserts
-    for (const term of toInsert) {
-      await db.from('rag_corpus_stats')
-        .insert({ workspace_id: workspaceId, term, doc_frequency: 1 });
+    // Execute batched inserts (single DB round-trip via transaction)
+    if (toInsert.length > 0) {
+      await db.from('rag_corpus_stats').insert(
+        toInsert.map(term => ({ workspace_id: workspaceId, term, doc_frequency: 1 }))
+      );
     }
 
-    // Execute batched updates
-    for (const { term, newFreq } of toUpdate) {
-      await db.from('rag_corpus_stats')
-        .update({ doc_frequency: newFreq, updated_at: now })
-        .eq('workspace_id', workspaceId)
-        .eq('term', term);
+    // Execute batched updates (parallelized, each needs distinct values)
+    if (toUpdate.length > 0) {
+      await Promise.allSettled(toUpdate.map(({ term, newFreq }) =>
+        db.from('rag_corpus_stats')
+          .update({ doc_frequency: newFreq, updated_at: now })
+          .eq('workspace_id', workspaceId)
+          .eq('term', term)
+      ));
     }
 
-    // Execute batched deletes
-    for (const term of toDelete) {
+    // Execute batched deletes (single DB round-trip via .in())
+    if (toDelete.length > 0) {
       await db.from('rag_corpus_stats').delete()
         .eq('workspace_id', workspaceId)
-        .eq('term', term);
+        .in('term', toDelete);
     }
   } catch {
     // Best-effort: don't fail document operations if stats update fails

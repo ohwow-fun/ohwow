@@ -384,7 +384,7 @@ function executeQuery<T>(
       const rows = Array.isArray(insertData) ? insertData : [insertData];
       const results: T[] = [];
 
-      for (const row of rows) {
+      const insertRow = (row: unknown) => {
         const record = row as Record<string, unknown>;
         const columns = Object.keys(record);
         const values = columns.map(col => {
@@ -405,6 +405,18 @@ function executeQuery<T>(
         if (inserted) {
           results.push(parseJsonColumns(inserted as Record<string, unknown>) as T);
         }
+      };
+
+      // Wrap multi-row inserts in a transaction for 10-100x better performance
+      if (rows.length > 1) {
+        const batchInsert = db.transaction((batchRows: unknown[]) => {
+          for (const row of batchRows) {
+            insertRow(row);
+          }
+        });
+        batchInsert(rows);
+      } else {
+        insertRow(rows[0]);
       }
 
       return { data: results, error: null };

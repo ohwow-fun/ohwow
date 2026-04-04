@@ -224,6 +224,21 @@ describe('mutations', () => {
     expect((data as unknown[]).length).toBe(2);
   });
 
+  it('batch insert is atomic (all-or-nothing)', async () => {
+    // First insert a row that will cause a UNIQUE conflict if we add a unique constraint
+    // Instead, test atomicity by inserting rows where one violates NOT NULL on name
+    const { error } = await adapter.from('test_items').insert([
+      { name: 'Atomic1', status: 'active', score: 1 },
+      { name: null as unknown as string, status: 'active', score: 2 }, // violates NOT NULL
+      { name: 'Atomic3', status: 'active', score: 3 },
+    ]);
+    expect(error).not.toBeNull();
+
+    // None of the rows should have been inserted due to transaction rollback
+    const { data } = await adapter.from('test_items').select().in('name', ['Atomic1', 'Atomic3']);
+    expect((data as unknown[]).length).toBe(0);
+  });
+
   it('insert with select returns inserted row', async () => {
     const { data, error } = await adapter.from('test_items')
       .insert({ name: 'Eta', status: 'active', score: 70 })
