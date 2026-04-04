@@ -9,7 +9,8 @@ export type MetricName =
   | 'success_rate'
   | 'utilization'
   | 'error_rate'
-  | 'sleep_debt';
+  | 'sleep_debt'
+  | 'synapse_health';
 
 export interface SetPoint {
   metric: MetricName;
@@ -53,4 +54,5 @@ export const DEFAULT_SET_POINTS: Record<MetricName, { target: number; tolerance:
   utilization:    { target: 0.6,  tolerance: 0.25, adaptationRate: 0.1 },
   error_rate:     { target: 0.05, tolerance: 0.5,  adaptationRate: 0.05 },
   sleep_debt:     { target: 0.2,  tolerance: 0.3,  adaptationRate: 0.02 },
+  synapse_health: { target: 0.7,  tolerance: 0.2,  adaptationRate: 0.05 },
 };

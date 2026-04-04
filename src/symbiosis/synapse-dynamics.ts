@@ -18,7 +18,33 @@
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type { GlobalWorkspace } from '../brain/global-workspace.js';
 import { logger } from '../lib/logger.js';
+
+/** Optional Global Workspace for broadcasting synapse events */
+let _workspace: GlobalWorkspace | null = null;
+
+/** Set the Global Workspace for cross-system broadcasts. Call once at startup. */
+export function setGlobalWorkspace(ws: GlobalWorkspace): void {
+  _workspace = ws;
+}
+
+function broadcastSynapseEvent(
+  event: string,
+  content: string,
+  salience: number,
+  metadata: Record<string, unknown>,
+): void {
+  if (!_workspace) return;
+  _workspace.broadcast({
+    source: 'synapse-dynamics',
+    type: 'synapse',
+    content,
+    salience,
+    timestamp: Date.now(),
+    metadata: { event, ...metadata },
+  });
+}
 
 // ============================================================================
 // TYPES
@@ -103,6 +129,9 @@ export async function strengthenSynapse(
         updated_at: now,
       }).eq('id', row.id);
 
+      broadcastSynapseEvent('strengthened', `Synapse strengthened: ${type} ${sourceAgentId}→${targetAgentId}`, 0.3,
+        { type, sourceAgentId, targetAgentId, strength: newStrength });
+
       logger.debug(
         { sourceAgentId, targetAgentId, type, strength: newStrength },
         '[synapse-dynamics] Strengthened synapse',
@@ -120,6 +149,9 @@ export async function strengthenSynapse(
         last_activated: now,
         activation_count: 1,
       });
+
+      broadcastSynapseEvent('created', `New ${origin} synapse: ${type} ${sourceAgentId}→${targetAgentId}`, 0.5,
+        { type, sourceAgentId, targetAgentId, strength: 0.55, origin });
 
       logger.debug(
         { sourceAgentId, targetAgentId, type, origin },
@@ -185,6 +217,10 @@ export async function decaySynapses(
       }
     }
 
+    if (removed > 0) {
+      broadcastSynapseEvent('dissolved', `${removed} synapses dissolved from inactivity`, 0.4,
+        { removed, decayed });
+    }
     if (decayed > 0 || removed > 0) {
       logger.info({ workspaceId, decayed, removed }, '[synapse-dynamics] Decay cycle complete');
     }
@@ -193,6 +229,35 @@ export async function decaySynapses(
   }
 
   return { decayed, removed };
+}
+
+// ============================================================================
+// HEALTH
+// ============================================================================
+
+/**
+ * Compute the overall synapse health for a workspace.
+ * Returns the average strength of all active synapses (0-1).
+ * Returns 1.0 if no synapses exist (healthy default — no org, no problem).
+ */
+export async function computeSynapseHealth(
+  db: DatabaseAdapter,
+  workspaceId: string,
+): Promise<number> {
+  try {
+    const { data } = await db
+      .from('agent_synapses')
+      .select('strength')
+      .eq('workspace_id', workspaceId);
+
+    if (!data || !Array.isArray(data) || data.length === 0) return 1.0;
+
+    const strengths = data.map(r => (r as { strength: number }).strength);
+    return strengths.reduce((sum, s) => sum + s, 0) / strengths.length;
+  } catch (err) {
+    logger.warn({ err }, '[synapse-dynamics] Failed to compute synapse health');
+    return 1.0;
+  }
 }
 
 // ============================================================================

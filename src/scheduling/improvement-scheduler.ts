@@ -17,8 +17,10 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
+import type { HomeostasisController } from '../homeostasis/homeostasis-controller.js';
 import { runImprovementCycle } from '../lib/self-improvement/improve.js';
 import { enforceMemoryCap, archiveOldExperiments } from '../lib/memory-maintenance.js';
+import { decaySynapses, computeSynapseHealth } from '../symbiosis/synapse-dynamics.js';
 import { logger } from '../lib/logger.js';
 import type { SleepCycle } from '../oneiros/sleep-cycle.js';
 
@@ -37,6 +39,7 @@ export class ImprovementScheduler {
   private running = false;
   private executing = false;
   private sleepCycle: SleepCycle | null = null;
+  private homeostasis: HomeostasisController | null = null;
   private lastIdleCheck = Date.now();
 
   constructor(
@@ -61,6 +64,11 @@ export class ImprovementScheduler {
   /** Get the sleep cycle instance (for external access). */
   getSleepCycle(): SleepCycle | null {
     return this.sleepCycle;
+  }
+
+  /** Wire a HomeostasisController for synapse health metric updates. */
+  setHomeostasis(controller: HomeostasisController): void {
+    this.homeostasis = controller;
   }
 
   async start(): Promise<void> {
@@ -164,6 +172,13 @@ export class ImprovementScheduler {
       const memoriesDeactivated = await enforceMemoryCap(this.db, this.workspaceId);
       const archiveResult = await archiveOldExperiments(this.db, this.workspaceId);
 
+      // Synapse maintenance: decay inactive connections and compute org health
+      const decayResult = await decaySynapses(this.db, this.workspaceId);
+      const synapseHealth = await computeSynapseHealth(this.db, this.workspaceId);
+      if (this.homeostasis) {
+        this.homeostasis.updateMetric('synapse_health', synapseHealth);
+      }
+
       logger.info(
         {
           durationMs: result.durationMs,
@@ -174,6 +189,9 @@ export class ImprovementScheduler {
           memoriesDeactivated,
           principlesArchived: archiveResult.principlesArchived,
           skillsArchived: archiveResult.skillsArchived,
+          synapsesDecayed: decayResult.decayed,
+          synapsesRemoved: decayResult.removed,
+          synapseHealth: synapseHealth.toFixed(2),
           skipLLM,
           sleepPhase: this.sleepCycle?.getState().phase ?? 'n/a',
         },

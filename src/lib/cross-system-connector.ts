@@ -190,6 +190,46 @@ export function connectSystems(deps: CrossSystemDeps): () => void {
   // The SleepCycle broadcasts its own wake signal via workspace.broadcastSignal
   // during its tick cycle. No subscription needed here.
 
+  // 9. Synapse events -> Endocrine: collaboration biology
+  if (deps.endocrine) {
+    const endocrine = deps.endocrine;
+    const unsub = deps.workspace.subscribe(
+      { types: ['synapse'], minSalience: 0.2 },
+      (item) => {
+        const meta = item.metadata as {
+          event?: string;
+          type?: string;
+          strength?: number;
+          origin?: string;
+        } | undefined;
+        if (!meta?.event) return;
+
+        switch (meta.event) {
+          case 'strengthened':
+            // Bonding from productive partnership
+            endocrine.stimulate({ hormone: 'oxytocin', delta: 0.1, source: 'synapse', reason: `${meta.type} synapse strengthened` });
+            if (meta.type === 'delegation') {
+              endocrine.stimulate({ hormone: 'dopamine', delta: 0.05, source: 'synapse', reason: 'effective delegation' });
+            }
+            break;
+          case 'created':
+            // Discovery reward for new emergent connections
+            if (meta.origin === 'emergent') {
+              endocrine.stimulate({ hormone: 'dopamine', delta: 0.1, source: 'synapse', reason: 'emergent synapse discovered' });
+            }
+            endocrine.stimulate({ hormone: 'oxytocin', delta: 0.05, source: 'synapse', reason: 'new connection formed' });
+            break;
+          case 'dissolved':
+            // Loss of established relationship
+            endocrine.stimulate({ hormone: 'cortisol', delta: 0.08, source: 'synapse', reason: 'synapse dissolved from inactivity' });
+            break;
+        }
+      },
+    );
+    unsubscribers.push(unsub);
+    logger.debug('cross-system: wired synapse -> endocrine');
+  }
+
   logger.debug({ flows: unsubscribers.length }, 'cross-system: connected');
 
   return () => {

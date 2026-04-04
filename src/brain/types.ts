@@ -397,7 +397,7 @@ export interface WorkspaceItem {
   source: string;
   /** Classification of the insight. */
   type: 'discovery' | 'failure' | 'skill' | 'pattern' | 'warning' | 'signal'
-    | 'affect' | 'hormonal' | 'immune' | 'dream' | 'narrative' | 'ethical' | 'habit';
+    | 'affect' | 'hormonal' | 'immune' | 'dream' | 'narrative' | 'ethical' | 'habit' | 'synapse';
   /** Human-readable content. */
   content: string;
   /** Salience score (0-1). Decays over time. Higher = more attention-worthy. */
