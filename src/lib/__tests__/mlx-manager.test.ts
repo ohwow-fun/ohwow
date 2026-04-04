@@ -32,4 +32,17 @@ describe('MLXManager', () => {
     const result = MLXManager.checkAvailable('nonexistent-python');
     expect(result).toBe(false);
   });
+
+  it('unloadModel is safe to call when not started', async () => {
+    const manager = new MLXManager();
+    await expect(manager.unloadModel()).resolves.toBeUndefined();
+  });
+
+  it('unloadModel clears capabilities', async () => {
+    const manager = new MLXManager();
+    // Capabilities start as null, unload should not throw
+    expect(manager.getCapabilities()).toBeNull();
+    await manager.unloadModel();
+    expect(manager.getCapabilities()).toBeNull();
+  });
 });

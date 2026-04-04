@@ -17,7 +17,7 @@ import { logger } from './logger.js';
 // TYPES
 // ============================================================================
 
-export type ProcessName = 'ollama' | 'comfyui' | 'kokoro' | 'whisper';
+export type ProcessName = 'ollama' | 'comfyui' | 'kokoro' | 'whisper' | 'llama-cpp' | 'mlx';
 
 export interface ProcessStatus {
   name: ProcessName;
@@ -75,6 +75,13 @@ const VRAM_ESTIMATES: Record<string, number> = {
 // PROCESS MONITOR
 // ============================================================================
 
+/** Externally registered inference process (llama-cpp or mlx). */
+interface ExternalProcess {
+  name: 'llama-cpp' | 'mlx';
+  url: string;
+  estimatedVramMB: number;
+}
+
 export class ProcessMonitor {
   private ollamaUrl: string;
   private emitter: TypedEventBus<RuntimeEvents>;
@@ -82,6 +89,7 @@ export class ProcessMonitor {
   private running = false;
   private lastStatuses: ProcessStatus[] = [];
   private lastDevice: DeviceInfo | null = null;
+  private externalProcesses: ExternalProcess[] = [];
 
   constructor(ollamaUrl: string, emitter: TypedEventBus<RuntimeEvents>) {
     this.ollamaUrl = ollamaUrl.replace(/\/$/, '');
@@ -113,6 +121,34 @@ export class ProcessMonitor {
   /** Get latest process statuses. */
   getStatuses(): ProcessStatus[] {
     return this.lastStatuses;
+  }
+
+  /**
+   * Register a dedicated inference server so it's included in capacity estimates.
+   * Call this after successfully starting llama-cpp or mlx.
+   */
+  registerExternalProcess(name: 'llama-cpp' | 'mlx', url: string, estimatedVramMB: number): void {
+    this.unregisterExternalProcess(name);
+    this.externalProcesses.push({ name, url, estimatedVramMB });
+  }
+
+  /** Remove a previously registered external process. */
+  unregisterExternalProcess(name: 'llama-cpp' | 'mlx'): void {
+    this.externalProcesses = this.externalProcesses.filter(p => p.name !== name);
+  }
+
+  /**
+   * Check if a model of the given size can fit in available VRAM,
+   * accounting for all tracked processes.
+   */
+  canFitModel(modelSizeGB: number, device?: DeviceInfo): { fits: boolean; availableGB: number; suggestion: string } {
+    const dev = device || this.lastDevice || detectDevice();
+    const cap = this.estimateCapacity(dev);
+    const fits = modelSizeGB <= cap.availableVramGB * 0.8; // 80% budget
+    const suggestion = fits
+      ? `Model (${modelSizeGB}GB) fits in available VRAM (${cap.availableVramGB.toFixed(1)}GB free)`
+      : `Model (${modelSizeGB}GB) exceeds VRAM budget (${cap.availableVramGB.toFixed(1)}GB free). Stop other inference servers or use a smaller model.`;
+    return { fits, availableGB: cap.availableVramGB, suggestion };
   }
 
   /** Estimate capacity for a given device based on current processes. */
@@ -270,6 +306,12 @@ export class ProcessMonitor {
       },
     ];
 
+    // Probe registered external inference servers (llama-cpp, mlx)
+    for (const ext of this.externalProcesses) {
+      const extStatus = await this.probeExternal(ext, now);
+      statuses.push(extStatus);
+    }
+
     // Detect changes
     const changed = this.hasChanged(statuses);
     this.lastStatuses = statuses;
@@ -309,6 +351,33 @@ export class ProcessMonitor {
       };
     } catch {
       return { name: 'ollama', running: false, url: this.ollamaUrl, memoryMB: 0, vramMB: 0, details: {}, lastChecked: now };
+    }
+  }
+
+  private async probeExternal(ext: ExternalProcess, now: string): Promise<ProcessStatus> {
+    try {
+      const response = await fetch(`${ext.url}/health`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      return {
+        name: ext.name,
+        running: response.ok,
+        url: ext.url,
+        memoryMB: response.ok ? Math.round(ext.estimatedVramMB * 0.3) : 0,
+        vramMB: response.ok ? ext.estimatedVramMB : 0,
+        details: {},
+        lastChecked: now,
+      };
+    } catch {
+      return {
+        name: ext.name,
+        running: false,
+        url: ext.url,
+        memoryMB: 0,
+        vramMB: 0,
+        details: {},
+        lastChecked: now,
+      };
     }
   }
 

@@ -645,6 +645,7 @@ export function computeDynamicNumCtx(
   tag: string,
   device: DeviceInfo,
   turboQuantBits?: CompressionBits,
+  reservedMemoryGB?: number,
 ): number {
   const entry = MODEL_CATALOG.find(m => m.tag === tag);
   const modelSize = entry?.sizeGB ?? 2.5; // conservative fallback
@@ -653,7 +654,8 @@ export function computeDynamicNumCtx(
   // Use free memory but floor at 50% of total (OS disk cache is reclaimable)
   const effectiveFree = Math.max(device.freeMemoryGB, device.totalMemoryGB * 0.5);
   // Reserve 1GB for OS + other processes on top of what's already in use
-  const availableForModel = effectiveFree - 1.0;
+  // Also subtract memory committed to other inference servers (e.g., MLX or llama-cpp)
+  const availableForModel = effectiveFree - 1.0 - (reservedMemoryGB ?? 0);
   // Subtract model weights to get RAM available for KV cache
   const availableForContext = availableForModel - modelSize;
   if (availableForContext <= 0) return 4096; // barely fits, use minimum

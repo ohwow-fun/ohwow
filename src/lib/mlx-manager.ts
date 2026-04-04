@@ -227,6 +227,28 @@ export class MLXManager {
     }
   }
 
+  /**
+   * Unload the current model from GPU memory without killing the server process.
+   * Uses mlx-vlm's POST /unload endpoint for fast model transitions.
+   * If the endpoint fails, the caller should fall back to stop().
+   */
+  async unloadModel(): Promise<void> {
+    if (!this.config) return;
+
+    try {
+      const url = `http://${this.config.host}:${this.config.port}/unload`;
+      await fetch(url, {
+        method: 'POST',
+        signal: AbortSignal.timeout(10_000),
+      });
+      this.capabilities = null;
+      logger.info('[mlx-manager] Model unloaded from GPU memory');
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err },
+        '[mlx-manager] Model unload failed, caller should stop server');
+    }
+  }
+
   /** Get the confirmed inference capabilities. */
   getCapabilities(): InferenceCapabilities | null {
     return this.capabilities;

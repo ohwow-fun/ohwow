@@ -139,18 +139,86 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // 5. Create ModelRouter
   const mainModelHasVision = MODEL_CATALOG.some(m => m.tag === config.ollamaModel && m.vision);
-  // Auto-start llama-server when TurboQuant is enabled for local inference
+
+  // Decide which local inference server to run (mutual exclusion: only ONE dedicated server)
+  // On Apple Silicon with mlx-vlm: prefer MLX (native Metal, vision/audio)
+  // On other hardware with TurboQuant: use llama-cpp
+  // Ollama is always available as fallback but we unload its model when a dedicated server starts
+  const device = (await import('../lib/device-info.js')).detectDevice();
+  const { getMLXModelId, computeDynamicNumCtx } = await import('../lib/ollama-models.js');
+  const wantsLocal = config.modelSource === 'local' || config.preferLocalModel;
+  const mlxModelId = config.mlxModel || getMLXModelId(config.ollamaModel);
+  const useMLX = device.mlxAvailable && !!mlxModelId && (config.mlxEnabled || wantsLocal);
+  const useLlamaCpp = !useMLX && config.turboQuantBits > 0 && wantsLocal;
+
   let llamaCppUrl: string | undefined;
   let llamaCppManager: import('../lib/llama-cpp-manager.js').LlamaCppManager | null = null;
   let inferenceCapabilities: import('../lib/inference-capabilities.js').InferenceCapabilities | null = null;
-  if (config.turboQuantBits > 0 && (config.modelSource === 'local' || config.preferLocalModel)) {
+  let mlxServerUrl: string | undefined;
+  let mlxManager: import('../lib/mlx-manager.js').MLXManager | null = null;
+  let mlxEnabled = false;
+  /** Estimated VRAM used by the dedicated server (for capacity tracking). */
+  let dedicatedServerVramGB = 0;
+
+  // Pre-flight: check if model fits in available VRAM (75% of total on Apple Silicon)
+  const modelEntry = MODEL_CATALOG.find(m => m.tag === config.ollamaModel);
+  const modelSizeGB = modelEntry?.sizeGB ?? 4;
+  const totalVramGB = device.isAppleSilicon ? device.totalMemoryGB * 0.75 : (device.hasNvidiaGpu ? 8 : 0);
+  const fitsInVram = modelSizeGB < totalVramGB * 0.8; // 80% of available VRAM budget
+
+  if (useMLX && fitsInVram) {
+    try {
+      const { MLXManager } = await import('../lib/mlx-manager.js');
+      mlxManager = new MLXManager();
+      const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
+      await mlxManager.start({
+        pythonPath: device.pythonPath || 'python3',
+        model: mlxModelId!,
+        port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
+        host: '127.0.0.1',
+        kvBits,
+        kvQuantScheme: kvBits ? 'turboquant' : undefined,
+      });
+      mlxServerUrl = mlxManager.getUrl();
+      mlxEnabled = true;
+      dedicatedServerVramGB = modelSizeGB;
+
+      if (kvBits) {
+        const mlxCaps = mlxManager.getCapabilities();
+        if (mlxCaps) inferenceCapabilities = mlxCaps;
+      }
+
+      mlxManager.setOnCrash(async () => {
+        const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+        const defaultCaps = createDefaultCapabilities();
+        orchestrator?.setInferenceCapabilities(defaultCaps);
+        bus.emit('inference:capabilities-changed', defaultCaps);
+        dedicatedServerVramGB = 0;
+        logger.warn('[daemon] mlx-vlm server permanently down, MLX disabled');
+      });
+
+      // Unload the same model from Ollama to free VRAM (best-effort)
+      try {
+        const { unloadModel } = await import('../lib/ollama-installer.js');
+        await unloadModel(config.ollamaModel, config.ollamaUrl);
+      } catch { /* Ollama may not be running or model not loaded */ }
+
+      logger.info({ url: mlxServerUrl, model: mlxModelId, kvBits, provider: 'mlx' }, '[daemon] Started MLX inference (Apple Silicon native)');
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] mlx-vlm not available, falling back to Ollama');
+      mlxManager = null;
+      mlxEnabled = false;
+    }
+  } else if (useMLX && !fitsInVram) {
+    logger.warn({ modelSizeGB, totalVramGB, model: config.ollamaModel }, '[daemon] Model too large for dedicated MLX server, using Ollama');
+  }
+
+  if (useLlamaCpp && !mlxEnabled && fitsInVram) {
     try {
       const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
       const { resolveGgufPath } = await import('../lib/llama-cpp-gguf.js');
       const binaryPath = await LlamaCppManager.ensureBinary(config.llamaCppBinaryPath || undefined);
       const modelPath = await resolveGgufPath(config.ollamaModel, config.llamaCppModelPath || undefined);
-      const device = (await import('../lib/device-info.js')).detectDevice();
-      const { computeDynamicNumCtx } = await import('../lib/ollama-models.js');
       const contextSize = computeDynamicNumCtx(config.ollamaModel, device, config.turboQuantBits as 2 | 3 | 4);
 
       llamaCppManager = new LlamaCppManager();
@@ -167,68 +235,26 @@ export async function startDaemon(): Promise<DaemonHandle> {
       });
       llamaCppUrl = llamaCppManager.getUrl();
       inferenceCapabilities = llamaCppManager.getCapabilities();
+      dedicatedServerVramGB = modelSizeGB;
 
-      // Notify TUI and orchestrator if llama-server crashes and auto-restart fails
       llamaCppManager.setOnCrash(async () => {
         const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
         const defaultCaps = createDefaultCapabilities();
         orchestrator?.setInferenceCapabilities(defaultCaps);
         bus.emit('inference:capabilities-changed', defaultCaps);
+        dedicatedServerVramGB = 0;
         logger.warn('[daemon] llama-server permanently down, TurboQuant disabled');
       });
 
-      logger.info({ url: llamaCppUrl, bits: config.turboQuantBits, turboActive: !!inferenceCapabilities?.turboQuantActive }, '[daemon] llama-server started with TurboQuant compression');
+      // Unload the same model from Ollama to free VRAM (best-effort)
+      try {
+        const { unloadModel } = await import('../lib/ollama-installer.js');
+        await unloadModel(config.ollamaModel, config.ollamaUrl);
+      } catch { /* Ollama may not be running or model not loaded */ }
+
+      logger.info({ url: llamaCppUrl, bits: config.turboQuantBits, provider: 'llama-cpp' }, '[daemon] Started llama-server with TurboQuant');
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] llama-server not available, falling back to Ollama');
-    }
-  }
-
-  // Auto-start mlx-vlm server on Apple Silicon when local inference is preferred
-  let mlxServerUrl: string | undefined;
-  let mlxManager: import('../lib/mlx-manager.js').MLXManager | null = null;
-  let mlxEnabled = false;
-
-  if (config.mlxEnabled || config.modelSource === 'local' || config.preferLocalModel) {
-    try {
-      const device = (await import('../lib/device-info.js')).detectDevice();
-      if (device.mlxAvailable) {
-        const { getMLXModelId } = await import('../lib/ollama-models.js');
-        const mlxModelId = config.mlxModel || getMLXModelId(config.ollamaModel);
-        if (mlxModelId) {
-          const { MLXManager } = await import('../lib/mlx-manager.js');
-          mlxManager = new MLXManager();
-          const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
-          await mlxManager.start({
-            pythonPath: device.pythonPath || 'python3',
-            model: mlxModelId,
-            port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
-            host: '127.0.0.1',
-            kvBits,
-            kvQuantScheme: kvBits ? 'turboquant' : undefined,
-          });
-          mlxServerUrl = mlxManager.getUrl();
-          mlxEnabled = true;
-
-          // Update inference capabilities if TurboQuant active via MLX
-          if (kvBits) {
-            const mlxCaps = mlxManager.getCapabilities();
-            if (mlxCaps) inferenceCapabilities = mlxCaps;
-          }
-
-          // Crash handler
-          mlxManager.setOnCrash(async () => {
-            const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
-            const defaultCaps = createDefaultCapabilities();
-            orchestrator?.setInferenceCapabilities(defaultCaps);
-            bus.emit('inference:capabilities-changed', defaultCaps);
-            logger.warn('[daemon] mlx-vlm server permanently down, MLX disabled');
-          });
-
-          logger.info({ url: mlxServerUrl, model: mlxModelId, kvBits }, '[daemon] mlx-vlm server started');
-        }
-      }
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] mlx-vlm not available, falling back');
     }
   }
 
@@ -250,85 +276,127 @@ export async function startDaemon(): Promise<DaemonHandle> {
     mlxModel: config.mlxModel || undefined,
   });
 
+  // ---- Graceful model switching (serialized, memory-aware) ----
+  let modelSwitchInProgress = false;
+
+  async function handleModelSwitch(newModel: string): Promise<void> {
+    const startTime = Date.now();
+    bus.emit('model:switch-started', { model: newModel });
+
+    try {
+      // 1. Stop current dedicated server first to free VRAM
+      if (mlxManager) {
+        try { await mlxManager.unloadModel(); } catch { /* best effort */ }
+        await mlxManager.stop();
+      }
+      if (llamaCppManager) {
+        await llamaCppManager.stop();
+      }
+      dedicatedServerVramGB = 0;
+
+      // 2. Unload old model from Ollama to free VRAM
+      try {
+        const { unloadModel } = await import('../lib/ollama-installer.js');
+        await unloadModel(newModel, config.ollamaUrl);
+      } catch { /* may not be loaded */ }
+
+      // 3. Re-detect free memory after unload
+      const freshDevice = (await import('../lib/device-info.js')).detectDevice();
+      const { getMLXModelId: resolveMLX } = await import('../lib/ollama-models.js');
+      const newMlxModelId = config.mlxModel || resolveMLX(newModel);
+      const newEntry = MODEL_CATALOG.find(m => m.tag === newModel);
+      const newModelSizeGB = newEntry?.sizeGB ?? 4;
+      const freshVramGB = freshDevice.isAppleSilicon ? freshDevice.totalMemoryGB * 0.75 : (freshDevice.hasNvidiaGpu ? 8 : 0);
+      const newFits = newModelSizeGB < freshVramGB * 0.8;
+
+      // 4. Start the appropriate server for the new model
+      const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
+      let switchedProvider = 'ollama';
+
+      if (freshDevice.mlxAvailable && newMlxModelId && newFits && mlxManager) {
+        await mlxManager.start({
+          pythonPath: freshDevice.pythonPath || 'python3',
+          model: newMlxModelId,
+          port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
+          host: '127.0.0.1',
+          kvBits,
+          kvQuantScheme: kvBits ? 'turboquant' : undefined,
+        });
+        dedicatedServerVramGB = newModelSizeGB;
+        const caps = mlxManager.getCapabilities();
+        if (caps) {
+          orchestrator?.setInferenceCapabilities(caps);
+          bus.emit('inference:capabilities-changed', caps);
+        }
+        switchedProvider = 'mlx';
+        logger.info({ model: newModel, mlxModel: newMlxModelId }, '[daemon] mlx-vlm restarted with new model');
+      } else if (llamaCppManager && config.turboQuantBits > 0 && newFits) {
+        const { resolveGgufPath } = await import('../lib/llama-cpp-gguf.js');
+        const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
+        const modelPath = await resolveGgufPath(newModel, config.llamaCppModelPath || undefined);
+        const contextSize = computeDynamicNumCtx(newModel, freshDevice, kvBits);
+
+        await llamaCppManager.start({
+          binaryPath: config.llamaCppBinaryPath || await LlamaCppManager.ensureBinary(),
+          modelPath,
+          contextSize,
+          cacheTypeK: LlamaCppManager.cacheTypeFromBits(kvBits!),
+          cacheTypeV: LlamaCppManager.cacheTypeFromBits(kvBits!),
+          gpuLayers: 99,
+          flashAttention: true,
+          port: parseInt(new URL(config.llamaCppUrl).port || '8085', 10),
+          host: '127.0.0.1',
+        });
+        dedicatedServerVramGB = newModelSizeGB;
+        const caps = llamaCppManager.getCapabilities();
+        if (caps) {
+          orchestrator?.setInferenceCapabilities(caps);
+          bus.emit('inference:capabilities-changed', caps);
+        }
+        switchedProvider = 'llama-cpp';
+        logger.info({ model: newModel }, '[daemon] llama-server restarted with new model');
+      } else {
+        // Fall back to Ollama (no dedicated server, or model too large)
+        const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+        const defaultCaps = createDefaultCapabilities();
+        orchestrator?.setInferenceCapabilities(defaultCaps);
+        bus.emit('inference:capabilities-changed', defaultCaps);
+        if (!newFits) {
+          logger.warn({ model: newModel, modelSizeGB: newModelSizeGB, availableVramGB: freshVramGB },
+            '[daemon] Model too large for dedicated server, falling back to Ollama');
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      bus.emit('model:switch-complete', { model: newModel, provider: switchedProvider, durationMs });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: reason, model: newModel }, '[daemon] Model switch failed');
+      bus.emit('model:switch-failed', { model: newModel, reason });
+
+      // Ensure capabilities reflect reality after failure
+      const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
+      const defaultCaps = createDefaultCapabilities();
+      orchestrator?.setInferenceCapabilities(defaultCaps);
+      bus.emit('inference:capabilities-changed', defaultCaps);
+      dedicatedServerVramGB = 0;
+    }
+  }
+
   // Update ModelRouter when user changes active model via the dashboard
   bus.on('ollama:model-changed', (payload: { model: string }) => {
     modelRouter.setOllamaModel(payload.model);
     logger.info(`[daemon] Active Ollama model changed to: ${payload.model}`);
 
-    // Restart mlx-vlm server with new model if MLX is active
-    if (mlxManager) {
-      (async () => {
-        try {
-          const { getMLXModelId } = await import('../lib/ollama-models.js');
-          const mlxModelId = getMLXModelId(payload.model);
-          if (mlxModelId) {
-            const device = (await import('../lib/device-info.js')).detectDevice();
-            const kvBits = config.turboQuantBits > 0 ? config.turboQuantBits as 2 | 3 | 4 : undefined;
-            await mlxManager!.stop();
-            await mlxManager!.start({
-              pythonPath: device.pythonPath || 'python3',
-              model: mlxModelId,
-              port: parseInt(new URL(config.mlxServerUrl).port || '8090', 10),
-              host: '127.0.0.1',
-              kvBits,
-              kvQuantScheme: kvBits ? 'turboquant' : undefined,
-            });
-            const caps = mlxManager!.getCapabilities();
-            if (caps && orchestrator) {
-              orchestrator.setInferenceCapabilities(caps);
-              bus.emit('inference:capabilities-changed', caps);
-            }
-            logger.info({ model: payload.model, mlxModel: mlxModelId }, '[daemon] mlx-vlm server restarted with new model');
-          } else {
-            logger.info({ model: payload.model }, '[daemon] No MLX mapping for model, keeping current MLX model');
-          }
-        } catch (err) {
-          logger.warn({ err: err instanceof Error ? err.message : err, model: payload.model },
-            '[daemon] mlx-vlm restart failed for new model');
-        }
-      })();
+    // Serialize model switches — don't start a new switch while one is in progress
+    if (modelSwitchInProgress) {
+      logger.warn({ model: payload.model }, '[daemon] Model switch already in progress, skipping');
+      return;
     }
-
-    // Restart llama-server with the new model if TurboQuant is active
-    if (llamaCppManager && config.turboQuantBits > 0) {
-      (async () => {
-        try {
-          const { resolveGgufPath } = await import('../lib/llama-cpp-gguf.js');
-          const { LlamaCppManager } = await import('../lib/llama-cpp-manager.js');
-          const modelPath = await resolveGgufPath(payload.model, config.llamaCppModelPath || undefined);
-          const device = (await import('../lib/device-info.js')).detectDevice();
-          const { computeDynamicNumCtx } = await import('../lib/ollama-models.js');
-          const contextSize = computeDynamicNumCtx(payload.model, device, config.turboQuantBits as 2 | 3 | 4);
-
-          await llamaCppManager!.stop();
-          await llamaCppManager!.start({
-            binaryPath: config.llamaCppBinaryPath || await LlamaCppManager.ensureBinary(),
-            modelPath,
-            contextSize,
-            cacheTypeK: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
-            cacheTypeV: LlamaCppManager.cacheTypeFromBits(config.turboQuantBits as 2 | 3 | 4),
-            gpuLayers: 99,
-            flashAttention: true,
-            port: parseInt(new URL(config.llamaCppUrl).port || '8085', 10),
-            host: '127.0.0.1',
-          });
-
-          const caps = llamaCppManager!.getCapabilities();
-          if (caps && orchestrator) {
-            orchestrator.setInferenceCapabilities(caps);
-            bus.emit('inference:capabilities-changed', caps);
-          }
-          logger.info({ model: payload.model }, '[daemon] llama-server restarted with new model');
-        } catch (err) {
-          logger.warn({ err: err instanceof Error ? err.message : err, model: payload.model },
-            '[daemon] llama-server restart failed for new model, falling back to Ollama');
-          const { createDefaultCapabilities } = await import('../lib/inference-capabilities.js');
-          const defaultCaps = createDefaultCapabilities();
-          if (orchestrator) orchestrator.setInferenceCapabilities(defaultCaps);
-          bus.emit('inference:capabilities-changed', defaultCaps);
-        }
-      })();
-    }
+    modelSwitchInProgress = true;
+    handleModelSwitch(payload.model).finally(() => {
+      modelSwitchInProgress = false;
+    });
   });
 
   // Update ModelRouter when user changes OpenRouter key or model via the dashboard
@@ -404,6 +472,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // 5c. Start ProcessMonitor for all local AI/media services
   const processMonitor = new ProcessMonitor(config.ollamaUrl, bus);
   processMonitor.start();
+
+  // Register dedicated inference servers so ProcessMonitor includes them in capacity
+  if (mlxEnabled && mlxManager) {
+    processMonitor.registerExternalProcess('mlx', mlxManager.getUrl(), dedicatedServerVramGB * 1024);
+  }
+  if (llamaCppManager && llamaCppUrl) {
+    processMonitor.registerExternalProcess('llama-cpp', llamaCppUrl, dedicatedServerVramGB * 1024);
+  }
   logger.info('[daemon] ProcessMonitor started');
 
   // 6. Create services

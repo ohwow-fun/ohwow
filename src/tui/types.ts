@@ -172,6 +172,11 @@ export interface RuntimeEvents {
   // Inference capabilities (TurboQuant detection)
   'inference:capabilities-changed': import('../lib/inference-capabilities.js').InferenceCapabilities;
 
+  // Model switching lifecycle
+  'model:switch-started': { model: string };
+  'model:switch-complete': { model: string; provider: string; durationMs: number };
+  'model:switch-failed': { model: string; reason: string };
+
   // OpenRouter
   'openrouter:key-changed': { key: string };
   'openrouter:model-changed': { model: string };
