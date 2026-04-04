@@ -38,6 +38,7 @@ import { ModelRouter } from '../execution/model-router.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
+import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
@@ -709,6 +710,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // 11. Start Express server + WebSocket
   let waClient: WhatsAppClient | null = null;
   let scheduler: LocalScheduler | null = null;
+  let connectorSyncScheduler: ConnectorSyncScheduler | null = null;
   const { app, attachWs } = createServer({
     config: {
       port: config.port,
@@ -890,6 +892,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
     improvementScheduler.start().catch(err => {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
+
+    // Connector sync scheduler: periodically syncs data source connectors
+    connectorSyncScheduler = new ConnectorSyncScheduler(db, workspaceId, connectorRegistry, bus);
+    connectorSyncScheduler.start();
   }
 
   // 12a2. Document processing worker (runs on all devices)
@@ -1357,6 +1363,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     tunnel?.stop();
     scheduler?.stop();
     proactiveEngine?.stop();
+    connectorSyncScheduler?.stop();
     documentWorker.stop();
     scraplingService.stop().catch(() => {});
     voiceboxService.stop().catch(() => {});
