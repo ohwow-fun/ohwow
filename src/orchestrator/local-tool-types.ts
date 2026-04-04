@@ -29,6 +29,8 @@ export interface LocalToolContext {
   ollamaModel?: string;
   /** BM25 weight for hybrid search (from config) */
   ragBm25Weight?: number;
+  /** Enable LLM-based reranking of RAG results (from config) */
+  rerankerEnabled?: boolean;
 }
 
 export interface ToolResult {

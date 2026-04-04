@@ -624,6 +624,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       embeddingModel: config.embeddingModel,
       ollamaModel: config.ollamaModel,
       ragBm25Weight: config.ragBm25Weight,
+      rerankerEnabled: config.rerankerEnabled,
     });
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
     if (inferenceCapabilities) {

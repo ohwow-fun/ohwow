@@ -222,6 +222,7 @@ export class OnboardingService {
       claudeCodeCliAutodetect: true,
       embeddingModel: 'nomic-embed-text',
       ragBm25Weight: 0.5,
+      rerankerEnabled: false,
       openaiCompatibleUrl: '',
       openaiCompatibleApiKey: '',
     };

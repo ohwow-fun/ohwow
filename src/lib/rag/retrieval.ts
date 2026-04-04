@@ -6,6 +6,7 @@
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../logger.js';
 import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from './embeddings.js';
+import { rerankWithLLM } from './reranker.js';
 
 // ============================================================================
 // TYPES
@@ -47,6 +48,8 @@ export interface RetrieveKnowledgeOptions {
   expandQueries?: boolean;
   /** Ollama model for query expansion (default: qwen3:4b) */
   ollamaModel?: string;
+  /** Enable LLM-based reranking of top candidates */
+  rerankerEnabled?: boolean;
 }
 
 export interface RetrieveMemoriesOptions {
@@ -338,7 +341,23 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
       }
     }
 
-    // 8. Filter by minScore (except 'always' docs), sort desc, apply budget
+    // 8. Optional: LLM-based reranking
+    if (opts.rerankerEnabled && opts.ollamaUrl && opts.ollamaModel) {
+      const candidates = scored
+        .filter(c => c.score !== Infinity && c.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20)
+        .map((c, i) => ({ index: scored.indexOf(c), content: c.content, originalScore: c.score }));
+
+      if (candidates.length > 0) {
+        const reranked = await rerankWithLLM(query, candidates, opts.ollamaUrl, opts.ollamaModel);
+        for (const r of reranked) {
+          scored[r.index].score = r.score;
+        }
+      }
+    }
+
+    // 9. Filter by minScore (except 'always' docs), sort desc, apply budget
     const filtered = scored.filter((c) => c.score === Infinity || c.score >= minScore);
     filtered.sort((a, b) => b.score - a.score);
 

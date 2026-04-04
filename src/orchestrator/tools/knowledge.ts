@@ -625,6 +625,7 @@ export async function searchKnowledge(
     bm25Weight: ctx.ragBm25Weight,
     expandQueries: !!ctx.ollamaUrl,
     ollamaModel: ctx.ollamaModel,
+    rerankerEnabled: ctx.rerankerEnabled,
   });
 
   if (chunks.length === 0) {

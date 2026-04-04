@@ -118,6 +118,8 @@ export interface RuntimeConfig {
   embeddingModel: string;
   /** Weight for BM25 in hybrid search: 0.0 = pure embedding, 1.0 = pure BM25 (default: 0.5) */
   ragBm25Weight: number;
+  /** Enable LLM-based reranking of RAG results (adds latency, default: false) */
+  rerankerEnabled: boolean;
   /** Base URL for OpenAI-compatible provider (e.g. http://localhost:8000). Empty to disable. */
   openaiCompatibleUrl: string;
   /** API key for OpenAI-compatible provider (optional) */
@@ -182,6 +184,7 @@ interface ConfigFile {
   claudeCodeCliAutodetect?: boolean;
   embeddingModel?: string;
   ragBm25Weight?: number;
+  rerankerEnabled?: boolean;
   openaiCompatibleUrl?: string;
   openaiCompatibleApiKey?: string;
 }
@@ -285,6 +288,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       const env = parseFloat(process.env.OHWOW_RAG_BM25_WEIGHT || '');
       return !isNaN(env) ? env : (fileConfig.ragBm25Weight ?? 0.5);
     })(),
+    rerankerEnabled: process.env.OHWOW_RERANKER_ENABLED === 'true' || (fileConfig.rerankerEnabled ?? false),
     openaiCompatibleUrl: process.env.OHWOW_OPENAI_COMPATIBLE_URL ?? fileConfig.openaiCompatibleUrl ?? '',
     openaiCompatibleApiKey: process.env.OHWOW_OPENAI_COMPATIBLE_API_KEY ?? fileConfig.openaiCompatibleApiKey ?? '',
   };
