@@ -95,10 +95,12 @@ export class ImmuneSystem {
       );
 
       if (newLevel !== this.inflammatoryState.alertLevel) {
+        const previousLevel = this.inflammatoryState.alertLevel;
         this.inflammatoryState.alertLevel = newLevel;
         this.inflammatoryState.escalatedAt = now;
         this.inflammatoryState.cooldownUntil = now + computeCooldown(newLevel);
-        logger.info({ level: newLevel, threats: this.inflammatoryState.recentThreats }, 'immune: alert level escalated');
+        logger.info({ from: previousLevel, to: newLevel, threats: this.inflammatoryState.recentThreats }, 'immune: alert level changed');
+        this.persistStateTransition(previousLevel, newLevel).catch(() => {});
       }
 
       this.persistIncident(detection).catch(() => {});
@@ -221,6 +223,20 @@ export class ImmuneSystem {
       }
     } catch (err) {
       logger.warn({ err }, 'immune: failed to load state');
+    }
+  }
+
+  private async persistStateTransition(fromLevel: string, toLevel: string): Promise<void> {
+    if (!this.db) return;
+
+    try {
+      await this.db.from('immune_state_transitions').insert({
+        workspace_id: this.workspaceId,
+        from_level: fromLevel,
+        to_level: toLevel,
+      });
+    } catch {
+      // Table may not exist yet (migration 075); non-fatal
     }
   }
 

@@ -796,13 +796,23 @@ export class LocalOrchestrator {
     this.soul.observer.observe({ type: 'message_sent', timestamp: Date.now(), metadata: { wordCount: userMessage.split(/\s+/).length, sessionId } });
 
     // True Soul: inject identity-level context (Plato's Tripartite + Jung's Shadow)
+    // Periodically persist soul snapshots for cross-session continuity
     try {
       const { TrueSoul } = await import('../soul/soul.js');
       const trueSoul = new TrueSoul();
-      // Build a minimal agent soul context for the active agent (if any)
       const soulContext = trueSoul.buildPromptContext();
       if (soulContext) {
         systemBlocks.push({ type: 'text' as const, text: `\n\n## Soul Awareness\n${soulContext}` });
+      }
+      // Persist soul snapshot every ~50 exchanges (fire-and-forget)
+      if (soulContext && this.exchangeCount > 0 && this.exchangeCount % 50 === 0 && this.db) {
+        this.db.from('soul_snapshots').insert({
+          workspace_id: this.workspaceId,
+          agent_id: this.workspaceId,
+          soul: JSON.stringify({ promptContext: soulContext }),
+          confidence: 0.5,
+          emerging_identity: soulContext.slice(0, 200),
+        }).then(() => {}, () => { /* table may not exist yet */ });
       }
     } catch { /* non-fatal: soul is best-effort enrichment */ }
 

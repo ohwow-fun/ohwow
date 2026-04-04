@@ -230,6 +230,69 @@ export function connectSystems(deps: CrossSystemDeps): () => void {
     logger.debug('cross-system: wired synapse -> endocrine');
   }
 
+  // 10. Tool failures -> Immune escalation (wired in Phase 6)
+  if (deps.immune) {
+    const immune = deps.immune;
+    const unsub = deps.workspace.subscribe(
+      { types: ['failure'], minSalience: 0.3 },
+      (item) => {
+        try {
+          const detection = immune.scan(item.content, item.source);
+          if (detection.detected) {
+            immune.respond(detection);
+          }
+        } catch { /* non-fatal */ }
+      },
+    );
+    unsubscribers.push(unsub);
+    logger.debug('cross-system: wired tool failures -> immune');
+  }
+
+  // 11. Homeostasis corrective actions -> Workspace broadcast (for scheduler/rate-limiter)
+  if (deps.homeostasis) {
+    const homeostasis = deps.homeostasis;
+    const unsub = deps.workspace.subscribe(
+      { types: ['warning'], minSalience: 0.5 },
+      (item) => {
+        if (!item.source.includes('homeostasis')) return;
+        const meta = item.metadata as { action?: string; urgency?: number } | undefined;
+        if (meta?.action === 'throttle' && (meta?.urgency ?? 0) > 0.6) {
+          deps.workspace.broadcast({
+            type: 'signal',
+            source: 'homeostasis',
+            content: `Throttle active: ${item.content}`,
+            salience: 0.6,
+            timestamp: Date.now(),
+            metadata: { signal: 'scheduler_defer', urgency: meta.urgency },
+          });
+        }
+      },
+    );
+    unsubscribers.push(unsub);
+    logger.debug('cross-system: wired homeostasis -> scheduler signals');
+  }
+
+  // 12. Collaboration success -> Narrative identity event
+  if (deps.narrative && deps.endocrine) {
+    const narrative = deps.narrative;
+    const unsub = deps.workspace.subscribe(
+      { types: ['synapse'], minSalience: 0.4 },
+      (item) => {
+        const meta = item.metadata as { event?: string; type?: string } | undefined;
+        if (meta?.event === 'created' || meta?.event === 'strengthened') {
+          narrative.recordEvent({
+            timestamp: new Date().toISOString(),
+            description: `Collaboration milestone: ${meta.type} connection ${meta.event}`,
+            significance: 0.6,
+            affect: 'satisfaction',
+          });
+        }
+      },
+    );
+    unsubscribers.push(unsub);
+    logger.debug('cross-system: wired synapse -> narrative');
+  }
+
   logger.debug({ flows: unsubscribers.length }, 'cross-system: connected');
 
   return () => {
