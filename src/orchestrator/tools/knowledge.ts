@@ -13,6 +13,38 @@ import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings
 import { chunkText } from '../../lib/rag/chunker.js';
 
 // ============================================================================
+// ENQUEUE DOCUMENT FOR BACKGROUND PROCESSING
+// ============================================================================
+
+const ENQUEUE_THRESHOLD_BYTES = 50_000; // 50KB
+
+export async function enqueueDocument(
+  db: import('../../db/adapter-types.js').DatabaseAdapter,
+  workspaceId: string,
+  documentId: string,
+  payload: Record<string, unknown>,
+): Promise<number> {
+  const jobId = createHash('sha256').update(`${Date.now()}-${documentId}`).digest('hex').slice(0, 32);
+
+  await db.from('document_processing_queue').insert({
+    id: jobId,
+    workspace_id: workspaceId,
+    document_id: documentId,
+    status: 'pending',
+    payload: JSON.stringify(payload),
+  });
+
+  // Return queue position (count of pending jobs)
+  const { data } = await db
+    .from<{ id: string }>('document_processing_queue')
+    .select('id')
+    .eq('workspace_id', workspaceId)
+    .eq('status', 'pending');
+
+  return data?.length ?? 1;
+}
+
+// ============================================================================
 // LIST KNOWLEDGE
 // ============================================================================
 
@@ -117,6 +149,22 @@ export async function uploadKnowledge(
     });
 
   if (insertError) return { success: false, error: insertError.message };
+
+  // Large files: enqueue for background processing instead of blocking
+  if (fileStats.size > ENQUEUE_THRESHOLD_BYTES) {
+    const position = await enqueueDocument(ctx.db, ctx.workspaceId, docId, {
+      source_type: 'upload',
+      file_path: filePath,
+    });
+    return {
+      success: true,
+      data: {
+        message: `"${title}" queued for background processing (position ${position}).`,
+        documentId: docId,
+        queued: true,
+      },
+    };
+  }
 
   // Process the file (extract + chunk)
   try {
@@ -256,6 +304,28 @@ export async function addKnowledgeFromUrl(
     });
 
   if (insertError) return { success: false, error: insertError.message };
+
+  // Large content: enqueue for background processing
+  if (Buffer.byteLength(text, 'utf-8') > ENQUEUE_THRESHOLD_BYTES) {
+    // Store compiled_text so worker can use it directly
+    await ctx.db
+      .from('agent_workforce_knowledge_documents')
+      .update({ compiled_text: text })
+      .eq('id', docId);
+
+    const position = await enqueueDocument(ctx.db, ctx.workspaceId, docId, {
+      source_type: 'url',
+      url,
+    });
+    return {
+      success: true,
+      data: {
+        message: `"${title}" from ${parsedUrl.hostname} queued for background processing (position ${position}).`,
+        documentId: docId,
+        queued: true,
+      },
+    };
+  }
 
   // Process
   const chunks = chunkTextLocal(text);
@@ -436,7 +506,7 @@ export async function deleteKnowledge(
 // LOCAL TEXT EXTRACTION (simplified, no heavy deps)
 // ============================================================================
 
-async function extractTextLocal(buffer: Buffer, ext: string, _filename: string): Promise<string> {
+export async function extractTextLocal(buffer: Buffer, ext: string, _filename: string): Promise<string> {
   const type = ext.replace('.', '').toLowerCase();
 
   switch (type) {
@@ -516,7 +586,7 @@ async function embedChunks(
 // ============================================================================
 
 /** Collect unique terms across all chunks and update rag_corpus_stats doc_frequency. */
-async function updateCorpusStats(
+export async function updateCorpusStats(
   db: import('../../db/adapter-types.js').DatabaseAdapter,
   workspaceId: string,
   chunks: LocalChunk[],

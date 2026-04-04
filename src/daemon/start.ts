@@ -37,6 +37,7 @@ import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
+import { DocumentWorker } from '../execution/workers/document-worker.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
 import { VoiceboxService } from '../voice/voicebox-service.js';
 import { findPythonCommand } from '../lib/platform-utils.js';
@@ -872,6 +873,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
     });
   }
 
+  // 12a2. Document processing worker (runs on all devices)
+  const documentWorker = new DocumentWorker(db, bus, {
+    ollamaUrl: config.ollamaUrl,
+    embeddingModel: config.embeddingModel || undefined,
+  });
+  documentWorker.start();
+
   // 12b. Start peer discovery + monitoring (all devices including workers)
   let peerDiscovery: import('../peers/discovery.js').PeerDiscovery | null = null;
   let peerMonitor: import('../peers/peer-monitor.js').PeerMonitor | null = null;
@@ -1329,6 +1337,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     tunnel?.stop();
     scheduler?.stop();
     proactiveEngine?.stop();
+    documentWorker.stop();
     scraplingService.stop().catch(() => {});
     voiceboxService.stop().catch(() => {});
     digitalNS.stop();

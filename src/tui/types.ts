@@ -207,6 +207,10 @@ export interface RuntimeEvents {
   'daemon:disconnected': Record<string, never>;
   'shutdown': undefined;
 
+  // Knowledge processing
+  'knowledge:processing': { documentId: string; status: 'started' | 'completed' | 'failed'; title?: string; error?: string };
+  'knowledge:queued': { documentId: string; title: string; queuePosition: number };
+
   // Credits
   'credits:exhausted': Record<string, never>;
 }
