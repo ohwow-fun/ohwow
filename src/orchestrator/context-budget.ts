@@ -35,10 +35,20 @@ export class ContextBudget {
   private toolTokens: number = 0;
   private historyTokens: number = 0;
   private messageCount: number = 0;
+  /**
+   * When true, homeostasis has detected memory pressure and trimming
+   * uses a tighter budget (70% of available) and fewer recent messages.
+   */
+  private aggressiveTrimming = false;
 
   constructor(modelCapacity: number, reservedForResponse: number = 4096) {
     this.modelCapacity = modelCapacity;
     this.reservedForResponse = reservedForResponse;
+  }
+
+  /** Activate or deactivate aggressive trimming (triggered by homeostasis compress_memory action). */
+  setAggressiveTrimming(active: boolean): void {
+    this.aggressiveTrimming = active;
   }
 
   /** Set token count for system prompt */
@@ -79,7 +89,10 @@ export class ContextBudget {
   trimToFit<T extends { role: string; content: string | unknown[] }>(messages: T[]): T[] {
     if (messages.length === 0) return messages;
 
-    const budget = this.availableForHistory;
+    // Homeostasis: use 70% of budget when aggressive trimming is active
+    const budget = this.aggressiveTrimming
+      ? Math.floor(this.availableForHistory * 0.7)
+      : this.availableForHistory;
     const tokenCounts = messages.map(m => estimateMessageTokens(m));
     let totalTokens = tokenCounts.reduce((sum, t) => sum + t, 0);
 
@@ -121,11 +134,15 @@ export class ContextBudget {
 
   summarizeAndTrim<T extends { role: string; content: string | unknown[] }>(
     messages: T[],
-    keepRecent: number = 4,
+    keepRecent?: number,
   ): T[] {
     if (messages.length === 0) return messages;
 
-    const budget = this.availableForHistory;
+    // Homeostasis: tighter budget and fewer recent messages when aggressive
+    const effectiveKeepRecent = keepRecent ?? (this.aggressiveTrimming ? 2 : 4);
+    const budget = this.aggressiveTrimming
+      ? Math.floor(this.availableForHistory * 0.7)
+      : this.availableForHistory;
     const tokenCounts = messages.map(m => estimateMessageTokens(m));
     const totalTokens = tokenCounts.reduce((sum, t) => sum + t, 0);
 
@@ -137,7 +154,7 @@ export class ContextBudget {
     }
 
     // Always keep: first message (original intent) + last N messages (recent context)
-    const safeKeepRecent = Math.min(keepRecent, messages.length - 1);
+    const safeKeepRecent = Math.min(effectiveKeepRecent, messages.length - 1);
     if (messages.length <= safeKeepRecent + 1) {
       // Not enough messages to summarize — fall back to trimToFit
       return this.trimToFit(messages);

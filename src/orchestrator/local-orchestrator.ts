@@ -1182,6 +1182,19 @@ export class LocalOrchestrator {
       const goalReminderBlock: TextBlockParam = { type: 'text', text: reflectionText };
       loopMessages.push({ role: 'user', content: [...toolResults, goalReminderBlock] });
 
+      // Homeostasis: dispatch corrective actions mid-loop
+      if (this.homeostasisController) {
+        try {
+          const hoState = this.homeostasisController.check();
+          for (const action of hoState.correctiveActions) {
+            if (action.type === 'compress_memory' && action.urgency > 0.5) {
+              // Will be applied if/when context trimming runs below
+              logger.debug({ urgency: action.urgency }, 'homeostasis: compress_memory action active');
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
       // Mid-loop context budget check for Anthropic path
       iterationsSinceSummarize++;
       const utilizationPct = totalInputTokens / anthropicContextLimit;

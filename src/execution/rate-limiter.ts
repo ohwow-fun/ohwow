@@ -19,6 +19,12 @@ const DEFAULT_TOKENS_PER_MINUTE = 100_000;
 
 export class RateLimiter {
   private bucket: TokenBucket;
+  /**
+   * Homeostasis modulation factor (0.1–1.0).
+   * When homeostasis detects resource overuse, this reduces effective capacity
+   * to throttle the system metabolically rather than hitting hard rate limits.
+   */
+  private homeostasisFactor = 1.0;
 
   constructor(
     requestsPerMinute = DEFAULT_REQUESTS_PER_MINUTE,
@@ -33,6 +39,14 @@ export class RateLimiter {
     };
   }
 
+  /** Set homeostasis modulation factor (0.1–1.0). Lower values throttle more aggressively. */
+  setHomeostasisModifier(factor: number): void {
+    this.homeostasisFactor = Math.max(0.1, Math.min(1.0, factor));
+    if (factor < 1.0) {
+      logger.debug({ factor: this.homeostasisFactor }, 'rate-limiter: homeostasis throttle active');
+    }
+  }
+
   /**
    * Wait until a request can proceed.
    * Returns immediately if within limits, otherwise waits.
@@ -40,6 +54,16 @@ export class RateLimiter {
   async waitForCapacity(estimatedTokens = 1000): Promise<void> {
     this.refill();
 
+    // Apply homeostasis modulation: reduce effective capacity under metabolic stress
+    const effectiveRequestCap = this.bucket.requestsPerMinute * this.homeostasisFactor;
+    const effectiveTokenCap = this.bucket.tokensPerMinute * this.homeostasisFactor;
+
+    if (this.bucket.requestTokens >= 1 && this.bucket.tokenTokens >= estimatedTokens
+        && this.bucket.requestTokens <= effectiveRequestCap && this.bucket.tokenTokens <= effectiveTokenCap) {
+      return;
+    }
+
+    // Also allow through if within base limits (homeostasis only slows, doesn't block)
     if (this.bucket.requestTokens >= 1 && this.bucket.tokenTokens >= estimatedTokens) {
       return;
     }

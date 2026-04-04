@@ -46,6 +46,8 @@ export class LocalScheduler {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private triggerEvaluator: LocalTriggerEvaluator | null = null;
+  /** Homeostasis controller for metabolic gating of schedule execution. */
+  private homeostasis: { check(): { correctiveActions: Array<{ type: string; urgency: number }> } } | null = null;
 
   get isRunning(): boolean {
     return this.running;
@@ -64,6 +66,11 @@ export class LocalScheduler {
    */
   setTriggerEvaluator(evaluator: LocalTriggerEvaluator): void {
     this.triggerEvaluator = evaluator;
+  }
+
+  /** Wire homeostasis controller for metabolic gating. */
+  setHomeostasis(controller: { check(): { correctiveActions: Array<{ type: string; urgency: number }> } }): void {
+    this.homeostasis = controller;
   }
 
   /**
@@ -124,6 +131,19 @@ export class LocalScheduler {
       .select('*')
       .eq('workspace_id', this.workspaceId)
       .eq('enabled', 1);
+
+    // Homeostasis gate: defer all schedule execution when system is throttling
+    if (this.homeostasis) {
+      try {
+        const state = this.homeostasis.check();
+        const throttle = state.correctiveActions.find(a => a.type === 'throttle');
+        if (throttle && throttle.urgency > 0.7) {
+          logger.info({ urgency: throttle.urgency }, 'scheduler: deferring all schedules due to homeostasis throttle');
+          await this.recalculate();
+          return;
+        }
+      } catch { /* homeostasis check is non-fatal */ }
+    }
 
     if (data) {
       const schedules = data ?? [];
