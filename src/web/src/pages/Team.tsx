@@ -9,6 +9,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { FeatureIntro } from '../components/FeatureIntro';
 import { api } from '../api/client';
 import { toast } from '../components/Toast';
+import { OrgTopologyTab } from './org/OrgTopologyTab';
 
 interface Department {
   id: string;
@@ -31,6 +32,7 @@ interface TeamMember {
 const TABS = [
   { id: 'departments', label: 'Departments' },
   { id: 'members', label: 'Members' },
+  { id: 'topology', label: 'Topology' },
 ];
 
 export function TeamPage() {
@@ -44,6 +46,7 @@ export function TeamPage() {
       </div>
       {tab === 'departments' && <DepartmentsTab />}
       {tab === 'members' && <MembersTab />}
+      {tab === 'topology' && <OrgTopologyTab />}
     </div>
   );
 }
