@@ -27,6 +27,9 @@ import { saveWorkspaceData } from '../lib/onboarding-logic.js';
 import { WhatsAppClient } from '../whatsapp/client.js';
 import { TelegramClient } from '../integrations/telegram/client.js';
 import { ChannelRegistry } from '../integrations/channel-registry.js';
+import { ConnectorRegistry } from '../integrations/connector-registry.js';
+import { GitHubConnector } from '../integrations/connectors/github-connector.js';
+import { LocalFilesConnector } from '../integrations/connectors/local-files-connector.js';
 import { MessageRouter } from '../integrations/message-router.js';
 import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ModelRouter } from '../execution/model-router.js';
@@ -609,6 +612,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // 10. Initialize channel registry + orchestrator
   const workspaceId = controlPlane?.connectedWorkspaceId || 'local';
   const channelRegistry = new ChannelRegistry();
+  const connectorRegistry = new ConnectorRegistry();
+  connectorRegistry.registerFactory('github', (cfg) => new GitHubConnector(cfg));
+  connectorRegistry.registerFactory('local-files', (cfg) => new LocalFilesConnector(cfg));
   const triggerEvaluator = new LocalTriggerEvaluator(db, engine, workspaceId, channelRegistry);
   triggerEvaluatorRef.current = triggerEvaluator;
 
@@ -627,6 +633,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       ragBm25Weight: config.ragBm25Weight,
       rerankerEnabled: config.rerankerEnabled,
     });
+    orchestrator.setConnectorRegistry(connectorRegistry);
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
     if (inferenceCapabilities) {
       orchestrator.setInferenceCapabilities(inferenceCapabilities);

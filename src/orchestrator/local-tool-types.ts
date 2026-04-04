@@ -9,6 +9,7 @@ import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import type { ScraplingService } from '../execution/scrapling/index.js';
 import type { ModelRouter } from '../execution/model-router.js';
+import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 
 export interface LocalToolContext {
   db: DatabaseAdapter;
@@ -31,6 +32,8 @@ export interface LocalToolContext {
   ragBm25Weight?: number;
   /** Enable LLM-based reranking of RAG results (from config) */
   rerankerEnabled?: boolean;
+  /** Connector registry for data source sync */
+  connectorRegistry?: ConnectorRegistry;
 }
 
 export interface ToolResult {

@@ -5,8 +5,9 @@
 
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
-import { randomUUID } from 'node:crypto';
-import type { ConnectorType } from '../../integrations/connector-types.js';
+import { randomUUID, createHash } from 'node:crypto';
+import type { ConnectorType, ConnectorConfig } from '../../integrations/connector-types.js';
+import { logger } from '../../lib/logger.js';
 
 // ============================================================================
 // LIST CONNECTORS
@@ -120,7 +121,7 @@ export async function removeConnector(
 }
 
 // ============================================================================
-// SYNC CONNECTOR (placeholder — actual sync requires connector implementation)
+// SYNC CONNECTOR
 // ============================================================================
 
 export async function syncConnector(
@@ -142,27 +143,121 @@ export async function syncConnector(
     return { success: false, error: 'Connector is disabled' };
   }
 
+  const registry = ctx.connectorRegistry;
+  if (!registry || !registry.hasFactory(connector.type as ConnectorType)) {
+    return {
+      success: false,
+      error: `No connector implementation registered for type "${connector.type}".`,
+    };
+  }
+
   // Mark as running
   await ctx.db
     .from('data_source_connectors')
     .update({ last_sync_status: 'running', updated_at: new Date().toISOString() })
     .eq('id', connectorId);
 
-  // NOTE: Actual connector sync requires a registered connector implementation.
-  // For now, mark as failed with a helpful message. Phase 2 will add real connectors.
-  await ctx.db
-    .from('data_source_connectors')
-    .update({
-      last_sync_status: 'failed',
-      last_sync_error: `No connector implementation registered for type "${connector.type}". Connector implementations coming in Phase 2.`,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', connectorId);
+  try {
+    // Build ConnectorConfig from DB row
+    const connectorConfig: ConnectorConfig = {
+      id: connector.id,
+      type: connector.type as ConnectorType,
+      name: connector.name,
+      settings: typeof connector.settings === 'string' ? JSON.parse(connector.settings) : connector.settings,
+      syncIntervalMinutes: 30,
+      pruneIntervalDays: 30,
+      enabled: !!connector.enabled,
+      lastSyncAt: connector.last_sync_at || undefined,
+    };
 
-  return {
-    success: false,
-    error: `No connector implementation for type "${connector.type}" yet. Configure a GitHub or local-files connector once implementations are available.`,
-  };
+    const instance = registry.create(connectorConfig);
+    if (!instance) {
+      throw new Error(`Failed to create connector instance for type "${connector.type}"`);
+    }
+
+    // Use poll() if we have a previous sync timestamp and the connector supports it, otherwise full load()
+    const usePoll = connector.last_sync_at && instance.poll;
+    const docs = usePoll
+      ? instance.poll!(new Date(connector.last_sync_at!))
+      : instance.load();
+
+    let enqueued = 0;
+    for await (const doc of docs) {
+      // Create document record
+      const docId = createHash('sha256').update(`${connectorId}-${doc.id}`).digest('hex').slice(0, 32);
+
+      await ctx.db
+        .from('agent_workforce_knowledge_documents')
+        .insert({
+          id: docId,
+          workspace_id: ctx.workspaceId,
+          title: doc.title,
+          filename: doc.title,
+          file_type: doc.mimeType || 'text/plain',
+          file_size: Buffer.byteLength(doc.content, 'utf-8'),
+          storage_path: doc.sourceUrl || `connector://${connectorId}/${doc.id}`,
+          source_type: 'connector',
+          source_url: doc.sourceUrl,
+          processing_status: 'pending',
+          compiled_text: doc.content,
+          compiled_token_count: Math.ceil(doc.content.length / 4),
+          content_hash: createHash('sha256').update(doc.content).digest('hex'),
+        });
+
+      // Enqueue for background processing
+      const jobId = createHash('sha256').update(`${Date.now()}-${docId}`).digest('hex').slice(0, 32);
+      await ctx.db
+        .from('document_processing_queue')
+        .insert({
+          id: jobId,
+          workspace_id: ctx.workspaceId,
+          document_id: docId,
+          status: 'pending',
+          payload: JSON.stringify({
+            source_type: 'connector',
+            content: doc.content,
+            title: doc.title,
+          }),
+        });
+
+      enqueued++;
+    }
+
+    // Update connector sync status
+    await ctx.db
+      .from('data_source_connectors')
+      .update({
+        last_sync_at: new Date().toISOString(),
+        last_sync_status: 'success',
+        last_sync_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', connectorId);
+
+    logger.info({ connectorId, type: connector.type, enqueued }, '[connectors] Sync completed');
+
+    return {
+      success: true,
+      data: {
+        message: `Synced "${connector.name}": ${enqueued} document${enqueued === 1 ? '' : 's'} enqueued for processing.`,
+        enqueued,
+      },
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Sync failed';
+    logger.error({ err, connectorId }, '[connectors] Sync failed');
+
+    await ctx.db
+      .from('data_source_connectors')
+      .update({
+        last_sync_status: 'failed',
+        last_sync_error: errorMsg,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', connectorId);
+
+    return { success: false, error: errorMsg };
+  }
 }
 
 // ============================================================================
@@ -177,19 +272,47 @@ export async function testConnector(
   if (!connectorId) return { success: false, error: 'connector_id is required' };
 
   const { data: connector } = await ctx.db
-    .from('data_source_connectors')
-    .select('id, type, name')
+    .from<{ id: string; type: string; name: string; settings: string }>('data_source_connectors')
+    .select('id, type, name, settings')
     .eq('id', connectorId)
     .eq('workspace_id', ctx.workspaceId)
     .single();
 
   if (!connector) return { success: false, error: 'Connector not found' };
 
-  // NOTE: Actual test requires a registered connector implementation.
-  return {
-    success: true,
-    data: {
-      message: `Connector "${(connector as Record<string, unknown>).name}" found. No implementation registered for type "${(connector as Record<string, unknown>).type}" yet — connection test skipped.`,
-    },
-  };
+  const registry = ctx.connectorRegistry;
+  if (!registry || !registry.hasFactory(connector.type as ConnectorType)) {
+    return {
+      success: true,
+      data: {
+        message: `Connector "${connector.name}" found. No implementation registered for type "${connector.type}" — connection test skipped.`,
+      },
+    };
+  }
+
+  try {
+    const connectorConfig: ConnectorConfig = {
+      id: connector.id,
+      type: connector.type as ConnectorType,
+      name: connector.name,
+      settings: typeof connector.settings === 'string' ? JSON.parse(connector.settings) : connector.settings,
+      syncIntervalMinutes: 30,
+      pruneIntervalDays: 30,
+      enabled: true,
+    };
+
+    const instance = registry.create(connectorConfig);
+    if (!instance) {
+      return { success: false, error: `Could not create connector instance for type "${connector.type}".` };
+    }
+
+    const result = await instance.testConnection();
+    if (result.ok) {
+      return { success: true, data: { message: `Connection test passed for "${connector.name}".` } };
+    }
+    return { success: false, error: `Connection test failed: ${result.error}` };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Connection test failed';
+    return { success: false, error: errorMsg };
+  }
 }

@@ -24,6 +24,7 @@ import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
+import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, OllamaProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -138,6 +139,8 @@ export class LocalOrchestrator {
   private soul = new Soul();
   /** Digital Body: the agent's embodied capabilities (Merleau-Ponty). */
   private digitalBody: DigitalBody | null = null;
+  /** Connector registry for data source sync. */
+  private _connectorRegistry: ConnectorRegistry | null = null;
   /** Body State Service: unified system health reporting. */
   private bodyStateService: BodyStateService | null = null;
 
@@ -184,6 +187,7 @@ export class LocalOrchestrator {
       ollamaModel: this._ollamaModel,
       ragBm25Weight: this._ragBm25Weight,
       rerankerEnabled: this._rerankerEnabled,
+      connectorRegistry: this._connectorRegistry || undefined,
     };
   }
 
@@ -345,6 +349,11 @@ export class LocalOrchestrator {
   /** Set whether to skip cost confirmation for cloud media tools. */
   setSkipMediaCostConfirmation(skip: boolean): void {
     this.skipMediaCostConfirmation = skip;
+  }
+
+  /** Set connector registry for data source sync. */
+  setConnectorRegistry(registry: ConnectorRegistry): void {
+    this._connectorRegistry = registry;
   }
 
   /** Set RAG embedding config (Ollama URL, models, weights). */
