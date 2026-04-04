@@ -5,6 +5,7 @@
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../logger.js';
+import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from './embeddings.js';
 
 // ============================================================================
 // TYPES
@@ -36,6 +37,16 @@ export interface RetrieveKnowledgeOptions {
   tokenBudget?: number; // default 6000
   maxChunks?: number;   // default 8
   minScore?: number;    // default 0.01
+  /** Ollama URL for embedding-based hybrid search */
+  ollamaUrl?: string;
+  /** Embedding model name (default: nomic-embed-text) */
+  embeddingModel?: string;
+  /** BM25 weight in hybrid score: 0.0 = pure embedding, 1.0 = pure BM25 (default: 0.5) */
+  bm25Weight?: number;
+  /** Enable query expansion via local LLM */
+  expandQueries?: boolean;
+  /** Ollama model for query expansion (default: qwen3:4b) */
+  ollamaModel?: string;
 }
 
 export interface RetrieveMemoriesOptions {
@@ -66,10 +77,16 @@ export function tokenize(text: string): string[] {
 }
 
 /**
- * Simplified BM25 scoring. No corpus stats needed at this scale.
- * avgDocLen is estimated inline based on typical chunk sizes (~200 tokens ≈ 800 chars).
+ * BM25 scoring with optional IDF from corpus statistics.
+ * When idfMap/corpusSize are provided, uses proper IDF weighting.
+ * Without them, falls back to IDF=1 (original behavior).
  */
-export function bm25Score(queryTokens: string[], docText: string): number {
+export function bm25Score(
+  queryTokens: string[],
+  docText: string,
+  idfMap?: Map<string, number>,
+  corpusSize?: number,
+): number {
   if (queryTokens.length === 0) return 0;
 
   const k1 = 1.5;
@@ -85,17 +102,87 @@ export function bm25Score(queryTokens: string[], docText: string): number {
     tf.set(t, (tf.get(t) ?? 0) + 1);
   }
 
+  const useIdf = idfMap && corpusSize && corpusSize > 0;
+
   let score = 0;
   for (const qt of queryTokens) {
     const freq = tf.get(qt) ?? 0;
     if (freq === 0) continue;
-    // BM25 term score (no IDF needed at this scale — treat as 1)
+
+    // IDF: use corpus stats when available, otherwise treat as 1
+    const idf = useIdf
+      ? Math.log(((corpusSize as number) - (idfMap.get(qt) ?? 0) + 0.5) / ((idfMap.get(qt) ?? 0) + 0.5) + 1)
+      : 1;
+
     const numerator = freq * (k1 + 1);
     const denominator = freq + k1 * (1 - b + b * (docLen / avgDocLen));
-    score += numerator / denominator;
+    score += idf * (numerator / denominator);
   }
 
   return score;
+}
+
+// ============================================================================
+// QUERY EXPANSION
+// ============================================================================
+
+/**
+ * Expand a query into multiple phrasings using the local LLM.
+ * Returns the union of tokens from all phrasings.
+ * Falls back to original query tokens if LLM is unavailable.
+ */
+export async function expandQuery(
+  query: string,
+  originalTokens: string[],
+  ollamaUrl: string,
+  model: string,
+): Promise<string[]> {
+  try {
+    const response = await fetch(`${ollamaUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10_000), // fast timeout — don't block retrieval
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: `Generate 3 alternative search queries for: "${query}". Return ONLY a JSON array of strings, no explanation. Example: ["query1","query2","query3"]`,
+          },
+        ],
+        max_tokens: 200,
+        temperature: 0.7,
+        stream: false,
+      }),
+    });
+    if (!response.ok) return originalTokens;
+
+    const data = await response.json() as {
+      choices: Array<{ message: { content: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content ?? '';
+
+    // Parse JSON array from response (tolerant of markdown fences and thinking tags)
+    const cleaned = content
+      .replace(/<think>[\s\S]*?<\/think>/g, '')
+      .replace(/```json?\n?/g, '')
+      .replace(/```/g, '')
+      .trim();
+    const alternatives: string[] = JSON.parse(cleaned);
+
+    if (!Array.isArray(alternatives)) return originalTokens;
+
+    // Union all tokens
+    const allTokens = new Set(originalTokens);
+    for (const alt of alternatives) {
+      if (typeof alt === 'string') {
+        for (const t of tokenize(alt)) allTokens.add(t);
+      }
+    }
+    return [...allTokens];
+  } catch {
+    return originalTokens; // graceful fallback
+  }
 }
 
 // ============================================================================
@@ -150,18 +237,46 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
     const docIds = eligibleDocs.map((d) => d.id);
     const docTitleMap = new Map(eligibleDocs.map((d) => [d.id, d.title]));
 
-    // 4. Fetch all chunks for eligible docs
+    // 4. Fetch all chunks for eligible docs (include embedding if available)
     const { data: chunkData } = await db
-      .from<{ id: string; document_id: string; content: string; keywords: string | string[] | null; token_count: number }>('agent_workforce_knowledge_chunks')
-      .select('id, document_id, content, keywords, token_count')
+      .from<{ id: string; document_id: string; content: string; keywords: string | string[] | null; token_count: number; embedding: Buffer | null }>('agent_workforce_knowledge_chunks')
+      .select('id, document_id, content, keywords, token_count, embedding')
       .in('document_id', docIds);
 
     if (!chunkData || chunkData.length === 0) return [];
 
     const chunks = chunkData ?? [];
 
-    // 5. Score chunks
-    const queryTokens = tokenize(query);
+    // 5. Load corpus stats for IDF weighting
+    let idfMap: Map<string, number> | undefined;
+    let corpusSize: number | undefined;
+    try {
+      const { data: statsData } = await db
+        .from<{ term: string; doc_frequency: number }>('rag_corpus_stats')
+        .select('term, doc_frequency')
+        .eq('workspace_id', workspaceId);
+
+      if (statsData && statsData.length > 0) {
+        idfMap = new Map<string, number>();
+        for (const row of statsData) {
+          idfMap.set(row.term, row.doc_frequency);
+        }
+        // Use total workspace doc count for IDF, not just eligible docs
+        const countResult = await db
+          .from('agent_workforce_knowledge_documents')
+          .select('id', { count: 'exact', head: true })
+          .eq('workspace_id', workspaceId);
+        corpusSize = countResult.count ?? eligibleDocs.length;
+      }
+    } catch {
+      // Table may not exist yet (pre-migration) — fall back to no IDF
+    }
+
+    // 6. Query expansion (optional)
+    const baseTokens = tokenize(query);
+    const queryTokens = (opts.expandQueries && opts.ollamaUrl && opts.ollamaModel)
+      ? await expandQuery(query, baseTokens, opts.ollamaUrl, opts.ollamaModel)
+      : baseTokens;
 
     const scored: RagChunk[] = chunks.map((chunk) => {
       const config = configByDoc.get(chunk.document_id);
@@ -182,7 +297,7 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
         }
         // Weight keywords twice as heavily by repeating them in the scored text
         const scoredText = `${keywords.join(' ')} ${keywords.join(' ')} ${chunk.content}`;
-        score = bm25Score(queryTokens, scoredText);
+        score = bm25Score(queryTokens, scoredText, idfMap, corpusSize);
       }
 
       return {
@@ -195,7 +310,35 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
       };
     });
 
-    // 6. Filter by minScore (except 'always' docs), sort desc, apply budget
+    // 7. Hybrid scoring: combine BM25 with embedding cosine similarity
+    const bm25Weight = opts.bm25Weight ?? 0.5;
+    if (opts.ollamaUrl && opts.embeddingModel) {
+      try {
+        const queryEmbedding = await generateEmbedding(query, opts.ollamaUrl, opts.embeddingModel);
+        if (queryEmbedding) {
+          // Normalize BM25 scores to 0-1 range
+          const finiteBm25Scores = scored.filter((c) => c.score !== Infinity).map((c) => c.score);
+          const maxBm25 = finiteBm25Scores.length > 0 ? Math.max(...finiteBm25Scores) : 1;
+
+          for (let i = 0; i < scored.length; i++) {
+            if (scored[i].score === Infinity) continue; // always-inject docs keep Infinity
+
+            const chunk = chunks[i];
+            if (chunk.embedding) {
+              const chunkEmbedding = deserializeEmbedding(chunk.embedding as Buffer);
+              const cosine = Math.max(0, cosineSimilarity(queryEmbedding.embedding, chunkEmbedding));
+              const normalizedBm25 = maxBm25 > 0 ? scored[i].score / maxBm25 : 0;
+              scored[i].score = bm25Weight * normalizedBm25 + (1 - bm25Weight) * cosine;
+            }
+            // Chunks without embeddings keep their BM25 score as-is
+          }
+        }
+      } catch {
+        // Embedding failed — continue with BM25 scores only
+      }
+    }
+
+    // 8. Filter by minScore (except 'always' docs), sort desc, apply budget
     const filtered = scored.filter((c) => c.score === Infinity || c.score >= minScore);
     filtered.sort((a, b) => b.score - a.score);
 

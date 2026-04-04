@@ -8,7 +8,8 @@ import type { ToolResult } from '../local-tool-types.js';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
-import { retrieveKnowledgeChunks } from '../../lib/rag/retrieval.js';
+import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
+import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 
 // ============================================================================
 // LIST KNOWLEDGE
@@ -147,6 +148,12 @@ export async function uploadKnowledge(
         });
     }
 
+    // Update corpus stats for IDF
+    await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
+
+    // Generate embeddings if Ollama is available
+    const embeddingModel = await embedChunks(ctx, docId, chunks);
+
     // Update document
     await ctx.db
       .from('agent_workforce_knowledge_documents')
@@ -157,6 +164,7 @@ export async function uploadKnowledge(
         compiled_token_count: Math.ceil(text.length / 4),
         chunk_count: chunks.length,
         content_hash: contentHash,
+        ...(embeddingModel ? { embedding_model: embeddingModel } : {}),
       })
       .eq('id', docId);
 
@@ -268,6 +276,12 @@ export async function addKnowledgeFromUrl(
       });
   }
 
+  // Update corpus stats for IDF
+  await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
+
+  // Generate embeddings if Ollama is available
+  const urlEmbeddingModel = await embedChunks(ctx, docId, chunks);
+
   await ctx.db
     .from('agent_workforce_knowledge_documents')
     .update({
@@ -277,6 +291,7 @@ export async function addKnowledgeFromUrl(
       compiled_token_count: Math.ceil(text.length / 4),
       chunk_count: chunks.length,
       content_hash: contentHash,
+      ...(urlEmbeddingModel ? { embedding_model: urlEmbeddingModel } : {}),
     })
     .eq('id', docId);
 
@@ -376,6 +391,21 @@ export async function deleteKnowledge(
     .single();
 
   if (!doc) return { success: false, error: 'Document not found' };
+
+  // Fetch chunks before deletion for corpus stats decrement
+  const { data: chunkRows } = await ctx.db
+    .from<{ content: string }>('agent_workforce_knowledge_chunks')
+    .select('content')
+    .eq('document_id', documentId);
+
+  if (chunkRows && chunkRows.length > 0) {
+    const fakeChunks: LocalChunk[] = chunkRows.map((c) => ({
+      content: c.content,
+      tokenCount: 0,
+      keywords: [],
+    }));
+    await updateCorpusStats(ctx.db, ctx.workspaceId, fakeChunks, -1);
+  }
 
   // Delete chunks first (SQLite may not cascade)
   await ctx.db
@@ -519,6 +549,122 @@ function extractKeywordsLocal(text: string): string[] {
 }
 
 // ============================================================================
+// EMBEDDING HELPER
+// ============================================================================
+
+/** Generate and store embeddings for chunks. Returns the model name if any were embedded. */
+async function embedChunks(
+  ctx: LocalToolContext,
+  docId: string,
+  chunks: LocalChunk[],
+): Promise<string | undefined> {
+  if (!ctx.ollamaUrl || !ctx.embeddingModel) return undefined;
+
+  const chunkTexts = chunks.map((c) => c.content);
+  const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
+  let embeddedCount = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const emb = embeddings[i];
+    if (emb) {
+      const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+      await ctx.db
+        .from('agent_workforce_knowledge_chunks')
+        .update({ embedding: serializeEmbedding(emb) })
+        .eq('id', chunkId);
+      embeddedCount++;
+    }
+  }
+  return embeddedCount > 0 ? ctx.embeddingModel : undefined;
+}
+
+// ============================================================================
+// CORPUS STATS (IDF tracking)
+// ============================================================================
+
+/** Collect unique terms across all chunks and update rag_corpus_stats doc_frequency. */
+async function updateCorpusStats(
+  db: import('../../db/adapter-types.js').DatabaseAdapter,
+  workspaceId: string,
+  chunks: LocalChunk[],
+  delta: 1 | -1,
+): Promise<void> {
+  try {
+    // Collect unique terms across all chunks in this document
+    const docTerms = new Set<string>();
+    for (const chunk of chunks) {
+      for (const t of tokenize(chunk.content)) {
+        docTerms.add(t);
+      }
+    }
+
+    const terms = [...docTerms];
+    if (terms.length === 0) return;
+
+    // Batch fetch existing stats for all terms at once
+    const { data: existingRows } = await db
+      .from<{ term: string; doc_frequency: number }>('rag_corpus_stats')
+      .select('term, doc_frequency')
+      .eq('workspace_id', workspaceId)
+      .in('term', terms);
+
+    const existingMap = new Map<string, number>();
+    for (const row of existingRows ?? []) {
+      existingMap.set(row.term, row.doc_frequency);
+    }
+
+    const now = new Date().toISOString();
+
+    // Batch operations by type to minimize round-trips
+    const toInsert: string[] = [];
+    const toUpdate: Array<{ term: string; newFreq: number }> = [];
+    const toDelete: string[] = [];
+
+    for (const term of terms) {
+      const current = existingMap.get(term);
+      if (delta > 0) {
+        if (current === undefined) {
+          toInsert.push(term);
+        } else {
+          toUpdate.push({ term, newFreq: current + 1 });
+        }
+      } else {
+        if (current !== undefined) {
+          const newFreq = current - 1;
+          if (newFreq <= 0) {
+            toDelete.push(term);
+          } else {
+            toUpdate.push({ term, newFreq });
+          }
+        }
+      }
+    }
+
+    // Execute batched inserts
+    for (const term of toInsert) {
+      await db.from('rag_corpus_stats')
+        .insert({ workspace_id: workspaceId, term, doc_frequency: 1 });
+    }
+
+    // Execute batched updates
+    for (const { term, newFreq } of toUpdate) {
+      await db.from('rag_corpus_stats')
+        .update({ doc_frequency: newFreq, updated_at: now })
+        .eq('workspace_id', workspaceId)
+        .eq('term', term);
+    }
+
+    // Execute batched deletes
+    for (const term of toDelete) {
+      await db.from('rag_corpus_stats').delete()
+        .eq('workspace_id', workspaceId)
+        .eq('term', term);
+    }
+  } catch {
+    // Best-effort: don't fail document operations if stats update fails
+  }
+}
+
+// ============================================================================
 // SEARCH KNOWLEDGE
 // ============================================================================
 
@@ -540,6 +686,11 @@ export async function searchKnowledge(
     query,
     tokenBudget: 6000,
     maxChunks: maxResults,
+    ollamaUrl: ctx.ollamaUrl,
+    embeddingModel: ctx.embeddingModel,
+    bm25Weight: ctx.ragBm25Weight,
+    expandQueries: !!ctx.ollamaUrl,
+    ollamaModel: ctx.ollamaModel,
   });
 
   if (chunks.length === 0) {

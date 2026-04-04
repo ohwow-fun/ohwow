@@ -21,6 +21,14 @@ export interface LocalToolContext {
   modelRouter?: ModelRouter | null;
   onScheduleChange?: () => void;
   workingDirectory?: string;
+  /** Ollama URL for embedding and query expansion (from config) */
+  ollamaUrl?: string;
+  /** Embedding model name for RAG hybrid search (from config) */
+  embeddingModel?: string;
+  /** Ollama chat model for query expansion (from config) */
+  ollamaModel?: string;
+  /** BM25 weight for hybrid search (from config) */
+  ragBm25Weight?: number;
 }
 
 export interface ToolResult {

@@ -1460,6 +1460,66 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   },
 
   // =========================================================================
+  // DATA SOURCE CONNECTOR TOOLS
+  // =========================================================================
+
+  {
+    name: 'list_connectors',
+    description: 'List all configured data source connectors and their sync status. Data source connectors automatically import documents from external systems (GitHub, Google Drive, etc.) into the knowledge base.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+    },
+  },
+  {
+    name: 'add_connector',
+    description: 'Add a new data source connector to import documents into the knowledge base. Supported types: github, local-files, google-drive, notion, slack, confluence, imap.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        type: { type: 'string', description: 'Connector type (e.g. "github", "local-files")' },
+        name: { type: 'string', description: 'Human-readable name for this connector' },
+        settings: { type: 'object', description: 'Connector-specific settings (e.g. { "repo": "owner/repo", "token": "..." })' },
+        sync_interval_minutes: { type: 'number', description: 'How often to sync (default: 30 minutes)' },
+      },
+      required: ['type', 'name'],
+    },
+  },
+  {
+    name: 'remove_connector',
+    description: 'Remove a data source connector by ID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connector_id: { type: 'string', description: 'ID of the connector to remove' },
+      },
+      required: ['connector_id'],
+    },
+  },
+  {
+    name: 'sync_connector',
+    description: 'Trigger an immediate sync for a data source connector, importing new or updated documents into the knowledge base.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connector_id: { type: 'string', description: 'ID of the connector to sync' },
+      },
+      required: ['connector_id'],
+    },
+  },
+  {
+    name: 'test_connector',
+    description: 'Test connectivity for a data source connector to verify it can reach the external system.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connector_id: { type: 'string', description: 'ID of the connector to test' },
+      },
+      required: ['connector_id'],
+    },
+  },
+
+  // =========================================================================
   // PDF FORM TOOLS
   // =========================================================================
 

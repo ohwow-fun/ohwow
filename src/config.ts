@@ -114,6 +114,10 @@ export interface RuntimeConfig {
   claudeCodeCliPermissionMode: ClaudeCodeCliPermissionMode;
   /** Auto-detect and prefer Claude Code CLI for code-capable agents (default: true) */
   claudeCodeCliAutodetect: boolean;
+  /** Embedding model for RAG vector search (default: nomic-embed-text). Empty string to disable. */
+  embeddingModel: string;
+  /** Weight for BM25 in hybrid search: 0.0 = pure embedding, 1.0 = pure BM25 (default: 0.5) */
+  ragBm25Weight: number;
 }
 
 interface ConfigFile {
@@ -172,6 +176,8 @@ interface ConfigFile {
   claudeCodeCliMaxTurns?: number;
   claudeCodeCliPermissionMode?: ClaudeCodeCliPermissionMode;
   claudeCodeCliAutodetect?: boolean;
+  embeddingModel?: string;
+  ragBm25Weight?: number;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -268,6 +274,11 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     claudeCodeCliMaxTurns: parseInt(process.env.OHWOW_CLAUDE_CODE_CLI_MAX_TURNS || '', 10) || fileConfig.claudeCodeCliMaxTurns || 25,
     claudeCodeCliPermissionMode: (process.env.OHWOW_CLAUDE_CODE_CLI_PERMISSION_MODE as ClaudeCodeCliPermissionMode) || fileConfig.claudeCodeCliPermissionMode || 'skip',
     claudeCodeCliAutodetect: process.env.OHWOW_CLAUDE_CODE_CLI_AUTODETECT === 'false' ? false : (fileConfig.claudeCodeCliAutodetect !== false),
+    embeddingModel: process.env.OHWOW_EMBEDDING_MODEL ?? fileConfig.embeddingModel ?? 'nomic-embed-text',
+    ragBm25Weight: (() => {
+      const env = parseFloat(process.env.OHWOW_RAG_BM25_WEIGHT || '');
+      return !isNaN(env) ? env : (fileConfig.ragBm25Weight ?? 0.5);
+    })(),
   };
 
 
