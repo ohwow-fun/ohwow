@@ -46,6 +46,8 @@ export interface OllamaModelInfo {
   audio?: boolean;
   /** Context window size in tokens (e.g. 262144 for 256K). Used by getModelContextSize(). */
   contextSize?: number;
+  /** HuggingFace model ID for mlx-vlm (Apple Silicon). Empty = not available via MLX. */
+  mlxModelId?: string;
   /** TurboQuant KV cache compression compatibility */
   turboQuant?: {
     /** Whether this model's architecture supports KV cache compression */
@@ -159,6 +161,7 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     vision: true,
     audio: true,
     contextSize: 131_072,
+    mlxModelId: 'mlx-community/gemma-4-e2b-it-4bit',
   },
   {
     tag: 'gemma3:4b',
@@ -273,6 +276,7 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     vision: true,
     audio: true,
     contextSize: 131_072,
+    mlxModelId: 'mlx-community/gemma-4-e4b-it-4bit',
   },
 
   // Large (16-32 GB RAM)
@@ -387,6 +391,7 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     toolCalling: true,
     vision: true,
     contextSize: 262_144,
+    mlxModelId: 'mlx-community/gemma-4-26b-it-4bit',
   },
 
   // XLarge (32GB+)
@@ -415,6 +420,7 @@ export const MODEL_CATALOG: OllamaModelInfo[] = [
     toolCalling: true,
     vision: true,
     contextSize: 262_144,
+    mlxModelId: 'mlx-community/gemma-4-31b-it-4bit',
   },
   {
     tag: 'gemma3:27b',
@@ -511,6 +517,12 @@ export function getOcrModel(tag?: string): OcrModelInfo | null {
     return OCR_MODELS.find(m => m.tag === tag) || null;
   }
   return OCR_MODELS[0] || null;
+}
+
+/** Resolve the MLX HuggingFace model ID for an Ollama tag. Returns undefined if no MLX mapping exists. */
+export function getMLXModelId(ollamaTag: string): string | undefined {
+  const entry = MODEL_CATALOG.find(m => m.tag === ollamaTag);
+  return entry?.mlxModelId;
 }
 
 /**
@@ -633,6 +645,7 @@ export function computeDynamicNumCtx(
   tag: string,
   device: DeviceInfo,
   turboQuantBits?: CompressionBits,
+  reservedMemoryGB?: number,
 ): number {
   const entry = MODEL_CATALOG.find(m => m.tag === tag);
   const modelSize = entry?.sizeGB ?? 2.5; // conservative fallback
@@ -641,7 +654,8 @@ export function computeDynamicNumCtx(
   // Use free memory but floor at 50% of total (OS disk cache is reclaimable)
   const effectiveFree = Math.max(device.freeMemoryGB, device.totalMemoryGB * 0.5);
   // Reserve 1GB for OS + other processes on top of what's already in use
-  const availableForModel = effectiveFree - 1.0;
+  // Also subtract memory committed to other inference servers (e.g., MLX or llama-cpp)
+  const availableForModel = effectiveFree - 1.0 - (reservedMemoryGB ?? 0);
   // Subtract model weights to get RAM available for KV cache
   const availableForContext = availableForModel - modelSize;
   if (availableForContext <= 0) return 4096; // barely fits, use minimum

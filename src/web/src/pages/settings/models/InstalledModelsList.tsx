@@ -101,6 +101,9 @@ export function InstalledModelsList({ models, downloading, onSetActive, onSetOrc
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                  {model.mlxModelId && (
+                    <FeatureBadge label="MLX" color="bg-emerald-500/20 text-emerald-400" />
+                  )}
                   {model.vision && <FeatureBadge label="Vision" color="bg-purple-500/20 text-purple-400" />}
                   {model.toolCalling && <FeatureBadge label="Tools" color="bg-white/10 text-neutral-300" />}
                   {model.sizeGB && (

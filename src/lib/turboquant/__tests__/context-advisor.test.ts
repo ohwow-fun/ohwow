@@ -16,6 +16,7 @@ function makeDevice(totalMemoryGB: number, freeMemoryGB?: number): DeviceInfo {
     cpuCores: 8,
     isAppleSilicon: true,
     hasNvidiaGpu: false,
+    mlxAvailable: false,
   };
 }
 

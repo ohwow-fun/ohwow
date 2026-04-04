@@ -17,6 +17,10 @@ export interface DeviceInfo {
   isAppleSilicon: boolean;
   hasNvidiaGpu: boolean;
   gpuName?: string;
+  /** Whether MLX framework is available (Apple Silicon + python3 + mlx-vlm installed) */
+  mlxAvailable: boolean;
+  /** Python 3 executable path for launching mlx_vlm.server */
+  pythonPath?: string;
 }
 
 /**
@@ -80,6 +84,23 @@ export function detectDevice(): DeviceInfo {
     }
   }
 
+  // MLX detection: Apple Silicon + python3 + mlx-vlm installed
+  let mlxAvailable = false;
+  let pythonPath: string | undefined;
+
+  if (isAppleSilicon) {
+    try {
+      execSync('python3 -c "import mlx_vlm"', {
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      mlxAvailable = true;
+      pythonPath = 'python3';
+    } catch {
+      // mlx-vlm not installed or python3 not available
+    }
+  }
+
   return {
     arch,
     platform,
@@ -90,6 +111,8 @@ export function detectDevice(): DeviceInfo {
     isAppleSilicon,
     hasNvidiaGpu,
     gpuName,
+    mlxAvailable,
+    pythonPath,
   };
 }
 
@@ -124,6 +147,7 @@ export function formatDeviceSummary(info: DeviceInfo): string[] {
   lines.push(`RAM: ${info.totalMemoryGB} GB`);
   lines.push(`Arch: ${info.arch} / ${info.platform}`);
   if (info.isAppleSilicon) lines.push('Apple Silicon: Yes (unified memory, great for local AI)');
+  if (info.mlxAvailable) lines.push('MLX-VLM: Available (native Metal inference for vision models)');
   if (info.hasNvidiaGpu && info.gpuName) lines.push(`GPU: ${info.gpuName}`);
   return lines;
 }

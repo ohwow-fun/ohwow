@@ -12,6 +12,7 @@ function makeDevice(totalMemoryGB: number, freeMemoryGB?: number): DeviceInfo {
     cpuCores: 8,
     isAppleSilicon: true,
     hasNvidiaGpu: false,
+    mlxAvailable: false,
   };
 }
 
@@ -95,6 +96,19 @@ describe('computeDynamicNumCtx', () => {
     const veryLowFree = computeDynamicNumCtx('qwen3:4b', makeDevice(32, 1));
     const halfFree = computeDynamicNumCtx('qwen3:4b', makeDevice(32, 16));
     expect(veryLowFree).toBe(halfFree); // both should floor at 50%
+  });
+
+  it('reduces context window when reservedMemoryGB is set', () => {
+    // phi4-mini (2.5GB, 16K ctx) on 6GB device: without reserved there's ~1GB for ctx
+    // With 1GB reserved, available for context drops to ~0 → falls to minimum 4096
+    const withoutReserved = computeDynamicNumCtx('phi4-mini', makeDevice(6));
+    const withReserved = computeDynamicNumCtx('phi4-mini', makeDevice(6), undefined, 1);
+    expect(withReserved).toBeLessThan(withoutReserved);
+  });
+
+  it('returns minimum when reservedMemoryGB exhausts available RAM', () => {
+    const result = computeDynamicNumCtx('qwen3:4b', makeDevice(8), undefined, 10);
+    expect(result).toBe(4096);
   });
 });
 

@@ -4,7 +4,10 @@ import { useApi } from '../../hooks/useApi';
 import { api } from '../../api/client';
 import { toast } from '../../components/Toast';
 import { useModels } from '../../hooks/useModels';
+import { useInferenceStatus } from '../../hooks/useInferenceStatus';
+import { useWsListener } from '../../hooks/useWebSocket';
 import { InstalledModelsList } from './models/InstalledModelsList';
+import { InferenceStatusBar } from './models/InferenceStatusBar';
 import { ModelCatalog } from './models/ModelCatalog';
 import { DeleteModelModal } from './models/DeleteModelModal';
 
@@ -49,6 +52,28 @@ export function ModelSection() {
     saveOpenRouterKey,
     setOpenRouterModel,
   } = useModels();
+
+  const { status: inferenceStatus } = useInferenceStatus();
+
+  // Track model switch progress inline (in addition to toasts)
+  const [switchState, setSwitchState] = useState<{
+    model: string; status: 'switching' | 'complete' | 'failed';
+    provider?: string; reason?: string;
+  } | null>(null);
+
+  useWsListener(useCallback((event: string, data: unknown) => {
+    const d = data as Record<string, string>;
+    if (event === 'model:switch-started') {
+      setSwitchState({ model: d.model, status: 'switching' });
+    } else if (event === 'model:switch-complete') {
+      setSwitchState({ model: d.model, status: 'complete', provider: d.provider });
+      fetchInstalled();
+      setTimeout(() => setSwitchState(null), 3000);
+    } else if (event === 'model:switch-failed') {
+      setSwitchState({ model: d.model, status: 'failed', reason: d.reason });
+      setTimeout(() => setSwitchState(null), 5000);
+    }
+  }, [fetchInstalled]));
 
   useEffect(() => {
     fetchInstalled();
@@ -237,11 +262,22 @@ export function ModelSection() {
         </div>
       </div>
 
-      {/* Local Models (Ollama) */}
+      {/* Local Models */}
       <div className="mb-6">
         <h2 className="text-sm font-medium text-neutral-400 uppercase tracking-wider mb-3">
-          Local Models (Ollama)
+          Local Models
         </h2>
+
+        {/* Inference status bar: active provider, VRAM, switch progress */}
+        {inferenceStatus && (
+          <InferenceStatusBar
+            activeProvider={inferenceStatus.activeProvider}
+            mlxModel={inferenceStatus.mlx?.model}
+            switchInProgress={inferenceStatus.switchInProgress}
+            switchState={switchState}
+            capacity={inferenceStatus.capacity}
+          />
+        )}
 
         {/* Ollama not running warning */}
         {!loading && !ollamaRunning && (

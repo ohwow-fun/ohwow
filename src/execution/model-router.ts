@@ -14,6 +14,7 @@ import type { OperationType, ExecutionPolicy } from './execution-policy.js';
 import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
+import { MLXProvider } from './providers/mlx-provider.js';
 import type {
   TextBlock,
   MessageParam,
@@ -44,7 +45,7 @@ export interface ModelResponse {
   inputTokens: number;
   outputTokens: number;
   model: string;
-  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp';
+  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp' | 'mlx';
 }
 
 // ============================================================================
@@ -1025,6 +1026,7 @@ export class ModelRouter {
   private openrouter: OpenRouterProvider | null;
   private claudeCode: ClaudeCodeProvider | null;
   private llamaCpp: LlamaCppProvider | null;
+  private mlx: MLXProvider | null;
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
@@ -1050,6 +1052,12 @@ export class ModelRouter {
     llamaCppUrl?: string;
     /** TurboQuant bits (>0 enables llama-cpp provider) */
     turboQuantBits?: 0 | 2 | 3 | 4;
+    /** URL for mlx-vlm server (Apple Silicon native inference) */
+    mlxServerUrl?: string;
+    /** Whether MLX provider is enabled */
+    mlxEnabled?: boolean;
+    /** MLX model identifier */
+    mlxModel?: string;
   }) {
     this.anthropic = opts.anthropicApiKey
       ? new AnthropicProvider(opts.anthropicApiKey)
@@ -1071,6 +1079,9 @@ export class ModelRouter {
     this.llamaCpp = (opts.llamaCppUrl && opts.turboQuantBits && opts.turboQuantBits > 0)
       ? new LlamaCppProvider(opts.llamaCppUrl, opts.ollamaModel || 'qwen3:4b')
       : null;
+    this.mlx = (opts.mlxServerUrl && opts.mlxEnabled)
+      ? new MLXProvider(opts.mlxServerUrl, opts.mlxModel || '')
+      : null;
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
     this.mainModelHasAudio = opts.mainModelHasAudio ?? false;
@@ -1083,6 +1094,7 @@ export class ModelRouter {
       this.ocrOllama?.setResponseCallback(cb);
       this.quickOllama?.setResponseCallback(cb);
       this.llamaCpp?.setResponseCallback(cb);
+      this.mlx?.setResponseCallback(cb);
     }
   }
 
@@ -1129,8 +1141,13 @@ export class ModelRouter {
       }
     }
 
-    // OCR and vision tasks: try dedicated OCR model → vision-capable main model → Anthropic
+    // OCR and vision tasks: try MLX → dedicated OCR model → vision-capable main model → Anthropic
     if (taskType === 'ocr' || taskType === 'vision') {
+      // 0. MLX (native multimodal on Apple Silicon — best for vision/audio)
+      if (this.mlx) {
+        const available = await this.mlx.isAvailable();
+        if (available) return this.mlx;
+      }
       // 1. Dedicated OCR model (best for OCR/vision tasks)
       if (this.ocrOllama) {
         const available = await this.ocrOllama.isAvailable();
@@ -1147,8 +1164,12 @@ export class ModelRouter {
       throw new Error('No vision-capable model available. Configure an OCR model, use a vision-capable local model, or add an Anthropic API key.');
     }
 
-    // Audio tasks: try audio-capable main model → Anthropic fallback
+    // Audio tasks: try MLX → audio-capable main model → Anthropic fallback
     if (taskType === 'audio') {
+      if (this.mlx) {
+        const available = await this.mlx.isAvailable();
+        if (available) return this.mlx;
+      }
       if (this.mainModelHasAudio && this.ollama) {
         const available = await this.ollama.isAvailable();
         if (available) return this.ollama;
@@ -1232,8 +1253,12 @@ export class ModelRouter {
       throw new Error('Cloud mode selected but no Anthropic API key configured. Add an API key or switch to local mode.');
     }
 
-    // Local mode: prefer llama-cpp (TurboQuant) → Ollama → Anthropic
+    // Local mode: prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → Ollama → Anthropic
     if (this.modelSource === 'local') {
+      if (this.mlx) {
+        const available = await this.mlx.isAvailable();
+        if (available) return this.mlx;
+      }
       if (this.llamaCpp) {
         const available = await this.llamaCpp.isAvailable();
         if (available) return this.llamaCpp;
@@ -1260,12 +1285,16 @@ export class ModelRouter {
     }
 
     // Auto mode: route by task type (original behavior)
-    const useLocal = this.preferLocal && (this.llamaCpp || this.ollama) && (
+    const useLocal = this.preferLocal && (this.mlx || this.llamaCpp || this.ollama) && (
       taskType === 'orchestrator' || taskType === 'memory_extraction'
     );
 
     if (useLocal) {
-      // Prefer llama-cpp (TurboQuant) when available, then Ollama
+      // Prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → Ollama
+      if (this.mlx) {
+        const available = await this.mlx.isAvailable();
+        if (available) return this.mlx;
+      }
       if (this.llamaCpp) {
         const available = await this.llamaCpp.isAvailable();
         if (available) return this.llamaCpp;

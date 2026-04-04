@@ -98,6 +98,12 @@ export interface RuntimeConfig {
   llamaCppBinaryPath: string;
   /** Direct path to a .gguf model file for llama-server (empty = resolve from Ollama blobs) */
   llamaCppModelPath: string;
+  /** Enable MLX-VLM inference on Apple Silicon (default: false, auto-enabled when hardware detected) */
+  mlxEnabled: boolean;
+  /** URL for mlx-vlm server (default: http://localhost:8090) */
+  mlxServerUrl: string;
+  /** MLX model ID from HuggingFace (e.g., 'mlx-community/gemma-4-e4b-it-4bit'). Empty = auto-resolve from ollamaModel. */
+  mlxModel: string;
   /** Path to claude CLI binary for full-delegation execution (empty = auto-detect from PATH) */
   claudeCodeCliPath: string;
   /** Model override for Claude Code CLI executor (empty = Claude Code default) */
@@ -158,6 +164,9 @@ interface ConfigFile {
   llamaCppUrl?: string;
   llamaCppBinaryPath?: string;
   llamaCppModelPath?: string;
+  mlxEnabled?: boolean;
+  mlxServerUrl?: string;
+  mlxModel?: string;
   claudeCodeCliPath?: string;
   claudeCodeCliModel?: string;
   claudeCodeCliMaxTurns?: number;
@@ -251,6 +260,9 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     llamaCppUrl: process.env.OHWOW_LLAMA_CPP_URL || fileConfig.llamaCppUrl || 'http://localhost:8085',
     llamaCppBinaryPath: process.env.OHWOW_LLAMA_CPP_BINARY || fileConfig.llamaCppBinaryPath || '',
     llamaCppModelPath: process.env.OHWOW_LLAMA_CPP_MODEL || fileConfig.llamaCppModelPath || '',
+    mlxEnabled: process.env.OHWOW_MLX_ENABLED === 'true' || fileConfig.mlxEnabled === true,
+    mlxServerUrl: process.env.OHWOW_MLX_SERVER_URL || fileConfig.mlxServerUrl || 'http://localhost:8090',
+    mlxModel: process.env.OHWOW_MLX_MODEL || fileConfig.mlxModel || '',
     claudeCodeCliPath: process.env.OHWOW_CLAUDE_CODE_CLI_PATH || fileConfig.claudeCodeCliPath || '',
     claudeCodeCliModel: process.env.OHWOW_CLAUDE_CODE_CLI_MODEL || fileConfig.claudeCodeCliModel || '',
     claudeCodeCliMaxTurns: parseInt(process.env.OHWOW_CLAUDE_CODE_CLI_MAX_TURNS || '', 10) || fileConfig.claudeCodeCliMaxTurns || 25,

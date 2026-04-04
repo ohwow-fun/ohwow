@@ -16,6 +16,14 @@ interface InstalledModelInfo {
   status: 'loaded' | 'installed' | 'unavailable';
   isActive: boolean;
   isOrchestrator: boolean;
+  mlxModelId?: string | null;
+}
+
+interface InferenceStatusInfo {
+  activeProvider: 'mlx' | 'llama-cpp' | 'ollama';
+  mlx: { url: string; model: string | null } | null;
+  switchInProgress: boolean;
+  capacity: { totalVramGB: number; usedVramGB: number; availableVramGB: number };
 }
 
 interface CatalogModel {
@@ -66,6 +74,9 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
   const [cloudKeyEditing, setCloudKeyEditing] = useState(false);
   const [cloudKeyValidating, setCloudKeyValidating] = useState(false);
 
+  // Inference status (provider, VRAM, switch progress)
+  const [inferenceStatus, setInferenceStatus] = useState<InferenceStatusInfo | null>(null);
+
   const messageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const apiFetch = useCallback(async <T = unknown>(path: string, options?: RequestInit): Promise<T> => {
@@ -108,7 +119,16 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
     }
   }, [apiFetch, selectedIdx]);
 
-  useEffect(() => { fetchModels(); }, [fetchModels]);
+  const fetchInferenceStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch<InferenceStatusInfo>('/api/inference/status');
+      setInferenceStatus(res);
+    } catch {
+      // Older daemon may not have this endpoint
+    }
+  }, [apiFetch]);
+
+  useEffect(() => { fetchModels(); fetchInferenceStatus(); }, [fetchModels, fetchInferenceStatus]);
 
   const showMessage = (msg: string) => {
     if (messageTimerRef.current) clearTimeout(messageTimerRef.current);
@@ -382,26 +402,33 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
       return;
     }
 
-    // Unload from VRAM
+    // Unload from VRAM (Ollama or MLX)
     if (input === 'u') {
-      if (model.status !== 'loaded') {
+      // Allow unloading MLX model even when it's the active model
+      const isMLXModel = inferenceStatus?.activeProvider === 'mlx' && !!model.mlxModelId;
+      if (!isMLXModel && model.status !== 'loaded') {
         showMessage('Model is not loaded in memory');
         return;
       }
-      if (model.isActive) {
+      if (!isMLXModel && model.isActive) {
         showMessage('Can\'t unload the active model');
         return;
       }
-      if (model.isOrchestrator) {
+      if (!isMLXModel && model.isOrchestrator) {
         showMessage('Can\'t unload the orchestrator model');
         return;
       }
       setActionInProgress(true);
-      apiFetch(`/api/models/${encodeURIComponent(model.tag)}/unload`, {
+      // Use MLX unload endpoint if this model is running on MLX
+      const unloadUrl = isMLXModel
+        ? '/api/inference/mlx/unload'
+        : `/api/models/${encodeURIComponent(model.tag)}/unload`;
+      apiFetch(unloadUrl, {
         method: 'POST',
       })
         .then(() => {
-          showMessage(`Unloaded ${model.tag} from memory`);
+          showMessage(isMLXModel ? `Unloaded MLX model from GPU` : `Unloaded ${model.tag} from memory`);
+          fetchInferenceStatus();
           return fetchModels();
         })
         .catch(() => showMessage('Couldn\'t unload model'))
@@ -588,12 +615,27 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
   }
 
   // --- Main list view ---
+  const providerLabel = inferenceStatus?.activeProvider === 'mlx' ? ' [MLX]'
+    : inferenceStatus?.activeProvider === 'llama-cpp' ? ' [llama.cpp]'
+    : '';
+  const vramInfo = inferenceStatus?.capacity
+    ? `VRAM ${inferenceStatus.capacity.usedVramGB.toFixed(1)}/${inferenceStatus.capacity.totalVramGB.toFixed(0)}GB`
+    : '';
+
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
         <Text bold>Model Manager</Text>
-        <Text color="gray">                                    Esc to go back</Text>
+        {providerLabel && <Text color="green">{providerLabel}</Text>}
+        {vramInfo && <Text color="gray">  {vramInfo}</Text>}
+        <Text color="gray">        Esc to go back</Text>
       </Box>
+
+      {inferenceStatus?.switchInProgress && (
+        <Box marginBottom={1}>
+          <Text color="cyan">⟳ Model switch in progress...</Text>
+        </Box>
+      )}
 
       {loading && models.length === 0 ? (
         <Text color="gray">Loading models...</Text>
@@ -618,6 +660,7 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
             const badges: string[] = [];
             if (model.isActive) badges.push('★ Active');
             if (model.isOrchestrator) badges.push('◆ Orchestrator');
+            if (model.mlxModelId) badges.push('◈ MLX');
             const tqInfo = getModelTurboQuantInfo(model.tag);
             if (tqInfo.compatible) badges.push(`⚡ TQ ${tqInfo.ratio4bit}x`);
 
@@ -630,7 +673,7 @@ export function ModelManager({ port, sessionToken, onBack, modelSource = 'local'
                   {'  '}
                   <Text color="gray">{model.status.padEnd(12)}</Text>
                   {badges.map(b => (
-                    <Text key={b} color={b.startsWith('★') ? 'yellow' : b.startsWith('⚡') ? 'cyan' : 'magenta'}>{' '}{b}</Text>
+                    <Text key={b} color={b.startsWith('★') ? 'yellow' : b.startsWith('◈') ? 'green' : b.startsWith('⚡') ? 'cyan' : 'magenta'}>{' '}{b}</Text>
                   ))}
                 </Text>
               </Box>

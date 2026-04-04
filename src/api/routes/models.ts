@@ -7,7 +7,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { EventEmitter } from 'events';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
-import { MODEL_CATALOG, isModelInstalled } from '../../lib/ollama-models.js';
+import { MODEL_CATALOG, isModelInstalled, getMLXModelId } from '../../lib/ollama-models.js';
 import { detectDevice, getMemoryTier } from '../../lib/device-info.js';
 import { isOllamaRunning, listInstalledModels, unloadModel, loadModel, pullModel } from '../../lib/ollama-installer.js';
 import { updateConfigFile } from '../../config.js';
@@ -87,6 +87,7 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
           toolCalling: catalogEntry?.toolCalling || false,
           vision: catalogEntry?.vision || false,
           audio: catalogEntry?.audio || false,
+          mlxModelId: getMLXModelId(name) || null,
           status: snapshot?.status || 'installed',
           totalRequests: modelStats?.total_requests || 0,
           totalDurationMs: modelStats?.total_duration_ms || 0,

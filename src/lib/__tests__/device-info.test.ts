@@ -12,6 +12,7 @@ function makeDevice(overrides: Partial<DeviceInfo> = {}): DeviceInfo {
     cpuCores: 8,
     isAppleSilicon: true,
     hasNvidiaGpu: false,
+    mlxAvailable: false,
     ...overrides,
   };
 }

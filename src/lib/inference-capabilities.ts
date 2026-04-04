@@ -11,7 +11,7 @@
 
 export interface InferenceCapabilities {
   /** Which provider is active */
-  provider: 'ollama' | 'llama-cpp' | 'anthropic' | 'openrouter' | 'claude-code';
+  provider: 'ollama' | 'llama-cpp' | 'mlx' | 'anthropic' | 'openrouter' | 'claude-code';
   /** Whether TurboQuant KV cache compression is confirmed active */
   turboQuantActive: boolean;
   /** Compression bits (0 = none, 2/3/4 = active) */
@@ -50,6 +50,25 @@ export function createLlamaCppCapabilities(
 ): InferenceCapabilities {
   return {
     provider: 'llama-cpp',
+    turboQuantActive: true,
+    turboQuantBits: bits,
+    cacheTypeK,
+    cacheTypeV,
+    detectedAt: Date.now(),
+  };
+}
+
+/**
+ * Create capabilities for a confirmed mlx-vlm server with TurboQuant KV cache.
+ * Call this after MLXManager.start() succeeds with kv-bits enabled.
+ */
+export function createMLXCapabilities(
+  bits: 2 | 3 | 4,
+  cacheTypeK: string,
+  cacheTypeV: string,
+): InferenceCapabilities {
+  return {
+    provider: 'mlx',
     turboQuantActive: true,
     turboQuantBits: bits,
     cacheTypeK,

@@ -24,6 +24,22 @@ export function useEventToasts() {
       case 'credits:exhausted':
         toast('info', 'Cloud credits exhausted. Tasks are running on your local model.');
         break;
+      case 'model:switch-started':
+        toast('info', `Switching model to ${d?.model || 'new model'}...`);
+        break;
+      case 'model:switch-complete':
+        toast('success', `Now using ${d?.model || 'model'} via ${d?.provider || 'local'}`);
+        break;
+      case 'model:switch-failed':
+        toast('error', `Model switch failed: ${d?.reason || 'Unknown error'}`);
+        break;
+      case 'inference:capabilities-changed': {
+        const caps = data as Record<string, unknown>;
+        if (caps?.turboQuantActive) {
+          toast('info', `TurboQuant ${caps.turboQuantBits}-bit active via ${caps.provider}`);
+        }
+        break;
+      }
     }
   }, []));
 }
