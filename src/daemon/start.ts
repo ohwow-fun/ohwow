@@ -274,6 +274,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
     mlxServerUrl,
     mlxEnabled,
     mlxModel: config.mlxModel || undefined,
+    openaiCompatibleUrl: config.openaiCompatibleUrl || undefined,
+    openaiCompatibleApiKey: config.openaiCompatibleApiKey || undefined,
   });
 
   // ---- Graceful model switching (serialized, memory-aware) ----

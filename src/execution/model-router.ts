@@ -15,6 +15,7 @@ import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import { MLXProvider } from './providers/mlx-provider.js';
+import { OpenAICompatibleProvider } from './providers/openai-compatible-provider.js';
 import type {
   TextBlock,
   MessageParam,
@@ -45,7 +46,7 @@ export interface ModelResponse {
   inputTokens: number;
   outputTokens: number;
   model: string;
-  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp' | 'mlx';
+  provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp' | 'mlx' | 'openai-compatible';
 }
 
 // ============================================================================
@@ -1027,6 +1028,7 @@ export class ModelRouter {
   private claudeCode: ClaudeCodeProvider | null;
   private llamaCpp: LlamaCppProvider | null;
   private mlx: MLXProvider | null;
+  private openaiCompatible: OpenAICompatibleProvider | null;
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
@@ -1058,6 +1060,10 @@ export class ModelRouter {
     mlxEnabled?: boolean;
     /** MLX model identifier */
     mlxModel?: string;
+    /** Base URL for OpenAI-compatible provider (e.g. http://localhost:8000) */
+    openaiCompatibleUrl?: string;
+    /** API key for OpenAI-compatible provider */
+    openaiCompatibleApiKey?: string;
   }) {
     this.anthropic = opts.anthropicApiKey
       ? new AnthropicProvider(opts.anthropicApiKey)
@@ -1082,6 +1088,9 @@ export class ModelRouter {
     this.mlx = (opts.mlxServerUrl && opts.mlxEnabled)
       ? new MLXProvider(opts.mlxServerUrl, opts.mlxModel || '')
       : null;
+    this.openaiCompatible = opts.openaiCompatibleUrl
+      ? new OpenAICompatibleProvider(opts.openaiCompatibleUrl, opts.ollamaModel || 'qwen3:4b', opts.openaiCompatibleApiKey || undefined)
+      : null;
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
     this.mainModelHasAudio = opts.mainModelHasAudio ?? false;
@@ -1095,6 +1104,7 @@ export class ModelRouter {
       this.quickOllama?.setResponseCallback(cb);
       this.llamaCpp?.setResponseCallback(cb);
       this.mlx?.setResponseCallback(cb);
+      this.openaiCompatible?.setResponseCallback(cb);
     }
   }
 
@@ -1253,7 +1263,7 @@ export class ModelRouter {
       throw new Error('Cloud mode selected but no Anthropic API key configured. Add an API key or switch to local mode.');
     }
 
-    // Local mode: prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → Ollama → Anthropic
+    // Local mode: prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → openai-compatible → Ollama → Anthropic
     if (this.modelSource === 'local') {
       if (this.mlx) {
         const available = await this.mlx.isAvailable();
@@ -1262,6 +1272,10 @@ export class ModelRouter {
       if (this.llamaCpp) {
         const available = await this.llamaCpp.isAvailable();
         if (available) return this.llamaCpp;
+      }
+      if (this.openaiCompatible) {
+        const available = await this.openaiCompatible.isAvailable();
+        if (available) return this.openaiCompatible;
       }
       if (this.ollama) {
         const available = await this.ollama.isAvailable();
@@ -1285,12 +1299,12 @@ export class ModelRouter {
     }
 
     // Auto mode: route by task type (original behavior)
-    const useLocal = this.preferLocal && (this.mlx || this.llamaCpp || this.ollama) && (
+    const useLocal = this.preferLocal && (this.mlx || this.llamaCpp || this.openaiCompatible || this.ollama) && (
       taskType === 'orchestrator' || taskType === 'memory_extraction'
     );
 
     if (useLocal) {
-      // Prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → Ollama
+      // Prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → openai-compatible → Ollama
       if (this.mlx) {
         const available = await this.mlx.isAvailable();
         if (available) return this.mlx;
@@ -1298,6 +1312,10 @@ export class ModelRouter {
       if (this.llamaCpp) {
         const available = await this.llamaCpp.isAvailable();
         if (available) return this.llamaCpp;
+      }
+      if (this.openaiCompatible) {
+        const available = await this.openaiCompatible.isAvailable();
+        if (available) return this.openaiCompatible;
       }
       if (this.ollama) {
         const available = await this.ollama.isAvailable();
@@ -1314,7 +1332,11 @@ export class ModelRouter {
 
     if (this.anthropic) return this.anthropic;
 
-    // Last resort: try Ollama even for non-preferred tasks (free tier always uses Ollama)
+    // Last resort: try OpenAI-compatible → Ollama even for non-preferred tasks (free tier)
+    if (this.openaiCompatible) {
+      const available = await this.openaiCompatible.isAvailable();
+      if (available) return this.openaiCompatible;
+    }
     if (this.ollama) {
       const available = await this.ollama.isAvailable();
       if (available) return this.ollama;

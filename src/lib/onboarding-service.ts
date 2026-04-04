@@ -222,6 +222,8 @@ export class OnboardingService {
       claudeCodeCliAutodetect: true,
       embeddingModel: 'nomic-embed-text',
       ragBm25Weight: 0.5,
+      openaiCompatibleUrl: '',
+      openaiCompatibleApiKey: '',
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;
