@@ -6,6 +6,7 @@
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../logger.js';
 import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from './embeddings.js';
+import { getRelatedChunkIds } from './knowledge-graph.js';
 import { rerankWithLLM } from './reranker.js';
 
 // ============================================================================
@@ -354,6 +355,28 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
         for (const r of reranked) {
           scored[r.index].score = r.score;
         }
+      }
+    }
+
+    // 8b. Boost chunks related via knowledge graph
+    if (opts.ollamaUrl) {
+      try {
+        const topChunkIds = scored
+          .filter(c => c.score !== Infinity)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5)
+          .map(c => c.id);
+
+        const relatedIds = await getRelatedChunkIds(db, workspaceId, topChunkIds, 1);
+        const relatedSet = new Set(relatedIds);
+
+        for (const s of scored) {
+          if (relatedSet.has(s.id) && s.score !== Infinity) {
+            s.score += 0.1; // small boost for graph-connected chunks
+          }
+        }
+      } catch {
+        // Graph not available yet — skip
       }
     }
 

@@ -14,6 +14,7 @@ import type { TypedEventBus } from '../../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../../tui/types.js';
 import { chunkText } from '../../lib/rag/chunker.js';
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { extractEntitiesAndRelations, saveGraphData } from '../../lib/rag/knowledge-graph.js';
 import { tokenize } from '../../lib/rag/retrieval.js';
 import { extractTextLocal, updateCorpusStats } from '../../orchestrator/tools/knowledge.js';
 import { logger } from '../../lib/logger.js';
@@ -52,7 +53,7 @@ export class DocumentWorker {
   constructor(
     private db: DatabaseAdapter,
     private bus: TypedEventBus<RuntimeEvents>,
-    private config: { ollamaUrl?: string; embeddingModel?: string },
+    private config: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string },
   ) {}
 
   /**
@@ -221,6 +222,25 @@ export class DocumentWorker {
           if (embeddedCount > 0) embeddingModel = this.config.embeddingModel;
         } catch (err) {
           logger.warn({ err, documentId: job.document_id }, '[DocumentWorker] Embedding generation failed, continuing without embeddings');
+        }
+      }
+
+      // 8b. Extract knowledge graph (best-effort, don't fail the job)
+      if (this.config.ollamaUrl && this.config.ollamaModel) {
+        for (let i = 0; i < chunks.length; i++) {
+          const chunkId = createHash('sha256').update(`${job.document_id}-${i}`).digest('hex').slice(0, 32);
+          try {
+            const extraction = await extractEntitiesAndRelations(
+              chunks[i].content,
+              this.config.ollamaUrl,
+              this.config.ollamaModel,
+            );
+            if (extraction.entities.length > 0 || extraction.relations.length > 0) {
+              await saveGraphData(this.db, job.workspace_id, chunkId, extraction);
+            }
+          } catch {
+            // Skip — graph extraction is best-effort
+          }
         }
       }
 

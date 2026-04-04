@@ -884,6 +884,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const documentWorker = new DocumentWorker(db, bus, {
     ollamaUrl: config.ollamaUrl,
     embeddingModel: config.embeddingModel || undefined,
+    ollamaModel: config.ollamaModel || undefined,
   });
   documentWorker.start();
 
