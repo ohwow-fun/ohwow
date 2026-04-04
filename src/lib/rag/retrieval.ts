@@ -261,7 +261,12 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
         for (const row of statsData) {
           idfMap.set(row.term, row.doc_frequency);
         }
-        corpusSize = eligibleDocs.length;
+        // Use total workspace doc count for IDF, not just eligible docs
+        const countResult = await db
+          .from('agent_workforce_knowledge_documents')
+          .select('id', { count: 'exact', head: true })
+          .eq('workspace_id', workspaceId);
+        corpusSize = countResult.count ?? eligibleDocs.length;
       }
     } catch {
       // Table may not exist yet (pre-migration) — fall back to no IDF
@@ -321,7 +326,7 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
             const chunk = chunks[i];
             if (chunk.embedding) {
               const chunkEmbedding = deserializeEmbedding(chunk.embedding as Buffer);
-              const cosine = cosineSimilarity(queryEmbedding.embedding, chunkEmbedding);
+              const cosine = Math.max(0, cosineSimilarity(queryEmbedding.embedding, chunkEmbedding));
               const normalizedBm25 = maxBm25 > 0 ? scored[i].score / maxBm25 : 0;
               scored[i].score = bm25Weight * normalizedBm25 + (1 - bm25Weight) * cosine;
             }

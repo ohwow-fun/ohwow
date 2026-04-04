@@ -5,7 +5,7 @@
 
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { ConnectorType } from '../../integrations/connector-types.js';
 
 // ============================================================================
@@ -61,7 +61,7 @@ export async function addConnector(
     return { success: false, error: `Invalid type "${type}". Valid: ${validTypes.join(', ')}` };
   }
 
-  const id = createHash('sha256').update(`${Date.now()}-${type}-${name}`).digest('hex').slice(0, 32);
+  const id = randomUUID().replace(/-/g, '');
   const settings = (input.settings as Record<string, unknown>) || {};
   const syncInterval = Number(input.sync_interval_minutes) || 30;
 

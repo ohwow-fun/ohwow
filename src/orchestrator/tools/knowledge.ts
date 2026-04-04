@@ -152,24 +152,7 @@ export async function uploadKnowledge(
     await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
 
     // Generate embeddings if Ollama is available
-    let embeddingModel: string | undefined;
-    if (ctx.ollamaUrl && ctx.embeddingModel) {
-      const chunkTexts = chunks.map((c) => c.content);
-      const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
-      let embeddedCount = 0;
-      for (let i = 0; i < chunks.length; i++) {
-        const emb = embeddings[i];
-        if (emb) {
-          const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
-          await ctx.db
-            .from('agent_workforce_knowledge_chunks')
-            .update({ embedding: serializeEmbedding(emb) })
-            .eq('id', chunkId);
-          embeddedCount++;
-        }
-      }
-      if (embeddedCount > 0) embeddingModel = ctx.embeddingModel;
-    }
+    const embeddingModel = await embedChunks(ctx, docId, chunks);
 
     // Update document
     await ctx.db
@@ -297,24 +280,7 @@ export async function addKnowledgeFromUrl(
   await updateCorpusStats(ctx.db, ctx.workspaceId, chunks, 1);
 
   // Generate embeddings if Ollama is available
-  let urlEmbeddingModel: string | undefined;
-  if (ctx.ollamaUrl && ctx.embeddingModel) {
-    const chunkTexts = chunks.map((c) => c.content);
-    const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
-    let embeddedCount = 0;
-    for (let i = 0; i < chunks.length; i++) {
-      const emb = embeddings[i];
-      if (emb) {
-        const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
-        await ctx.db
-          .from('agent_workforce_knowledge_chunks')
-          .update({ embedding: serializeEmbedding(emb) })
-          .eq('id', chunkId);
-        embeddedCount++;
-      }
-    }
-    if (embeddedCount > 0) urlEmbeddingModel = ctx.embeddingModel;
-  }
+  const urlEmbeddingModel = await embedChunks(ctx, docId, chunks);
 
   await ctx.db
     .from('agent_workforce_knowledge_documents')
@@ -583,6 +549,35 @@ function extractKeywordsLocal(text: string): string[] {
 }
 
 // ============================================================================
+// EMBEDDING HELPER
+// ============================================================================
+
+/** Generate and store embeddings for chunks. Returns the model name if any were embedded. */
+async function embedChunks(
+  ctx: LocalToolContext,
+  docId: string,
+  chunks: LocalChunk[],
+): Promise<string | undefined> {
+  if (!ctx.ollamaUrl || !ctx.embeddingModel) return undefined;
+
+  const chunkTexts = chunks.map((c) => c.content);
+  const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
+  let embeddedCount = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const emb = embeddings[i];
+    if (emb) {
+      const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+      await ctx.db
+        .from('agent_workforce_knowledge_chunks')
+        .update({ embedding: serializeEmbedding(emb) })
+        .eq('id', chunkId);
+      embeddedCount++;
+    }
+  }
+  return embeddedCount > 0 ? ctx.embeddingModel : undefined;
+}
+
+// ============================================================================
 // CORPUS STATS (IDF tracking)
 // ============================================================================
 
@@ -602,53 +597,67 @@ async function updateCorpusStats(
       }
     }
 
-    for (const term of docTerms) {
+    const terms = [...docTerms];
+    if (terms.length === 0) return;
+
+    // Batch fetch existing stats for all terms at once
+    const { data: existingRows } = await db
+      .from<{ term: string; doc_frequency: number }>('rag_corpus_stats')
+      .select('term, doc_frequency')
+      .eq('workspace_id', workspaceId)
+      .in('term', terms);
+
+    const existingMap = new Map<string, number>();
+    for (const row of existingRows ?? []) {
+      existingMap.set(row.term, row.doc_frequency);
+    }
+
+    const now = new Date().toISOString();
+
+    // Batch operations by type to minimize round-trips
+    const toInsert: string[] = [];
+    const toUpdate: Array<{ term: string; newFreq: number }> = [];
+    const toDelete: string[] = [];
+
+    for (const term of terms) {
+      const current = existingMap.get(term);
       if (delta > 0) {
-        // Upsert: try insert, if conflict increment
-        const { error: insertErr } = await db
-          .from('rag_corpus_stats')
-          .insert({ workspace_id: workspaceId, term, doc_frequency: 1 });
-
-        if (insertErr) {
-          // Row exists — fetch current value and update
-          const { data: existing } = await db
-            .from<{ doc_frequency: number }>('rag_corpus_stats')
-            .select('doc_frequency')
-            .eq('workspace_id', workspaceId)
-            .eq('term', term)
-            .single();
-
-          if (existing) {
-            await db
-              .from('rag_corpus_stats')
-              .update({ doc_frequency: existing.doc_frequency + 1, updated_at: new Date().toISOString() })
-              .eq('workspace_id', workspaceId)
-              .eq('term', term);
-          }
+        if (current === undefined) {
+          toInsert.push(term);
+        } else {
+          toUpdate.push({ term, newFreq: current + 1 });
         }
       } else {
-        // Decrement on delete
-        const { data: existing } = await db
-          .from<{ doc_frequency: number }>('rag_corpus_stats')
-          .select('doc_frequency')
-          .eq('workspace_id', workspaceId)
-          .eq('term', term)
-          .single();
-
-        if (existing) {
-          const newFreq = existing.doc_frequency - 1;
+        if (current !== undefined) {
+          const newFreq = current - 1;
           if (newFreq <= 0) {
-            await db.from('rag_corpus_stats').delete()
-              .eq('workspace_id', workspaceId)
-              .eq('term', term);
+            toDelete.push(term);
           } else {
-            await db.from('rag_corpus_stats')
-              .update({ doc_frequency: newFreq, updated_at: new Date().toISOString() })
-              .eq('workspace_id', workspaceId)
-              .eq('term', term);
+            toUpdate.push({ term, newFreq });
           }
         }
       }
+    }
+
+    // Execute batched inserts
+    for (const term of toInsert) {
+      await db.from('rag_corpus_stats')
+        .insert({ workspace_id: workspaceId, term, doc_frequency: 1 });
+    }
+
+    // Execute batched updates
+    for (const { term, newFreq } of toUpdate) {
+      await db.from('rag_corpus_stats')
+        .update({ doc_frequency: newFreq, updated_at: now })
+        .eq('workspace_id', workspaceId)
+        .eq('term', term);
+    }
+
+    // Execute batched deletes
+    for (const term of toDelete) {
+      await db.from('rag_corpus_stats').delete()
+        .eq('workspace_id', workspaceId)
+        .eq('term', term);
     }
   } catch {
     // Best-effort: don't fail document operations if stats update fails
