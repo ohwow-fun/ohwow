@@ -1,12 +1,10 @@
-# Onyx Analysis: Lessons Learned & Enhancement Plan for ohwow
+# RAG Enhancement Plan for ohwow
 
 ## Context
 
-**Onyx** (formerly Danswer) is an enterprise AI assistant with world-class RAG capabilities: 62+ data source connectors, hybrid vector+keyword search via Vespa, 9 specialized Celery workers, reranking pipelines, knowledge graphs, multi-tenancy with RBAC/SSO, and broad LLM provider support (OpenAI, Anthropic, Google, Azure, Bedrock, Ollama, vLLM).
+ohwow is a local-first AI cognitive operating system with a unique 7-layer philosophical architecture (Brain/Body/Work/Mesh/Soul/Symbiosis/BIOS), 150+ orchestrator tools, mesh networking, and MCP/A2A support. Its RAG is currently BM25-only with no embeddings, no reranking, and no connector ecosystem beyond Telegram.
 
-**ohwow** is a local-first AI cognitive operating system with a unique 7-layer philosophical architecture (Brain/Body/Work/Mesh/Soul/Symbiosis/BIOS), 150+ orchestrator tools, mesh networking, and MCP/A2A support. Its RAG is currently BM25-only with no embeddings, no reranking, and no connector ecosystem beyond Telegram.
-
-This plan identifies the highest-impact enhancements ohwow can adopt from Onyx while respecting its local-first philosophy and unique strengths.
+This plan identifies the highest-impact enhancements to close gaps in document intelligence, informed by best practices from production RAG systems (hybrid search, connector ecosystems, background processing, reranking pipelines).
 
 ---
 
@@ -25,7 +23,7 @@ This plan identifies the highest-impact enhancements ohwow can adopt from Onyx w
 ---
 
 ### 1.2 Connector Interface Abstraction
-**Why**: ohwow has `MessagingChannel` (`src/integrations/channel-types.ts:27-39`) for messaging but no equivalent for data source connectors. Onyx's `LoadConnector`/`PollConnector` pattern is proven. This interface is the foundation for the entire connector ecosystem.
+**Why**: ohwow has `MessagingChannel` (`src/integrations/channel-types.ts:27-39`) for messaging but no equivalent for data source connectors. A `LoadConnector`/`PollConnector` pattern is proven in production RAG systems. This interface is the foundation for the entire connector ecosystem.
 
 **Files**:
 - New: `src/integrations/connector-types.ts` — `DataSourceConnector` interface
@@ -112,7 +110,7 @@ interface DataSourceConnector {
 **Files**:
 - New: `src/integrations/connectors/github-connector.ts`
 - New: `src/integrations/connectors/local-files-connector.ts`
-- `src/scheduling/local-scheduler.ts` — register periodic connector sync (30min default, like Onyx)
+- `src/scheduling/local-scheduler.ts` — register periodic connector sync (30min default)
 
 **Priority**: HIGH | **Effort**: Medium
 
@@ -180,7 +178,7 @@ Each connector follows the pattern from 1.2 and lives in `src/integrations/conne
 ---
 
 ### 3.4 Mesh-Distributed RAG
-**Why**: ohwow's unique mesh layer (`src/peers/`, `src/mesh/`) enables something Onyx cannot: distributed knowledge retrieval across peers.
+**Why**: ohwow's unique mesh layer (`src/peers/`, `src/mesh/`) enables distributed knowledge retrieval across peers.
 
 **Files**:
 - `src/mesh/mesh-router.ts` — add RAG query routing
@@ -210,7 +208,7 @@ Incrementally raise thresholds in `vitest.config.ts` (currently 15%).
 2. **Graceful degradation** — if Ollama is down, BM25 still works; if embeddings missing for a chunk, skip cosine for that chunk
 3. **Respect the philosophical architecture** — RAG integrates through Brain's `GlobalWorkspace`, connectors flow through Body's `DigitalNervousSystem`
 4. **Reuse existing patterns** — `ChannelRegistry` for connector registry, `DigitalNervousSystem` monitors for background workers, `TypedEventBus` for progress
-5. **No heavy dependencies** — no Vespa, Redis, or Celery. SQLite + Ollama + Node.js workers keep the footprint minimal
+5. **No heavy dependencies** — no external search engines, message brokers, or task queues. SQLite + Ollama + Node.js workers keep the footprint minimal
 
 ---
 
