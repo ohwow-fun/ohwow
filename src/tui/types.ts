@@ -213,6 +213,10 @@ export interface RuntimeEvents {
 
   // Credits
   'credits:exhausted': Record<string, never>;
+
+  // Budget guard
+  'budget:warning': { agentId: string; taskId: string; pct: number };
+  'budget:exceeded': { agentId: string; taskId: string; reason: string };
 }
 
 export type RuntimeEventName = keyof RuntimeEvents;

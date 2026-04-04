@@ -43,6 +43,8 @@ const FORWARDED_EVENTS: RuntimeEventName[] = [
   'cloud:replaced',
   'mcp:elicitation',
   'credits:exhausted',
+  'budget:warning',
+  'budget:exceeded',
 ];
 
 interface WsClient extends WebSocket {

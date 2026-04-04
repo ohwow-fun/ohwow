@@ -47,6 +47,8 @@ export interface ModelResponse {
   outputTokens: number;
   model: string;
   provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp' | 'mlx' | 'openai-compatible';
+  /** Actual cost in cents reported by provider (e.g., OpenRouter x-openrouter-cost header). */
+  costCents?: number;
 }
 
 // ============================================================================
@@ -863,12 +865,19 @@ export class OpenRouterProvider implements ModelProvider {
     const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
     const _durationMs = Date.now() - startTime;
 
+    // Extract actual cost from OpenRouter response header (USD → cents)
+    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
+    const costCents = openrouterCostHeader
+      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+      : undefined;
+
     return {
       content,
       inputTokens: usage.prompt_tokens,
       outputTokens: usage.completion_tokens,
       model,
       provider: 'openrouter',
+      costCents,
     };
   }
 
@@ -950,12 +959,19 @@ export class OpenRouterProvider implements ModelProvider {
         },
       }));
 
+    // Extract actual cost from OpenRouter response header (USD → cents)
+    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
+    const costCents = openrouterCostHeader
+      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+      : undefined;
+
     return {
       content,
       inputTokens: usage.prompt_tokens,
       outputTokens: usage.completion_tokens,
       model,
       provider: 'openrouter',
+      costCents,
       toolCalls,
     };
   }

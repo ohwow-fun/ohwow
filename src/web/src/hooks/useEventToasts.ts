@@ -24,6 +24,12 @@ export function useEventToasts() {
       case 'credits:exhausted':
         toast('info', 'Cloud credits exhausted. Tasks are running on your local model.');
         break;
+      case 'budget:warning':
+        toast('info', `Budget at ${d?.pct || '?'}% capacity`);
+        break;
+      case 'budget:exceeded':
+        toast('error', `Budget exceeded: ${d?.reason || 'Limit reached'}`);
+        break;
       case 'model:switch-started':
         toast('info', `Switching model to ${d?.model || 'new model'}...`);
         break;

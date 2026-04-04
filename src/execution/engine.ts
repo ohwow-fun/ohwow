@@ -1124,6 +1124,7 @@ export class RuntimeEngine {
       let totalInputTokens = 0;
       let totalOutputTokens = 0;
       let reactTrace: LocalReActStep[] = [];
+      let providerReportedCostCents: number | undefined;
 
       // Initialize LLM response cache
       const llmCache = new LocalLLMCache(this.db, workspaceId);
@@ -1206,6 +1207,7 @@ export class RuntimeEngine {
           totalInputTokens = ollamaResult.totalInputTokens;
           totalOutputTokens = ollamaResult.totalOutputTokens;
           reactTrace = ollamaResult.reactTrace;
+          providerReportedCostCents = ollamaResult.providerCostCents;
         } else if (tools.length > 0) {
           // ── Anthropic tool loop ──
           let currentMessages = [...messages];
@@ -1603,7 +1605,10 @@ export class RuntimeEngine {
       const { type: responseType, cleanContent } = this.parseResponseMeta(fullContent);
 
       const totalTokens = totalInputTokens + totalOutputTokens;
-      const costCents = useOllama
+      // Use provider-reported cost (OpenRouter) when available, otherwise estimate
+      const costCents = providerReportedCostCents
+        ? providerReportedCostCents
+        : useOllama
         ? 0
         : calculateCostCents(
             (agentConfig.model as ClaudeModel) || 'claude-sonnet-4-5',
@@ -2302,7 +2307,7 @@ export class RuntimeEngine {
     mcpClients?: McpClientManager | null;
     desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
-  }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[] }> {
+  }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number }> {
     // Query routing stats for adaptive model selection
     let routingHistory: import('./model-router.js').RoutingHistory | undefined;
     try {
@@ -2344,6 +2349,7 @@ export class RuntimeEngine {
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let providerCostCents = 0;
     let fullContent = '';
     const reactTrace: LocalReActStep[] = [];
 
@@ -2448,6 +2454,7 @@ export class RuntimeEngine {
 
         totalInputTokens += response.inputTokens;
         totalOutputTokens += response.outputTokens;
+        if (response.costCents) providerCostCents += response.costCents;
         this.emit('task:progress', { taskId: opts.taskId, tokensUsed: totalInputTokens + totalOutputTokens });
 
         if (response.content) {
@@ -2617,7 +2624,7 @@ export class RuntimeEngine {
       });
     }
 
-    return { fullContent, totalInputTokens, totalOutputTokens, reactTrace };
+    return { fullContent, totalInputTokens, totalOutputTokens, reactTrace, providerCostCents: providerCostCents || undefined };
   }
 
   // ==========================================================================
