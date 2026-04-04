@@ -22,6 +22,7 @@ export interface InstalledModel {
   family: string | null;
   toolCalling: boolean;
   vision: boolean;
+  audio?: boolean;
   status: 'loaded' | 'installed' | 'unavailable';
   totalRequests: number;
   totalDurationMs: number;
@@ -29,6 +30,8 @@ export interface InstalledModel {
   isActive: boolean;
   isOrchestrator: boolean;
   inCatalog: boolean;
+  /** HuggingFace model ID for MLX inference (e.g. 'mlx-community/gemma-4-e4b-it-4bit') */
+  mlxModelId?: string | null;
 }
 
 export interface CatalogModel {

@@ -1218,6 +1218,43 @@ export async function startDaemon(): Promise<DaemonHandle> {
     res.json({ statuses, capacity });
   });
 
+  // Consolidated inference status endpoint (provider, VRAM, switch state)
+  app.get('/api/inference/status', (_req, res) => {
+    const capacity = processMonitor.estimateCapacity();
+    const mlxRunning = mlxEnabled && mlxManager !== null;
+    const llamaCppRunning = llamaCppManager !== null && llamaCppUrl !== undefined;
+
+    res.json({
+      activeProvider: mlxRunning ? 'mlx' : llamaCppRunning ? 'llama-cpp' : 'ollama',
+      mlx: mlxRunning ? { url: mlxManager!.getUrl(), model: mlxManager!.getModel() } : null,
+      llamaCpp: llamaCppRunning ? { url: llamaCppUrl } : null,
+      switchInProgress: modelSwitchInProgress,
+      capacity: {
+        totalVramGB: capacity.totalVramGB,
+        usedVramGB: capacity.usedVramGB,
+        availableVramGB: capacity.availableVramGB,
+      },
+      processes: processMonitor.getStatuses().filter(s => s.running),
+    });
+  });
+
+  // Unload the MLX model from GPU memory without killing the server
+  app.post('/api/inference/mlx/unload', async (_req, res) => {
+    if (!mlxManager) {
+      res.status(404).json({ error: 'MLX server not running' });
+      return;
+    }
+    try {
+      await mlxManager.unloadModel();
+      dedicatedServerVramGB = 0;
+      processMonitor.unregisterExternalProcess('mlx');
+      bus.emit('inference:capabilities-changed', (await import('../lib/inference-capabilities.js')).createDefaultCapabilities());
+      res.json({ data: { unloaded: true } });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Unload failed' });
+    }
+  });
+
   // TurboQuant capabilities endpoint
   app.get('/api/turboquant/status', (_req, res) => {
     const caps = mlxManager?.getCapabilities() ?? llamaCppManager?.getCapabilities() ?? null;
