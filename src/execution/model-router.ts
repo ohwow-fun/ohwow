@@ -1361,6 +1361,56 @@ export class ModelRouter {
     throw new Error('No model provider available. Make sure Ollama is running, or configure an Anthropic API key.');
   }
 
+  // ============================================================================
+  // BPP-AWARE MODEL SELECTION
+  // ============================================================================
+
+  /**
+   * Select a model provider using biological/psychological signals.
+   * Wraps getProvider() with endocrine modulation, self-model confidence,
+   * and predictive engine feedback to make routing decisions organic.
+   */
+  async selectModelWithContext(
+    taskType: TaskType,
+    context: {
+      selfModelConfidence?: number;
+      endocrineEffects?: Array<{ parameter: string; modifier: number }>;
+      recentPredictionAccuracy?: number;
+      routingHistory?: RoutingHistory;
+      difficulty?: 'simple' | 'moderate' | 'complex';
+    },
+  ): Promise<ModelProvider> {
+    let effectiveDifficulty = context.difficulty;
+
+    // Endocrine modulation: cortisol (stress) → prefer more capable model
+    if (context.endocrineEffects) {
+      const ambitionEffect = context.endocrineEffects.find(e => e.parameter === 'ambition');
+      if (ambitionEffect && ambitionEffect.modifier < 0.85) {
+        // Cortisol is suppressing ambition → escalate to safer model
+        if (!effectiveDifficulty || effectiveDifficulty === 'simple') effectiveDifficulty = 'moderate';
+        else if (effectiveDifficulty === 'moderate') effectiveDifficulty = 'complex';
+      }
+
+      const confidenceEffect = context.endocrineEffects.find(e => e.parameter === 'prediction_confidence');
+      if (confidenceEffect && confidenceEffect.modifier > 1.1 && effectiveDifficulty === 'complex') {
+        // High dopamine confidence → allow downgrade
+        effectiveDifficulty = 'moderate';
+      }
+    }
+
+    // Self-model: low confidence → escalate to more capable model
+    if (context.selfModelConfidence !== undefined && context.selfModelConfidence < 0.3) {
+      effectiveDifficulty = 'complex';
+    }
+
+    // Prediction accuracy: if recent predictions are consistently wrong, escalate
+    if (context.recentPredictionAccuracy !== undefined && context.recentPredictionAccuracy < 0.3) {
+      effectiveDifficulty = 'complex';
+    }
+
+    return this.getProvider(taskType, effectiveDifficulty, undefined, context.routingHistory);
+  }
+
   /** Get the Anthropic provider directly (for tool-using tasks that need the SDK) */
   getAnthropicProvider(): AnthropicProvider | null {
     return this.anthropic;

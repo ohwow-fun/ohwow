@@ -2326,7 +2326,12 @@ export class RuntimeEngine {
       }
     } catch { /* routing stats table may not exist yet */ }
 
-    const provider = await this.modelRouter!.getProvider('agent_task', opts.difficulty, undefined, routingHistory);
+    // BPP-aware model selection: use brain confidence when available
+    const provider = await this.modelRouter!.selectModelWithContext('agent_task', {
+      selfModelConfidence: this.brain?.predictiveEngine?.getToolSuccessRate('agent_task'),
+      routingHistory,
+      difficulty: opts.difficulty,
+    });
 
     // Filter to client tools only (exclude Anthropic server-side tools like web_search)
     const clientTools = opts.tools.filter(

@@ -572,7 +572,15 @@ export class LocalOrchestrator {
     if (this.modelRouter) {
       let provider: ModelProvider;
       try {
-        provider = await this.modelRouter.getProvider('orchestrator');
+        // BPP-aware model selection: use brain confidence + endocrine state when available
+        if (this.brain || this.endocrineSystem) {
+          provider = await this.modelRouter.selectModelWithContext('orchestrator', {
+            selfModelConfidence: this.brain?.predictiveEngine?.getToolSuccessRate('orchestrator'),
+            endocrineEffects: this.endocrineSystem?.getEffects(),
+          });
+        } else {
+          provider = await this.modelRouter.getProvider('orchestrator');
+        }
       } catch {
         yield { type: 'text', content: "No model available. Go to Settings → press **o** to set up a model." };
         yield { type: 'done', inputTokens: 0, outputTokens: 0 };
