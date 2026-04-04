@@ -354,6 +354,15 @@ export class PredictiveEngine {
   }
 
   /**
+   * Check if a tool is novel (fewer than 3 recorded attempts).
+   * Novel tool executions trigger curiosity affect rather than satisfaction.
+   */
+  isNovel(toolName: string): boolean {
+    const stats = this.toolStats.get(toolName);
+    return !stats || stats.totalAttempts < 3;
+  }
+
+  /**
    * Get contextual success rate for a tool.
    */
   getContextualSuccessRate(toolName: string, contextKey: string): number | null {

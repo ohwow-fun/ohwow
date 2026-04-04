@@ -966,6 +966,7 @@ export class LocalOrchestrator {
     let fullContent = '';
     const executedToolCalls = new Map<string, ToolResult>();
     const orchToolCallHashes: string[] = [];
+    const sessionToolNames: string[] = [];
     const maxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
 
     // Reset brain session state for this turn
@@ -1125,11 +1126,14 @@ export class LocalOrchestrator {
           this.brain.recordToolExecution(block.name, block.input, toolResult.success);
         }
         orchToolCallHashes.push(hashToolCall(block.name, block.input));
+        sessionToolNames.push(block.name);
 
         // Affect: process tool result -> emotional response (Damasio)
+        // Novelty detection via predictive engine: novel tools trigger curiosity, not just satisfaction
         if (toolResult && this.affectEngine) {
+          const isNovel = this.brain?.predictiveEngine?.isNovel(block.name) ?? false;
           this.affectEngine.processToolResult(
-            block.name, userMessage, toolResult.success,
+            block.name, userMessage, toolResult.success, isNovel,
           ).catch(() => { /* non-fatal */ });
         }
 
@@ -1144,7 +1148,10 @@ export class LocalOrchestrator {
 
         // Habit: record execution for matching habits (Aristotle's hexis)
         if (toolResult && this.habitEngine) {
-          // Habit tracking is handled at the pattern level, not individual tools
+          const matchingHabits = this.habitEngine.checkCues(block.name, sessionToolNames);
+          for (const match of matchingHabits) {
+            this.habitEngine.recordExecution(match.habit.id, toolResult.success).catch(() => { /* non-fatal */ });
+          }
         }
       }
 
@@ -1462,6 +1469,7 @@ export class LocalOrchestrator {
     let consecutiveParseErrors = 0;
     let toolLoopAborted = false;
     const ollamaToolCallHashes: string[] = [];
+    const ollamaSessionToolNames: string[] = [];
     const ollamaMaxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
 
     // Cast provider for streaming access — safe because we only enter this
@@ -1720,6 +1728,31 @@ export class LocalOrchestrator {
 
           // Brain: record tool execution (predict → update → embody)
           this.brain?.recordToolExecution(req.name, req.input, outcome.result.success);
+
+          // Affect: process tool result -> emotional response (Damasio) — Ollama path parity
+          if (this.affectEngine) {
+            const isNovel = this.brain?.predictiveEngine?.isNovel(req.name) ?? false;
+            this.affectEngine.processToolResult(req.name, userMessage, outcome.result.success, isNovel).catch(() => {});
+          }
+
+          // Endocrine: tool results trigger hormone responses (Spinoza) — Ollama path parity
+          if (this.endocrineSystem) {
+            if (outcome.result.success) {
+              this.endocrineSystem.stimulate({ hormone: 'dopamine', delta: 0.05, source: 'tool_execution', reason: `${req.name} succeeded` });
+            } else {
+              this.endocrineSystem.stimulate({ hormone: 'cortisol', delta: 0.1, source: 'tool_execution', reason: `${req.name} failed` });
+            }
+          }
+
+          // Habit: record execution for matching habits (Aristotle's hexis) — Ollama path parity
+          if (this.habitEngine) {
+            const matchingHabits = this.habitEngine.checkCues(req.name, ollamaSessionToolNames);
+            for (const match of matchingHabits) {
+              this.habitEngine.recordExecution(match.habit.id, outcome.result.success).catch(() => {});
+            }
+          }
+
+          ollamaSessionToolNames.push(req.name);
 
           // Ollama format: use text resultContent (no image blocks)
           loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
