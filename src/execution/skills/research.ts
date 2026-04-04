@@ -16,6 +16,9 @@ import type {
   TextBlock,
   WebSearchTool20250305,
 } from '@anthropic-ai/sdk/resources/messages/messages';
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { logger } from '../../lib/logger.js';
+import { retrieveKnowledgeChunks, type RagChunk } from '../../lib/rag/retrieval.js';
 import type { ModelRouter } from '../model-router.js';
 
 const WEB_SEARCH_TOOL: WebSearchTool20250305 = {
@@ -41,14 +44,27 @@ Format your report with:
 - Key findings organized by theme
 - Citations referencing the sources
 
+Some information may come from the user's local knowledge base (marked as "Local Knowledge"). Prioritize local knowledge when it's relevant, as it represents the user's own documents and context.
+
 Keep the report concise and actionable. Use bullet points for findings.`;
 
 export type ResearchDepth = 'quick' | 'thorough' | 'comprehensive';
 
-interface ResearchResult {
+export interface LocalKnowledgeOptions {
+  db: DatabaseAdapter;
+  workspaceId: string;
+  ollamaUrl?: string;
+  embeddingModel?: string;
+  ollamaModel?: string;
+  ragBm25Weight?: number;
+  rerankerEnabled?: boolean;
+}
+
+export interface ResearchResult {
   report: string;
   queryCount: number;
   sourceCount: number;
+  localSourceCount: number;
   tokensUsed: number;
 }
 
@@ -62,9 +78,11 @@ export async function executeResearch(
   depth: ResearchDepth,
   anthropicApiKey: string,
   modelRouter?: ModelRouter | null,
+  localKnowledge?: LocalKnowledgeOptions,
 ): Promise<ResearchResult> {
   const client = new Anthropic({ apiKey: anthropicApiKey });
   let totalTokens = 0;
+  let localSourceCount = 0;
 
   // Step 1: Generate search queries
   const queryCount = depth === 'quick' ? 2 : depth === 'thorough' ? 4 : 6;
@@ -106,21 +124,55 @@ export async function executeResearch(
     }
   }
 
+  // Step 1.5: Retrieve local knowledge if available
+  let localKnowledgeContext = '';
+  if (localKnowledge) {
+    try {
+      const localChunks: RagChunk[] = await retrieveKnowledgeChunks({
+        db: localKnowledge.db,
+        workspaceId: localKnowledge.workspaceId,
+        agentId: '__orchestrator__',
+        query: question,
+        tokenBudget: 4000,
+        maxChunks: 5,
+        ollamaUrl: localKnowledge.ollamaUrl,
+        embeddingModel: localKnowledge.embeddingModel,
+        ollamaModel: localKnowledge.ollamaModel,
+        bm25Weight: localKnowledge.ragBm25Weight,
+        rerankerEnabled: localKnowledge.rerankerEnabled,
+      });
+
+      if (localChunks.length > 0) {
+        localSourceCount = localChunks.length;
+        const formattedChunks = localChunks
+          .map((c) => `[Document: ${c.documentTitle}]\n${c.content}`)
+          .join('\n---\n');
+        localKnowledgeContext = `\nThe user has the following relevant documents in their local knowledge base. Reference these when applicable:\n\n--- Local Knowledge ---\n${formattedChunks}\n---\n`;
+        logger.info({ count: localChunks.length }, '[research] Retrieved local knowledge chunks');
+      }
+    } catch (err) {
+      logger.warn({ err }, '[research] Failed to retrieve local knowledge, continuing with web search only');
+    }
+  }
+
   // Step 2: Execute searches using Claude with web search tool
   // We make a single call with all queries to let Claude search efficiently
   const searchPrompt = `Research the following question thoroughly by searching for information:
 
 Question: ${question}
-
+${localKnowledgeContext}
 Search for these specific aspects:
 ${queries.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
 Search for each aspect, then compile ALL the information you find. Include URLs and sources.`;
 
+  const searchSystemPrompt = 'You are a thorough research assistant. Search for information and compile detailed findings with sources.'
+    + (localKnowledgeContext ? ' The user has provided local knowledge documents. Incorporate relevant information from those documents alongside your web search findings.' : '');
+
   const searchResponse = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 4096,
-    system: 'You are a thorough research assistant. Search for information and compile detailed findings with sources.',
+    system: searchSystemPrompt,
     messages: [{ role: 'user', content: searchPrompt }],
     tools: [WEB_SEARCH_TOOL],
   });
@@ -166,6 +218,7 @@ Search for each aspect, then compile ALL the information you find. Include URLs 
     report,
     queryCount: queries.length,
     sourceCount,
+    localSourceCount,
     tokensUsed: totalTokens,
   };
 }

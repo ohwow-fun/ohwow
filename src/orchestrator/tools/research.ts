@@ -4,7 +4,7 @@
  */
 
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
-import { executeResearch, type ResearchDepth } from '../../execution/skills/research.js';
+import { executeResearch, type ResearchDepth, type LocalKnowledgeOptions } from '../../execution/skills/research.js';
 
 export async function deepResearch(
   ctx: LocalToolContext,
@@ -36,7 +36,17 @@ export async function deepResearch(
       return { success: false, error: 'Anthropic API key not available for research' };
     }
 
-    const result = await executeResearch(question, depth, apiKey);
+    const localKnowledge: LocalKnowledgeOptions | undefined = ctx.db ? {
+      db: ctx.db,
+      workspaceId: ctx.workspaceId,
+      ollamaUrl: ctx.ollamaUrl,
+      embeddingModel: ctx.embeddingModel,
+      ollamaModel: ctx.ollamaModel,
+      ragBm25Weight: ctx.ragBm25Weight,
+      rerankerEnabled: ctx.rerankerEnabled,
+    } : undefined;
+
+    const result = await executeResearch(question, depth, apiKey, ctx.modelRouter, localKnowledge);
 
     return {
       success: true,
@@ -44,6 +54,7 @@ export async function deepResearch(
         report: result.report,
         queryCount: result.queryCount,
         sourceCount: result.sourceCount,
+        localSourceCount: result.localSourceCount,
         tokensUsed: result.tokensUsed,
       },
     };
