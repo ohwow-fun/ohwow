@@ -10,6 +10,7 @@ import { basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { chunkText } from '../../lib/rag/chunker.js';
 
 // ============================================================================
 // LIST KNOWLEDGE
@@ -474,78 +475,11 @@ interface LocalChunk {
 }
 
 function chunkTextLocal(text: string): LocalChunk[] {
-  if (!text || text.trim().length === 0) return [];
-
-  const targetChars = 4000; // ~1000 tokens
-
-  if (text.length <= targetChars * 1.2) {
-    return [{
-      content: text.trim(),
-      tokenCount: Math.ceil(text.length / 4),
-      keywords: extractKeywordsLocal(text),
-    }];
-  }
-
-  const paragraphs = text.split(/\n{2,}|(?=^#{1,6}\s)/m)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-
-  const chunks: LocalChunk[] = [];
-  let current = '';
-
-  for (const paragraph of paragraphs) {
-    const combined = current + (current ? '\n\n' : '') + paragraph;
-
-    if (combined.length > targetChars && current.length > 0) {
-      const finalChunk = current.trim();
-      if (finalChunk.length > 0) {
-        chunks.push({
-          content: finalChunk,
-          tokenCount: Math.ceil(finalChunk.length / 4),
-          keywords: extractKeywordsLocal(finalChunk),
-        });
-      }
-      current = paragraph;
-    } else {
-      current = combined;
-    }
-  }
-
-  const finalChunk = current.trim();
-  if (finalChunk.length > 0) {
-    chunks.push({
-      content: finalChunk,
-      tokenCount: Math.ceil(finalChunk.length / 4),
-      keywords: extractKeywordsLocal(finalChunk),
-    });
-  }
-
-  return chunks;
-}
-
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-  'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
-  'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
-  'could', 'should', 'it', 'its', 'this', 'that', 'not', 'you', 'they',
-]);
-
-function extractKeywordsLocal(text: string): string[] {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
-
-  const freq = new Map<string, number>();
-  for (const word of words) {
-    freq.set(word, (freq.get(word) || 0) + 1);
-  }
-
-  return Array.from(freq.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([word]) => word);
+  return chunkText(text).map((c) => ({
+    content: c.content,
+    tokenCount: c.tokenCount,
+    keywords: c.keywords,
+  }));
 }
 
 // ============================================================================
