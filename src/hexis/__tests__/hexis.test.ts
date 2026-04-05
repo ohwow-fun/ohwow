@@ -230,7 +230,7 @@ describe('HabitEngine', () => {
   it('detects bad habits via checkBadHabits', async () => {
     const engine = new HabitEngine(null, 'ws1');
 
-    const habit = await engine.promotePattern(
+    const _habit = await engine.promotePattern(
       'failing routine',
       ['tool1'],
       { type: 'intent_match', pattern: 'fail', confidence: 0.9 },

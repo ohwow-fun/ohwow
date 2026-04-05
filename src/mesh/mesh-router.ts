@@ -13,7 +13,6 @@
 import type {
   DeviceBrainProfile,
   BrainScoringWeights,
-  DEFAULT_BRAIN_SCORING_WEIGHTS,
 } from './types.js';
 import type { WorkKind } from '../work/types.js';
 

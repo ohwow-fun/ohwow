@@ -332,7 +332,7 @@ describe('LocalScheduler', () => {
         executeById: vi.fn().mockResolvedValue(undefined),
       };
 
-      const { scheduler, db } = createScheduler({
+      const { scheduler, db: _db } = createScheduler({
         agent_workforce_schedules: { data: [] },
         local_triggers: {
           data: [

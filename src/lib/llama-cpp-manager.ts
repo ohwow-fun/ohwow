@@ -10,7 +10,7 @@
 
 import { spawn, execSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
-import { existsSync, openSync, closeSync, mkdirSync, writeFileSync, chmodSync, createWriteStream, unlinkSync } from 'fs';
+import { existsSync, openSync, closeSync, mkdirSync, chmodSync, createWriteStream, unlinkSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform, arch } from 'os';
 import { pipeline } from 'stream/promises';

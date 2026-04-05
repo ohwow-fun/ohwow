@@ -12,11 +12,8 @@ import crypto from 'crypto';
 import type {
   PersonaModel,
   BehavioralEvent,
-  ChronoBioProfile,
   CognitiveLoadState,
-  CommunicationProfile,
   AgentTrustMap,
-  AgentTrustEntry,
   EnergyState,
   WorkIntensity,
   TrustTrend,

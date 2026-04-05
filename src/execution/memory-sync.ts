@@ -126,7 +126,7 @@ export async function extractMemories(
     const validTypes = ['fact', 'skill', 'feedback_positive', 'feedback_negative'];
 
     // Classify confidentiality based on tools used during the task
-    const confidentiality = classifyMemoryConfidentiality(toolsUsed || []);
+    const _confidentiality = classifyMemoryConfidentiality(toolsUsed || []);
 
     // Fetch existing active memories for dedup check
     const { data: existingData } = await db

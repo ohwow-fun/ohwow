@@ -1152,6 +1152,39 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     return hints;
   };
 
+  // Model picker callbacks
+  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local') => {
+    if (source === 'cloud') {
+      updateConfigFile({ modelSource: 'cloud', cloudModel: model });
+      onConfigChange?.({ ...config, modelSource: 'cloud', cloudModel: model });
+    } else {
+      updateConfigFile({ modelSource: 'local' });
+      onConfigChange?.({ ...config, modelSource: 'local' });
+    }
+    // Notify daemon so ModelRouter switches source at runtime
+    fetch(`http://127.0.0.1:${config.port}/api/models/orchestrator`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${runtime.sessionToken}` },
+      body: JSON.stringify({ model, modelSource: source }),
+    }).catch(() => {});
+    orchestrator.setModel(model, source);
+    setShowModelPicker(false);
+  }, [config, onConfigChange, orchestrator, runtime.sessionToken]);
+
+  const handleApiKeySet = useCallback((key: string) => {
+    updateConfigFile({ anthropicApiKey: key });
+    onConfigChange?.({ ...config, anthropicApiKey: key });
+    // Notify running daemon
+    fetch(`http://127.0.0.1:${config.port}/api/set-api-key`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(runtime.sessionToken ? { Authorization: `Bearer ${runtime.sessionToken}` } : {}),
+      },
+      body: JSON.stringify({ apiKey: key }),
+    }).catch(() => {});
+  }, [config, onConfigChange, runtime.sessionToken]);
+
   // Cost confirmation dialog overlay
   if (orchestrator.costConfirmation) {
     const { toolName, estimatedCredits, description } = orchestrator.costConfirmation;
@@ -1307,39 +1340,6 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       </Box>
     );
   }
-
-  // Model picker callbacks
-  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local') => {
-    if (source === 'cloud') {
-      updateConfigFile({ modelSource: 'cloud', cloudModel: model });
-      onConfigChange?.({ ...config, modelSource: 'cloud', cloudModel: model });
-    } else {
-      updateConfigFile({ modelSource: 'local' });
-      onConfigChange?.({ ...config, modelSource: 'local' });
-    }
-    // Notify daemon so ModelRouter switches source at runtime
-    fetch(`http://127.0.0.1:${config.port}/api/models/orchestrator`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${runtime.sessionToken}` },
-      body: JSON.stringify({ model, modelSource: source }),
-    }).catch(() => {});
-    orchestrator.setModel(model, source);
-    setShowModelPicker(false);
-  }, [config, onConfigChange, orchestrator, runtime.sessionToken]);
-
-  const handleApiKeySet = useCallback((key: string) => {
-    updateConfigFile({ anthropicApiKey: key });
-    onConfigChange?.({ ...config, anthropicApiKey: key });
-    // Notify running daemon
-    fetch(`http://127.0.0.1:${config.port}/api/set-api-key`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(runtime.sessionToken ? { Authorization: `Bearer ${runtime.sessionToken}` } : {}),
-      },
-      body: JSON.stringify({ apiKey: key }),
-    }).catch(() => {});
-  }, [config, onConfigChange, runtime.sessionToken]);
 
   return (
     <Box flexDirection="column" width="100%">

@@ -12,7 +12,6 @@
  */
 
 import type {
-  CompressionBits,
   TurboQuantConfig,
   TurboQuantCodebook,
   CompressedVector,
@@ -30,7 +29,6 @@ import {
   generateProjectionMatrix,
   projectVector,
   signBitQuantize,
-  signBitDequantize,
   reconstructInnerProduct,
 } from './qjl.js';
 

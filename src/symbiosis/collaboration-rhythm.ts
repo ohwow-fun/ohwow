@@ -25,9 +25,6 @@ const HIGH_MODIFICATION_RATE = 0.5;
 /** Threshold: fast approval suggests delegation comfort (ms). */
 const FAST_APPROVAL_MS = 30_000; // 30 seconds
 
-/** Threshold: slow approval suggests careful review (ms). */
-const SLOW_APPROVAL_MS = 300_000; // 5 minutes
-
 /** Minimum tasks required for meaningful pattern detection. */
 const MIN_TASKS_FOR_DETECTION = 5;
 

@@ -5,7 +5,7 @@
 
 import type { DataSourceConnector, ConnectorDocument, ConnectorConfig } from '../connector-types.js';
 import { readFile, stat, readdir } from 'node:fs/promises';
-import { join, relative, extname } from 'node:path';
+import { join, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { logger } from '../../lib/logger.js';
 

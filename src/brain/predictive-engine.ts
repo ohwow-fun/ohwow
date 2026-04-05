@@ -47,9 +47,6 @@ const STATS_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 /** Maximum context entries per tool (memory guard). */
 const MAX_CONTEXT_ENTRIES = 100;
 
-/** Threshold for "similar" failure context (how many shared tokens). */
-const CONTEXT_SIMILARITY_MIN_OVERLAP = 2;
-
 // ============================================================================
 // INTERNAL TYPES
 // ============================================================================

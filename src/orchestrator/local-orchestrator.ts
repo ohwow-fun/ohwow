@@ -84,7 +84,7 @@ import { CircuitBreaker } from './error-recovery.js';
 import { ToolCache } from './tool-cache.js';
 import { runSubOrchestrator, getFocusSections, type SubOrchestratorResult } from './sub-orchestrator.js';
 import { logger } from '../lib/logger.js';
-import { hashToolCall, detectStagnation, STAGNATION_PROMPT } from '../lib/stagnation.js';
+import { hashToolCall } from '../lib/stagnation.js';
 import { Brain } from '../brain/brain.js';
 import { enrichIntent } from '../brain/intentionality.js';
 import type { Stimulus, Perception, WorkspaceItem } from '../brain/types.js';

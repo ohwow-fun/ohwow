@@ -9,7 +9,6 @@ import type { ExecutionContext } from './automation-types.js';
 import {
   getNestedValue,
   resolveFieldMapping,
-  resolveContextTemplate,
   resolveContextFieldMapping,
 } from './field-mapper.js';
 

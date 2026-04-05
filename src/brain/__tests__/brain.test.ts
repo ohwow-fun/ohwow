@@ -7,7 +7,7 @@
  * All modules are pure logic — no mocks needed.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ExperienceStream } from '../experience-stream.js';
 import { PredictiveEngine } from '../predictive-engine.js';
 import { enrichIntent } from '../intentionality.js';
@@ -72,7 +72,7 @@ describe('ExperienceStream', () => {
     stream.append('tool_executed', { toolName: 'old' }, 'orchestrator');
 
     // Manually manipulate to simulate time passage
-    const recent = stream.getRecent(1);
+    const _recent = stream.getRecent(1);
     // The experience was just created, so query with after = now - 1 should find it
     const results = stream.query({ after: now - 1000 });
     expect(results.length).toBeGreaterThanOrEqual(1);

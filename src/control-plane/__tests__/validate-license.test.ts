@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { validateLicenseKey } from '../validate-license.js';
 
 // Mock os.hostname to return a stable value

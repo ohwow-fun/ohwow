@@ -42,7 +42,7 @@ export function globMatch(filename: string, pattern: string): boolean {
     } else if (c === '.') {
       regexStr += '\\.';
     } else {
-      regexStr += c.replace(/[{}()\[\]\\+^$|]/g, '\\$&');
+      regexStr += c.replace(/[{}()[\]\\+^$|]/g, '\\$&');
     }
     i++;
   }

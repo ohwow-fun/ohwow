@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ClaudeCodeStreamParser } from '../adapters/claude-code-parser.js';
-import type { ClaudeCodeStreamEvent, ProgressInfo } from '../adapters/claude-code-parser.js';
+import type { ProgressInfo } from '../adapters/claude-code-parser.js';
 
 describe('ClaudeCodeStreamParser', () => {
   describe('parseLine', () => {

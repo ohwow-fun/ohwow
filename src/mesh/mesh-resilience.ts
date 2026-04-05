@@ -9,7 +9,7 @@
  * The organism survives the death of individual cells.
  */
 
-import type { MeshHeartbeat, FailoverEvent, MeshRole } from './types.js';
+import type { MeshHeartbeat, FailoverEvent } from './types.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================

@@ -350,7 +350,7 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
         .filter(c => c.score !== Infinity && c.score >= minScore)
         .sort((a, b) => b.score - a.score)
         .slice(0, 20)
-        .map((c, i) => ({ index: scored.indexOf(c), content: c.content, originalScore: c.score }));
+        .map((c, _i) => ({ index: scored.indexOf(c), content: c.content, originalScore: c.score }));
 
       if (candidates.length > 0) {
         const reranked = await rerankWithLLM(query, candidates, opts.ollamaUrl, opts.ollamaModel);

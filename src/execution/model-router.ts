@@ -8,9 +8,9 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { getWorkingNumCtx, getModelContextSize } from '../lib/ollama-models.js';
+import { getWorkingNumCtx } from '../lib/ollama-models.js';
 import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
-import type { OperationType, ExecutionPolicy } from './execution-policy.js';
+import type { OperationType } from './execution-policy.js';
 import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';

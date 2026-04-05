@@ -15,7 +15,6 @@
  * agent's Umwelt into the physical world.
  */
 
-import crypto from 'crypto';
 import type {
   BodyPart,
   Affordance,
@@ -24,7 +23,6 @@ import type {
   PhysicalDeviceConfig,
   ConnectionBackendInstance,
   ConnectionBackendType,
-  SensorDataCallback,
 } from './types.js';
 import { logger } from '../lib/logger.js';
 

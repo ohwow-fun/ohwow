@@ -61,7 +61,7 @@ const JUNK_PATTERNS: RegExp[] = [
   // Pure URLs or file paths without context
   /^(https?:\/\/|\/[a-z])[^\s]*$/i,
   // JSON/code blobs masquerading as memories
-  /^\s*[\[{]/,
+  /^\s*[[{]/,
 ];
 
 /** Returns true if the content looks like junk that shouldn't be stored. */

@@ -203,7 +203,7 @@ export function ModelPicker({
     const fittingCatalog = catalog.filter(m => m.fits && matchesQuery(m.tag, m.label, m.family));
     const tooLargeCatalog = catalog.filter(m => !m.fits && matchesQuery(m.tag, m.label, m.family));
     return { installed: matchInstalled, catalog: fittingCatalog, tooLarge: tooLargeCatalog };
-  }, [searchQuery, installed, catalog, matchesQuery]);
+  }, [installed, catalog, matchesQuery]);
 
   const flatList = useMemo<FlatItem[]>(() => [
     ...filtered.installed.map(m => ({ kind: 'installed' as const, data: m })),

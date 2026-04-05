@@ -42,8 +42,6 @@ import type {
   Plan,
   PlannedAction,
   SelfModel,
-  BrainEvent,
-  WorkspaceItem,
 } from './types.js';
 import { ExperienceStream } from './experience-stream.js';
 import type { ExperiencePersistence } from './experience-stream.js';
@@ -59,7 +57,6 @@ import type { ClassifiedIntent } from '../orchestrator/orchestrator-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { NervousSystem } from '../body/nervous-system.js';
-import type { TelosProfile, PhronesisRecommendation, WorkKind } from '../work/types.js';
 
 // ============================================================================
 // BRAIN DEPENDENCIES

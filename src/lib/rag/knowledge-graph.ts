@@ -7,7 +7,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import { logger } from '../logger.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 
 // ============================================================================

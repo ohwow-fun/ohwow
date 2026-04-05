@@ -15,7 +15,6 @@
 
 import type { ClassifiedIntent, OrchestratorEvent } from '../orchestrator/orchestrator-types.js';
 import type { IntentSection } from '../orchestrator/tool-definitions.js';
-import type { ToolResult } from '../orchestrator/local-tool-types.js';
 import type { RagMemory } from '../lib/rag/retrieval.js';
 import type { TranscriptionSegment } from '../voice/types.js';
 

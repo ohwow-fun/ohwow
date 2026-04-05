@@ -164,7 +164,7 @@ export function SessionPicker({ daemonPort, sessionToken, onSelect, onBack }: Se
     );
   }
 
-  const items = sessions.map((s, i) => ({
+  const items = sessions.map((s, _i) => ({
     label: `${s.title}  ${s.message_count} msgs  ${relativeTime(s.updated_at)}`,
     value: s.id,
     key: s.id,

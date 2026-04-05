@@ -384,7 +384,7 @@ describe('Semaphore', () => {
       const sem = new Semaphore(3);
       let maxObserved = 0;
 
-      const tasks = Array.from({ length: 15 }, (_, i) =>
+      const tasks = Array.from({ length: 15 }, (_, _i) =>
         sem.acquire().then(async () => {
           maxObserved = Math.max(maxObserved, sem.active);
           // Simulate async work

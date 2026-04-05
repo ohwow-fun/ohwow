@@ -5,7 +5,7 @@
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
-import { BUSINESS_TYPES, type AgentPreset, type BusinessType, type PresetAutomation } from '../tui/data/agent-presets.js';
+import { BUSINESS_TYPES, type AgentPreset, type BusinessType } from '../tui/data/agent-presets.js';
 import { AutomationService } from '../triggers/automation-service.js';
 import { MCP_SERVER_CATALOG } from '../mcp/catalog.js';
 

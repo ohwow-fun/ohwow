@@ -27,7 +27,6 @@ import {
   checkMidLoop,
   isExternalProvider,
   upsertDailyResourceUsage,
-  type AutonomyBudget,
 } from './budget-guard.js';
 import { strengthenSynapse } from '../symbiosis/synapse-dynamics.js';
 import type { EngineConfig, RuntimeEffects, ExecuteAgentResult, BusinessContext } from './types.js';
@@ -52,11 +51,6 @@ import {
   BROWSER_TOOL_DEFINITIONS,
   BROWSER_SYSTEM_PROMPT,
   REQUEST_BROWSER_TOOL,
-  BROWSER_ACTIVATION_MESSAGE,
-  executeBrowserTool,
-  isBrowserTool,
-  formatBrowserToolResult,
-  saveScreenshotLocally,
 } from './browser/index.js';
 import {
   LocalDesktopService,
@@ -67,15 +61,11 @@ import type { DesktopServiceOptions } from './desktop/index.js';
 import {
   DRAFT_TOOL_DEFINITIONS,
   DRAFT_TOOL_PROMPT_HINT,
-  isDraftTool,
-  buildDeferredAction,
 } from './draft-tools.js';
 import {
   ScraplingService,
   SCRAPLING_TOOL_DEFINITIONS,
   SCRAPLING_SYSTEM_PROMPT,
-  isScraplingTool,
-  executeScraplingTool,
 } from './scrapling/index.js';
 import { parseToolArguments } from './tool-parse.js';
 import { Semaphore } from './semaphore.js';
@@ -83,20 +73,16 @@ import {
   FileAccessGuard,
   FILESYSTEM_TOOL_DEFINITIONS,
   FILESYSTEM_SYSTEM_PROMPT,
-  isFilesystemTool,
-  executeFilesystemTool,
 } from './filesystem/index.js';
 import {
   BASH_TOOL_DEFINITIONS,
   BASH_SYSTEM_PROMPT,
-  isBashTool,
-  executeBashTool,
 } from './bash/index.js';
-import { McpClientManager, isMcpTool } from '../mcp/index.js';
+import { McpClientManager } from '../mcp/index.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { retrieveRelevantMemories, retrieveKnowledgeChunks } from '../lib/rag/retrieval.js';
 import { scanForInjection, wrapUserData } from '../lib/prompt-injection.js';
-import { hashToolCall, detectStagnation, STAGNATION_PROMPT, REFLECTION_PROMPT } from '../lib/stagnation.js';
+import { hashToolCall, REFLECTION_PROMPT } from '../lib/stagnation.js';
 import { CircuitBreaker } from '../orchestrator/error-recovery.js';
 import { Brain } from '../brain/brain.js';
 import crypto from 'crypto';

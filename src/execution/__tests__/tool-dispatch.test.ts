@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolExecutorRegistry } from '../tool-dispatch/registry.js';
 import { createDefaultToolRegistry } from '../tool-dispatch/index.js';
-import type { ToolExecutor, ToolExecutionContext, ToolCallResult } from '../tool-dispatch/types.js';
+import type { ToolExecutor, ToolExecutionContext } from '../tool-dispatch/types.js';
 
 function makeCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
   return {

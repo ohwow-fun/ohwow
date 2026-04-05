@@ -94,7 +94,7 @@ describe('LocalFilesConnector', () => {
 
   it('poll(since) only returns files modified after since date', async () => {
     const oldDate = new Date('2020-01-01T00:00:00Z');
-    const recentDate = new Date(Date.now() + 60_000); // future to ensure it's "new"
+    const _recentDate = new Date(Date.now() + 60_000); // future to ensure it's "new"
 
     await writeFile(join(tmpDir, 'old.md'), 'Old content');
     // Set mtime to the past

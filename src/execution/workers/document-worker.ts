@@ -15,7 +15,6 @@ import type { RuntimeEvents } from '../../tui/types.js';
 import { chunkText } from '../../lib/rag/chunker.js';
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 import { extractEntitiesAndRelations, saveGraphData } from '../../lib/rag/knowledge-graph.js';
-import { tokenize } from '../../lib/rag/retrieval.js';
 import { extractTextLocal, updateCorpusStats } from '../../orchestrator/tools/knowledge.js';
 import { logger } from '../../lib/logger.js';
 

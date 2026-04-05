@@ -7,7 +7,7 @@ import { execFile, execFileSync } from 'child_process';
 import { platform } from 'os';
 
 /** Allowlist: command names must be alphanumeric with dots, hyphens, underscores. */
-const SAFE_CMD_RE = /^[a-zA-Z0-9._\-]+$/;
+const SAFE_CMD_RE = /^[a-zA-Z0-9._-]+$/;
 
 /**
  * Check if a command exists using POSIX-standard `command -v`.

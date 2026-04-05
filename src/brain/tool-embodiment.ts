@@ -33,9 +33,6 @@ import type { SelfModelBuilder } from './self-model.js';
 // CONSTANTS
 // ============================================================================
 
-/** Maximum characters for a compact description. */
-const COMPACT_DESC_MAX_LENGTH = 80;
-
 /**
  * Hand-written compact descriptions for common tools.
  * These are the "ready-to-hand" summaries: just enough to remind,

@@ -174,7 +174,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
-    const { output, durationMs } = executeSkill(skillId, args || {});
+    const { output, durationMs: _durationMs } = executeSkill(skillId, args || {});
 
     return {
       content: [{ type: 'text', text: output || '(no output)' }],

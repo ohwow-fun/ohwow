@@ -4,7 +4,7 @@
  * error handling works, and cloud tools degrade gracefully.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { registerCoreTools } from '../tools/core.js';
 import { registerCrmTools } from '../tools/crm.js';
 import { registerWorkflowTools } from '../tools/workflows.js';

@@ -12,7 +12,7 @@
 
 import { execSync } from 'child_process';
 import { logger } from '../../lib/logger.js';
-import type { DesktopAction, DesktopActionType } from './desktop-types.js';
+import type { DesktopAction } from './desktop-types.js';
 
 // ============================================================================
 // TYPES

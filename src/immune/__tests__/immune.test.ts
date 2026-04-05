@@ -6,7 +6,6 @@ import {
   shouldEscalate,
   computeCooldown,
   tryDeescalate,
-  createInitialInflammatoryState,
 } from '../inflammatory-response.js';
 import { assessSelfNonSelf, detectAutoimmune } from '../tolerance.js';
 import { ImmuneSystem } from '../immune-system.js';
