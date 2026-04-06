@@ -46,6 +46,7 @@ import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
 import { VoiceboxService } from '../voice/voicebox-service.js';
+import { ensureInternetDeps } from '../lib/internet-installer.js';
 import { findPythonCommand } from '../lib/platform-utils.js';
 import { DigitalBody, type VoiceServiceLike } from '../body/digital-body.js';
 import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
@@ -507,6 +508,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
       .then(() => logger.info('[daemon] Voicebox auto-started'))
       .catch((err) => logger.debug(`[daemon] Voicebox auto-start skipped: ${(err as Error).message}`));
   }
+
+  // Auto-install internet tool dependencies (non-blocking)
+  ensureInternetDeps()
+    .then(({ ytdlp, gh }) => logger.info(`[daemon] Internet deps: yt-dlp=${ytdlp ? 'ok' : 'unavailable'}, gh=${gh ? 'ok' : 'unavailable'}`))
+    .catch((err) => logger.debug(`[daemon] Internet deps check skipped: ${(err as Error).message}`));
 
   // 7. Connect to cloud (connected tier only)
   let controlPlane: ControlPlaneClient | null = null;

@@ -7,19 +7,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../../lib/logger.js';
+import { commandExists } from '../../lib/platform-utils.js';
+import { ensureYtdlp, ensureGh } from '../../lib/internet-installer.js';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 
 const execFileAsync = promisify(execFile);
-
-/** Check if a binary exists on PATH. Returns the path or null. */
-async function which(name: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('/usr/bin/which', [name], { timeout: 5_000 });
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // youtube_transcript — extract subtitles via yt-dlp
@@ -68,17 +60,18 @@ export async function youtubeTranscript(
 
   const lang = (input.language as string) || 'en';
 
-  const ytdlp = await which('yt-dlp');
-  if (!ytdlp) {
+  // Auto-install yt-dlp if missing
+  const available = await ensureYtdlp();
+  if (!available) {
     return {
       success: false,
-      error: 'yt-dlp is not installed. Install it with: brew install yt-dlp (macOS) or pip install yt-dlp',
+      error: 'yt-dlp could not be auto-installed. Install manually: brew install yt-dlp (macOS) or pip install yt-dlp',
     };
   }
 
   try {
     // Step 1: Get video metadata and subtitle info
-    const { stdout: infoJson } = await execFileAsync(ytdlp, [
+    const { stdout: infoJson } = await execFileAsync('yt-dlp', [
       '--dump-json',
       '--no-download',
       '--no-warnings',
@@ -226,17 +219,18 @@ export async function githubSearch(
     return { success: false, error: `Invalid type "${searchType}". Use: repos, issues, prs, or code` };
   }
 
-  const gh = await which('gh');
-  if (!gh) {
+  // Auto-install gh if missing
+  const available = await ensureGh();
+  if (!available) {
     return {
       success: false,
-      error: 'gh CLI is not installed. Install it with: brew install gh (macOS) or see https://cli.github.com',
+      error: 'gh CLI could not be auto-installed. Install manually: brew install gh (macOS) or see https://cli.github.com',
     };
   }
 
   try {
     const fields = GH_SEARCH_FIELDS[searchType];
-    const { stdout } = await execFileAsync(gh, [
+    const { stdout } = await execFileAsync('gh', [
       'search', searchType,
       query,
       '--json', fields,
