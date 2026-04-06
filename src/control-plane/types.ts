@@ -52,6 +52,8 @@ export interface AgentConfigPayload {
     desktop_allowed_apps?: string[];
     desktop_recording_enabled?: boolean;
     desktop_pre_action_screenshots?: boolean;
+    /** Documentation URLs to auto-mount for this agent */
+    mounted_docs?: string[];
   };
   fileAccessPaths?: Array<{ path: string; label?: string }>;
   /** Per-agent memory sync policy. Controls which memory types can leave the device. */

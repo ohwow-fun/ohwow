@@ -866,6 +866,36 @@ export class RuntimeEngine {
         }
       }
 
+      // Auto-mount declared documentation for this agent
+      const mountedDocs: string[] = (() => {
+        try {
+          const raw = agentConfig.mounted_docs;
+          if (Array.isArray(raw)) return raw as string[];
+          if (typeof raw === 'string') return JSON.parse(raw) as string[];
+          return [];
+        } catch { return []; }
+      })();
+
+      if (mountedDocs.length > 0) {
+        for (const docUrl of mountedDocs) {
+          try {
+            const existing = await this.docMountManager.getMountByUrl(docUrl, workspaceId);
+            if (existing && existing.status === 'ready') {
+              // Already mounted — expand file access
+              const current = fileAccessGuard?.getAllowedPaths() ?? [];
+              fileAccessGuard = new FileAccessGuard([...current, existing.mountPath]);
+            } else if (!existing) {
+              // Mount in background — don't block task start
+              this.docMountManager.mount(docUrl, workspaceId).catch((err) => {
+                logger.warn({ err, url: docUrl }, '[engine] Background doc mount failed');
+              });
+            }
+          } catch (err) {
+            logger.warn({ err, url: docUrl }, '[engine] Auto-mount check failed');
+          }
+        }
+      }
+
       // Load goal context if task is linked to a goal
       let goalContext: string | undefined;
       if (task.goal_id) {
