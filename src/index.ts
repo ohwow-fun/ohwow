@@ -134,6 +134,8 @@ if (subcommand === 'logs') {
     ollamaModel: config.ollamaModel,
     preferLocalModel: config.preferLocalModel,
     modelSource: config.modelSource,
+    claudeCodeCliPath: config.claudeCodeCliPath || undefined,
+    claudeCodeCliModel: config.claudeCodeCliModel || undefined,
   });
 
   const skipLLM = process.argv.includes('--local-only');

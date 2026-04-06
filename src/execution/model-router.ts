@@ -1081,6 +1081,10 @@ export class ModelRouter {
     openaiCompatibleUrl?: string;
     /** API key for OpenAI-compatible provider */
     openaiCompatibleApiKey?: string;
+    /** Path to claude CLI binary for Claude Code provider (empty = auto-detect) */
+    claudeCodeCliPath?: string;
+    /** Model override for Claude Code provider */
+    claudeCodeCliModel?: string;
   }) {
     this.anthropic = opts.anthropicApiKey
       ? new AnthropicProvider(opts.anthropicApiKey)
@@ -1098,7 +1102,9 @@ export class ModelRouter {
     this.openrouter = opts.openRouterApiKey
       ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'openrouter/optimus-alpha')
       : null;
-    this.claudeCode = this.modelSource === 'claude-code' ? new ClaudeCodeProvider() : null;
+    this.claudeCode = this.modelSource === 'claude-code'
+      ? new ClaudeCodeProvider(opts.claudeCodeCliPath, opts.claudeCodeCliModel)
+      : null;
     this.llamaCpp = (opts.llamaCppUrl && opts.turboQuantBits && opts.turboQuantBits > 0)
       ? new LlamaCppProvider(opts.llamaCppUrl, opts.ollamaModel || 'qwen3:4b')
       : null;
@@ -1240,7 +1246,7 @@ export class ModelRouter {
       // For 'auto' policy modelSource, fall through to standard routing below
     }
 
-    // Claude Code mode: route through MCP sampling bridge
+    // Claude Code mode: route through Claude Code CLI
     if (this.modelSource === 'claude-code') {
       if (this.claudeCode) {
         const available = await this.claudeCode.isAvailable();
@@ -1252,7 +1258,7 @@ export class ModelRouter {
         if (available) return this.ollama;
       }
       if (this.anthropic) return this.anthropic;
-      throw new Error('Claude Code mode selected but the sampling bridge is not running. Make sure Claude Code is open with the ohwow plugin connected.');
+      throw new Error('Claude Code mode selected but the CLI is not available. Make sure Claude Code is installed and authenticated.');
     }
 
     // OpenRouter mode: always prefer OpenRouter, fall back to others

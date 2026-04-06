@@ -284,6 +284,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
     mlxModel: config.mlxModel || undefined,
     openaiCompatibleUrl: config.openaiCompatibleUrl || undefined,
     openaiCompatibleApiKey: config.openaiCompatibleApiKey || undefined,
+    claudeCodeCliPath: config.claudeCodeCliPath || undefined,
+    claudeCodeCliModel: config.claudeCodeCliModel || undefined,
   });
 
   // ---- Graceful model switching (serialized, memory-aware) ----
