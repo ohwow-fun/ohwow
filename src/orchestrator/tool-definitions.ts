@@ -1561,9 +1561,10 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
 
 import {
   FILESYSTEM_TOOL_DEFINITIONS,
+  REQUEST_FILE_ACCESS_TOOL,
 } from '../execution/filesystem/index.js';
 
-export { FILESYSTEM_TOOL_DEFINITIONS };
+export { FILESYSTEM_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL };
 
 // =========================================================================
 // BASH COMMAND EXECUTION (conditionally added)
@@ -1718,6 +1719,9 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // Bash tools → 'filesystem' (shell access is filesystem-adjacent)
   run_bash: ['filesystem'],
 
+  // File access gateway → 'filesystem'
+  request_file_access: ['filesystem'],
+
   // Browser tools → 'browser'
   request_browser: ['browser'],
 
@@ -1743,7 +1747,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
   search_contacts: 1, list_contacts: 1, create_contact: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
-  request_browser: 1, request_desktop: 1,
+  request_file_access: 1, request_browser: 1, request_desktop: 1,
   scrape_url: 1, deep_research: 1,
   send_whatsapp_message: 1, list_whatsapp_chats: 1, connect_whatsapp: 1,
   send_telegram_message: 1, list_telegram_chats: 1,

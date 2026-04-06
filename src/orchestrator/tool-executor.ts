@@ -33,6 +33,7 @@ import { summarizeToolResult } from './result-summarizer.js';
 import { retryTransient, CircuitBreaker } from './error-recovery.js';
 import { estimateMediaCost } from '../media/media-router.js';
 import type { ImmuneSystem } from '../immune/immune-system.js';
+import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -224,6 +225,40 @@ export async function* executeToolCall(
       isError: false,
       toolsModified: true,
     };
+  }
+
+  // --- Filesystem/bash activation (permission-gated) ---
+  if (request.name === 'request_file_access') {
+    const resolvedDir = (toolInput.directory as string | undefined)
+      || ctx.toolCtx.workingDirectory
+      || '';
+    if (!resolvedDir) {
+      const errorResult: ToolResult = { success: false, error: 'No directory available to request access for.' };
+      ctx.executedToolCalls.set(toolKey, errorResult);
+      yield { type: 'tool_done', name: request.name, result: errorResult };
+      return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
+    }
+    const requestId = crypto.randomUUID();
+    yield { type: 'permission_request', requestId, path: resolvedDir, toolName: request.name };
+    const granted = await ctx.waitForPermission(requestId);
+    if (granted) {
+      await ctx.addAllowedPath(resolvedDir);
+      const activationResult: ToolResult = { success: true, data: FILE_ACCESS_ACTIVATION_MESSAGE };
+      ctx.executedToolCalls.set(toolKey, activationResult);
+      yield { type: 'tool_done', name: request.name, result: activationResult };
+      return {
+        toolName: request.name,
+        result: activationResult,
+        resultContent: FILE_ACCESS_ACTIVATION_MESSAGE,
+        isError: false,
+        toolsModified: true,
+      };
+    } else {
+      const deniedResult: ToolResult = { success: false, error: 'File access denied by user.' };
+      ctx.executedToolCalls.set(toolKey, deniedResult);
+      yield { type: 'tool_done', name: request.name, result: deniedResult };
+      return { toolName: request.name, result: deniedResult, resultContent: deniedResult.error!, isError: true };
+    }
   }
 
   // --- Delegate subtask to sub-orchestrator ---

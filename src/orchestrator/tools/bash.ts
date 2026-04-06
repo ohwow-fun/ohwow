@@ -24,7 +24,6 @@ async function getGuard(ctx: LocalToolContext): Promise<FileAccessGuard | null> 
     .eq('workspace_id', ctx.workspaceId);
 
   const paths = data ? (data as Array<{ path: string }>).map((p) => p.path) : [];
-  if (ctx.workingDirectory) paths.push(ctx.workingDirectory);
   if (paths.length === 0) return null;
 
   cachedGuard = new FileAccessGuard(paths);

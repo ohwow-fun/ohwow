@@ -8,6 +8,10 @@ export {
 export { executeFilesystemTool } from './filesystem-executor.js';
 export type { FilesystemToolResult } from './filesystem-executor.js';
 export {
+  REQUEST_FILE_ACCESS_TOOL,
+  FILE_ACCESS_ACTIVATION_MESSAGE,
+} from './request-file-access-tool.js';
+export {
   SKIP_DIRECTORIES,
   MAX_FILE_SIZE,
   MAX_DIR_ENTRIES,

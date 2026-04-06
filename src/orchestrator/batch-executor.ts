@@ -17,7 +17,7 @@ interface BatchResult {
   events: OrchestratorEvent[];
 }
 
-/** Set of filesystem tools that may trigger waitForPermission(). */
+/** Set of filesystem/bash tools that may trigger waitForPermission(). */
 const FILESYSTEM_TOOLS = new Set([
   'local_list_directory',
   'local_read_file',
@@ -25,7 +25,11 @@ const FILESYSTEM_TOOLS = new Set([
   'local_search_content',
   'local_write_file',
   'local_edit_file',
+  'run_bash',
 ]);
+
+/** Set of activation gateway tools that must run first (mutate tool list). */
+const ACTIVATION_TOOLS = new Set(['request_browser', 'request_file_access']);
 
 /**
  * Drain an async generator, collecting all yielded events and the final return value.
@@ -102,19 +106,19 @@ export async function* executeToolCallsBatch(
   }
 
   // Split requests into four groups:
-  // 1. Browser activation (must run first, mutates state)
+  // 1. Activation gateways (must run first, mutate tool list)
   // 2. MCP tools with destructiveHint (run sequentially)
-  // 3. Filesystem tools (run sequentially at end, may block on permissions)
+  // 3. Filesystem/bash tools (run sequentially at end, may block on permissions)
   // 4. Everything else (run in parallel)
-  const browserActivation = requests.filter(r => r.name === 'request_browser');
+  const activationRequests = requests.filter(r => ACTIVATION_TOOLS.has(r.name));
   const destructiveMcp = requests.filter(r =>
-    r.name !== 'request_browser' &&
+    !ACTIVATION_TOOLS.has(r.name) &&
     !FILESYSTEM_TOOLS.has(r.name) &&
     isDestructiveMcpTool(r.name, mcpAnnotations),
   );
   const filesystemTools = requests.filter(r => FILESYSTEM_TOOLS.has(r.name));
   const parallel = requests.filter(r =>
-    r.name !== 'request_browser' &&
+    !ACTIVATION_TOOLS.has(r.name) &&
     !FILESYSTEM_TOOLS.has(r.name) &&
     !isDestructiveMcpTool(r.name, mcpAnnotations),
   );
@@ -122,8 +126,8 @@ export async function* executeToolCallsBatch(
   // Map from request to its outcome (preserves original order)
   const outcomeMap = new Map<ToolCallRequest, ToolCallOutcome>();
 
-  // Phase 1: Execute browser activation sequentially first
-  for (const req of browserActivation) {
+  // Phase 1: Execute activation gateways sequentially first (browser, file access)
+  for (const req of activationRequests) {
     const outcome = yield* executeSingle(req, ctx);
     outcomeMap.set(req, outcome);
   }

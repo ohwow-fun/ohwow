@@ -17,8 +17,10 @@ import type {
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
-import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, filterToolsByIntent, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
+import { invalidateBashAccessCache } from './tools/bash.js';
+import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
 import { getWorkingNumCtx, MODEL_CATALOG, getParameterTier } from '../lib/ollama-models.js';
 import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget, estimateTokens, estimateToolTokens } from './context-budget.js';
@@ -116,6 +118,7 @@ export class LocalOrchestrator {
   private browserActivated = false;
   private desktopService: LocalDesktopService | null = null;
   private desktopActivated = false;
+  private filesystemActivated = false;
   private onScheduleChange?: () => void;
   private _ollamaUrl?: string;
   private _embeddingModel?: string;
@@ -1142,6 +1145,15 @@ export class LocalOrchestrator {
           if (idx !== -1) tools.splice(idx, 1, ...DESKTOP_TOOL_DEFINITIONS);
         }
 
+        // Handle filesystem activation: swap gateway for real filesystem + bash tools
+        if (outcome.toolsModified && outcome.toolName === 'request_file_access' && !this.filesystemActivated) {
+          this.filesystemActivated = true;
+          invalidateFileAccessCache();
+          invalidateBashAccessCache();
+          const idx = tools.indexOf(REQUEST_FILE_ACCESS_TOOL);
+          if (idx !== -1) tools.splice(idx, 1, ...FILESYSTEM_TOOL_DEFINITIONS, ...BASH_TOOL_DEFINITIONS);
+        }
+
         // Anthropic format: use formattedBlocks (with images) for browser/desktop results
         toolResults.push({
           type: 'tool_result',
@@ -1340,9 +1352,12 @@ export class LocalOrchestrator {
       tools = [REQUEST_DESKTOP_TOOL, ...tools];
     }
 
-    const hasFileAccess = this.workingDirectory || await this.hasOrchestratorFileAccess();
-    if (hasFileAccess) {
+    // Add filesystem/bash tools: if already activated this session or paths exist in DB,
+    // include full tools directly. Otherwise show the gateway tool.
+    if (this.filesystemActivated || await this.hasOrchestratorFileAccess()) {
       tools = [...tools, ...FILESYSTEM_TOOL_DEFINITIONS, ...BASH_TOOL_DEFINITIONS];
+    } else {
+      tools = [...tools, REQUEST_FILE_ACCESS_TOOL];
     }
 
     // Append MCP tools (skip intent filtering — MCP tools aren't in TOOL_SECTION_MAP)
