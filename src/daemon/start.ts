@@ -704,7 +704,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   let messageRouter: MessageRouter | null = null;
   if (!isWorker) {
-    messageRouter = new MessageRouter({ orchestrator: orchestrator!, channelRegistry, rawDb, triggerEvaluator, eventBus: bus });
+    messageRouter = new MessageRouter({ orchestrator: orchestrator!, channelRegistry, rawDb, db, workspaceId, triggerEvaluator, eventBus: bus });
   }
 
   // 11. Start Express server + WebSocket

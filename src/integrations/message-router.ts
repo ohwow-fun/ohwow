@@ -13,6 +13,8 @@ import type { ChannelRegistry } from './channel-registry.js';
 import { MessageQueue } from './message-queue.js';
 import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import type { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
+import { persistExchange } from '../orchestrator/session-store.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
 
 /** Allowed table names per channel type — prevents SQL injection via dynamic table names */
@@ -27,6 +29,8 @@ interface MessageRouterDeps {
   orchestrator: LocalOrchestrator;
   channelRegistry: ChannelRegistry;
   rawDb: Database.Database;
+  db: DatabaseAdapter;
+  workspaceId: string;
   triggerEvaluator?: LocalTriggerEvaluator;
   eventBus?: TypedEventBus<RuntimeEvents>;
 }
@@ -35,6 +39,8 @@ export class MessageRouter {
   private orchestrator: LocalOrchestrator;
   private channelRegistry: ChannelRegistry;
   private rawDb: Database.Database;
+  private db: DatabaseAdapter;
+  private workspaceId: string;
   private triggerEvaluator: LocalTriggerEvaluator | null;
   private eventBus: TypedEventBus<RuntimeEvents> | null;
   private queue = new MessageQueue();
@@ -43,6 +49,8 @@ export class MessageRouter {
     this.orchestrator = deps.orchestrator;
     this.channelRegistry = deps.channelRegistry;
     this.rawDb = deps.rawDb;
+    this.db = deps.db;
+    this.workspaceId = deps.workspaceId;
     this.triggerEvaluator = deps.triggerEvaluator ?? null;
     this.eventBus = deps.eventBus ?? null;
   }
@@ -165,6 +173,17 @@ export class MessageRouter {
         this.rawDb.prepare(
           `INSERT INTO ${tableName} ${insertCols} VALUES ${insertPlaceholders}`,
         ).run(...assistantParams);
+
+        // Persist to append-only conversation history (fire-and-forget)
+        persistExchange(
+          { db: this.db, workspaceId: this.workspaceId },
+          sessionId,
+          text,
+          response,
+          { title: text.slice(0, 100), channel: address.channel },
+        ).catch((err) => {
+          logger.warn({ err }, '[MessageRouter] Conversation persistence failed');
+        });
 
         // Send response via channel
         await channel.sendResponse(address.chatId, response);

@@ -18,6 +18,108 @@ import type { ModelRouter } from '../execution/model-router.js';
 import { MAX_ACTIVE_MEMORIES, MEMORY_EXTRACTION_PROMPT } from './orchestrator-types.js';
 import { logger } from '../lib/logger.js';
 
+// ============================================================================
+// CONVERSATION PERSISTENCE (append-only message history)
+// ============================================================================
+
+/**
+ * Ensure a conversation record exists for the given session, return its ID.
+ * Creates one if it doesn't exist yet.
+ */
+export async function ensureConversation(
+  deps: SessionDeps,
+  sessionId: string,
+  opts?: { title?: string; channel?: string },
+): Promise<string> {
+  // Use sessionId as the conversation ID for 1:1 mapping
+  const conversationId = sessionId;
+
+  const { data } = await deps.db
+    .from('orchestrator_conversations')
+    .select('id')
+    .eq('id', conversationId)
+    .maybeSingle();
+
+  if (data) return conversationId;
+
+  // Create new conversation
+  const { error } = await deps.db
+    .from('orchestrator_conversations')
+    .insert({
+      id: conversationId,
+      workspace_id: deps.workspaceId,
+      title: opts?.title ?? null,
+      source: 'ohwow',
+      channel: opts?.channel ?? null,
+      message_count: 0,
+      is_archived: 0,
+      extraction_count: 0,
+      metadata: '{}',
+    });
+
+  if (error) {
+    logger.warn(`[session-store] Couldn't create conversation record: ${error.message}`);
+  }
+
+  return conversationId;
+}
+
+/**
+ * Persist a user+assistant exchange to the append-only messages table.
+ * Called alongside saveToSession so every exchange is permanently stored.
+ */
+export async function persistExchange(
+  deps: SessionDeps,
+  sessionId: string,
+  userContent: string,
+  assistantContent: string,
+  opts?: { title?: string; channel?: string; model?: string },
+): Promise<void> {
+  try {
+    const conversationId = await ensureConversation(deps, sessionId, {
+      title: opts?.title,
+      channel: opts?.channel,
+    });
+
+    const now = new Date().toISOString();
+
+    // Insert user message
+    await deps.db.from('orchestrator_messages').insert({
+      id: crypto.randomUUID(),
+      conversation_id: conversationId,
+      workspace_id: deps.workspaceId,
+      role: 'user',
+      content: userContent,
+      metadata: '{}',
+      created_at: now,
+    });
+
+    // Insert assistant message
+    await deps.db.from('orchestrator_messages').insert({
+      id: crypto.randomUUID(),
+      conversation_id: conversationId,
+      workspace_id: deps.workspaceId,
+      role: 'assistant',
+      content: assistantContent,
+      model: opts?.model ?? null,
+      metadata: '{}',
+      created_at: new Date(Date.now() + 1).toISOString(),
+    });
+
+    // Update conversation metadata
+    await deps.db
+      .from('orchestrator_conversations')
+      .update({
+        last_message_at: now,
+        updated_at: now,
+      })
+      .eq('id', conversationId);
+  } catch (err) {
+    // Non-fatal: don't break the chat flow if persistence fails
+    logger.warn({ err }, '[session-store] Couldn\'t persist exchange to conversation history');
+  }
+}
+
 /** Truncate a title at a word boundary, up to maxLen characters. */
 function truncateTitle(text: string, maxLen = 60): string {
   if (text.length <= maxLen) return text;

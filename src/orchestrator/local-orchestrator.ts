@@ -60,6 +60,7 @@ import { classifyIntent } from './intent-classifier.js';
 import {
   loadHistory,
   saveToSession,
+  persistExchange,
   buildAnthropicTurnMessages,
   buildOllamaTurnMessages,
   extractOrchestratorMemory,
@@ -1250,6 +1251,15 @@ export class LocalOrchestrator {
     const turnMessages = buildAnthropicTurnMessages(userMessage, loopMessages, turnStartIndex, fullContent);
     await saveToSession(this.sessionDeps, sessionId, turnMessages, userMessage.slice(0, 100));
 
+    // Persist to append-only conversation history (fire-and-forget)
+    if (fullContent) {
+      persistExchange(this.sessionDeps, sessionId, userMessage, fullContent, {
+        title: userMessage.slice(0, 100),
+      }).catch((err) => {
+        logger.warn(`[LocalOrchestrator] Conversation persistence failed: ${err}`);
+      });
+    }
+
     // Extract orchestrator memory every 3rd exchange (fire-and-forget)
     this.exchangeCount++;
     if (this.exchangeCount % 3 === 0 && fullContent) {
@@ -1858,6 +1868,15 @@ export class LocalOrchestrator {
     // Save to session (full turn with tool context, converted to MessageParam format)
     const ollamaTurnMessages = buildOllamaTurnMessages(userMessage, loopMessages, ollamaTurnStartIndex, fullContent);
     await saveToSession(this.sessionDeps, sessionId, ollamaTurnMessages, userMessage.slice(0, 100));
+
+    // Persist to append-only conversation history (fire-and-forget)
+    if (fullContent) {
+      persistExchange(this.sessionDeps, sessionId, userMessage, fullContent, {
+        title: userMessage.slice(0, 100),
+      }).catch((err) => {
+        logger.warn(`[LocalOrchestrator] Conversation persistence failed: ${err}`);
+      });
+    }
 
     // Extract orchestrator memory every 3rd exchange (fire-and-forget, parity with Claude path)
     this.exchangeCount++;
