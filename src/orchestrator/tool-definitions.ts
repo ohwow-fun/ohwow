@@ -1825,6 +1825,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   mount_docs: ['rag'],
   unmount_docs: ['rag'],
   list_doc_mounts: ['rag'],
+  search_mounted_docs: ['rag'],
 
   // Knowledge base → 'rag'
   list_knowledge: ['rag'],
@@ -1878,7 +1879,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   search_contacts: 1, list_contacts: 1, create_contact: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
   request_file_access: 1, request_browser: 1, request_desktop: 1,
-  scrape_url: 1, deep_research: 1, mount_docs: 1, list_doc_mounts: 1, unmount_docs: 1,
+  scrape_url: 1, deep_research: 1, mount_docs: 1, list_doc_mounts: 1, unmount_docs: 1, search_mounted_docs: 1,
   send_whatsapp_message: 1, list_whatsapp_chats: 1, connect_whatsapp: 1,
   send_telegram_message: 1, list_telegram_chats: 1,
   ocr_extract_text: 1, analyze_image: 1,

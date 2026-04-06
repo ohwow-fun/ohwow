@@ -17,6 +17,7 @@ import type { DocMount, CrawlOptions, CrawledPage } from './types.js';
 import { crawlDocSite } from './crawler.js';
 import { normalizeUrlsToPaths, urlToNamespace, extractDomain } from './path-normalizer.js';
 import * as store from './mount-store.js';
+import { ingestMountToKnowledgeBase, removeKnowledgeForMount, type RagIngestOptions } from './rag-ingest.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================================
@@ -30,12 +31,29 @@ const DOCS_BASE_DIR = path.join(os.homedir(), '.ohwow', 'docs');
 // MANAGER
 // ============================================================================
 
+export interface DocMountManagerConfig {
+  /** Ollama URL for embedding generation */
+  ollamaUrl?: string;
+  /** Embedding model name (e.g., nomic-embed-text) */
+  embeddingModel?: string;
+}
+
 export class DocMountManager {
+  private ragConfig: DocMountManagerConfig;
+
   constructor(
     private db: DatabaseAdapter,
     private scraplingService: ScraplingService,
     private dataDir?: string,
-  ) {}
+    ragConfig?: DocMountManagerConfig,
+  ) {
+    this.ragConfig = ragConfig ?? {};
+  }
+
+  /** Update RAG config (e.g., when Ollama becomes available) */
+  setRagConfig(config: DocMountManagerConfig): void {
+    this.ragConfig = { ...this.ragConfig, ...config };
+  }
 
   /** Get the base directory for materialized docs */
   private getDocsDir(): string {
@@ -89,6 +107,16 @@ export class DocMountManager {
   async unmount(mountId: string): Promise<void> {
     const mount = await store.getMount(this.db, mountId);
     if (!mount) return;
+
+    // Remove knowledge base entries
+    try {
+      const removed = await removeKnowledgeForMount(mount.id, this.db, mount.workspaceId);
+      if (removed > 0) {
+        logger.info({ removed }, '[doc-mount] Removed knowledge base entries');
+      }
+    } catch (err) {
+      logger.warn({ err }, '[doc-mount] Knowledge cleanup failed, continuing unmount');
+    }
 
     // Remove from disk
     if (mount.mountPath && fs.existsSync(mount.mountPath)) {
@@ -228,6 +256,19 @@ export class DocMountManager {
       });
 
       await this.materializeToDisk(updatedMount);
+
+      // RAG ingestion: chunk + embed into knowledge base (best-effort)
+      try {
+        const storedPages = await store.listPages(this.db, mount.id);
+        await ingestMountToKnowledgeBase(updatedMount, storedPages, {
+          db: this.db,
+          workspaceId: mount.workspaceId,
+          ollamaUrl: this.ragConfig.ollamaUrl,
+          embeddingModel: this.ragConfig.embeddingModel,
+        });
+      } catch (err) {
+        logger.warn({ err, url: mount.url }, '[doc-mount] RAG ingestion failed, mount still usable');
+      }
 
       logger.info(
         { url: mount.url, pages: rawPages.length, bytes: totalBytes },

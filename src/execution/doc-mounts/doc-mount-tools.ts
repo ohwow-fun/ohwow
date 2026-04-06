@@ -58,6 +58,29 @@ export const DOC_MOUNT_TOOL_DEFINITIONS: Tool[] = [
       required: [],
     },
   },
+  {
+    name: 'search_mounted_docs',
+    description:
+      'Semantically search across all mounted documentation. Unlike local_search_content (exact text match), this finds conceptually related content using embeddings and BM25 scoring. Use when you need to find docs about a concept rather than a specific string.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Natural language search query (e.g., "how to handle webhook retries")',
+        },
+        url: {
+          type: 'string',
+          description: 'Optional: limit search to docs from a specific mounted site',
+        },
+        max_results: {
+          type: 'number',
+          description: 'Max results to return (default: 5)',
+        },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
 export const DOC_MOUNT_TOOL_NAMES = DOC_MOUNT_TOOL_DEFINITIONS.map((t) => t.name);
@@ -77,11 +100,11 @@ You can mount documentation sites as browsable filesystems:
 - **mount_docs**: Crawl a doc site and mount it locally. After mounting, browse with local_list_directory, local_read_file, and local_search_content.
 - **unmount_docs**: Remove a mounted doc site.
 - **list_doc_mounts**: See all currently mounted doc sites.
+- **search_mounted_docs**: Semantic search across mounted docs. Finds conceptually related content, not just exact text matches.
 
 Use mount_docs before writing code against any library or API. This gives you current documentation instead of stale training data. Mounted docs are cached and re-used across tasks.
 
-After mounting, the docs appear as files you can browse:
-1. local_list_directory to see the structure
-2. local_search_content to find relevant pages
-3. local_read_file to read specific pages
+After mounting, two search strategies are available:
+- **Exact match**: local_search_content for grep-like text search
+- **Semantic**: search_mounted_docs for concept-based search (e.g., "how to handle retries")
 `;

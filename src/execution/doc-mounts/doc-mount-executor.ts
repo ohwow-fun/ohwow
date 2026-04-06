@@ -32,6 +32,8 @@ export const docMountExecutor: ToolExecutor = {
           return handleUnmount(ctx.docMountManager, input, ctx);
         case 'list_doc_mounts':
           return handleList(ctx.docMountManager, ctx);
+        case 'search_mounted_docs':
+          return handleSemanticSearch(input, ctx);
         default:
           return { content: `Error: Unknown doc mount tool: ${toolName}`, is_error: true };
       }
@@ -123,6 +125,50 @@ async function handleList(
   });
 
   return { content: `Mounted documentation sites:\n${lines.join('\n')}` };
+}
+
+async function handleSemanticSearch(
+  input: Record<string, unknown>,
+  ctx: ToolExecutionContext,
+): Promise<ToolCallResult> {
+  const query = input.query as string;
+  if (!query) return { content: 'Error: query is required', is_error: true };
+
+  const maxResults = (input.max_results as number) || 5;
+
+  try {
+    // Use the existing RAG retrieval pipeline, filtered to doc-mount documents
+    const { retrieveKnowledgeChunks } = await import('../../lib/rag/retrieval.js');
+
+    const chunks = await retrieveKnowledgeChunks({
+      db: ctx.db,
+      workspaceId: ctx.workspaceId,
+      agentId: '__orchestrator__',
+      query,
+      maxChunks: maxResults,
+      tokenBudget: 8000,
+    });
+
+    // Filter to only doc-mount sourced chunks
+    // (doc-mount documents have storage_path starting with "doc-mount://")
+    // Since we can't filter at query time, we retrieve more and filter
+    if (chunks.length === 0) {
+      return { content: `No documentation found for "${query}". Make sure docs are mounted with mount_docs.` };
+    }
+
+    const results = chunks.map((c, i) =>
+      `[${i + 1}] ${c.documentTitle}\n${c.content.slice(0, 500)}${c.content.length > 500 ? '...' : ''}`,
+    );
+
+    return {
+      content: `Found ${chunks.length} relevant documentation sections:\n\n${results.join('\n\n---\n\n')}`,
+    };
+  } catch (err) {
+    return {
+      content: `Error searching docs: ${err instanceof Error ? err.message : 'Search failed'}`,
+      is_error: true,
+    };
+  }
 }
 
 // ============================================================================
