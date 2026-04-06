@@ -1116,8 +1116,13 @@ export class RuntimeEngine {
       const llmCache = new LocalLLMCache(this.db, workspaceId);
       const systemPromptHash = crypto.createHash('sha256').update(systemPrompt).digest('hex');
 
-      // Decide execution path: Ollama (free tier) vs Anthropic
-      const useOllama = !this.config.anthropicApiKey && this.modelRouter;
+      // Decide execution path: Ollama vs Anthropic
+      // Use Ollama when: no API key, OR the agent is explicitly configured with a local model
+      const agentModelIsLocal = agentConfig.model
+        && !(agentConfig.model as string).startsWith('claude-');
+      const useOllama = agentModelIsLocal
+        ? !!this.modelRouter
+        : !this.config.anthropicApiKey && !!this.modelRouter;
       if (!useOllama && !this.anthropic) {
         throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentConfig.model || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
       }
