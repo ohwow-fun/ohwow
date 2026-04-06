@@ -23,3 +23,8 @@ export {
   urlToNamespace,
   extractDomain,
 } from './path-normalizer.js';
+export {
+  syncPeerMounts,
+  listPeerMounts,
+  removePeerMirrors,
+} from './mesh-sync.js';
