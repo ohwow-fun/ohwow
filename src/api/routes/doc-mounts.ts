@@ -59,6 +59,16 @@ export function createDocMountPeerRouter(db: DatabaseAdapter, workspaceId: strin
     }
 
     try {
+      // Verify mount belongs to this workspace
+      const { data: mount } = await db
+        .from('doc_mounts')
+        .select('id')
+        .eq('id', req.params.mountId)
+        .eq('workspace_id', workspaceId)
+        .single();
+
+      if (!mount) { res.status(404).json({ error: 'Mount not found' }); return; }
+
       const { data: pages } = await db
         .from('doc_mount_pages')
         .select('file_path')
@@ -87,6 +97,16 @@ export function createDocMountPeerRouter(db: DatabaseAdapter, workspaceId: strin
     }
 
     try {
+      // Verify mount belongs to this workspace
+      const { data: mountCheck } = await db
+        .from('doc_mounts')
+        .select('id')
+        .eq('id', req.params.mountId)
+        .eq('workspace_id', workspaceId)
+        .single();
+
+      if (!mountCheck) { res.status(404).json({ error: 'Mount not found' }); return; }
+
       const { data: page } = await db
         .from('doc_mount_pages')
         .select('file_path, content, source_url, token_count')
@@ -121,6 +141,16 @@ export function createDocMountPeerRouter(db: DatabaseAdapter, workspaceId: strin
     }
 
     try {
+      // Verify mount belongs to this workspace
+      const { data: mountCheck } = await db
+        .from('doc_mounts')
+        .select('id')
+        .eq('id', req.params.mountId)
+        .eq('workspace_id', workspaceId)
+        .single();
+
+      if (!mountCheck) { res.status(404).json({ error: 'Mount not found' }); return; }
+
       // Simple in-memory search: fetch all pages and filter
       const { data: pages } = await db
         .from('doc_mount_pages')

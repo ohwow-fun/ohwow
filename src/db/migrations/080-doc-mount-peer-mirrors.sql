@@ -7,6 +7,7 @@
 
 CREATE TABLE IF NOT EXISTS doc_mount_peer_mirrors (
   id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
   mount_namespace TEXT NOT NULL,
   peer_id TEXT NOT NULL,
   peer_mount_id TEXT NOT NULL,

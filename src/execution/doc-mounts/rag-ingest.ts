@@ -141,59 +141,54 @@ export async function ingestMountToKnowledgeBase(
 /**
  * Remove all knowledge documents created from a doc mount.
  * Called during unmount to clean up.
+ *
+ * Uses the namespace-based storage_path prefix to identify docs
+ * belonging to this mount: "doc-mount://{namespace}/..."
  */
 export async function removeKnowledgeForMount(
-  mountId: string,
+  namespace: string,
   db: DatabaseAdapter,
   workspaceId: string,
 ): Promise<number> {
-  // Find all knowledge docs with storage_path matching this mount
-  const namespace = `doc-mount://${mountId}`;
-  // Actually we store as doc-mount://{namespace}/{path}
-  // So we need to find docs by mount ID relationship
-  // Use a LIKE query on storage_path prefix
+  const prefix = `doc-mount://${namespace}/`;
 
-  const { data: docs } = await db
+  // Fetch all doc-mount knowledge docs for this workspace
+  // Filter by storage_path prefix in JS (DatabaseAdapter lacks LIKE)
+  const { data: allDocs } = await db
     .from('agent_workforce_knowledge_documents')
-    .select('id')
+    .select('id, storage_path')
     .eq('workspace_id', workspaceId)
     .eq('source_type', 'url');
 
-  if (!docs || docs.length === 0) return 0;
+  if (!allDocs || allDocs.length === 0) return 0;
 
-  // Filter for docs whose storage_path starts with doc-mount://
-  // Since DatabaseAdapter doesn't support LIKE, we filter in JS
+  // Filter to only docs from this specific mount's namespace
+  const mountDocs = (allDocs as Array<{ id: string; storage_path: string }>)
+    .filter((d) => d.storage_path?.startsWith(prefix));
+
+  if (mountDocs.length === 0) return 0;
+
   let removed = 0;
-  for (const doc of docs) {
-    const { data: fullDoc } = await db
-      .from('agent_workforce_knowledge_documents')
-      .select('storage_path')
-      .eq('id', (doc as { id: string }).id)
-      .single();
+  for (const doc of mountDocs) {
+    // Get chunks for corpus stats update before deleting
+    const { data: chunks } = await db
+      .from('agent_workforce_knowledge_chunks')
+      .select('content')
+      .eq('document_id', doc.id);
 
-    if (fullDoc && (fullDoc as { storage_path: string }).storage_path?.startsWith('doc-mount://')) {
-      // Get chunks for corpus stats update before deleting
-      const { data: chunks } = await db
-        .from('agent_workforce_knowledge_chunks')
-        .select('content')
-        .eq('document_id', (doc as { id: string }).id);
-
-      if (chunks && chunks.length > 0) {
-        const chunkData = (chunks as Array<{ content: string }>).map((c) => ({
-          content: c.content,
-          tokenCount: 0,
-          keywords: [] as string[],
-        }));
-        await updateCorpusStatsForChunks(db, workspaceId, chunkData, -1);
-      }
-
-      // Delete document (chunks cascade)
-      await db
-        .from('agent_workforce_knowledge_documents')
-        .delete()
-        .eq('id', (doc as { id: string }).id);
-      removed++;
+    if (chunks && chunks.length > 0) {
+      const chunkData = (chunks as Array<{ content: string }>).map((c) => ({
+        content: c.content,
+      }));
+      await updateCorpusStatsForChunks(db, workspaceId, chunkData, -1);
     }
+
+    // Delete document (chunks cascade)
+    await db
+      .from('agent_workforce_knowledge_documents')
+      .delete()
+      .eq('id', doc.id);
+    removed++;
   }
 
   return removed;

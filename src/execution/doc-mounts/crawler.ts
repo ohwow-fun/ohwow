@@ -21,6 +21,12 @@ const DEFAULT_MAX_PAGES = 500;
 const MAX_PAGES_LIMIT = 2000;
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_PAGE_TIMEOUT = 30;
+/** Delay between page fetches to avoid rate limiting (ms) */
+const CRAWL_DELAY_MS = 75;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ============================================================================
 // MAIN CRAWLER
@@ -55,6 +61,7 @@ export async function* crawlDocSite(
     logger.info({ count: llmsUrls.length, url: base }, '[doc-mount] Using llms.txt discovery');
     for (const url of llmsUrls) {
       if (pageCount >= maxPages) break;
+      if (pageCount > 0) await delay(CRAWL_DELAY_MS);
       const page = await fetchAndConvert(url, scraplingService, pageTimeout);
       if (page) {
         pageCount++;
@@ -70,6 +77,7 @@ export async function* crawlDocSite(
     logger.info({ count: sitemapUrls.length, url: base }, '[doc-mount] Using sitemap.xml discovery');
     for (const url of sitemapUrls) {
       if (pageCount >= maxPages) break;
+      if (pageCount > 0) await delay(CRAWL_DELAY_MS);
       const page = await fetchAndConvert(url, scraplingService, pageTimeout);
       if (page) {
         pageCount++;
@@ -100,6 +108,9 @@ export async function* crawlDocSite(
 
     // Skip non-doc URLs
     if (isNonDocUrl(normalized)) continue;
+
+    // Rate limiting delay
+    if (pageCount > 0) await delay(CRAWL_DELAY_MS);
 
     // Fetch the page (get raw HTML for link extraction)
     let html: string | null = null;

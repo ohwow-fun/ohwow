@@ -88,15 +88,23 @@ export class DocMountManager {
     const mountPath = path.join(this.getDocsDir(), namespace);
     const ttlDays = options.ttlDays ?? DEFAULT_TTL_DAYS;
 
-    const mount = await store.createMount(this.db, {
-      id: randomUUID(),
-      workspaceId,
-      url,
-      domain,
-      namespace,
-      mountPath,
-      ttlDays,
-    });
+    let mount: DocMount;
+    try {
+      mount = await store.createMount(this.db, {
+        id: randomUUID(),
+        workspaceId,
+        url,
+        domain,
+        namespace,
+        mountPath,
+        ttlDays,
+      });
+    } catch {
+      // UNIQUE constraint race: another concurrent mount won — use theirs
+      const raced = await store.getMountByUrl(this.db, url, workspaceId);
+      if (raced) return raced;
+      throw new Error(`Couldn't create doc mount for ${url}`);
+    }
 
     await store.updateMountStatus(this.db, mount.id, { status: 'crawling' });
 
@@ -108,9 +116,9 @@ export class DocMountManager {
     const mount = await store.getMount(this.db, mountId);
     if (!mount) return;
 
-    // Remove knowledge base entries
+    // Remove knowledge base entries (keyed by namespace)
     try {
-      const removed = await removeKnowledgeForMount(mount.id, this.db, mount.workspaceId);
+      const removed = await removeKnowledgeForMount(mount.namespace, this.db, mount.workspaceId);
       if (removed > 0) {
         logger.info({ removed }, '[doc-mount] Removed knowledge base entries');
       }
@@ -178,10 +186,17 @@ export class DocMountManager {
     fs.mkdirSync(docsDir, { recursive: true });
 
     let writtenCount = 0;
+    const resolvedDocsDir = path.resolve(docsDir);
     for (const page of pages) {
-      const filePath = path.join(docsDir, page.filePath);
-      const dir = path.dirname(filePath);
+      const filePath = path.resolve(docsDir, page.filePath.replace(/^\//, ''));
 
+      // Path traversal guard: ensure resolved path stays within mount directory
+      if (!filePath.startsWith(resolvedDocsDir + path.sep) && filePath !== resolvedDocsDir) {
+        logger.warn({ filePath: page.filePath }, '[doc-mount] Skipping path traversal attempt');
+        continue;
+      }
+
+      const dir = path.dirname(filePath);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(filePath, page.content, 'utf-8');
       writtenCount++;

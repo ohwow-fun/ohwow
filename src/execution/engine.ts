@@ -889,6 +889,13 @@ export class RuntimeEngine {
               this.docMountManager.mount(docUrl, workspaceId).catch((err) => {
                 logger.warn({ err, url: docUrl }, '[engine] Background doc mount failed');
               });
+            } else if (existing.status === 'stale' || existing.status === 'failed') {
+              // Stale/failed — still serve from disk if available, refresh in background
+              const current = fileAccessGuard?.getAllowedPaths() ?? [];
+              fileAccessGuard = new FileAccessGuard([...current, existing.mountPath]);
+              this.docMountManager.refreshIfStale(existing.id).catch((err) => {
+                logger.warn({ err, url: docUrl }, '[engine] Background doc refresh failed');
+              });
             }
           } catch (err) {
             logger.warn({ err, url: docUrl }, '[engine] Auto-mount check failed');

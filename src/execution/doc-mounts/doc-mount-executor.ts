@@ -61,6 +61,16 @@ async function handleMount(
     return { content: 'Error: url is required', is_error: true };
   }
 
+  // Validate URL
+  try {
+    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { content: 'Error: URL must use http or https', is_error: true };
+    }
+  } catch {
+    return { content: `Error: Invalid URL "${url}"`, is_error: true };
+  }
+
   const maxPages = input.max_pages as number | undefined;
   const ttlDays = input.ttl_days as number | undefined;
 
@@ -135,33 +145,54 @@ async function handleSemanticSearch(
   if (!query) return { content: 'Error: query is required', is_error: true };
 
   const maxResults = (input.max_results as number) || 5;
+  const urlFilter = input.url as string | undefined;
 
   try {
-    // Use the existing RAG retrieval pipeline, filtered to doc-mount documents
     const { retrieveKnowledgeChunks } = await import('../../lib/rag/retrieval.js');
 
+    // Retrieve more chunks than needed so we can filter to doc-mount sources
     const chunks = await retrieveKnowledgeChunks({
       db: ctx.db,
       workspaceId: ctx.workspaceId,
       agentId: '__orchestrator__',
       query,
-      maxChunks: maxResults,
-      tokenBudget: 8000,
+      maxChunks: maxResults * 3,
+      tokenBudget: 16000,
     });
 
-    // Filter to only doc-mount sourced chunks
-    // (doc-mount documents have storage_path starting with "doc-mount://")
-    // Since we can't filter at query time, we retrieve more and filter
-    if (chunks.length === 0) {
+    // Filter to only doc-mount sourced chunks by checking documentTitle prefix
+    // Doc-mount titles follow the pattern "{domain}: {path}"
+    let filtered = chunks.filter((c) => {
+      // Doc-mount documents have titles like "docs.stripe.com: Api > Charges > Create"
+      // They are created with domain prefix in titleFromPath()
+      return c.documentTitle.includes(':');
+    });
+
+    // If url filter is provided, further scope to that domain
+    if (urlFilter) {
+      try {
+        const filterDomain = new URL(urlFilter).hostname;
+        filtered = filtered.filter((c) =>
+          c.documentTitle.toLowerCase().startsWith(filterDomain.toLowerCase()),
+        );
+      } catch {
+        // Invalid URL filter, skip
+      }
+    }
+
+    // Take only requested number
+    filtered = filtered.slice(0, maxResults);
+
+    if (filtered.length === 0) {
       return { content: `No documentation found for "${query}". Make sure docs are mounted with mount_docs.` };
     }
 
-    const results = chunks.map((c, i) =>
+    const results = filtered.map((c, i) =>
       `[${i + 1}] ${c.documentTitle}\n${c.content.slice(0, 500)}${c.content.length > 500 ? '...' : ''}`,
     );
 
     return {
-      content: `Found ${chunks.length} relevant documentation sections:\n\n${results.join('\n\n---\n\n')}`,
+      content: `Found ${filtered.length} relevant documentation sections:\n\n${results.join('\n\n---\n\n')}`,
     };
   } catch (err) {
     return {

@@ -7,7 +7,7 @@
  */
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
-import type { DocMount, DocMountPage, DocMountRow, DocMountPageRow, CrawledPage } from './types.js';
+import type { DocMount, DocMountPage, DocMountRow, DocMountPageRow } from './types.js';
 import { mapMountRow, mapPageRow } from './types.js';
 
 // ============================================================================
