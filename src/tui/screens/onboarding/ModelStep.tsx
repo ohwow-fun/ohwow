@@ -109,13 +109,15 @@ export function ModelStep({
 
     const sourceLabel = modelSource === 'cloud'
       ? `Cloud: ${formatCloudModelName(cloudModel)}`
+      : modelSource === 'claude-code'
+      ? 'Claude Code CLI'
       : `Local: ${configuredTag}`;
 
     return (
       <Box flexDirection="column">
         <Text bold>Your orchestrator model</Text>
         <Box>
-          <Text color={modelSource === 'cloud' ? 'magenta' : 'green'}>{sourceLabel}</Text>
+          <Text color={modelSource === 'cloud' ? 'magenta' : modelSource === 'claude-code' ? 'blue' : 'green'}>{sourceLabel}</Text>
           {modelSource === 'cloud' && cloudAuthStatus === 'authenticated' && (
             <Text color="green"> (connected)</Text>
           )}
@@ -129,6 +131,14 @@ export function ModelStep({
               <Text color={cloudAuthStatus === 'authenticated' ? 'green' : 'yellow'}>
                 {cloudAuthStatus === 'authenticated' ? '● Connected' : '○ Not connected'}
               </Text>
+            </Box>
+          </Box>
+        ) : modelSource === 'claude-code' ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Box borderStyle="round" borderColor="blue" paddingX={2} paddingY={1} flexDirection="column">
+              <Text bold color="white">Claude Code CLI</Text>
+              <Text color="gray">Uses your Claude Code subscription. No API key needed.</Text>
+              <Text color="green">● Ready</Text>
             </Box>
           </Box>
         ) : installedCatalogModels.length === 0 && extraTags.length === 0 ? (
@@ -184,7 +194,7 @@ export function ModelStep({
           </Box>
         )}
 
-        {showAlternatives && status && status.alternatives.length > 0 && modelSource !== 'cloud' && (
+        {showAlternatives && status && status.alternatives.length > 0 && modelSource === 'local' && (
           <Box flexDirection="column" marginTop={1}>
             <Text color="gray">Pull a new model:</Text>
             <ModelSelectionTable
@@ -203,12 +213,12 @@ export function ModelStep({
         <Box marginTop={1}>
           <KeyHints
             hints={[
-              ...(modelSource !== 'cloud' ? [
+              ...(modelSource === 'local' ? [
                 { key: 'j/k', label: 'Navigate' },
                 { key: 'l', label: 'Load model' },
                 { key: 'p', label: showAlternatives ? 'Hide options' : 'Pull new model' },
               ] : []),
-              { key: 'c', label: modelSource === 'cloud' ? 'Local model' : 'Cloud model' },
+              { key: 'c', label: modelSource === 'local' ? 'Cloud model' : modelSource === 'cloud' ? 'Claude Code' : 'Local model' },
               { key: 'Enter', label: showAlternatives ? 'Pull selected' : 'Continue' },
             ]}
           />
@@ -256,6 +266,42 @@ export function ModelStep({
           <KeyHints
             hints={[
               { key: 'Enter', label: cloudAuthStatus === 'authenticated' ? 'Continue' : 'Connect' },
+              { key: 'c', label: 'Claude Code' },
+              { key: 'Esc', label: 'Back' },
+            ]}
+          />
+        </Box>
+      </Box>
+    );
+  }
+
+  // Claude Code mode: uses the Claude Code CLI as AI backend
+  if (modelSource === 'claude-code') {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Your AI Model</Text>
+        <Box marginTop={1}>
+          <Text color="gray">{status.deviceSummary}</Text>
+        </Box>
+
+        <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor="blue" paddingX={2} paddingY={1}>
+          <Box>
+            <Text bold color="white">Claude Code CLI</Text>
+            <Text color="green"> ✓ Ready</Text>
+          </Box>
+          <Text color="gray">Uses your Claude Code subscription. No API key or download needed.</Text>
+        </Box>
+
+        {error && (
+          <Box marginTop={1}>
+            <Text color="red">{error}</Text>
+          </Box>
+        )}
+
+        <Box marginTop={1}>
+          <KeyHints
+            hints={[
+              { key: 'Enter', label: 'Continue' },
               { key: 'c', label: 'Local model' },
               { key: 'Esc', label: 'Back' },
             ]}

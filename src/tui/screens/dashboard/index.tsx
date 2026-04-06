@@ -1153,8 +1153,11 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   };
 
   // Model picker callbacks
-  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local') => {
-    if (source === 'cloud') {
+  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local' | 'claude-code') => {
+    if (source === 'claude-code') {
+      updateConfigFile({ modelSource: 'claude-code' });
+      onConfigChange?.({ ...config, modelSource: 'claude-code' });
+    } else if (source === 'cloud') {
       updateConfigFile({ modelSource: 'cloud', cloudModel: model });
       onConfigChange?.({ ...config, modelSource: 'cloud', cloudModel: model });
     } else {

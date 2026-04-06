@@ -56,7 +56,7 @@ export interface ModelPickerProps {
   anthropicOAuthToken?: string;
   cloudModel?: string;
   modelSource?: ModelSource;
-  onSelect: (model: string, source: 'cloud' | 'local') => void;
+  onSelect: (model: string, source: 'cloud' | 'local' | 'claude-code') => void;
   onClose: () => void;
   onApiKeySet?: (key: string) => void;
   isActive: boolean;
@@ -77,7 +77,7 @@ export function ModelPicker({
 }: ModelPickerProps) {
   // --- Step / source ---
   const [step, setStep] = useState<Step>('source');
-  const [source, setSource] = useState<'cloud' | 'local'>('local');
+  const [source, setSource] = useState<'cloud' | 'local' | 'claude-code'>('local');
   const [sourceIdx, setSourceIdx] = useState(0);
 
   // --- Model data ---
@@ -113,13 +113,18 @@ export function ModelPicker({
   const [apiKeyValidating, setApiKeyValidating] = useState(false);
   const [apiKeyError, setApiKeyError] = useState('');
 
-  // Detect if current model is cloud on mount
+  // Detect current source on mount
   useEffect(() => {
-    const hasCloudKey = !!(anthropicApiKey || anthropicOAuthToken);
-    const isCloud = hasCloudKey && CLOUD_MODELS.some(cm => cm.id === currentModel);
-    setSource(isCloud ? 'cloud' : 'local');
-    setSourceIdx(isCloud ? 0 : 1);
-  }, [anthropicApiKey, anthropicOAuthToken, currentModel]);
+    if (modelSource === 'claude-code') {
+      setSource('claude-code');
+      setSourceIdx(2);
+    } else {
+      const hasCloudKey = !!(anthropicApiKey || anthropicOAuthToken);
+      const isCloud = hasCloudKey && CLOUD_MODELS.some(cm => cm.id === currentModel);
+      setSource(isCloud ? 'cloud' : 'local');
+      setSourceIdx(isCloud ? 0 : 1);
+    }
+  }, [anthropicApiKey, anthropicOAuthToken, currentModel, modelSource]);
 
   // --- API helper ---
   const apiFetch = useCallback(async <T = unknown>(path: string, options?: RequestInit): Promise<T> => {
@@ -147,7 +152,7 @@ export function ModelPicker({
 
   // --- Fetch models when entering list step ---
   useEffect(() => {
-    if (step !== 'list' || source === 'cloud') return;
+    if (step !== 'list' || source === 'cloud' || source === 'claude-code') return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -320,10 +325,10 @@ export function ModelPicker({
     // --- Source step ---
     if (step === 'source') {
       if (key.escape) { onClose(); return; }
-      if (input === 'j' || key.downArrow) { setSourceIdx(i => Math.min(i + 1, 1)); return; }
+      if (input === 'j' || key.downArrow) { setSourceIdx(i => Math.min(i + 1, 2)); return; }
       if (input === 'k' || key.upArrow) { setSourceIdx(i => Math.max(i - 1, 0)); return; }
       if (key.return) {
-        const selected = sourceIdx === 0 ? 'cloud' : 'local';
+        const selected = sourceIdx === 0 ? 'cloud' : sourceIdx === 1 ? 'local' : 'claude-code' as const;
         if (selected === 'cloud') {
           const hasKey = !!(anthropicApiKey || anthropicOAuthToken);
           if (!hasKey) {
@@ -331,6 +336,11 @@ export function ModelPicker({
             setApiKeyError('');
             return;
           }
+        }
+        if (selected === 'claude-code') {
+          // No auth or model list needed — select immediately
+          onSelect('claude-code', 'claude-code');
+          return;
         }
         setSource(selected);
         setStep('list');
@@ -491,9 +501,11 @@ export function ModelPicker({
     const hasCloudKey = !!(anthropicApiKey || anthropicOAuthToken);
     const cloudCount = hasCloudKey ? CLOUD_MODELS.length : 0;
     const localCount = installed.length || '...';
+    const isCC = modelSource === 'claude-code';
     const sources = [
       { key: 'cloud' as const, icon: '\u2601', label: 'Cloud', count: cloudCount === 0 ? 'set up' : String(cloudCount), color: 'magenta' as const },
       { key: 'local' as const, icon: '\u2299', label: 'Local', count: String(localCount), color: 'cyan' as const },
+      { key: 'claude-code' as const, icon: '\u2318', label: 'Claude Code', count: isCC ? 'active' : 'CLI', color: 'blue' as const },
     ];
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
