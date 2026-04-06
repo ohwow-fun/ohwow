@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.8] — 2026-04-06
+
+### Added
+- Audio transcription tool (`transcribe_audio`) with provider cascade: Voicebox, Gemma Audio, Whisper Local, Whisper API. Supports optional LLM analysis of the transcript
+- Internet tools: `youtube_transcript` (yt-dlp), `read_rss_feed` (rss-parser), `github_search` (gh CLI). Zero-cost, zero-config
+- Auto-install of yt-dlp and gh CLI on daemon startup (non-blocking, same pattern as scrapling)
+- Text-to-speech tool (`generate_voice`) via Kokoro TTS with OpenAI fallback
+- Google Lyria music generation and video generation via OpenRouter
+
+### Fixed
+- QA cleanup: dead code removal, fragile regex fixes, base64 MIME detection improvements
+
 ## [0.4.7] — 2026-04-06
 
 ### Added
