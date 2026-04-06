@@ -707,6 +707,25 @@ export async function startDaemon(): Promise<DaemonHandle> {
     messageRouter = new MessageRouter({ orchestrator: orchestrator!, channelRegistry, rawDb, db, workspaceId, triggerEvaluator, eventBus: bus });
   }
 
+  // Device data fetcher (for device-pinned data)
+  let deviceFetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher | null = null;
+  if (controlPlane?.connectedDeviceId) {
+    const { DeviceDataFetcher } = await import('../data-locality/fetch-client.js');
+    const { createPeerResolver } = await import('../data-locality/resolve-peer.js');
+
+    deviceFetcher = new DeviceDataFetcher({
+      db,
+      workspaceId,
+      deviceId: controlPlane.connectedDeviceId,
+      cloudUrl: config.cloudUrl || '',
+      sessionToken: controlPlane.cloudSessionToken,
+      resolvePeer: createPeerResolver(db, {
+        cloudUrl: config.cloudUrl,
+        sessionToken: controlPlane.cloudSessionToken,
+      }),
+    });
+  }
+
   // 11. Start Express server + WebSocket
   let waClient: WhatsAppClient | null = null;
   let scheduler: LocalScheduler | null = null;
@@ -1398,6 +1417,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
     waClient?.disconnect();
     peerDiscovery?.stop();
     peerMonitor?.stop();
+    deviceFetcher?.destroy();
+    // Clean up data-locality timers
+    import('../data-locality/approval.js').then(m => m.cancelAllPendingApprovals()).catch(() => {});
+    import('../execution/conversation-memory-sync.js').then(m => m.cancelAllExtractionTimers()).catch(() => {});
     bus.emit('shutdown');
     controlPlane?.disconnect();
     server.close(() => {

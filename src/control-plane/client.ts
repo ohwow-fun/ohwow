@@ -71,6 +71,11 @@ export class ControlPlaneClient {
   get connectedDeviceId(): string | null {
     return this.deviceId;
   }
+
+  /** Public accessor for the cloud session token (for device-to-device auth) */
+  get cloudSessionToken(): string | null {
+    return this.sessionToken;
+  }
   private polling = false;
   private replaced = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
