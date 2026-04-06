@@ -12,7 +12,7 @@ import { logger } from '../lib/logger.js';
 
 export interface OutboundQueueItem {
   id: string;
-  type: 'task_report' | 'session_sync';
+  type: 'task_report' | 'session_sync' | 'conversation_sync';
   payload: string; // JSON
   created_at: string;
   attempts: number;

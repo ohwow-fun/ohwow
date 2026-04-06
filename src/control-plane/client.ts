@@ -801,6 +801,12 @@ export class ControlPlaneClient {
     this.heartbeatCount++;
     if (this.heartbeatCount % 5 === 0) {
       this.syncSessionMetadata().catch(() => {});
+      this.syncConversations().catch(() => {});
+    }
+
+    // Sync memories every 10th heartbeat (~150s)
+    if (this.heartbeatCount % 10 === 0) {
+      this.syncMemories().catch(() => {});
     }
 
     // Sync consciousness items every 3rd heartbeat (~45s)
@@ -1192,6 +1198,199 @@ export class ControlPlaneClient {
       }
     } catch {
       // DB query failed, nothing to enqueue
+    }
+  }
+
+  private lastConversationSyncAt: string | null = null;
+
+  /**
+   * Sync conversations (metadata + messages) to cloud.
+   * Sends conversations updated since last sync.
+   */
+  private async syncConversations(): Promise<void> {
+    try {
+      // Get recently updated conversations
+      let query = this.db
+        .from('orchestrator_conversations')
+        .select('id, title, source, channel, message_count, last_message_at')
+        .order('last_message_at', { ascending: false })
+        .limit(10);
+
+      if (this.lastConversationSyncAt) {
+        query = query.gt('last_message_at', this.lastConversationSyncAt);
+      }
+
+      const { data: conversations } = await query;
+      if (!conversations || (conversations as unknown[]).length === 0) return;
+
+      // For each conversation, get new messages
+      const syncPayload: Array<Record<string, unknown>> = [];
+
+      for (const conv of conversations as Array<{
+        id: string; title: string | null; source: string; channel: string | null;
+        message_count: number; last_message_at: string;
+      }>) {
+        const { data: messages } = await this.db
+          .from('orchestrator_messages')
+          .select('id, role, content, model, created_at')
+          .eq('conversation_id', conv.id)
+          .order('created_at', { ascending: false })
+          .limit(20); // Last 20 messages per conversation
+
+        syncPayload.push({
+          id: conv.id,
+          title: conv.title,
+          source: conv.source,
+          channel: conv.channel,
+          message_count: conv.message_count,
+          last_message_at: conv.last_message_at,
+          messages: messages ?? [],
+        });
+      }
+
+      try {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-conversations`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: JSON.stringify({ conversations: syncPayload }),
+        });
+
+        if (response.ok) {
+          this.lastConversationSyncAt = new Date().toISOString();
+        } else {
+          await this.outboundQueue.enqueue('conversation_sync', { conversations: syncPayload });
+        }
+      } catch {
+        await this.outboundQueue.enqueue('conversation_sync', { conversations: syncPayload });
+      }
+    } catch {
+      // DB query failed
+    }
+  }
+
+  private lastMemorySyncAt: string | null = null;
+
+  /**
+   * Bidirectional memory sync with cloud.
+   * Pushes locally extracted memories, pulls cloud memories from other devices.
+   */
+  private async syncMemories(): Promise<void> {
+    try {
+      // Get unsynced memories (active, not local-only, not secret)
+      let query = this.db
+        .from('agent_workforce_agent_memory')
+        .select('id, agent_id, memory_type, content, source_type, relevance_score, times_used, token_count, trust_level, confidentiality_level, source_conversation_id, created_at, updated_at')
+        .eq('is_active', 1)
+        .eq('is_local_only', 0)
+        .not('confidentiality_level', 'eq', 'secret')
+        .order('updated_at', { ascending: false })
+        .limit(50);
+
+      if (this.lastMemorySyncAt) {
+        query = query.gt('updated_at', this.lastMemorySyncAt);
+      }
+
+      const { data: memories } = await query;
+
+      const memoryPayload = ((memories ?? []) as Array<Record<string, unknown>>).map(m => ({
+        id: m.id,
+        agentId: m.agent_id,
+        memoryType: m.memory_type,
+        content: m.content,
+        sourceType: m.source_type,
+        relevanceScore: m.relevance_score,
+        timesUsed: m.times_used,
+        tokenCount: m.token_count,
+        trustLevel: m.trust_level,
+        confidentialityLevel: m.confidentiality_level,
+        sourceConversationId: m.source_conversation_id,
+        createdAt: m.created_at,
+        updatedAt: m.updated_at,
+      }));
+
+      try {
+        const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-memories`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.sessionToken}`,
+          },
+          body: JSON.stringify({
+            memories: memoryPayload,
+            lastSyncAt: this.lastMemorySyncAt,
+          }),
+        });
+
+        if (response.ok) {
+          const result = await response.json() as {
+            accepted: number;
+            cloudMemories: Array<Record<string, unknown>>;
+          };
+
+          // Import cloud memories locally
+          if (result.cloudMemories?.length > 0) {
+            await this.importCloudMemories(result.cloudMemories);
+          }
+
+          this.lastMemorySyncAt = new Date().toISOString();
+        }
+      } catch {
+        // Network failure, will retry next cycle
+      }
+    } catch {
+      // DB query failed
+    }
+  }
+
+  /**
+   * Import memories from cloud into local database.
+   * Deduplicates by content similarity.
+   */
+  private async importCloudMemories(cloudMemories: Array<Record<string, unknown>>): Promise<void> {
+    for (const mem of cloudMemories) {
+      // Check if already exists locally
+      const { data: existing } = await this.db
+        .from('agent_workforce_agent_memory')
+        .select('id')
+        .eq('id', mem.id as string)
+        .maybeSingle();
+
+      if (existing) continue;
+
+      // Content dedup: check against recent local memories
+      const { data: recentLocal } = await this.db
+        .from('agent_workforce_agent_memory')
+        .select('id, content')
+        .eq('is_active', 1)
+        .order('created_at', { ascending: false })
+        .limit(200);
+
+      const contentLower = (mem.content as string).toLowerCase().trim();
+      const isDuplicate = (recentLocal as Array<{ id: string; content: string }> ?? [])
+        .some(local => local.content.toLowerCase().trim().startsWith(contentLower.slice(0, 50)));
+
+      if (isDuplicate) continue;
+
+      await this.db.from('agent_workforce_agent_memory').insert({
+        id: mem.id,
+        agent_id: mem.agentId ?? null,
+        workspace_id: this.connectedWorkspaceId || 'local',
+        memory_type: mem.memoryType,
+        content: mem.content,
+        source_type: mem.sourceType,
+        source_conversation_id: mem.sourceConversationId ?? null,
+        relevance_score: mem.relevanceScore ?? 0.5,
+        times_used: mem.timesUsed ?? 0,
+        token_count: mem.tokenCount ?? 0,
+        trust_level: mem.trustLevel ?? 'inferred',
+        is_active: 1,
+        confidentiality_level: mem.confidentialityLevel ?? 'workspace',
+        source_device_id: null,
+        is_local_only: 0,
+      });
     }
   }
 
