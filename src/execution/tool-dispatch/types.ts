@@ -13,6 +13,7 @@ import type { LocalBrowserService } from '../browser/local-browser.service.js';
 import type { LocalDesktopService } from '../desktop/local-desktop.service.js';
 import type { DesktopServiceOptions } from '../desktop/desktop-types.js';
 import type { CircuitBreaker } from '../../orchestrator/error-recovery.js';
+import type { DocMountManager } from '../doc-mounts/mount-manager.js';
 
 /** Context shared across all tool executors for a single task execution */
 export interface ToolExecutionContext {
@@ -35,6 +36,8 @@ export interface ToolExecutionContext {
   desktopActivated: boolean;
   /** Desktop service options (allowedApps, autonomyLevel, etc.) from agent config */
   desktopOptions?: Partial<DesktopServiceOptions>;
+  /** Doc mount manager for documentation filesystem mounts */
+  docMountManager: DocMountManager | null;
 }
 
 /** Result from a tool execution */
@@ -45,6 +48,8 @@ export interface ToolCallResult {
   browserActivated?: boolean;
   /** Side effect: desktop was activated during this call */
   desktopActivated?: boolean;
+  /** Side effect: doc mount paths to add to FileAccessGuard */
+  mountedDocPaths?: string[];
 }
 
 /** Strategy interface for tool execution */

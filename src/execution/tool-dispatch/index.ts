@@ -16,6 +16,7 @@ import { filesystemExecutor } from './filesystem-executor.js';
 import { bashExecutor } from './bash-executor.js';
 import { mcpExecutor } from './mcp-executor.js';
 import { stateExecutor } from './state-executor.js';
+import { docMountExecutor } from '../doc-mounts/doc-mount-executor.js';
 
 /** Create a registry with all default tool executors */
 export function createDefaultToolRegistry(): ToolExecutorRegistry {
@@ -26,6 +27,7 @@ export function createDefaultToolRegistry(): ToolExecutorRegistry {
   registry.register(requestBrowserExecutor);
   registry.register(browserExecutor);
   registry.register(scraplingExecutor);
+  registry.register(docMountExecutor);
   registry.register(filesystemExecutor);
   registry.register(bashExecutor);
   registry.register(draftExecutor);

@@ -78,6 +78,11 @@ import {
   BASH_TOOL_DEFINITIONS,
   BASH_SYSTEM_PROMPT,
 } from './bash/index.js';
+import {
+  DocMountManager,
+  DOC_MOUNT_TOOL_DEFINITIONS,
+  DOC_MOUNT_SYSTEM_PROMPT,
+} from './doc-mounts/index.js';
 import { McpClientManager } from '../mcp/index.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { retrieveRelevantMemories, retrieveKnowledgeChunks } from '../lib/rag/retrieval.js';
@@ -196,6 +201,7 @@ export class RuntimeEngine {
   private pendingElicitations = new Map<string, (result: Record<string, unknown> | null) => void>();
   private circuitBreaker = new CircuitBreaker();
   private toolRegistry = createDefaultToolRegistry();
+  private docMountManager: DocMountManager;
   /** Brain: unified cognitive coordinator for agent task execution. */
   private brain = new Brain({ modelRouter: null });
   private taskDistributor: import('../peers/task-distributor.js').TaskDistributor | null = null;
@@ -222,6 +228,7 @@ export class RuntimeEngine {
     this.emitter = emitter ?? null;
     this.modelRouter = modelRouter ?? null;
     this.scraplingService = scraplingService ?? new ScraplingService();
+    this.docMountManager = new DocMountManager(db, this.scraplingService, config.dataDir);
     // Ollama processes one inference at a time; Anthropic can handle concurrent requests
     this.semaphore = new Semaphore(config.anthropicApiKey ? 3 : 1);
     // Claude Code session store for --resume support
@@ -274,6 +281,7 @@ export class RuntimeEngine {
       desktopService: opts.desktopService,
       desktopActivated: opts.desktopActivated,
       desktopOptions: opts.desktopOptions,
+      docMountManager: this.docMountManager,
     };
   }
 
@@ -1088,6 +1096,7 @@ export class RuntimeEngine {
       if (browserEnabled) tools.push(REQUEST_BROWSER_TOOL);
       if (desktopEnabled) tools.push(REQUEST_DESKTOP_TOOL);
       if (scraplingEnabled) tools.push(...SCRAPLING_TOOL_DEFINITIONS);
+      if (scraplingEnabled) tools.push(...DOC_MOUNT_TOOL_DEFINITIONS);
       if (localFilesEnabled && fileAccessGuard) tools.push(...FILESYSTEM_TOOL_DEFINITIONS);
       if (bashEnabled && fileAccessGuard) tools.push(...BASH_TOOL_DEFINITIONS);
       if (approvalRequired) tools.push(...DRAFT_TOOL_DEFINITIONS);
@@ -1390,6 +1399,17 @@ export class RuntimeEngine {
                 const requestDesktopIdx = tools.findIndex(t => 'name' in t && t.name === 'request_desktop');
                 if (requestDesktopIdx !== -1) tools.splice(requestDesktopIdx, 1);
                 tools.push(...DESKTOP_TOOL_DEFINITIONS);
+              }
+
+              // Expand FileAccessGuard when doc mounts add new paths
+              if (result.mountedDocPaths?.length) {
+                const currentPaths = fileAccessGuard?.getAllowedPaths() ?? [];
+                const expanded = [...currentPaths, ...result.mountedDocPaths];
+                fileAccessGuard = new FileAccessGuard(expanded);
+                // Ensure filesystem tools are available if not already
+                if (!tools.some(t => 'name' in t && t.name === 'local_list_directory')) {
+                  tools.push(...FILESYSTEM_TOOL_DEFINITIONS);
+                }
               }
 
               // Cast content to the SDK-expected type (our ToolCallResult is wider)
@@ -2531,6 +2551,13 @@ export class RuntimeEngine {
             browserActivated = true;
           }
 
+          // Expand FileAccessGuard when doc mounts add new paths
+          if (toolResult.mountedDocPaths?.length && opts.fileAccessGuard) {
+            const currentPaths = opts.fileAccessGuard.getAllowedPaths();
+            const expanded = [...currentPaths, ...toolResult.mountedDocPaths];
+            opts.fileAccessGuard = new FileAccessGuard(expanded);
+          }
+
           // Flatten content to string for Ollama format
           let resultContent: string;
           if (typeof toolResult.content === 'string') {
@@ -2788,6 +2815,7 @@ You have web search capability. Use it whenever you need current or factual info
       : '';
     const browserSection = opts.browserEnabled ? BROWSER_SYSTEM_PROMPT : '';
     const scraplingSection = opts.scraplingEnabled ? SCRAPLING_SYSTEM_PROMPT : '';
+    const docMountSection = opts.scraplingEnabled ? DOC_MOUNT_SYSTEM_PROMPT : '';
     const filesystemSection = opts.localFilesEnabled ? FILESYSTEM_SYSTEM_PROMPT : '';
     const bashSection = opts.bashEnabled ? BASH_SYSTEM_PROMPT : '';
 
@@ -2799,7 +2827,7 @@ You have web search capability. Use it whenever you need current or factual info
 
 ## Business Context
 ${wrappedBusinessDesc}
-${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${filesystemSection}${bashSection}
+${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}
 ## Guidelines
 - Always maintain a professional and helpful tone
 - Focus on quality and accuracy in your work
