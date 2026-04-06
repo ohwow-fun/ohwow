@@ -16,6 +16,7 @@ import {
   type PinDataOpts,
   type PinnedDataType,
 } from '../../data-locality/manifest.js';
+import { encryptForRecipient } from '../../data-locality/crypto.js';
 import { logger } from '../../lib/logger.js';
 
 export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: string, deviceId: string): Router {
@@ -79,7 +80,7 @@ export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: strin
   // ── Serve pinned data to authenticated peers ──
   router.post('/fetch', async (req, res) => {
     try {
-      const { dataId } = req.body as { dataId: string };
+      const { dataId, ephemeralPublicKey } = req.body as { dataId: string; ephemeralPublicKey?: string };
       if (!dataId) return res.status(400).json({ error: 'dataId is required' });
 
       // Find manifest entry
@@ -115,6 +116,18 @@ export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: strin
       // Record access
       await recordFetch(db, dataId);
 
+      // If requester provided an ephemeral public key, encrypt the response
+      if (ephemeralPublicKey) {
+        const plaintext = Buffer.from(JSON.stringify(data), 'utf-8');
+        const encryptedPayload = encryptForRecipient(plaintext, ephemeralPublicKey);
+        return res.json({
+          encryptedPayload,
+          accessPolicy: entry.accessPolicy,
+          cacheTtl: accessPolicyToTtl(entry.accessPolicy),
+        });
+      }
+
+      // Unencrypted response (for direct peer calls on trusted LAN)
       return res.json({
         data,
         accessPolicy: entry.accessPolicy,
