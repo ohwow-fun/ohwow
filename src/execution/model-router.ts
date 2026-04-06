@@ -1049,6 +1049,7 @@ export class ModelRouter {
   private modelSource: ModelSourceOption;
   private mainModelHasVision: boolean;
   private mainModelHasAudio: boolean;
+  private _openRouterApiKey: string;
   private _onOllamaResponse: ((model: string, inputTokens: number, outputTokens: number, durationMs: number) => void) | null = null;
   /** Cached credit balance percentage (0-100). Updated from heartbeat responses. */
   private _creditBalancePercent = 100;
@@ -1110,6 +1111,7 @@ export class ModelRouter {
     this.preferLocal = opts.preferLocalModel ?? false;
     this.mainModelHasVision = opts.mainModelHasVision ?? false;
     this.mainModelHasAudio = opts.mainModelHasAudio ?? false;
+    this._openRouterApiKey = opts.openRouterApiKey ?? '';
     this._onOllamaResponse = opts.onOllamaResponse ?? null;
 
     // Wire response callback to all local providers
@@ -1457,8 +1459,14 @@ export class ModelRouter {
     return this.openrouter;
   }
 
+  /** Get the OpenRouter API key (for media generation bridges). */
+  getOpenRouterApiKey(): string {
+    return this._openRouterApiKey;
+  }
+
   /** Update the OpenRouter API key at runtime (called when user changes key in settings). */
   setOpenRouterApiKey(key: string): void {
+    this._openRouterApiKey = key;
     if (key) {
       if (this.openrouter) {
         this.openrouter.setApiKey(key);

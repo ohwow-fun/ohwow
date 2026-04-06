@@ -1,5 +1,5 @@
 /**
- * Media Tools — slide generation and other media helpers.
+ * Media Tools — slide generation, music generation, video generation, and other media helpers.
  */
 
 import { readFile } from 'fs/promises';
@@ -8,6 +8,8 @@ import { join } from 'path';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { saveMediaBuffer } from '../../media/storage.js';
 import { LocalBrowserService } from '../../execution/browser/local-browser.service.js';
+import { LyriaOpenRouterBridge } from '../../media/lyria-openrouter-bridge.js';
+import { logger } from '../../lib/logger.js';
 
 const SLIDE_STYLES: Record<string, { bg: string; text: string; accent: string; font: string }> = {
   modern: { bg: '#1a1a2e', text: '#eaeaea', accent: '#e94560', font: "'Inter', system-ui, sans-serif" },
@@ -171,5 +173,107 @@ export async function exportSlidesToPdf(
     return { success: false, error: msg };
   } finally {
     await browser.close();
+  }
+}
+
+/**
+ * Get or create a LyriaOpenRouterBridge instance.
+ * Requires an OpenRouter API key from the model router.
+ */
+function getLyriaBridge(ctx: LocalToolContext): LyriaOpenRouterBridge | null {
+  const apiKey = ctx.modelRouter?.getOpenRouterApiKey();
+  if (!apiKey) return null;
+  return new LyriaOpenRouterBridge({ apiKey });
+}
+
+/**
+ * Generate music or sound effects from a text prompt via Google Lyria.
+ * Saves output to ~/.ohwow/media/audio/.
+ */
+export async function generateMusic(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const prompt = input.prompt as string | undefined;
+  if (!prompt) {
+    return { success: false, error: 'prompt is required' };
+  }
+
+  const bridge = getLyriaBridge(ctx);
+  if (!bridge) {
+    return {
+      success: false,
+      error: 'Music generation requires an OpenRouter API key. Set it in Settings > Models > OpenRouter.',
+    };
+  }
+
+  const durationSeconds = Math.min(Math.max(Number(input.duration_seconds) || 15, 5), 30);
+  const genre = input.genre as string | undefined;
+  const mood = input.mood as string | undefined;
+  const bpm = input.bpm ? Math.min(Math.max(Number(input.bpm), 60), 180) : undefined;
+
+  try {
+    const result = await bridge.generateMusic({
+      prompt,
+      durationSeconds,
+      genre,
+      mood,
+      bpm,
+    });
+
+    return {
+      success: true,
+      data: result.message,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Music generation failed';
+    logger.error(`[generate_music] ${msg}`);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Generate a short video from a text prompt via OpenRouter video models.
+ * Saves output to ~/.ohwow/media/videos/.
+ */
+export async function generateVideo(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const prompt = input.prompt as string | undefined;
+  if (!prompt) {
+    return { success: false, error: 'prompt is required' };
+  }
+
+  const bridge = getLyriaBridge(ctx);
+  if (!bridge) {
+    return {
+      success: false,
+      error: 'Video generation requires an OpenRouter API key. Set it in Settings > Models > OpenRouter.',
+    };
+  }
+
+  const durationSeconds = Math.min(Math.max(Number(input.duration_seconds) || 4, 2), 10);
+  const aspectRatio = input.aspect_ratio as string || '16:9';
+
+  if (!['16:9', '9:16', '1:1'].includes(aspectRatio)) {
+    return { success: false, error: `Invalid aspect ratio "${aspectRatio}". Use 16:9, 9:16, or 1:1.` };
+  }
+
+  try {
+    const result = await bridge.generateVideo({
+      prompt,
+      durationSeconds,
+      aspectRatio,
+    });
+
+    return {
+      success: true,
+      data: result.message,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Video generation failed';
+    logger.error(`[generate_video] ${msg}`);
+    return { success: false, error: msg };
   }
 }

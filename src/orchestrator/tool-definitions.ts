@@ -1375,6 +1375,38 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  {
+    name: 'generate_music',
+    description:
+      'Generate music or sound effects from a text description using Google Lyria via OpenRouter. Produces an audio file saved to the media library. Great for background music, jingles, sound effects, ambient soundscapes, and instrumental tracks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'Description of the music to generate (e.g. "upbeat lo-fi hip hop beat with soft piano and vinyl crackle")' },
+        duration_seconds: { type: 'number', description: 'Duration in seconds (5-30, default 15)' },
+        genre: { type: 'string', enum: ['ambient', 'electronic', 'orchestral', 'jazz', 'rock', 'pop', 'lo-fi', 'cinematic', 'folk', 'hip-hop'], description: 'Genre hint' },
+        mood: { type: 'string', enum: ['calm', 'energetic', 'dark', 'uplifting', 'melancholic', 'playful', 'dramatic', 'mysterious'], description: 'Mood hint' },
+        bpm: { type: 'number', description: 'Tempo in BPM (60-180, optional)' },
+      },
+      required: ['prompt'],
+    },
+  },
+
+  {
+    name: 'generate_video',
+    description:
+      'Generate a short video from a text description using video generation models via OpenRouter. Produces an MP4 file saved to the media library. Good for social media clips, product demos, visual concepts, and short animations.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'Description of the video to generate (e.g. "a golden retriever running through a field of wildflowers at sunset, cinematic, slow motion")' },
+        duration_seconds: { type: 'number', description: 'Duration in seconds (2-10, default 4)' },
+        aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1'], description: 'Aspect ratio (default 16:9)' },
+      },
+      required: ['prompt'],
+    },
+  },
+
   // =========================================================================
   // KNOWLEDGE BASE
   // =========================================================================

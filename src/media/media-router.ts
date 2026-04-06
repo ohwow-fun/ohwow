@@ -8,7 +8,7 @@
 import type { McpClientManager } from '../mcp/client.js';
 import { logger } from '../lib/logger.js';
 
-export type MediaModality = 'image' | 'video' | 'tts' | 'stt';
+export type MediaModality = 'image' | 'video' | 'tts' | 'stt' | 'music';
 export type MediaQuality = 'draft' | 'standard' | 'premium';
 
 export interface MediaRequest {
@@ -45,6 +45,7 @@ const MEDIA_SERVER_PROFILES: Record<string, {
   'openai-image': { modalities: ['image'], quality: ['standard', 'premium'], costTier: 3, isLocal: false },
   'minimax': { modalities: ['image', 'video', 'tts'], quality: ['standard', 'premium'], costTier: 3, isLocal: false },
   'elevenlabs': { modalities: ['tts'], quality: ['standard', 'premium'], costTier: 4, isLocal: false },
+  'lyria-openrouter': { modalities: ['music', 'video'], quality: ['standard', 'premium'], costTier: 3, isLocal: false },
 };
 
 const CREDIT_COSTS: Record<MediaModality, Record<MediaQuality, number>> = {
@@ -52,6 +53,7 @@ const CREDIT_COSTS: Record<MediaModality, Record<MediaQuality, number>> = {
   video: { draft: 10, standard: 50, premium: 400 },
   tts: { draft: 2, standard: 2, premium: 5 },
   stt: { draft: 3, standard: 3, premium: 5 },
+  music: { draft: 10, standard: 30, premium: 60 },
 };
 
 /**
@@ -162,6 +164,7 @@ export function estimateMediaCost(
   const unitLabel = type === 'video' ? 'per second'
     : type === 'tts' ? 'per 1K characters'
     : type === 'stt' ? 'per minute'
+    : type === 'music' ? 'per track'
     : '';
 
   const desc = units
