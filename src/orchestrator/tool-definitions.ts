@@ -1048,6 +1048,51 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['question'],
     },
   },
+  // Internet tools (zero-cost, zero-config)
+  {
+    name: 'youtube_transcript',
+    description:
+      'Extract the transcript or subtitles from a YouTube video. Returns timestamped text content. Useful for summarizing, researching, or quoting video content without watching it. Requires yt-dlp installed locally.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'YouTube video URL' },
+        language: { type: 'string', description: 'Subtitle language code (default: en)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'read_rss_feed',
+    description:
+      'Parse an RSS or Atom feed URL and return recent entries. Use for monitoring blogs, news sites, changelogs, podcast feeds, or any site with an RSS feed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'RSS or Atom feed URL' },
+        limit: { type: 'number', description: 'Max entries to return (default 20, max 50)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'github_search',
+    description:
+      'Search GitHub for repositories, issues, pull requests, or code. Use for finding libraries, researching how others solved a problem, or tracking issues. Requires gh CLI installed and authenticated.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query (supports GitHub search syntax)' },
+        type: {
+          type: 'string',
+          enum: ['repos', 'issues', 'prs', 'code'],
+          description: 'What to search for (default: repos)',
+        },
+        limit: { type: 'number', description: 'Max results to return (default 10, max 30)' },
+      },
+      required: ['query'],
+    },
+  },
   // OCR
   {
     name: 'ocr_extract_text',
@@ -1739,6 +1784,11 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   scrape_search: ['rag', 'browser'],
   deep_research: ['rag', 'browser'],
 
+  // Internet tools → 'rag'
+  youtube_transcript: ['rag'],
+  read_rss_feed: ['rag'],
+  github_search: ['rag'],
+
   // OCR/vision → 'vision'
   ocr_extract_text: ['vision'],
   analyze_image: ['vision'],
@@ -1814,6 +1864,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   list_projects: 2, create_project: 2, list_goals: 2, create_goal: 2,
   scrape_search: 2, list_knowledge: 2,
   get_agent_suggestions: 2,
+  youtube_transcript: 2, read_rss_feed: 2, github_search: 2,
 
   // P3: Rare/advanced tools
   list_workflows: 3, run_workflow: 3, get_workflow_detail: 3,

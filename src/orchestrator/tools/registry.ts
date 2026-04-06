@@ -35,6 +35,7 @@ import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo, genera
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
 import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
+import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -205,4 +206,9 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['set_agent_state', (ctx, input) => setAgentState(ctx, input)],
   ['list_agent_state', (ctx, input) => listAgentState(ctx, input)],
   ['delete_agent_state', (ctx, input) => deleteAgentState(ctx, input)],
+
+  // Internet tools (zero-cost, zero-config)
+  ['youtube_transcript', (ctx, input) => youtubeTranscript(ctx, input)],
+  ['read_rss_feed', (ctx, input) => readRssFeed(ctx, input)],
+  ['github_search', (ctx, input) => githubSearch(ctx, input)],
 ]);
