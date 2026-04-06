@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.7] — 2026-04-06
+
+### Added
+- feat: gate filesystem/bash access behind permission-based gateway tool
+- feat: device-pinned data manifest and locality control (Phase A)
+- feat: secure device-to-device data fetch protocol (Phase B)
+- feat: filter ephemeral device-pinned content from extraction (Phase C)
+- feat: fetch approval flow and predictive pre-fetch (Phases D+E)
+- feat: wire DeviceDataFetcher into runtime + shutdown cleanup
+- feat: wire device-pinned memories into task execution engine
+- feat: conversation persistence layer (Phase 1)
+- feat: conversation memory extraction engine (Phase 2)
+- feat: local-to-cloud conversation and memory sync (Phase 5)
+- feat: accept config and department_id when creating agents via API
+
+### Fixed
+- fix: system prompt no longer claims filesystem tools before permission granted
+- fix: QA audit fixes for device-pinned data (Phases A-E)
+- fix: QA audit fixes for conversation persistence
+- fix: respect agent's configured model for Ollama vs Anthropic routing
+- fix: use 'pending' instead of 'queued' for task status
+- fix: include README.md in npm files field for registry display
+
 ## [0.4.6] — 2026-04-05
 
 ### Added
