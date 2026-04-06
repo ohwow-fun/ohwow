@@ -14,3 +14,8 @@ export { EphemeralCache, accessPolicyToTtlMs } from './ephemeral-cache.js';
 
 export { DeviceDataFetcher, DataNotFoundError, DeviceOfflineError, AccessDeniedError } from './fetch-client.js';
 export type { FetchResult } from './fetch-client.js';
+
+export { requestApproval, respondToApproval, getPendingApprovals, cancelAllPendingApprovals } from './approval.js';
+export type { ApprovalRequest, ApprovalDecision } from './approval.js';
+
+export { predictNeededData, preFetchPredicted } from './predictive-fetch.js';

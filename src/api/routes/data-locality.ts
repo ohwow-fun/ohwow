@@ -17,9 +17,15 @@ import {
   type PinnedDataType,
 } from '../../data-locality/manifest.js';
 import { encryptForRecipient } from '../../data-locality/crypto.js';
+import { requestApproval, respondToApproval, getPendingApprovals } from '../../data-locality/approval.js';
 import { logger } from '../../lib/logger.js';
 
-export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: string, deviceId: string): Router {
+export function createDataLocalityRoutes(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  deviceId: string,
+  eventBus?: { emit: (event: string, data: unknown) => void } | null,
+): Router {
   const router = Router();
 
   // ── Pin data to this device ──
@@ -103,8 +109,18 @@ export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: strin
 
       // Check if approval is required
       if (entry.requiresApproval) {
-        // For now, auto-approve. Phase D adds the approval flow.
-        logger.info({ dataId, title: entry.title }, '[data-locality] Auto-approving fetch (approval flow not yet implemented)');
+        const requestingDeviceId = (req.body as Record<string, string>).requestingDeviceId ?? 'unknown';
+        const decision = await requestApproval(db, eventBus ?? null, {
+          manifestEntryId: entry.id,
+          dataTitle: entry.title,
+          dataType: entry.dataType,
+          requestingDeviceId,
+          requestingDeviceName: requestingDeviceId,
+        });
+
+        if (decision === 'denied') {
+          return res.status(403).json({ error: 'Fetch denied by device owner' });
+        }
       }
 
       // Load actual data based on type
@@ -136,6 +152,34 @@ export function createDataLocalityRoutes(db: DatabaseAdapter, workspaceId: strin
     } catch (err) {
       logger.error({ err }, '[data-locality] Fetch failed');
       return res.status(500).json({ error: 'Fetch failed' });
+    }
+  });
+
+  // ── Approval endpoints ──
+
+  router.get('/approvals', async (_req, res) => {
+    try {
+      const pending = await getPendingApprovals(db);
+      return res.json({ approvals: pending });
+    } catch (err) {
+      logger.error({ err }, '[data-locality] List approvals failed');
+      return res.status(500).json({ error: 'List failed' });
+    }
+  });
+
+  router.post('/approvals/:approvalId/respond', async (req, res) => {
+    try {
+      const { approvalId } = req.params;
+      const { decision } = req.body as { decision: 'approved' | 'denied' | 'always_approve' };
+      if (!decision) return res.status(400).json({ error: 'decision is required' });
+
+      const success = await respondToApproval(db, approvalId, decision);
+      if (!success) return res.status(404).json({ error: 'Approval not found or already resolved' });
+
+      return res.json({ success: true, decision });
+    } catch (err) {
+      logger.error({ err }, '[data-locality] Respond to approval failed');
+      return res.status(500).json({ error: 'Response failed' });
     }
   });
 
