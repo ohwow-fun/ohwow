@@ -77,7 +77,7 @@ export function TaskDispatch({ agents, db, engine, tier, modelReady, onBack }: T
         title,
         description: description || null,
         input: description || title,
-        status: 'queued',
+        status: 'pending',
       });
 
       // Log activity

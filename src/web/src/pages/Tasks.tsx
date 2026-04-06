@@ -25,12 +25,12 @@ interface Agent {
   name: string;
 }
 
-const STATUSES = ['all', 'queued', 'in_progress', 'completed', 'needs_approval', 'failed'] as const;
+const STATUSES = ['all', 'pending', 'in_progress', 'completed', 'needs_approval', 'failed'] as const;
 
 type SortMode = 'date' | 'priority' | 'status';
 
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-const STATUS_ORDER: Record<string, number> = { in_progress: 0, queued: 1, needs_approval: 2, completed: 3, failed: 4 };
+const STATUS_ORDER: Record<string, number> = { in_progress: 0, pending: 1, needs_approval: 2, completed: 3, failed: 4 };
 
 export function TasksPage() {
   const wsTick = useWsRefresh(['task:started', 'task:completed', 'task:failed']);

@@ -106,7 +106,7 @@ describe('Tasks Routes', () => {
 
   it('GET /api/tasks returns a list of tasks', async () => {
     const tasks = [
-      { id: 'task-1', title: 'Do something', status: 'queued' },
+      { id: 'task-1', title: 'Do something', status: 'pending' },
       { id: 'task-2', title: 'Do another thing', status: 'completed' },
     ];
     db = mockDb({ agent_workforce_tasks: { data: tasks } });
@@ -123,7 +123,7 @@ describe('Tasks Routes', () => {
   });
 
   it('GET /api/tasks/:id returns a single task', async () => {
-    const task = { id: 'task-1', title: 'Do something', status: 'queued' };
+    const task = { id: 'task-1', title: 'Do something', status: 'pending' };
     db = mockDb({ agent_workforce_tasks: { data: task } });
     router = createTasksRouter(db as unknown as DatabaseAdapter, null);
 

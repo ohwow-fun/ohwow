@@ -90,7 +90,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
         title,
         description: description || null,
         input: JSON.stringify({ title, description }),
-        status: 'queued',
+        status: 'pending',
         priority: 'normal',
         created_at: now,
         updated_at: now,
@@ -106,7 +106,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
         engine.executeTask(agentId, taskId).catch(() => {});
       }
 
-      res.status(201).json({ data: { id: taskId, status: 'queued' } });
+      res.status(201).json({ data: { id: taskId, status: 'pending' } });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

@@ -30,7 +30,7 @@ interface Task {
 }
 
 const KANBAN_COLUMNS = [
-  { id: 'queued', label: 'Queued', textColor: 'text-neutral-400', bgColor: 'bg-white/[0.04]' },
+  { id: 'pending', label: 'Pending', textColor: 'text-neutral-400', bgColor: 'bg-white/[0.04]' },
   { id: 'in_progress', label: 'In Progress', textColor: 'text-blue-400', bgColor: 'bg-blue-500/[0.08]' },
   { id: 'completed', label: 'Completed', textColor: 'text-success', bgColor: 'bg-success/[0.08]' },
   { id: 'failed', label: 'Failed', textColor: 'text-critical', bgColor: 'bg-critical/[0.08]' },
