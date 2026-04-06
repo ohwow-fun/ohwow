@@ -200,6 +200,12 @@ export class RuntimeEngine {
   private brain = new Brain({ modelRouter: null });
   private taskDistributor: import('../peers/task-distributor.js').TaskDistributor | null = null;
   private ccSessionStore: ClaudeCodeSessionStore | null = null;
+  private deviceFetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher | null = null;
+
+  /** Set the device data fetcher for device-pinned memory retrieval */
+  setDeviceFetcher(fetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher): void {
+    this.deviceFetcher = fetcher;
+  }
 
   constructor(
     private db: DatabaseAdapter,
@@ -2684,6 +2690,28 @@ export class RuntimeEngine {
           .map(t => `- ${t.title} (${t.status})`)
           .join('\n');
         sections.push(`### Recent Tasks\n${taskSummaries}`);
+      }
+
+      // Device-pinned memories: fetch from remote devices if fetcher is available
+      if (this.deviceFetcher) {
+        try {
+          const { searchManifest } = await import('../data-locality/manifest.js');
+          const keywords = taskTitle.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          if (keywords.length > 0) {
+            const matches = await searchManifest(this.db, workspaceId, keywords, { dataType: 'memory', limit: 3 });
+            const pinnedLines: string[] = [];
+            for (const match of matches) {
+              try {
+                const result = await this.deviceFetcher.fetch(match.dataId);
+                const data = result.data as Record<string, unknown> | null;
+                if (data?.content) pinnedLines.push(`- ${data.content}`);
+              } catch { /* device offline or denied */ }
+            }
+            if (pinnedLines.length > 0) {
+              sections.push(`### Device-Pinned Knowledge (ephemeral)\n${pinnedLines.join('\n')}`);
+            }
+          }
+        } catch { /* non-fatal */ }
       }
 
       return sections.join('\n\n');

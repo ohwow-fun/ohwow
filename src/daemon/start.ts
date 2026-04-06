@@ -724,6 +724,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
         sessionToken: controlPlane.cloudSessionToken,
       }),
     });
+
+    // Wire into engine for device-pinned memory retrieval during tasks
+    engine.setDeviceFetcher(deviceFetcher);
   }
 
   // 11. Start Express server + WebSocket
