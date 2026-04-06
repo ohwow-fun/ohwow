@@ -599,15 +599,18 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
 
     // ── Model ──
     if (step === 'model' && !busy) {
-      // Toggle cloud/local with 'c' key (works in all model modes)
+      // Cycle model source with 'c' key: local → cloud → claude-code → local
       if (input === 'c') {
-        setModelSource(prev => prev === 'cloud' ? 'local' : 'cloud');
+        setModelSource(prev => prev === 'local' ? 'cloud' : prev === 'cloud' ? 'claude-code' : 'local');
         return;
       }
 
       if (existingState?.modelName) {
         // Readiness mode
-        if (modelSource === 'cloud') {
+        if (modelSource === 'claude-code') {
+          // Claude Code readiness: Enter to continue (no auth needed)
+          if (key.return) completeReturningUser();
+        } else if (modelSource === 'cloud') {
           // Cloud readiness: Enter to continue (skip model list navigation)
           if (key.return) {
             if (anthropicKey) {
@@ -659,7 +662,13 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         }
       } else {
         // New user model step
-        if (modelSource === 'cloud') {
+        if (modelSource === 'claude-code') {
+          // Claude Code mode: Enter → proceed immediately (no auth needed)
+          if (key.return) {
+            const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+            setStep(nextAfterModel);
+          }
+        } else if (modelSource === 'cloud') {
           // Cloud mode: Enter → show auth if not authenticated, else proceed
           if (key.return) {
             if (anthropicKey) {

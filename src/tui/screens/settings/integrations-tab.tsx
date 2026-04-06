@@ -174,6 +174,12 @@ export function IntegrationsTab({ config, whatsappStatus, ollamaConnected, ollam
       {/* Claude Code CLI Executor */}
       <Box flexDirection="column" marginTop={1}>
         <Text bold color="cyan">Claude Code CLI</Text>
+        {config.modelSource === 'claude-code' && (
+          <Text>
+            {'  AI Provider: '}
+            <Text color="blue">Claude Code (active)</Text>
+          </Text>
+        )}
         <Text>
           {'  Auto-delegate: '}
           <Text color={config.claudeCodeCliAutodetect ? 'green' : 'gray'}>

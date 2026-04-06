@@ -206,6 +206,22 @@ Or add to any project's `.mcp.json`:
 
 **Example**: "Research the top 5 competitors in our space, add the findings to the knowledge base, then create a contact for each CEO." Claude uses ohwow's research, knowledge, and CRM tools seamlessly.
 
+### Use Claude Code as Your AI Provider
+
+If you have Claude Code installed and authenticated, ohwow can use it as the AI backend for all agent tasks. No API key needed.
+
+```bash
+# Via environment variable
+OHWOW_MODEL_SOURCE=claude-code npx ohwow
+
+# Or press Ctrl+O in the dashboard and select "Claude Code"
+```
+
+This routes all model calls through `claude --print`, using your existing Claude subscription. Two modes work together:
+
+- **Provider mode** (`modelSource: claude-code`): single-turn completions for orchestrator chat, memory extraction, planning
+- **Full delegation** (`modelSource: claude-code-cli`): entire tasks delegated to Claude Code with its own tool loop
+
 ## Desktop Control
 
 Your agents aren't trapped in a chat window. They operate your computer.
