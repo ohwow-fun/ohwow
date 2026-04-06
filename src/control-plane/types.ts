@@ -16,6 +16,8 @@ export interface DeviceCapabilities {
   hasNvidiaGpu: boolean;
   gpuName?: string;
   memoryTier: 'tiny' | 'small' | 'medium' | 'large' | 'xlarge';
+  /** Total GPU/VRAM in GB (dedicated VRAM or estimated unified memory share) */
+  totalVramGb?: number;
   desktopControlAvailable?: boolean;
 }
 
@@ -141,7 +143,20 @@ export interface LocalModelSummary {
 export interface HeartbeatPayload {
   uptimeSeconds: number;
   cpuPercent?: number | null;
+  /** System RAM usage percentage (0-100) */
   memoryPercent: number;
+  /** Total system RAM in GB */
+  totalMemoryGb?: number;
+  /** Used system RAM in GB */
+  usedMemoryGb?: number;
+  /** Free system RAM in GB */
+  freeMemoryGb?: number;
+  /** Total GPU/VRAM in GB */
+  totalVramGb?: number;
+  /** Used GPU/VRAM in GB */
+  usedVramGb?: number;
+  /** Free GPU/VRAM in GB */
+  freeVramGb?: number;
   dbSizeMb: number;
   totalTasksExecuted: number;
   totalTokensUsed: number;
@@ -157,6 +172,16 @@ export interface HeartbeatPayload {
   desktopSessionActive?: boolean;
   /** The agent ID currently using desktop control (if any) */
   desktopActiveAgentId?: string;
+  /** Battery percentage (0-100) for laptops */
+  batteryPercent?: number;
+  /** Power source: ac, battery, usb, or unknown */
+  powerSource?: 'ac' | 'battery' | 'usb' | 'unknown';
+  /** Network connection type */
+  networkType?: 'ethernet' | 'wifi' | 'cellular' | 'unknown';
+  /** Whether the device screen is currently active */
+  screenActive?: boolean;
+  /** Whether a human is actively using this device */
+  userActive?: boolean;
 }
 
 // ============================================================================

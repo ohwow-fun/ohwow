@@ -12,7 +12,7 @@
  * and 'replaced' signals on poll/heartbeat (another device took over).
  */
 
-import { hostname, cpus } from 'os';
+import os, { hostname, cpus } from 'os';
 import { statSync } from 'fs';
 import { VERSION } from '../version.js';
 import type { TypedEventBus } from '../lib/typed-event-bus.js';
@@ -40,7 +40,7 @@ import type { OllamaMonitor } from '../lib/ollama-monitor.js';
 import type { RuntimeConfig } from '../config.js';
 import { writeReplacedMarker } from '../daemon/lifecycle.js';
 import { logger } from '../lib/logger.js';
-import { detectDevice, getMemoryTier } from '../lib/device-info.js';
+import { detectDevice, getMemoryTier, estimateTotalVramGb, getVramInfo, getFleetSensingData } from '../lib/device-info.js';
 import { getMachineId } from '../lib/machine-id.js';
 import { OutboundQueue } from './outbound-queue.js';
 import type { OutboundQueueItem } from './outbound-queue.js';
@@ -131,6 +131,7 @@ export class ControlPlaneClient {
     // Detect device capabilities for cloud registration
     const device = detectDevice();
     const memoryTier = getMemoryTier(device);
+    const totalVramGb = estimateTotalVramGb();
     const deviceCapabilities: DeviceCapabilities = {
       totalMemoryGb: device.totalMemoryGB,
       cpuCores: device.cpuCores,
@@ -139,6 +140,7 @@ export class ControlPlaneClient {
       hasNvidiaGpu: device.hasNvidiaGpu,
       gpuName: device.gpuName,
       memoryTier,
+      ...(totalVramGb > 0 ? { totalVramGb } : {}),
     };
 
     const body: ConnectRequest = {
@@ -688,9 +690,20 @@ export class ControlPlaneClient {
 
     const uptimeSeconds = Math.round((Date.now() - this.startTime) / 1000);
 
-    // Get basic metrics
-    const memUsage = process.memoryUsage();
-    const memoryPercent = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
+    // System RAM metrics (not Node heap)
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memoryPercent = Math.round((usedMem / totalMem) * 100);
+    const totalMemoryGb = Math.round((totalMem / (1024 ** 3)) * 10) / 10;
+    const usedMemoryGb = Math.round((usedMem / (1024 ** 3)) * 10) / 10;
+    const freeMemoryGb = Math.round((freeMem / (1024 ** 3)) * 10) / 10;
+
+    // GPU/VRAM metrics (cached, refreshed every 5 min)
+    const vramInfo = await getVramInfo();
+
+    // Fleet sensing (battery, power, network, user presence — cached 30s)
+    const fleetSensing = await getFleetSensingData();
 
     // Get local model summaries if monitor is available
     let localModels: LocalModelSummary[] | undefined;
@@ -719,6 +732,14 @@ export class ControlPlaneClient {
       uptimeSeconds,
       cpuPercent: this.getCpuPercent(),
       memoryPercent,
+      totalMemoryGb,
+      usedMemoryGb,
+      freeMemoryGb,
+      ...(vramInfo ? {
+        totalVramGb: vramInfo.totalGb,
+        usedVramGb: vramInfo.usedGb,
+        freeVramGb: vramInfo.freeGb,
+      } : {}),
       dbSizeMb: this.getDbSizeMb(),
       totalTasksExecuted: 0,
       totalTokensUsed: 0,
@@ -729,6 +750,7 @@ export class ControlPlaneClient {
       desktopAvailable: process.platform === 'darwin',
       desktopSessionActive: this._desktopSessionActive,
       desktopActiveAgentId: this._desktopActiveAgentId ?? undefined,
+      ...fleetSensing,
     };
 
     // Try to get stats from DB
