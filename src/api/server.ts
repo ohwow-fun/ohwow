@@ -50,6 +50,7 @@ import { createTemplatesRouter } from './routes/templates.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createWhatsAppRouter } from './routes/whatsapp.js';
 import { createPeerPublicRouter, createPeersRouter } from './routes/peers.js';
+import { createDataLocalityRoutes } from './routes/data-locality.js';
 import { createRagPublicRouter } from './routes/rag.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
@@ -302,6 +303,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createWorkflowsRouter(db, modelRouter || undefined));
   app.use(createA2ARouter(db));
   app.use(createPeersRouter(db, { messageRouter: messageRouter ?? undefined, rawDb }));
+  app.use('/api/data-locality', createDataLocalityRoutes(db, workspaceId || 'local', controlPlane?.connectedDeviceId || 'local'));
   app.use(createMcpRouter());
   app.use(createCloudProxyRouter(controlPlane ?? null));
   app.use(createOrgRouter(db));

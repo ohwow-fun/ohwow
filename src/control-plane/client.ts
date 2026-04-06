@@ -802,6 +802,7 @@ export class ControlPlaneClient {
     if (this.heartbeatCount % 5 === 0) {
       this.syncSessionMetadata().catch(() => {});
       this.syncConversations().catch(() => {});
+      this.syncManifest().catch(() => {});
     }
 
     // Sync memories every 10th heartbeat (~150s)
@@ -1209,10 +1210,11 @@ export class ControlPlaneClient {
    */
   private async syncConversations(): Promise<void> {
     try {
-      // Get recently updated conversations
+      // Get recently updated conversations (exclude device-pinned and sealed)
       let query = this.db
         .from('orchestrator_conversations')
         .select('id, title, source, channel, message_count, last_message_at')
+        .eq('locality_policy', 'sync')
         .order('last_message_at', { ascending: false })
         .limit(10);
 
@@ -1272,6 +1274,7 @@ export class ControlPlaneClient {
   }
 
   private lastMemorySyncAt: string | null = null;
+  private lastManifestSyncAt: string | null = null;
 
   /**
    * Bidirectional memory sync with cloud.
@@ -1279,12 +1282,13 @@ export class ControlPlaneClient {
    */
   private async syncMemories(): Promise<void> {
     try {
-      // Get unsynced memories (active, not local-only, not secret)
+      // Get unsynced memories (active, not local-only, not secret, not device-pinned/sealed)
       let query = this.db
         .from('agent_workforce_agent_memory')
         .select('id, agent_id, memory_type, content, source_type, relevance_score, times_used, token_count, trust_level, confidentiality_level, source_conversation_id, created_at, updated_at')
         .eq('is_active', 1)
         .eq('is_local_only', 0)
+        .eq('locality_policy', 'sync')
         .not('confidentiality_level', 'eq', 'secret')
         .order('updated_at', { ascending: false })
         .limit(50);
@@ -1392,6 +1396,82 @@ export class ControlPlaneClient {
       // Track for dedup within this batch
       localIds.add(mem.id as string);
       localMemories.push({ id: mem.id as string, content: mem.content as string });
+    }
+  }
+
+  /**
+   * Sync device-pinned data manifest to cloud.
+   * Pushes local manifest entries, receives entries from other devices.
+   */
+  private async syncManifest(): Promise<void> {
+    try {
+      const { data } = await this.db
+        .from('device_data_manifest')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (!data || (data as unknown[]).length === 0) return;
+
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-manifest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify({
+          entries: data,
+          deviceId: this.deviceId,
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json() as {
+          synced: number;
+          otherDeviceEntries: Array<Record<string, unknown>>;
+        };
+
+        // Store other devices' manifest entries locally for offline lookup
+        if (result.otherDeviceEntries?.length > 0) {
+          for (const entry of result.otherDeviceEntries) {
+            const dataId = (entry.dataId ?? entry.data_id) as string;
+            const deviceId = (entry.deviceId ?? entry.device_id) as string;
+
+            // Skip our own entries
+            if (deviceId === this.deviceId) continue;
+
+            const { data: existing } = await this.db
+              .from('device_data_manifest')
+              .select('id')
+              .eq('data_id', dataId)
+              .eq('device_id', deviceId)
+              .maybeSingle();
+
+            if (!existing) {
+              await this.db.from('device_data_manifest').insert({
+                id: crypto.randomUUID(),
+                workspace_id: this.connectedWorkspaceId || 'local',
+                device_id: deviceId,
+                data_type: entry.dataType ?? entry.data_type,
+                data_id: dataId,
+                title: entry.title,
+                tags: typeof entry.tags === 'string' ? entry.tags : JSON.stringify(entry.tags ?? []),
+                size_bytes: entry.sizeBytes ?? entry.size_bytes ?? 0,
+                access_policy: entry.accessPolicy ?? entry.access_policy ?? 'ephemeral',
+                requires_approval: entry.requiresApproval ?? entry.requires_approval ? 1 : 0,
+                owner_user_id: entry.ownerUserId ?? entry.owner_user_id ?? null,
+                pinned_at: entry.pinnedAt ?? entry.pinned_at ?? new Date().toISOString(),
+                fetch_count: 0,
+                created_at: new Date().toISOString(),
+              });
+            }
+          }
+        }
+
+        this.lastManifestSyncAt = new Date().toISOString();
+      }
+    } catch {
+      // Network failure, will retry next cycle
     }
   }
 
