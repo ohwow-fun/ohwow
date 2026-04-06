@@ -17,7 +17,7 @@ const AUDIO_MAGIC: Array<{ prefix: string; mime: string }> = [
   { prefix: 'SUQz', mime: 'audio/mp3' },    // MP3 (ID3v2)
   { prefix: 'T2dn', mime: 'audio/ogg' },    // OGG
   { prefix: 'GkXf', mime: 'audio/webm' },   // WebM
-  { prefix: 'AAAA', mime: 'audio/mp4' },    // M4A/AAC
+  { prefix: 'AAAAGGZ0', mime: 'audio/mp4' }, // M4A (ftyp box)
 ];
 
 function detectAudioMime(base64: string): string {

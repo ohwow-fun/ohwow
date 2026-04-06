@@ -7,7 +7,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../../lib/logger.js';
-import { commandExists } from '../../lib/platform-utils.js';
 import { ensureYtdlp, ensureGh } from '../../lib/internet-installer.js';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 
@@ -84,18 +83,6 @@ export async function youtubeTranscript(
     const channel = info.channel || info.uploader || 'Unknown';
 
     // Step 2: Try to get subtitles (manual first, then auto-generated)
-    const subArgs = [
-      '--skip-download',
-      '--write-sub',
-      '--write-auto-sub',
-      '--sub-lang', lang,
-      '--sub-format', 'vtt',
-      '--print', '%(requested_subtitles)j',
-      '-o', '-',
-      url,
-    ];
-
-    // Use yt-dlp to get subtitle URL, then fetch it
     const subtitles = info.subtitles?.[lang] || info.automatic_captions?.[lang];
     if (!subtitles || subtitles.length === 0) {
       return {

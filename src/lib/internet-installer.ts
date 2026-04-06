@@ -142,6 +142,8 @@ export async function ensureGh(): Promise<boolean> {
  * Non-blocking: failures are logged but don't prevent startup.
  */
 export async function ensureInternetDeps(): Promise<{ ytdlp: boolean; gh: boolean }> {
-  const [ytdlp, gh] = await Promise.all([ensureYtdlp(), ensureGh()]);
+  // Sequential: ensureYtdlp/ensureGh use execFileSync internally
+  const ytdlp = await ensureYtdlp();
+  const gh = await ensureGh();
   return { ytdlp, gh };
 }
