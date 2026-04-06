@@ -50,7 +50,7 @@ export function createDataLocalityRoutes(
       const { dataId } = req.body as { dataId: string };
       if (!dataId) return res.status(400).json({ error: 'dataId is required' });
 
-      await unpinData(db, dataId);
+      await unpinData(db, dataId, deviceId);
       return res.json({ success: true });
     } catch (err) {
       logger.error({ err }, '[data-locality] Unpin failed');
@@ -64,7 +64,7 @@ export function createDataLocalityRoutes(
       const { dataId, dataType } = req.body as { dataId: string; dataType: PinnedDataType };
       if (!dataId || !dataType) return res.status(400).json({ error: 'dataId and dataType are required' });
 
-      await sealData(db, dataId, dataType);
+      await sealData(db, dataId, dataType, deviceId);
       return res.json({ success: true });
     } catch (err) {
       logger.error({ err }, '[data-locality] Seal failed');

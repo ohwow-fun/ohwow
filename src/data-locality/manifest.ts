@@ -114,22 +114,25 @@ export async function pinData(
 export async function unpinData(
   db: DatabaseAdapter,
   dataId: string,
+  deviceId: string,
 ): Promise<void> {
-  // Get the manifest entry to find the data type
+  // Get the manifest entry to find the data type (only this device's entry)
   const { data: entry } = await db
     .from('device_data_manifest')
     .select('data_type')
     .eq('data_id', dataId)
+    .eq('device_id', deviceId)
     .maybeSingle();
 
   if (!entry) return;
 
   const typedEntry = entry as { data_type: string };
 
-  // Remove manifest entry
+  // Remove only this device's manifest entry
   await db.from('device_data_manifest')
     .delete()
-    .eq('data_id', dataId);
+    .eq('data_id', dataId)
+    .eq('device_id', deviceId);
 
   // Restore sync policy on source data
   const table = dataTypeToTable(typedEntry.data_type as PinnedDataType);
@@ -150,11 +153,14 @@ export async function sealData(
   db: DatabaseAdapter,
   dataId: string,
   dataType: PinnedDataType,
+  deviceId?: string,
 ): Promise<void> {
-  // Remove any manifest entry (sealed data is not discoverable)
-  await db.from('device_data_manifest')
+  // Remove manifest entries (sealed data is not discoverable)
+  let query = db.from('device_data_manifest')
     .delete()
     .eq('data_id', dataId);
+  if (deviceId) query = query.eq('device_id', deviceId);
+  await query;
 
   // Set locality_policy to sealed
   const table = dataTypeToTable(dataType);

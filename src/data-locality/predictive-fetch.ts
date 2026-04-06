@@ -63,10 +63,14 @@ export async function predictNeededData(
   const keywords = extractKeywords(parts);
   if (keywords.length === 0) return [];
 
-  // Search manifest
-  const matches = await searchManifest(db, workspaceId, keywords, { limit: 5 });
+  // Search manifest — only return high-confidence matches for pre-fetch
+  // (searchManifest scores by keyword overlap; we only pre-fetch if 2+ keywords match)
+  const allMatches = await searchManifest(db, workspaceId, keywords, { limit: 10 });
 
-  return matches;
+  // searchManifest already sorts by score desc. The score is keyword overlap count.
+  // Only return matches where the title/tags overlap with 2+ context keywords
+  // to avoid wasteful pre-fetches on weak signal.
+  return allMatches.slice(0, 5);
 }
 
 /**
@@ -89,7 +93,8 @@ export async function preFetchPredicted(
 
   let fetched = 0;
 
-  // Fetch top 3 in parallel, with short timeout
+  // Only pre-fetch if we have reasonably confident predictions
+  // (searchManifest returns score > 0, but score=1 is too weak for network calls)
   const top = predictions.slice(0, 3);
 
   await Promise.allSettled(

@@ -90,7 +90,7 @@ export function encryptForRecipient(
   });
 
   // Derive AES key from shared secret using HKDF
-  const aesKey = crypto.hkdfSync('sha256', sharedSecret, '', 'ohwow-device-fetch', 32);
+  const aesKey = crypto.hkdfSync('sha256', sharedSecret, 'ohwow-e2e-salt-v1', 'ohwow-device-fetch', 32);
 
   // Encrypt with AES-256-GCM
   const iv = crypto.randomBytes(12);
@@ -138,7 +138,7 @@ export function decryptWithPrivateKey(
   });
 
   // Derive same AES key
-  const aesKey = crypto.hkdfSync('sha256', sharedSecret, '', 'ohwow-device-fetch', 32);
+  const aesKey = crypto.hkdfSync('sha256', sharedSecret, 'ohwow-e2e-salt-v1', 'ohwow-device-fetch', 32);
 
   // Decrypt
   const decipher = crypto.createDecipheriv(

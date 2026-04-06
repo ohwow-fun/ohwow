@@ -1432,7 +1432,7 @@ export class ControlPlaneClient {
         };
 
         // Store other devices' manifest entries locally for offline lookup
-        if (result.otherDeviceEntries?.length > 0) {
+        if (result.otherDeviceEntries?.length > 0 && this.connectedWorkspaceId) {
           for (const entry of result.otherDeviceEntries) {
             const dataId = (entry.dataId ?? entry.data_id) as string;
             const deviceId = (entry.deviceId ?? entry.device_id) as string;
@@ -1450,7 +1450,7 @@ export class ControlPlaneClient {
             if (!existing) {
               await this.db.from('device_data_manifest').insert({
                 id: crypto.randomUUID(),
-                workspace_id: this.connectedWorkspaceId || 'local',
+                workspace_id: this.connectedWorkspaceId!,
                 device_id: deviceId,
                 data_type: entry.dataType ?? entry.data_type,
                 data_id: dataId,
@@ -1458,7 +1458,7 @@ export class ControlPlaneClient {
                 tags: typeof entry.tags === 'string' ? entry.tags : JSON.stringify(entry.tags ?? []),
                 size_bytes: entry.sizeBytes ?? entry.size_bytes ?? 0,
                 access_policy: entry.accessPolicy ?? entry.access_policy ?? 'ephemeral',
-                requires_approval: entry.requiresApproval ?? entry.requires_approval ? 1 : 0,
+                requires_approval: (entry.requiresApproval ?? entry.requires_approval) ? 1 : 0,
                 owner_user_id: entry.ownerUserId ?? entry.owner_user_id ?? null,
                 pinned_at: entry.pinnedAt ?? entry.pinned_at ?? new Date().toISOString(),
                 fetch_count: 0,
