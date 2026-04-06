@@ -41,7 +41,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   router.post('/api/agents', validate(createAgentSchema), async (req, res) => {
     try {
       const { workspaceId } = req;
-      const { name, role, system_prompt, description } = req.body;
+      const { name, role, system_prompt, description, department_id, config: userConfig } = req.body;
 
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -49,17 +49,19 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       const { error } = await db.from('agent_workforce_agents').insert({
         id,
         workspace_id: workspaceId,
+        department_id: department_id || null,
         name,
         role,
         system_prompt,
         description: description || null,
         status: 'idle',
         config: JSON.stringify({
-          model: 'llama3.1',
-          temperature: 0.7,
-          max_tokens: 4096,
-          approval_required: false,
-          web_search_enabled: false,
+          model: userConfig?.model || 'qwen3:0.6b',
+          temperature: userConfig?.temperature ?? 0.7,
+          max_tokens: userConfig?.max_tokens ?? 4096,
+          tools_enabled: userConfig?.tools_enabled || [],
+          approval_required: userConfig?.approval_required ?? false,
+          web_search_enabled: userConfig?.web_search_enabled ?? false,
         }),
         stats: JSON.stringify({
           total_tasks: 0,

@@ -41,6 +41,15 @@ export const createAgentSchema = z.object({
   role: z.string().min(1, 'role is required'),
   system_prompt: z.string().min(1, 'system_prompt is required'),
   description: z.string().optional(),
+  department_id: z.string().optional(),
+  config: z.object({
+    model: z.string().optional(),
+    temperature: z.number().optional(),
+    max_tokens: z.number().optional(),
+    tools_enabled: z.array(z.string()).optional(),
+    approval_required: z.boolean().optional(),
+    web_search_enabled: z.boolean().optional(),
+  }).optional(),
 });
 
 /** POST /api/tasks (dispatched via orchestrator) */
