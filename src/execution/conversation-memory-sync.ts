@@ -121,7 +121,14 @@ export async function extractFromConversation(
 
   try {
     // Build conversation text for the prompt
-    const conversationText = messages
+    // Filter out ephemeral device-pinned content that shouldn't be extracted
+    const filteredMessages = messages.map(m => ({
+      ...m,
+      content: m.content.replace(/\[DEVICE-PINNED\].*$/gm, '[device-pinned content redacted]'),
+    }));
+
+    const conversationText = filteredMessages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
       .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 500)}`)
       .join('\n\n');
 
