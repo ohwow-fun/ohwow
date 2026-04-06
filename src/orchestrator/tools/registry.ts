@@ -36,6 +36,7 @@ import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawA
 import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
+import { transcribeAudio } from './audio.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -211,4 +212,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['youtube_transcript', (ctx, input) => youtubeTranscript(ctx, input)],
   ['read_rss_feed', (ctx, input) => readRssFeed(ctx, input)],
   ['github_search', (ctx, input) => githubSearch(ctx, input)],
+
+  // Audio transcription
+  ['transcribe_audio', (ctx, input) => transcribeAudio(ctx, input)],
 ]);

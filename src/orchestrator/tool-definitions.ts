@@ -1048,6 +1048,31 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['question'],
     },
   },
+  // Audio transcription
+  {
+    name: 'transcribe_audio',
+    description:
+      'Transcribe audio to text using the best available speech-to-text provider (Voicebox Whisper, Gemma Audio, or OpenAI Whisper). Optionally analyze the transcript with a follow-up prompt. IMPORTANT: Only call this when you have actual base64-encoded audio data to process.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        audio_base64: {
+          type: 'string',
+          minLength: 100,
+          description: 'Base64-encoded audio data (WAV, MP3, OGG, WebM, or M4A). Must be real audio file data, not a placeholder.',
+        },
+        language: {
+          type: 'string',
+          description: 'Language hint for transcription accuracy (e.g., "en", "es", "fr"). Optional.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Optional analysis prompt applied to the transcript after transcription. Use for summarizing, extracting action items, translating, or any other processing.',
+        },
+      },
+      required: ['audio_base64'],
+    },
+  },
   // Internet tools (zero-cost, zero-config)
   {
     name: 'youtube_transcript',
@@ -1784,6 +1809,9 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   scrape_search: ['rag', 'browser'],
   deep_research: ['rag', 'browser'],
 
+  // Audio transcription → 'rag', 'vision'
+  transcribe_audio: ['rag', 'vision'],
+
   // Internet tools → 'rag'
   youtube_transcript: ['rag'],
   read_rss_feed: ['rag'],
@@ -1864,6 +1892,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   list_projects: 2, create_project: 2, list_goals: 2, create_goal: 2,
   scrape_search: 2, list_knowledge: 2,
   get_agent_suggestions: 2,
+  transcribe_audio: 2,
   youtube_transcript: 2, read_rss_feed: 2, github_search: 2,
 
   // P3: Rare/advanced tools
