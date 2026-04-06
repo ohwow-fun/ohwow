@@ -443,8 +443,10 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     .join('\n');
 
   // --- CWD Section (identity-oriented, near top) ---
-  const cwdSection = workingDirectory
+  const cwdSection = workingDirectory && hasFilesystemTools
     ? `\n## Your Location\nYou are running from: \`${workingDirectory}\`\nThis is your working directory. Filesystem tools are available: local_list_directory, local_read_file, local_search_files, local_search_content, local_write_file, local_edit_file.\n\nWhen the user asks about their project, codebase, or any files — start by calling \`local_list_directory\` on this path. Do not ask for clarification about file locations. Explore first, answer based on what you find.`
+    : workingDirectory
+      ? `\n## Your Location\nYou are running from: \`${workingDirectory}\`\nFilesystem and shell tools are not yet active. If the task requires reading, writing, or searching files, or running commands, call \`request_file_access\` first to request permission.`
     : hasFilesystemTools
       ? `\n## Your Location\nNo default working directory is configured, but filesystem tools are active in your tool list (local_list_directory, local_read_file, local_search_files, local_search_content, local_write_file, local_edit_file).\n\nWhen asked about files or the codebase — start by calling \`local_list_directory\` on \`~\` to explore the user's home directory. Do not say you lack filesystem access. Explore first.`
       : '';
@@ -702,8 +704,10 @@ export function buildCompactDynamicContext(args: BuildLocalSystemPromptArgs): st
     .map(a => `- ${a.name} (${a.role}) [${a.status}] [id: ${a.id}]`)
     .join('\n');
 
-  const cwdLine = workingDirectory
+  const cwdLine = workingDirectory && hasFilesystemTools
     ? `Working directory: \`${workingDirectory}\`. Filesystem tools active.`
+    : workingDirectory
+      ? `Working directory: \`${workingDirectory}\`. Call \`request_file_access\` to enable filesystem tools.`
     : hasFilesystemTools
       ? 'Filesystem tools active. Start from `~`.'
       : '';

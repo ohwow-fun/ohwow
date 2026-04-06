@@ -214,7 +214,7 @@ export async function buildTargetedPrompt(
   }
 
   const hasFilesystemTools = need('filesystem')
-    ? !!(deps.workingDirectory || await deps.hasOrchestratorFileAccess())
+    ? await deps.hasOrchestratorFileAccess()
     : false;
 
   const activeAgents = agents.filter((a) => a.status === 'working').length;

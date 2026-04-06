@@ -12,7 +12,7 @@ let cachedGuard: FileAccessGuard | null = null;
 let cachedKey: string | null = null;
 
 async function getGuard(ctx: LocalToolContext): Promise<FileAccessGuard | null> {
-  const key = `${ctx.workspaceId}:${ctx.workingDirectory || ''}`;
+  const key = ctx.workspaceId;
   if (cachedGuard && cachedKey === key) {
     return cachedGuard;
   }
