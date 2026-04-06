@@ -1251,10 +1251,11 @@ export class LocalOrchestrator {
     const turnMessages = buildAnthropicTurnMessages(userMessage, loopMessages, turnStartIndex, fullContent);
     await saveToSession(this.sessionDeps, sessionId, turnMessages, userMessage.slice(0, 100));
 
-    // Persist to append-only conversation history (fire-and-forget)
+    // Persist to append-only conversation history + schedule idle extraction (fire-and-forget)
     if (fullContent) {
       persistExchange(this.sessionDeps, sessionId, userMessage, fullContent, {
         title: userMessage.slice(0, 100),
+        extractionDeps: { anthropic: this.anthropic, modelRouter: this.modelRouter },
       }).catch((err) => {
         logger.warn(`[LocalOrchestrator] Conversation persistence failed: ${err}`);
       });
@@ -1869,10 +1870,11 @@ export class LocalOrchestrator {
     const ollamaTurnMessages = buildOllamaTurnMessages(userMessage, loopMessages, ollamaTurnStartIndex, fullContent);
     await saveToSession(this.sessionDeps, sessionId, ollamaTurnMessages, userMessage.slice(0, 100));
 
-    // Persist to append-only conversation history (fire-and-forget)
+    // Persist to append-only conversation history + schedule idle extraction (fire-and-forget)
     if (fullContent) {
       persistExchange(this.sessionDeps, sessionId, userMessage, fullContent, {
         title: userMessage.slice(0, 100),
+        extractionDeps: { anthropic: this.anthropic, modelRouter: this.modelRouter },
       }).catch((err) => {
         logger.warn(`[LocalOrchestrator] Conversation persistence failed: ${err}`);
       });

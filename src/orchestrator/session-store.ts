@@ -16,6 +16,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { isJunkMemory, checkDedup, type ExistingMemory } from '../lib/memory-utils.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import { MAX_ACTIVE_MEMORIES, MEMORY_EXTRACTION_PROMPT } from './orchestrator-types.js';
+import { scheduleIdleExtraction } from '../execution/conversation-memory-sync.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -64,16 +65,23 @@ export async function ensureConversation(
   return conversationId;
 }
 
+/** Optional extraction deps — when provided, idle extraction is scheduled */
+export interface ExtractionDeps {
+  anthropic: import('@anthropic-ai/sdk').default | null;
+  modelRouter: import('../execution/model-router.js').ModelRouter | null;
+}
+
 /**
  * Persist a user+assistant exchange to the append-only messages table.
  * Called alongside saveToSession so every exchange is permanently stored.
+ * When extractionDeps are provided, also schedules idle memory extraction.
  */
 export async function persistExchange(
   deps: SessionDeps,
   sessionId: string,
   userContent: string,
   assistantContent: string,
-  opts?: { title?: string; channel?: string; model?: string },
+  opts?: { title?: string; channel?: string; model?: string; extractionDeps?: ExtractionDeps },
 ): Promise<void> {
   try {
     const conversationId = await ensureConversation(deps, sessionId, {
@@ -114,6 +122,23 @@ export async function persistExchange(
         updated_at: now,
       })
       .eq('id', conversationId);
+
+    // Schedule idle extraction (fires after 2 min of silence)
+    if (opts?.extractionDeps) {
+      scheduleIdleExtraction(
+        conversationId,
+        { conversationId, workspaceId: deps.workspaceId },
+        { db: deps.db, anthropic: opts.extractionDeps.anthropic, modelRouter: opts.extractionDeps.modelRouter },
+        async () => {
+          const { data } = await deps.db
+            .from('orchestrator_messages')
+            .select('role, content')
+            .eq('conversation_id', conversationId)
+            .order('created_at', { ascending: true });
+          return (data ?? []) as Array<{ role: string; content: string }>;
+        },
+      );
+    }
   } catch (err) {
     // Non-fatal: don't break the chat flow if persistence fails
     logger.warn({ err }, '[session-store] Couldn\'t persist exchange to conversation history');
