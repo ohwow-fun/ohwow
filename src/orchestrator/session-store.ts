@@ -90,10 +90,12 @@ export async function persistExchange(
     });
 
     const now = new Date().toISOString();
+    const userMsgId = crypto.randomUUID();
+    const asstMsgId = crypto.randomUUID();
 
     // Insert user message
     await deps.db.from('orchestrator_messages').insert({
-      id: crypto.randomUUID(),
+      id: userMsgId,
       conversation_id: conversationId,
       workspace_id: deps.workspaceId,
       role: 'user',
@@ -104,7 +106,7 @@ export async function persistExchange(
 
     // Insert assistant message
     await deps.db.from('orchestrator_messages').insert({
-      id: crypto.randomUUID(),
+      id: asstMsgId,
       conversation_id: conversationId,
       workspace_id: deps.workspaceId,
       role: 'assistant',
@@ -114,12 +116,15 @@ export async function persistExchange(
       created_at: new Date(Date.now() + 1).toISOString(),
     });
 
+    // FTS index (fire-and-forget, non-critical)
+    deps.db.from('orchestrator_messages_fts').insert({ message_id: userMsgId, content: userContent }).then(() => {}, () => {});
+    deps.db.from('orchestrator_messages_fts').insert({ message_id: asstMsgId, content: assistantContent }).then(() => {}, () => {});
+
     // Update conversation metadata
     await deps.db
       .from('orchestrator_conversations')
       .update({
         last_message_at: now,
-        updated_at: now,
       })
       .eq('id', conversationId);
 

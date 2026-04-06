@@ -43,26 +43,12 @@ CREATE INDEX IF NOT EXISTS idx_msg_conversation
 CREATE INDEX IF NOT EXISTS idx_msg_workspace
   ON orchestrator_messages(workspace_id, created_at DESC);
 
--- FTS5 virtual table for full-text search on messages
+-- FTS5 standalone table (not content-sync, since orchestrator_messages uses TEXT PK)
+-- Manually populated via application-level inserts after message creation
 CREATE VIRTUAL TABLE IF NOT EXISTS orchestrator_messages_fts USING fts5(
-  content,
-  content='orchestrator_messages',
-  content_rowid='rowid'
+  message_id,
+  content
 );
-
--- Triggers to keep FTS in sync
-CREATE TRIGGER IF NOT EXISTS orchestrator_messages_ai AFTER INSERT ON orchestrator_messages BEGIN
-  INSERT INTO orchestrator_messages_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS orchestrator_messages_ad AFTER DELETE ON orchestrator_messages BEGIN
-  INSERT INTO orchestrator_messages_fts(orchestrator_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS orchestrator_messages_au AFTER UPDATE ON orchestrator_messages BEGIN
-  INSERT INTO orchestrator_messages_fts(orchestrator_messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-  INSERT INTO orchestrator_messages_fts(rowid, content) VALUES (new.rowid, new.content);
-END;
 
 -- Provenance: link memories back to conversations
 ALTER TABLE agent_workforce_agent_memory

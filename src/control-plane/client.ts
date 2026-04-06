@@ -1234,8 +1234,8 @@ export class ControlPlaneClient {
           .from('orchestrator_messages')
           .select('id, role, content, model, created_at')
           .eq('conversation_id', conv.id)
-          .order('created_at', { ascending: false })
-          .limit(20); // Last 20 messages per conversation
+          .order('created_at', { ascending: true })
+          .limit(50); // Last 50 messages per conversation, chronological order
 
         syncPayload.push({
           id: conv.id,
@@ -1350,34 +1350,31 @@ export class ControlPlaneClient {
    * Deduplicates by content similarity.
    */
   private async importCloudMemories(cloudMemories: Array<Record<string, unknown>>): Promise<void> {
+    if (!this.connectedWorkspaceId) return;
+
+    // Load existing memories once for batch dedup
+    const { data: recentLocal } = await this.db
+      .from('agent_workforce_agent_memory')
+      .select('id, content')
+      .eq('is_active', 1)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    const localMemories = (recentLocal ?? []) as Array<{ id: string; content: string }>;
+    const localIds = new Set(localMemories.map(m => m.id));
+
     for (const mem of cloudMemories) {
-      // Check if already exists locally
-      const { data: existing } = await this.db
-        .from('agent_workforce_agent_memory')
-        .select('id')
-        .eq('id', mem.id as string)
-        .maybeSingle();
-
-      if (existing) continue;
-
-      // Content dedup: check against recent local memories
-      const { data: recentLocal } = await this.db
-        .from('agent_workforce_agent_memory')
-        .select('id, content')
-        .eq('is_active', 1)
-        .order('created_at', { ascending: false })
-        .limit(200);
+      // Check if already exists locally (by ID or content prefix)
+      if (localIds.has(mem.id as string)) continue;
 
       const contentLower = (mem.content as string).toLowerCase().trim();
-      const isDuplicate = (recentLocal as Array<{ id: string; content: string }> ?? [])
+      const isDuplicate = localMemories
         .some(local => local.content.toLowerCase().trim().startsWith(contentLower.slice(0, 50)));
-
       if (isDuplicate) continue;
 
       await this.db.from('agent_workforce_agent_memory').insert({
         id: mem.id,
         agent_id: mem.agentId ?? null,
-        workspace_id: this.connectedWorkspaceId || 'local',
+        workspace_id: this.connectedWorkspaceId!,
         memory_type: mem.memoryType,
         content: mem.content,
         source_type: mem.sourceType,
@@ -1388,9 +1385,13 @@ export class ControlPlaneClient {
         trust_level: mem.trustLevel ?? 'inferred',
         is_active: 1,
         confidentiality_level: mem.confidentialityLevel ?? 'workspace',
-        source_device_id: null,
+        source_device_id: (mem as Record<string, unknown>).sourceDeviceId ?? 'cloud',
         is_local_only: 0,
       });
+
+      // Track for dedup within this batch
+      localIds.add(mem.id as string);
+      localMemories.push({ id: mem.id as string, content: mem.content as string });
     }
   }
 
