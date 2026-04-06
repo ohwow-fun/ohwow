@@ -31,7 +31,7 @@ import { listPeers, delegateToPeer, askPeer, listPeerAgentsTool } from './peers.
 import { getAgentSuggestions } from './agent-suggestions.js';
 import { listAvailablePresets, setupAgents, bootstrapWorkspace } from './setup-agents.js';
 import { discoverCapabilities, proposeAutomation, createAutomation } from './automation-builder.js';
-import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo } from './media.js';
+import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo, generateVoice } from './media.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
 import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
@@ -192,6 +192,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['export_slides_pdf', (ctx, input) => exportSlidesToPdf(ctx, input)],
   ['generate_music', (ctx, input) => generateMusic(ctx, input)],
   ['generate_video', (ctx, input) => generateVideo(ctx, input)],
+  ['generate_voice', (ctx, input) => generateVoice(ctx, input)],
 
   // OpenClaw tools
   ['openclaw_list_skills', (ctx) => openclawListSkills(ctx, {})],

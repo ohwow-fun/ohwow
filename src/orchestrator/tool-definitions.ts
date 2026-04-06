@@ -1407,6 +1407,21 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  {
+    name: 'generate_voice',
+    description:
+      'Convert text to speech audio. Uses local Kokoro TTS when available (free, fast), otherwise falls back to cloud TTS via OpenRouter. Produces an MP3 file saved to the media library. Great for voiceovers, narration, audio content, and accessibility.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        text: { type: 'string', description: 'The text to convert to speech' },
+        voice: { type: 'string', description: 'Voice name (e.g. "af_heart", "alloy"). Available voices depend on the provider.' },
+        speed: { type: 'number', description: 'Speech speed multiplier (0.5-2.0, default 1.0)' },
+      },
+      required: ['text'],
+    },
+  },
+
   // =========================================================================
   // KNOWLEDGE BASE
   // =========================================================================

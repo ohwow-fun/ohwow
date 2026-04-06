@@ -9,6 +9,7 @@ import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { saveMediaBuffer } from '../../media/storage.js';
 import { LocalBrowserService } from '../../execution/browser/local-browser.service.js';
 import { LyriaOpenRouterBridge } from '../../media/lyria-openrouter-bridge.js';
+import { KokoroBridge } from '../../media/kokoro-mcp-bridge.js';
 import { logger } from '../../lib/logger.js';
 
 const SLIDE_STYLES: Record<string, { bg: string; text: string; accent: string; font: string }> = {
@@ -274,6 +275,92 @@ export async function generateVideo(
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Video generation failed';
     logger.error(`[generate_video] ${msg}`);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Generate speech audio from text. Tries local Kokoro first (free),
+ * falls back to OpenRouter cloud TTS. Saves to ~/.ohwow/media/audio/.
+ */
+export async function generateVoice(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const text = input.text as string | undefined;
+  if (!text) {
+    return { success: false, error: 'text is required' };
+  }
+
+  if (text.length > 5000) {
+    return { success: false, error: 'Text too long. Keep it under 5,000 characters per generation.' };
+  }
+
+  const voice = input.voice as string | undefined;
+  const speed = input.speed ? Math.min(Math.max(Number(input.speed), 0.5), 2.0) : 1.0;
+
+  // Try local Kokoro first (free, fast)
+  const kokoro = new KokoroBridge();
+  const kokoroAvailable = await kokoro.isAvailable();
+
+  if (kokoroAvailable) {
+    try {
+      const result = await kokoro.textToSpeech({ text, voice, speed });
+      return {
+        success: true,
+        data: `${result.message} (local Kokoro TTS, free)`,
+      };
+    } catch (err) {
+      logger.warn(`[generate_voice] Kokoro failed, trying cloud fallback: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // Fall back to OpenRouter cloud TTS
+  const apiKey = ctx.modelRouter?.getOpenRouterApiKey();
+  if (!apiKey) {
+    return {
+      success: false,
+      error: kokoroAvailable
+        ? 'Local TTS failed and no OpenRouter API key configured for cloud fallback.'
+        : 'Kokoro TTS not running locally and no OpenRouter API key configured. Start Kokoro (port 8880) or set an OpenRouter key in Settings.',
+    };
+  }
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://ohwow.fun',
+        'X-Title': 'OHWOW',
+      },
+      signal: AbortSignal.timeout(60_000),
+      body: JSON.stringify({
+        model: 'openai/tts-1',
+        input: text,
+        voice: voice ?? 'alloy',
+        speed,
+        response_format: 'mp3',
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Cloud TTS failed (${response.status}): ${errText.slice(0, 200)}`);
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    logger.info(`[generate_voice] Cloud TTS generated ${buffer.length} bytes`);
+
+    const saved = await saveMediaBuffer(buffer, 'audio/mpeg', 'voice');
+    return {
+      success: true,
+      data: `Voice audio generated and saved to ${saved.path} (${Math.round(buffer.length / 1024)}KB, cloud TTS)`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Voice generation failed';
+    logger.error(`[generate_voice] ${msg}`);
     return { success: false, error: msg };
   }
 }

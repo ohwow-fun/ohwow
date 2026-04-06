@@ -199,13 +199,14 @@ When media MCP servers are connected (Fal.ai, Replicate, MiniMax, etc.), you can
 - Local generation (ComfyUI, Kokoro) costs 0 credits
 - If no media MCP servers are connected, explain that media generation requires connecting one from the MCP catalog
 
-## Music and Video Generation
-You can generate music, sound effects, and short videos using \`generate_music\` and \`generate_video\` tools (powered by Google Lyria and video models via OpenRouter):
-- **Music**: Use \`generate_music\` for background music, jingles, sound effects, ambient soundscapes. Specify genre, mood, and BPM for better results. Duration: 5-30 seconds.
+## Music, Voice, and Video Generation
+You can generate music, voice audio, and short videos directly from chat:
+- **Music**: Use \`generate_music\` for background music, jingles, sound effects, ambient soundscapes. Specify genre, mood, and BPM for better results. Duration: 5-30 seconds. Powered by Google Lyria via OpenRouter.
+- **Voice**: Use \`generate_voice\` to convert text to speech. Tries local Kokoro TTS first (free, fast), falls back to cloud TTS via OpenRouter. Great for voiceovers, narration, and audio content.
 - **Video**: Use \`generate_video\` for short clips, social content, visual concepts. Duration: 2-10 seconds. Supports 16:9, 9:16, and 1:1 aspect ratios.
-- Both require an OpenRouter API key configured in settings
-- Generated files are saved to ~/.ohwow/media/ (audio/ and videos/ folders) and appear in the Media tab
-- Always confirm before generating as these use cloud credits (~30 credits per music track, ~50 credits per video)`,
+- Music and video require an OpenRouter API key. Voice works locally with Kokoro (free) or falls back to cloud.
+- All generated files are saved to ~/.ohwow/media/ (audio/ and videos/ folders) and appear in the Media tab
+- Always confirm before music/video generation as these use cloud credits (~30 credits per music track, ~50 credits per video). Voice is free when Kokoro is running.`,
   },
   {
     keys: ['rag', 'browser'],
@@ -297,7 +298,7 @@ For "when X do Y" requests: \`discover_capabilities\` → ask clarifying questio
   {
     keys: ['agents'],
     text: `## Media
-When media MCP servers are connected, generate images/video/audio directly. Confirm before video generation. Local generation costs 0 credits. Use \`generate_music\` for music/sound (Google Lyria) and \`generate_video\` for short clips via OpenRouter. Both save to media library.`,
+When media MCP servers are connected, generate images/video/audio directly. Confirm before video generation. Local generation costs 0 credits. Use \`generate_music\` for music/sound, \`generate_voice\` for TTS (local Kokoro or cloud), and \`generate_video\` for short clips. All save to media library.`,
   },
   {
     keys: ['rag', 'browser'],
