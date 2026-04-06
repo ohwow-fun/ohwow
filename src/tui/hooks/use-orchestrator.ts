@@ -89,7 +89,7 @@ export interface OrchestratorState {
   stopStreaming: () => void;
   newSession: () => void;
   clearSwitchTab: () => void;
-  setModel: (model: string, source?: 'local' | 'cloud') => void;
+  setModel: (model: string, source?: 'local' | 'cloud' | 'claude-code') => void;
   resolvePermission: (requestId: string, granted: boolean) => void;
   resolveCostApproval: (requestId: string, approved: boolean) => void;
   resolveElicitation: (requestId: string, accepted: boolean, fields?: Record<string, unknown>) => void;
@@ -111,7 +111,7 @@ export function useOrchestrator(
   const [sessionTitle, setSessionTitle] = useState('');
   const [switchTabSignal, setSwitchTabSignal] = useState<string | null>(null);
   const [currentModel, setCurrentModel] = useState(orchestratorModel || 'ollama');
-  const [modelSource, setModelSource] = useState<'local' | 'cloud'>('local');
+  const [modelSource, setModelSource] = useState<'local' | 'cloud' | 'claude-code'>('local');
   const [permissionRequest, setPermissionRequest] = useState<{ requestId: string; path: string; toolName: string } | null>(null);
   const [costConfirmation, setCostConfirmation] = useState<CostConfirmationRequest | null>(null);
   const [elicitationRequest, setElicitationRequest] = useState<ElicitationRequest | null>(null);
@@ -446,7 +446,7 @@ export function useOrchestrator(
     abortRef.current?.abort();
   }, []);
 
-  const setModel = useCallback((model: string, source?: 'local' | 'cloud') => {
+  const setModel = useCallback((model: string, source?: 'local' | 'cloud' | 'claude-code') => {
     setCurrentModel(model);
     if (source) setModelSource(source);
     // Start a new session with the new model

@@ -28,7 +28,7 @@ import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
-import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, OllamaProvider } from '../execution/model-router.js';
+import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
 import { repairToolCall } from './tool-call-repair.js';
@@ -366,7 +366,7 @@ export class LocalOrchestrator {
   }
 
   /** Set the model source at runtime (delegates to ModelRouter). */
-  setModelSource(source: 'local' | 'cloud' | 'auto'): void {
+  setModelSource(source: ModelSourceOption): void {
     this.modelRouter?.setModelSource(source);
   }
 

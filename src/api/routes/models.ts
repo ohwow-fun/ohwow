@@ -386,14 +386,14 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
    */
   router.put('/api/models/orchestrator', async (req: Request, res: Response) => {
     try {
-      const { model, modelSource } = req.body as { model?: string; modelSource?: 'local' | 'cloud' | 'auto' };
+      const { model, modelSource } = req.body as { model?: string; modelSource?: 'local' | 'cloud' | 'auto' | 'claude-code' };
       if (model === undefined) {
         res.status(400).json({ error: 'model is required' });
         return;
       }
 
-      // If non-empty, validate model is installed (skip for cloud models)
-      if (model && modelSource !== 'cloud') {
+      // If non-empty, validate model is installed (skip for cloud and claude-code models)
+      if (model && modelSource !== 'cloud' && modelSource !== 'claude-code') {
         const installedNames = await listInstalledModels(OLLAMA_URL);
         if (!isModelInstalled(model, installedNames)) {
           res.status(400).json({ error: 'Model is not installed' });
