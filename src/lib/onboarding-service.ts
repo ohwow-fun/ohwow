@@ -170,6 +170,7 @@ export class OnboardingService {
       cloudUrl: DEFAULT_CLOUD_URL,
       anthropicApiKey: '',
       modelSource: 'local',
+      cloudProvider: 'anthropic',
       cloudModel: 'claude-haiku-4-5-20251001',
       anthropicOAuthToken: '',
       port: DEFAULT_PORT,

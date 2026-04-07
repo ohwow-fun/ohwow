@@ -14,6 +14,7 @@ const ALLOWED_SETTINGS = new Set([
   'ocr_model',
   'openrouter_api_key',
   'openrouter_model',
+  'cloud_provider',
   'tunnel_url',
   'cloud_url',
   'cloud_workspace_id',

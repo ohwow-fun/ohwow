@@ -15,6 +15,9 @@ export type RuntimeTier = 'free' | 'connected';
 
 export type ModelSource = 'local' | 'cloud' | 'auto' | 'claude-code' | 'claude-code-cli';
 
+/** Which cloud provider to use when modelSource === 'cloud' */
+export type CloudProvider = 'anthropic' | 'openrouter';
+
 export type ClaudeCodeCliPermissionMode = 'skip' | 'allowedTools' | 'interactive';
 
 export type DeviceRole = 'hybrid' | 'worker' | 'coordinator';
@@ -28,7 +31,9 @@ export interface RuntimeConfig {
   anthropicApiKey: string;
   /** Which model provider to use: local (Ollama), cloud (Claude), or auto (route by task) */
   modelSource: ModelSource;
-  /** Cloud model ID for Claude inference */
+  /** Which cloud provider to use when modelSource === 'cloud' */
+  cloudProvider: CloudProvider;
+  /** Cloud model ID for the selected cloud provider */
   cloudModel: string;
   /** OAuth token from Anthropic browser flow */
   anthropicOAuthToken: string;
@@ -133,6 +138,7 @@ interface ConfigFile {
   cloudUrl?: string;
   anthropicApiKey?: string;
   modelSource?: ModelSource;
+  cloudProvider?: CloudProvider;
   cloudModel?: string;
   anthropicOAuthToken?: string;
   port?: number;
@@ -232,6 +238,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     cloudUrl: process.env.OHWOW_CLOUD_URL || fileConfig.cloudUrl || DEFAULT_CLOUD_URL,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || fileConfig.anthropicApiKey || '',
     modelSource: (process.env.OHWOW_MODEL_SOURCE as ModelSource) || fileConfig.modelSource || 'local',
+    cloudProvider: (process.env.OHWOW_CLOUD_PROVIDER as CloudProvider) || fileConfig.cloudProvider || 'anthropic',
     cloudModel: process.env.OHWOW_CLOUD_MODEL || fileConfig.cloudModel || 'claude-haiku-4-5-20251001',
     anthropicOAuthToken: process.env.ANTHROPIC_OAUTH_TOKEN || fileConfig.anthropicOAuthToken || '',
     port: parseInt(process.env.OHWOW_PORT || '', 10) || fileConfig.port || DEFAULT_PORT,

@@ -177,7 +177,8 @@ export interface RuntimeEvents {
   'model:switch-complete': { model: string; provider: string; durationMs: number };
   'model:switch-failed': { model: string; reason: string };
 
-  // OpenRouter
+  // Cloud provider
+  'cloud:provider-changed': { provider: string; model?: string };
   'openrouter:key-changed': { key: string };
   'openrouter:model-changed': { model: string };
 

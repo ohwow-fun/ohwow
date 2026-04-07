@@ -1021,7 +1021,7 @@ export class OpenRouterProvider implements ModelProvider {
 
 export type TaskType = 'orchestrator' | 'memory_extraction' | 'planning' | 'agent_task' | 'browser' | 'ocr' | 'vision' | 'audio';
 
-export type ModelSourceOption = 'local' | 'cloud' | 'openrouter' | 'claude-code' | 'claude-code-cli' | 'auto';
+export type ModelSourceOption = 'local' | 'cloud' | 'claude-code' | 'claude-code-cli' | 'auto';
 
 /**
  * Routing history for adaptive model selection.
@@ -1047,6 +1047,7 @@ export class ModelRouter {
   private openaiCompatible: OpenAICompatibleProvider | null;
   private preferLocal: boolean;
   private modelSource: ModelSourceOption;
+  private cloudProvider: 'anthropic' | 'openrouter';
   private mainModelHasVision: boolean;
   private mainModelHasAudio: boolean;
   private _openRouterApiKey: string;
@@ -1064,6 +1065,8 @@ export class ModelRouter {
     openRouterModel?: string;
     preferLocalModel?: boolean;
     modelSource?: ModelSourceOption;
+    /** Which cloud provider to use when modelSource === 'cloud' */
+    cloudProvider?: 'anthropic' | 'openrouter';
     mainModelHasVision?: boolean;
     mainModelHasAudio?: boolean;
     onOllamaResponse?: (model: string, inputTokens: number, outputTokens: number, durationMs: number) => void;
@@ -1090,6 +1093,7 @@ export class ModelRouter {
       ? new AnthropicProvider(opts.anthropicApiKey)
       : null;
     this.modelSource = opts.modelSource ?? 'auto';
+    this.cloudProvider = opts.cloudProvider ?? 'anthropic';
     this.ollama = opts.ollamaUrl
       ? new OllamaProvider(opts.ollamaUrl, opts.ollamaModel || 'qwen3:4b')
       : null;
@@ -1261,30 +1265,35 @@ export class ModelRouter {
       throw new Error('Claude Code mode selected but the CLI is not available. Make sure Claude Code is installed and authenticated.');
     }
 
-    // OpenRouter mode: always prefer OpenRouter, fall back to others
-    if (this.modelSource === 'openrouter') {
+    // Cloud mode: use the selected cloud provider (Anthropic or OpenRouter)
+    if (this.modelSource === 'cloud') {
+      if (this.cloudProvider === 'openrouter') {
+        // OpenRouter cloud provider
+        if (this.openrouter) {
+          const available = await this.openrouter.isAvailable();
+          if (available) return this.openrouter;
+        }
+        // Fall back to Anthropic → Ollama
+        if (this.anthropic) return this.anthropic;
+        if (this.ollama) {
+          const available = await this.ollama.isAvailable();
+          if (available) return this.ollama;
+        }
+        throw new Error('Cloud mode with OpenRouter selected but OpenRouter is not available. Check your API key or switch provider.');
+      }
+
+      // Anthropic cloud provider (default)
+      if (this.anthropic) return this.anthropic;
+      // Fall back to OpenRouter → Ollama
       if (this.openrouter) {
         const available = await this.openrouter.isAvailable();
         if (available) return this.openrouter;
       }
-      // Fall back to Anthropic → Ollama
-      if (this.anthropic) return this.anthropic;
       if (this.ollama) {
         const available = await this.ollama.isAvailable();
         if (available) return this.ollama;
       }
-      throw new Error('OpenRouter mode selected but OpenRouter is not available. Check your API key or switch to a different mode.');
-    }
-
-    // Cloud mode: always prefer Anthropic for all task types
-    if (this.modelSource === 'cloud') {
-      if (this.anthropic) return this.anthropic;
-      // Fall back to Ollama if Anthropic not configured
-      if (this.ollama) {
-        const available = await this.ollama.isAvailable();
-        if (available) return this.ollama;
-      }
-      throw new Error('Cloud mode selected but no Anthropic API key configured. Add an API key or switch to local mode.');
+      throw new Error('Cloud mode selected but no API key configured. Add an Anthropic or OpenRouter API key, or switch to local mode.');
     }
 
     // Local mode: prefer mlx (Apple Silicon) → llama-cpp (TurboQuant) → openai-compatible → Ollama → Anthropic
@@ -1458,6 +1467,20 @@ export class ModelRouter {
     if (source === 'claude-code' && !this.claudeCode) {
       this.claudeCode = new ClaudeCodeProvider();
     }
+  }
+
+  /** Update which cloud provider to use when modelSource === 'cloud'. */
+  setCloudProvider(provider: 'anthropic' | 'openrouter'): void {
+    this.cloudProvider = provider;
+    // Lazily create OpenRouter provider if key is available
+    if (provider === 'openrouter' && !this.openrouter && this._openRouterApiKey) {
+      this.openrouter = new OpenRouterProvider(this._openRouterApiKey);
+    }
+  }
+
+  /** Get the current cloud provider. */
+  getCloudProvider(): 'anthropic' | 'openrouter' {
+    return this.cloudProvider;
   }
 
   /** Get the OpenRouter provider directly (for status checks). */
