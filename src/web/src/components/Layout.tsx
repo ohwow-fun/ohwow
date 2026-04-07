@@ -32,6 +32,7 @@ import {
   Browser,
   Newspaper,
   Microphone,
+  Eye,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -67,6 +68,7 @@ const NAV_ITEMS: NavItem[] = [
   // Configure
   { path: '/webhook-events', label: 'Webhooks', icon: Plug, group: 'configure' },
   { path: '/browser', label: 'Browser', icon: Browser, group: 'configure' },
+  { path: '/eye', label: 'Eye', icon: Eye, group: 'configure' },
   { path: '/briefings', label: 'Briefings', icon: Newspaper, group: 'configure' },
   { path: '/podcast', label: 'Podcast', icon: Microphone, group: 'configure' },
   { path: '/knowledge', label: 'Knowledge', icon: BookOpen, group: 'configure' },

@@ -35,6 +35,7 @@ import { TeamPage } from './pages/Team';
 import { BrowserViewerPage } from './pages/BrowserViewer';
 import { BriefingsPage } from './pages/Briefings';
 import { PodcastPage } from './pages/Podcast';
+import { EyePage } from './pages/Eye';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -86,6 +87,7 @@ export function App() {
           <Route path="browser" element={<BrowserViewerPage />} />
           <Route path="briefings" element={<BriefingsPage />} />
           <Route path="podcast" element={<PodcastPage />} />
+          <Route path="eye" element={<EyePage />} />
           <Route path="chat" element={<Navigate to="/" replace />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
