@@ -40,6 +40,7 @@ import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
@@ -957,6 +958,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
     improvementScheduler.start().catch(err => {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
+
+    // Inner thoughts loop: background context accumulation for proactive greetings
+    const orchWorkspace = orchestrator?.getBrain()?.workspace;
+    if (orchWorkspace) {
+      const innerThoughts = new InnerThoughtsLoop(db, orchWorkspace, modelRouter, workspaceId);
+      innerThoughts.start();
+    }
 
     // Connector sync scheduler: periodically syncs data source connectors
     connectorSyncScheduler = new ConnectorSyncScheduler(db, workspaceId, connectorRegistry, bus);
