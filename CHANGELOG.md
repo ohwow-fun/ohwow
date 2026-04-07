@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.1] — 2026-04-07
+
+### Fixed
+- Bump vite to 6.4.2 to resolve CVE file-read and path-traversal vulnerabilities (GHSA-p9ff-h696-f583, GHSA-4w7w-66w2-5vf9)
+
 ## [0.5.0] — 2026-04-07
 
 ### Added
