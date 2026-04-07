@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.2] — 2026-04-07
+
+### Added
+- feat: add deliverables UI to local web dashboard
+- feat: add deliverables API routes for local dashboard
+- feat: add save_deliverable tool and enhance deliverables schema
+- feat: add BPP state sync to cloud control plane
+
+### Fixed
+- fix: L2 approval dead code and React key anti-patterns
+- fix: address QA audit findings for deliverables
+- fix: always create deliverables for task outputs
+- fix: remove "psychological" from BPP comments
+- fix: prevent infinite voice restart loop on local Eye page
+
+### Docs
+- docs: update README with AI agent comparison section
+
 ## [0.5.1] — 2026-04-07
 
 ### Fixed
