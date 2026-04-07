@@ -25,3 +25,6 @@ export type { ShouldSequenceInput, ShouldSequenceResult } from './should-sequenc
 
 export { decomposeIntoSequence } from './sequence-decomposer.js';
 export type { DecomposeInput } from './sequence-decomposer.js';
+
+export { checkAbstention } from './abstention-check.js';
+export type { AbstentionDecision, AbstentionCheckInput } from './abstention-check.js';

@@ -17,8 +17,11 @@ import type {
   SequenceResult,
   SequenceEvent,
 } from './types.js';
+import Anthropic from '@anthropic-ai/sdk';
+import type { ModelRouter } from '../../execution/model-router.js';
 import { topologicalSort } from './topological-sort.js';
 import { buildPredecessorContext } from './predecessor-context.js';
+import { checkAbstention } from './abstention-check.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================================
@@ -31,6 +34,12 @@ export interface ExecuteSequenceOptions {
   workspaceId: string;
   definition: SequenceDefinition;
   onEvent?: (event: SequenceEvent) => void;
+  /** Enable abstention checks before each step (default: true). */
+  enableAbstention?: boolean;
+  /** Anthropic client for abstention checks (if available). */
+  anthropic?: Anthropic;
+  /** Model router for abstention checks via Ollama. */
+  modelRouter?: ModelRouter | null;
   /** Timeout per step in ms (default: 120s). */
   stepTimeoutMs?: number;
 }
@@ -135,8 +144,80 @@ export async function executeSequence(
       stepIds: wave.map((s) => s.id),
     });
 
-    // Execute steps in this wave concurrently
-    const wavePromises = wave.map((step) =>
+    // Abstention check phase
+    const abstentionEnabled = options.enableAbstention !== false;
+    let stepsToExecute = wave;
+
+    if (abstentionEnabled && wave.length > 0 && (options.anthropic || options.modelRouter)) {
+      const abstentionResults = await Promise.all(
+        wave.map(async (step) => {
+          const predecessors = step.dependsOn
+            .map((depId) => completedResults.get(depId))
+            .filter((r): r is SequenceStepResult => r !== undefined && r.status === 'completed');
+          const predecessorSummary = predecessors
+            .map((p) => {
+              const name = agentNames.get(p.agentId) ?? 'Agent';
+              return `${name}: ${(p.output ?? '').slice(0, 200)}`;
+            })
+            .join('\n');
+
+          const decision = await checkAbstention({
+            agentName: agentNames.get(step.agentId) ?? 'Agent',
+            agentRole: step.expectedRole ?? '',
+            stepPrompt: step.prompt,
+            predecessorSummary,
+            anthropic: options.anthropic,
+            modelRouter: options.modelRouter,
+          });
+
+          return { step, decision };
+        })
+      );
+
+      const participating = abstentionResults.filter((r) => r.decision.participate);
+      const abstaining = abstentionResults.filter((r) => !r.decision.participate);
+
+      // Anchor agent: if ALL abstain, force the highest-confidence one
+      if (participating.length === 0 && abstaining.length > 0) {
+        const anchor = abstaining.reduce((best, curr) =>
+          curr.decision.confidence > best.decision.confidence ? curr : best
+        );
+        stepsToExecute = [anchor.step];
+
+        for (const { step, decision } of abstaining) {
+          if (step.id === anchor.step.id) continue;
+          const abstainResult: SequenceStepResult = {
+            stepId: step.id, agentId: step.agentId, status: 'abstained',
+            abstentionReason: decision.reason, wave: waveNumber,
+            inputTokens: 0, outputTokens: 0, costCents: 0,
+          };
+          allResults.push(abstainResult);
+          completedResults.set(step.id, abstainResult);
+          emit(onEvent, {
+            type: 'step_abstained', stepId: step.id, agentId: step.agentId,
+            agentName: agentNames.get(step.agentId) ?? 'Agent', reason: decision.reason,
+          });
+        }
+      } else {
+        stepsToExecute = participating.map((r) => r.step);
+        for (const { step, decision } of abstaining) {
+          const abstainResult: SequenceStepResult = {
+            stepId: step.id, agentId: step.agentId, status: 'abstained',
+            abstentionReason: decision.reason, wave: waveNumber,
+            inputTokens: 0, outputTokens: 0, costCents: 0,
+          };
+          allResults.push(abstainResult);
+          completedResults.set(step.id, abstainResult);
+          emit(onEvent, {
+            type: 'step_abstained', stepId: step.id, agentId: step.agentId,
+            agentName: agentNames.get(step.agentId) ?? 'Agent', reason: decision.reason,
+          });
+        }
+      }
+    }
+
+    // Execute participating steps concurrently
+    const wavePromises = stepsToExecute.map((step) =>
       executeStep({
         step,
         wave: waveNumber,
@@ -155,7 +236,7 @@ export async function executeSequence(
 
     for (let i = 0; i < waveResults.length; i++) {
       const settled = waveResults[i];
-      const step = wave[i];
+      const step = stepsToExecute[i];
 
       let result: SequenceStepResult;
       if (settled.status === 'fulfilled') {
