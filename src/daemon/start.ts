@@ -422,8 +422,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
     logger.info(`[daemon] OpenRouter model changed to: ${payload.model}`);
   });
   bus.on('cloud:provider-changed', (payload: { provider: string; model?: string }) => {
-    modelRouter.setCloudProvider(payload.provider as 'anthropic' | 'openrouter');
-    if (payload.model) modelRouter.setOpenRouterModel(payload.model);
+    const prov = payload.provider as 'anthropic' | 'openrouter';
+    modelRouter.setCloudProvider(prov);
+    if (payload.model && prov === 'openrouter') {
+      modelRouter.setOpenRouterModel(payload.model);
+    }
     logger.info(`[daemon] Cloud provider changed to: ${payload.provider}`);
   });
 

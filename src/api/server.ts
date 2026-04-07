@@ -288,7 +288,7 @@ export function createServer(deps: ServerDeps): {
   }
   app.use(createVoiceRouter(voiceboxService || undefined));
   app.use(createPodcastRouter(vibeVoiceService || undefined));
-  app.use(createSettingsRouter(db));
+  app.use(createSettingsRouter(db, eventBus));
   app.use(createModelsRouter(db, eventBus, orchestrator));
   app.use(createTriggersRouter(db, triggerEvaluator || undefined, onScheduleChange));
   app.use(createAutomationsRouter(db, workspaceId || 'local', triggerEvaluator || undefined, onScheduleChange));

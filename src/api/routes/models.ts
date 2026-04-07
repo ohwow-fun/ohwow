@@ -431,6 +431,7 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
       // Persist to config file
       const configUpdate: Record<string, string> = { orchestratorModel: model };
       if (cloudProvider) configUpdate.cloudProvider = cloudProvider;
+      if (cloudProvider === 'openrouter') configUpdate.openRouterModel = model;
       updateConfigFile(configUpdate);
 
       // Update orchestrator in-memory if available
@@ -441,10 +442,26 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
         }
         if (cloudProvider) {
           orchestrator.setCloudProvider(cloudProvider);
+          // Update the specific provider's default model
+          const router = orchestrator.getModelRouter();
+          if (cloudProvider === 'openrouter' && router) {
+            router.setOpenRouterModel(model);
+          }
         }
       }
 
+      // Persist cloudProvider to runtime_settings
       if (cloudProvider) {
+        const { data: existingCP } = await db.from('runtime_settings')
+          .select('key').eq('key', 'cloud_provider').maybeSingle();
+        if (existingCP) {
+          await db.from('runtime_settings')
+            .update({ value: cloudProvider, updated_at: new Date().toISOString() })
+            .eq('key', 'cloud_provider');
+        } else {
+          await db.from('runtime_settings')
+            .insert({ key: 'cloud_provider', value: cloudProvider });
+        }
         eventBus?.emit('cloud:provider-changed' as string, { provider: cloudProvider, model });
       }
       eventBus?.emit('ollama:model-changed', { model });

@@ -220,6 +220,15 @@ export function ModelPicker({
     return () => { cancelled = true; };
   }, [step, source, apiFetch]);
 
+  // --- Filtered OpenRouter models (memoized for input handler + render consistency) ---
+  const filteredOrModels = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return orModels;
+    return orModels.filter(m =>
+      m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
+    );
+  }, [orModels, searchQuery]);
+
   // --- Filtered + flat list ---
   const matchesQuery = useCallback((tag: string, label: string, family?: string) => {
     const q = searchQuery.toLowerCase().trim();
@@ -472,14 +481,9 @@ export function ModelPicker({
         setCloudProviderIdx(1);
         return;
       }
-      const filtered = orModels.filter(m => {
-        const q = searchQuery.toLowerCase().trim();
-        if (!q) return true;
-        return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
-      });
       if (input === 'j' || key.downArrow) {
         setListIdx(i => {
-          const next = Math.min(i + 1, filtered.length - 1);
+          const next = Math.min(i + 1, filteredOrModels.length - 1);
           if (next >= scrollOffset + MAX_VISIBLE) setScrollOffset(next - MAX_VISIBLE + 1);
           return next;
         });
@@ -493,8 +497,8 @@ export function ModelPicker({
         });
         return;
       }
-      if (key.return && filtered.length > 0) {
-        const selected = filtered[listIdx];
+      if (key.return && filteredOrModels.length > 0) {
+        const selected = filteredOrModels[listIdx];
         if (selected) onSelect(selected.id, 'cloud', 'openrouter');
         return;
       }
@@ -756,19 +760,14 @@ export function ModelPicker({
 
   // --- OpenRouter model list ---
   if (step === 'openrouter_list') {
-    const filtered = orModels.filter(m => {
-      const q = searchQuery.toLowerCase().trim();
-      if (!q) return true;
-      return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
-    });
-    const visibleOR = filtered.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
-    const hasMoreOR = filtered.length > scrollOffset + MAX_VISIBLE;
+    const visibleOR = filteredOrModels.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
+    const hasMoreOR = filteredOrModels.length > scrollOffset + MAX_VISIBLE;
     const hasAboveOR = scrollOffset > 0;
 
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
         <Text bold>Switch Model  <Text color="yellow">{'\u2295'} OpenRouter</Text></Text>
-        <Text color="gray" dimColor>{filtered.length} model{filtered.length !== 1 ? 's' : ''}</Text>
+        <Text color="gray" dimColor>{filteredOrModels.length} model{filteredOrModels.length !== 1 ? 's' : ''}</Text>
 
         {/* Search input */}
         <Box marginTop={1}>
@@ -779,7 +778,7 @@ export function ModelPicker({
 
         {orLoading ? (
           <Box marginTop={1}><Text color="gray">Loading models...</Text></Box>
-        ) : filtered.length === 0 ? (
+        ) : filteredOrModels.length === 0 ? (
           <Box marginTop={1}><Text color="gray">{searchQuery ? 'No models match your search' : 'No models available'}</Text></Box>
         ) : (
           <Box marginTop={1} flexDirection="column">
@@ -803,7 +802,7 @@ export function ModelPicker({
                 </Text>
               );
             })}
-            {hasMoreOR && <Text color="gray" dimColor>  {'\u2193'} {filtered.length - scrollOffset - MAX_VISIBLE} more below</Text>}
+            {hasMoreOR && <Text color="gray" dimColor>  {'\u2193'} {filteredOrModels.length - scrollOffset - MAX_VISIBLE} more below</Text>}
           </Box>
         )}
 

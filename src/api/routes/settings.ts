@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import type { EventEmitter } from 'events';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 
 const ALLOWED_SETTINGS = new Set([
@@ -35,7 +36,7 @@ function maskSensitiveValue(value: string): string {
   return '****' + value.slice(-4);
 }
 
-export function createSettingsRouter(db: DatabaseAdapter): Router {
+export function createSettingsRouter(db: DatabaseAdapter, eventBus?: EventEmitter): Router {
   const router = Router();
 
   // Read a single setting
@@ -106,6 +107,12 @@ export function createSettingsRouter(db: DatabaseAdapter): Router {
           res.status(500).json({ error: error.message });
           return;
         }
+      }
+
+      // Notify daemon of key changes that require runtime updates
+      if (eventBus) {
+        if (key === 'openrouter_api_key') eventBus.emit('openrouter:key-changed', { key: String(value) });
+        if (key === 'openrouter_model') eventBus.emit('openrouter:model-changed', { model: String(value) });
       }
 
       const displayValue = SENSITIVE_SETTINGS.has(key) ? maskSensitiveValue(String(value)) : String(value);
