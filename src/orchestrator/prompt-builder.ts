@@ -14,6 +14,7 @@ import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import { retrieveRelevantMemories, retrieveKnowledgeChunks, formatRelevantMemories, formatRagChunks } from '../lib/rag/retrieval.js';
 import { loadOrchestratorMemory } from './session-store.js';
 import { logger } from '../lib/logger.js';
+import { getGitContext, isStaleBranch } from '../lib/git-utils.js';
 
 export interface PromptBuilderDeps {
   db: DatabaseAdapter;
@@ -252,6 +253,24 @@ export async function buildTargetedPrompt(
     platform,
     learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
     learnedSkills: (skillsResult.data || []) as SkillRow[],
+    gitContext: (() => {
+      if (!need('filesystem') || !deps.workingDirectory) return undefined;
+      try {
+        const gc = getGitContext(deps.workingDirectory);
+        if (!gc) return undefined;
+        const stale = isStaleBranch(deps.workingDirectory);
+        return {
+          branch: gc.branch,
+          commitsBehindMain: gc.commitsBehindMain,
+          uncommittedChanges: gc.uncommittedChanges,
+          mainBranch: gc.mainBranch,
+          isStale: stale?.isStale ?? false,
+          staleBranchWarning: stale?.recommendation,
+          recentCommits: gc.recentCommits,
+        };
+      } catch { return undefined; }
+    })(),
+    hasLspTools: need('filesystem') || need('dev'),
   };
 
   // Fire-and-forget: increment times_applied for principles injected into the prompt

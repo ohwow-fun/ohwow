@@ -10,8 +10,20 @@ describe('classifyError', () => {
     expect(classifyError('ETIMEDOUT')).toBe('transient');
   });
 
-  it('classifies 429 Too Many Requests as transient', () => {
-    expect(classifyError('429 Too Many Requests')).toBe('transient');
+  it('classifies 429 Too Many Requests as rate_limit', () => {
+    expect(classifyError('429 Too Many Requests')).toBe('rate_limit');
+  });
+
+  it('classifies 401 Unauthorized as auth', () => {
+    expect(classifyError('401 Unauthorized')).toBe('auth');
+  });
+
+  it('classifies context length exceeded as context_overflow', () => {
+    expect(classifyError('context length exceeded')).toBe('context_overflow');
+  });
+
+  it('classifies unknown tool as tool_not_found', () => {
+    expect(classifyError('unknown tool: foo_bar')).toBe('tool_not_found');
   });
 
   it('classifies JSON.parse error as parse', () => {

@@ -60,6 +60,18 @@ export interface BuildLocalSystemPromptArgs {
   learnedPrinciples?: { id: string; rule: string; category: string }[];
   /** Learned skills/procedures from self-improvement cycle */
   learnedSkills?: { id: string; name: string; description: string }[];
+  /** Git context for the working directory */
+  gitContext?: {
+    branch: string;
+    commitsBehindMain: number;
+    uncommittedChanges: number;
+    mainBranch: string;
+    isStale: boolean;
+    staleBranchWarning?: string;
+    recentCommits?: string[];
+  };
+  /** Whether LSP code intelligence tools are available */
+  hasLspTools?: boolean;
 }
 
 /**
@@ -673,7 +685,16 @@ Browser tools handle web content inside Chromium. If you encounter native OS int
   return `You are the Orchestrator — an AI business success strategist and operations partner for ${business?.name || 'the business'}, running locally in the user's terminal.
 
 You are sharp, data-driven, and action-oriented. Think of yourself as the COO who reads every metric before the morning standup. You lead with insight, not just information. Your job is to help the founder win — every single day.
-${cwdSection}
+${cwdSection}${args.gitContext ? `
+## Git Context
+Branch: ${args.gitContext.branch}${args.gitContext.uncommittedChanges > 0 ? `\nUncommitted changes: ${args.gitContext.uncommittedChanges} file${args.gitContext.uncommittedChanges !== 1 ? 's' : ''}` : ''}${args.gitContext.isStale ? `\nWARNING: Branch is ${args.gitContext.commitsBehindMain} commits behind ${args.gitContext.mainBranch}. ${args.gitContext.staleBranchWarning || `Consider rebasing onto ${args.gitContext.mainBranch}.`}` : ''}${args.gitContext.recentCommits?.length ? `\nRecent commits:\n${args.gitContext.recentCommits.slice(0, 3).map(c => `  ${c}`).join('\n')}` : ''}` : ''}${args.hasLspTools ? `
+## Code Intelligence (LSP)
+Language server tools are available for real-time code analysis:
+- lsp_diagnostics: Get compiler errors/warnings for a file. Use after editing to verify correctness.
+- lsp_hover: Get type info at a position.
+- lsp_go_to_definition: Jump to where a symbol is defined.
+- lsp_references: Find all usages of a symbol.
+Line and character numbers are 1-based. Servers start automatically on first use.` : ''}
 ## Current Context
 - Date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
 - Time: ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
