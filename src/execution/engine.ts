@@ -1779,8 +1779,8 @@ export class RuntimeEngine {
         toolsUsed: reactTrace.flatMap(step => step.actions.map(a => a.tool)),
       });
 
-      // Create deliverable record for tasks needing approval
-      if (responseType === 'deliverable' && finalStatus === 'needs_approval') {
+      // Create deliverable record for all deliverable responses
+      if (responseType === 'deliverable') {
         try {
           const { data: taskRow } = await this.db
             .from('agent_workforce_tasks')
@@ -1812,10 +1812,40 @@ export class RuntimeEngine {
             provider: deferredAction?.provider || null,
             title: deliverableTitle,
             content: JSON.stringify(deferredAction?.params || { text: cleanContent }),
-            status: 'pending_review',
+            status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
           });
         } catch (err) {
           logger.error({ err }, '[RuntimeEngine] Deliverable creation failed');
+        }
+      }
+
+      // Auto-deliverable fallback: if agent didn't tag but output is substantial
+      if (!responseType && cleanContent) {
+        try {
+          const { data: taskMeta } = await this.db
+            .from('agent_workforce_tasks')
+            .select('source_type')
+            .eq('id', taskId)
+            .single();
+          const sourceType = (taskMeta as Record<string, unknown> | null)?.source_type as string | null;
+          const auto = this.shouldAutoCreateDeliverable(cleanContent, {
+            title: task.title,
+            sourceType,
+          });
+          if (auto.create) {
+            await this.db.from('agent_workforce_deliverables').insert({
+              workspace_id: workspaceId,
+              task_id: taskId,
+              agent_id: agentId,
+              deliverable_type: auto.inferredType,
+              title: task.title,
+              content: JSON.stringify({ text: cleanContent }),
+              status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
+              auto_created: 1,
+            });
+          }
+        } catch (err) {
+          logger.error({ err }, '[RuntimeEngine] Auto-deliverable fallback failed');
         }
       }
 
@@ -2836,13 +2866,11 @@ export class RuntimeEngine {
     const biz = this.businessContext;
     const memorySection = opts.memoryDocument ? `\n${opts.memoryDocument}\n` : '';
     const knowledgeSection = opts.knowledgeDocument ? `\n${opts.knowledgeDocument}\n` : '';
-    const classificationSection = opts.approvalRequired
-      ? `\n## Response Classification
+    const classificationSection = `\n## Response Classification
 Before your response content, include exactly one hidden metadata tag on the very first line:
-- <!--response_meta:{"type":"deliverable"}--> when your response contains a concrete work product ready for review
-- <!--response_meta:{"type":"informational"}--> when your response is analysis, advice, brainstorming, or a report
-${DRAFT_TOOL_PROMPT_HINT}`
-      : '';
+- <!--response_meta:{"type":"deliverable"}--> when your response contains a concrete work product (a draft, email, article, proposal, report, plan, code, creative content, data analysis, or any actionable output)
+- <!--response_meta:{"type":"informational"}--> when your response is a brief answer, status update, clarification, or acknowledgment
+${DRAFT_TOOL_PROMPT_HINT}`;
     const webSearchSection = opts.webSearchEnabled
       ? `\n## Web Search
 You have web search capability. Use it whenever you need current or factual information.
@@ -2898,5 +2926,88 @@ ${opts.agentPrompt}`;
       // Unparseable
     }
     return { type: null, cleanContent: content };
+  }
+
+  /** Heuristic: determine if an untagged response should auto-create a deliverable */
+  private shouldAutoCreateDeliverable(
+    content: string,
+    task: { title: string; sourceType?: string | null },
+  ): { create: boolean; inferredType: string } {
+    const NO = { create: false, inferredType: 'other' };
+
+    // Skip trivially short responses
+    if (content.length < 200) return NO;
+
+    // Skip system/heartbeat/internal tasks
+    const lowerTitle = task.title.toLowerCase();
+    const systemPrefixes = ['heartbeat', 'health check', 'system:', 'internal:', 'ping', 'cron:'];
+    if (systemPrefixes.some(p => lowerTitle.startsWith(p))) return NO;
+    if (task.sourceType === 'heartbeat' || task.sourceType === 'system') return NO;
+
+    // Structure signals
+    const hasHeaders = /^#{1,3}\s/m.test(content);
+    const hasList = /^[-*]\s/m.test(content) || /^\d+\.\s/m.test(content);
+    const hasCodeBlock = /```[\s\S]*?```/.test(content);
+    const hasTable = /\|.*\|.*\|/m.test(content);
+    const structureScore = [hasHeaders, hasList, hasCodeBlock, hasTable].filter(Boolean).length;
+
+    // Substantial content (>500 chars) with any structure = deliverable
+    if (content.length > 500 && structureScore >= 1) {
+      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
+    }
+
+    // Very long content (>1500 chars) even without structure
+    if (content.length > 1500) {
+      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
+    }
+
+    // Medium content (200-500) with strong structure (2+ signals)
+    if (content.length >= 200 && structureScore >= 2) {
+      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
+    }
+
+    return NO;
+  }
+
+  /** Infer deliverable type from content patterns and task title */
+  private inferTypeFromContent(content: string, lowerTitle: string): string {
+    // Email patterns
+    if (/subject:|dear |regards|sincerely/i.test(content) &&
+        (lowerTitle.includes('email') || lowerTitle.includes('outreach') || lowerTitle.includes('message'))) {
+      return 'email';
+    }
+
+    // Code patterns
+    if (/```(ts|js|python|tsx|jsx|rust|go|java|sql|html|css|sh|bash)/i.test(content) ||
+        lowerTitle.includes('code') || lowerTitle.includes('implement') || lowerTitle.includes('script')) {
+      return 'code';
+    }
+
+    // Report patterns
+    if (lowerTitle.includes('report') || lowerTitle.includes('analysis') || lowerTitle.includes('audit') ||
+        /executive summary|key findings|recommendations|conclusion/i.test(content)) {
+      return 'report';
+    }
+
+    // Plan patterns
+    if (lowerTitle.includes('plan') || lowerTitle.includes('strategy') || lowerTitle.includes('roadmap') ||
+        /phase \d|step \d|timeline|milestone/i.test(content)) {
+      return 'plan';
+    }
+
+    // Data patterns
+    if (lowerTitle.includes('data') || lowerTitle.includes('spreadsheet') || lowerTitle.includes('csv') ||
+        /\|.*\|.*\|/m.test(content)) {
+      return 'data';
+    }
+
+    // Creative patterns
+    if (lowerTitle.includes('write') || lowerTitle.includes('draft') || lowerTitle.includes('blog') ||
+        lowerTitle.includes('post') || lowerTitle.includes('article') || lowerTitle.includes('copy') ||
+        lowerTitle.includes('creative') || lowerTitle.includes('story')) {
+      return 'creative';
+    }
+
+    return 'document';
   }
 }
