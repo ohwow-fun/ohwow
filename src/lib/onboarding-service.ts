@@ -185,7 +185,7 @@ export class OnboardingService {
       quickModel: '',
       ocrModel: '',
       openRouterApiKey: '',
-      openRouterModel: 'openrouter/optimus-alpha',
+      openRouterModel: 'deepseek/deepseek-v3.2',
       scraplingPort: 8100,
       scraplingAutoStart: true,
       scraplingProxy: '',

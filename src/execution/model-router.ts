@@ -798,6 +798,164 @@ export class OllamaProvider implements ModelProvider {
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
+/**
+ * Curated OpenRouter models — mirrors the cloud dashboard catalog.
+ * Organized by tier: each model has a specific role in the routing hierarchy.
+ *
+ * Tier 1 (primary): best quality-to-cost ratio per task type
+ * Tier 2 (premium): higher quality for complex/critical tasks
+ * Tier 3 (fallback): legacy or niche models
+ */
+export const CURATED_OPENROUTER_MODELS: OpenRouterModelInfo[] = [
+  // ── Tier 1: Primary models ──────────────────────────────────────────
+  {
+    id: 'google/gemini-3.1-flash-lite-preview',
+    name: 'Gemini 3.1 Flash Lite',
+    contextLength: 1_048_576,
+    pricing: { prompt: 0.00000025, completion: 0.0000015 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'deepseek/deepseek-v3.2',
+    name: 'DeepSeek V3.2',
+    contextLength: 163_840,
+    pricing: { prompt: 0.00000026, completion: 0.00000038 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
+  {
+    id: 'xiaomi/mimo-v2-flash',
+    name: 'MiMo-V2-Flash',
+    contextLength: 262_144,
+    pricing: { prompt: 0, completion: 0 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: true,
+  },
+  {
+    id: 'google/gemini-3.1-flash-image-preview',
+    name: 'Nano Banana 2 (image gen)',
+    contextLength: 65_536,
+    pricing: { prompt: 0.0000005, completion: 0.000003 },
+    supportsTools: false,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'qwen/qwen3.5-9b',
+    name: 'Qwen 3.5 9B',
+    contextLength: 262_144,
+    pricing: { prompt: 0.00000005, completion: 0.00000015 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'qwen/qwen3.5-35b-a3b',
+    name: 'Qwen 3.5 35B',
+    contextLength: 262_144,
+    pricing: { prompt: 0.00000016, completion: 0.0000013 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'google/gemini-3-flash-preview',
+    name: 'Gemini 3 Flash',
+    contextLength: 1_048_576,
+    pricing: { prompt: 0.0000005, completion: 0.000003 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  // ── Tier 2: Premium models ──────────────────────────────────────────
+  {
+    id: 'anthropic/claude-sonnet-4.6',
+    name: 'Claude Sonnet 4.6',
+    contextLength: 1_000_000,
+    pricing: { prompt: 0.000003, completion: 0.000015 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'deepseek/deepseek-r1',
+    name: 'DeepSeek R1',
+    contextLength: 64_000,
+    pricing: { prompt: 0.0000007, completion: 0.0000025 },
+    supportsTools: false,
+    supportsVision: false,
+    isFree: false,
+  },
+  {
+    id: 'google/gemini-3.1-pro-preview',
+    name: 'Gemini 3.1 Pro',
+    contextLength: 1_048_576,
+    pricing: { prompt: 0.000002, completion: 0.000012 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'xiaomi/mimo-v2-pro',
+    name: 'MiMo-V2-Pro',
+    contextLength: 1_048_576,
+    pricing: { prompt: 0.000001, completion: 0.000003 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
+  // ── Tier 3: Fallback / niche ────────────────────────────────────────
+  {
+    id: 'anthropic/claude-haiku-4.5',
+    name: 'Claude Haiku 4.5',
+    contextLength: 200_000,
+    pricing: { prompt: 0.000001, completion: 0.000005 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'anthropic/claude-opus-4.6',
+    name: 'Claude Opus 4.6',
+    contextLength: 1_000_000,
+    pricing: { prompt: 0.000005, completion: 0.000025 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'xiaomi/mimo-v2-omni',
+    name: 'MiMo-V2-Omni',
+    contextLength: 262_144,
+    pricing: { prompt: 0.0000004, completion: 0.000002 },
+    supportsTools: true,
+    supportsVision: true,
+    isFree: false,
+  },
+  {
+    id: 'mistralai/devstral-2512',
+    name: 'Devstral 2',
+    contextLength: 262_144,
+    pricing: { prompt: 0.00000005, completion: 0.00000022 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
+  {
+    id: 'qwen/qwen3.5-flash-02-23',
+    name: 'Qwen 3.5 Flash',
+    contextLength: 1_000_000,
+    pricing: { prompt: 0.00000007, completion: 0.00000026 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
+];
+
 /** Model info returned by OpenRouter's /models endpoint. */
 export interface OpenRouterModelInfo {
   id: string;
@@ -819,7 +977,7 @@ export class OpenRouterProvider implements ModelProvider {
   private _modelsCachedAt = 0;
   private static MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-  constructor(apiKey: string, defaultModel: string = 'openrouter/optimus-alpha') {
+  constructor(apiKey: string, defaultModel: string = 'deepseek/deepseek-v3.2') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
   }
@@ -1013,7 +1171,11 @@ export class OpenRouterProvider implements ModelProvider {
     }
   }
 
-  /** Fetch available models from OpenRouter with caching. */
+  /**
+   * Fetch available models from OpenRouter with caching.
+   * Returns curated models first (marked as recommended), then all others from the live API.
+   * Falls back to the curated catalog if the API is unreachable.
+   */
   async listModels(forceRefresh = false): Promise<OpenRouterModelInfo[]> {
     if (!forceRefresh && this._modelsCache && (Date.now() - this._modelsCachedAt) < OpenRouterProvider.MODELS_CACHE_TTL_MS) {
       return this._modelsCache;
@@ -1024,7 +1186,7 @@ export class OpenRouterProvider implements ModelProvider {
         headers: { 'Authorization': `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok) return this._modelsCache || [];
+      if (!response.ok) return this._modelsCache || CURATED_OPENROUTER_MODELS;
 
       const data = await response.json() as {
         data: Array<{
@@ -1037,7 +1199,8 @@ export class OpenRouterProvider implements ModelProvider {
         }>;
       };
 
-      this._modelsCache = (data.data || []).map(m => {
+      // Build live model list
+      const liveModels = (data.data || []).map(m => {
         const promptPrice = parseFloat(m.pricing?.prompt || '0');
         const completionPrice = parseFloat(m.pricing?.completion || '0');
         const modality = m.architecture?.modality || '';
@@ -1051,10 +1214,19 @@ export class OpenRouterProvider implements ModelProvider {
           isFree: promptPrice === 0 && completionPrice === 0,
         };
       });
+
+      // Curated models first (with live data if available), then remaining live models
+      const curatedIds = new Set(CURATED_OPENROUTER_MODELS.map(m => m.id));
+      const liveById = new Map(liveModels.map(m => [m.id, m]));
+
+      const curated = CURATED_OPENROUTER_MODELS.map(c => liveById.get(c.id) || c);
+      const rest = liveModels.filter(m => !curatedIds.has(m.id));
+
+      this._modelsCache = [...curated, ...rest];
       this._modelsCachedAt = Date.now();
       return this._modelsCache;
     } catch {
-      return this._modelsCache || [];
+      return this._modelsCache || CURATED_OPENROUTER_MODELS;
     }
   }
 
@@ -1169,7 +1341,7 @@ export class ModelRouter {
       ? new OllamaProvider(opts.ollamaUrl, opts.quickModel)
       : null;
     this.openrouter = opts.openRouterApiKey
-      ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'openrouter/optimus-alpha')
+      ? new OpenRouterProvider(opts.openRouterApiKey, opts.openRouterModel || 'deepseek/deepseek-v3.2')
       : null;
     this.claudeCode = this.modelSource === 'claude-code'
       ? new ClaudeCodeProvider(opts.claudeCodeCliPath, opts.claudeCodeCliModel)

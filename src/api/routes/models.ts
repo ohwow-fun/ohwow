@@ -12,6 +12,7 @@ import { MODEL_CATALOG, isModelInstalled, getMLXModelId } from '../../lib/ollama
 import { detectDevice, getMemoryTier } from '../../lib/device-info.js';
 import { isOllamaRunning, listInstalledModels, unloadModel, loadModel, pullModel } from '../../lib/ollama-installer.js';
 import { updateConfigFile } from '../../config.js';
+import { CURATED_OPENROUTER_MODELS } from '../../execution/model-router.js';
 import type { LocalOrchestrator } from '../../orchestrator/local-orchestrator.js';
 
 const OLLAMA_URL = process.env.OHWOW_OLLAMA_URL || 'http://localhost:11434';
@@ -492,14 +493,19 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: TypedEventBus
         .maybeSingle();
       const activeModel = (modelSetting as { value: string } | null)?.value || '';
 
+      // Curated model IDs for the UI to highlight as "recommended"
+      const curatedIds = CURATED_OPENROUTER_MODELS.map(m => m.id);
+
       if (!apiKey) {
-        res.json({ data: { models: [], configured: false, activeModel } });
+        // Return curated catalog even without a key (for browsing)
+        res.json({ data: { models: CURATED_OPENROUTER_MODELS, curatedIds, configured: false, activeModel } });
         return;
       }
 
       // Fetch live models via the orchestrator's OpenRouter provider
+      // (returns curated first, then all others from the live API)
       const provider = orchestrator?.getModelRouter()?.getOpenRouterProvider();
-      let models = provider ? await provider.listModels() : [];
+      let models = provider ? await provider.listModels() : CURATED_OPENROUTER_MODELS;
 
       // Apply filters from query params
       const search = (req.query.search as string || '').toLowerCase().trim();
@@ -517,6 +523,7 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: TypedEventBus
       res.json({
         data: {
           models,
+          curatedIds,
           configured: true,
           activeModel,
         },

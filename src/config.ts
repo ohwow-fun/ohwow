@@ -61,7 +61,7 @@ export interface RuntimeConfig {
   ocrModel: string;
   /** OpenRouter API key for free frontier models */
   openRouterApiKey: string;
-  /** OpenRouter model ID (default: openrouter/optimus-alpha) */
+  /** OpenRouter model ID (default: deepseek/deepseek-v3.2) */
   openRouterModel: string;
   /** Port for the Scrapling sidecar server (default: 8100) */
   scraplingPort: number;
@@ -253,7 +253,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     quickModel: process.env.OHWOW_QUICK_MODEL || fileConfig.quickModel || '',
     ocrModel: process.env.OHWOW_OCR_MODEL || fileConfig.ocrModel || '',
     openRouterApiKey: process.env.OPENROUTER_API_KEY || fileConfig.openRouterApiKey || '',
-    openRouterModel: process.env.OPENROUTER_MODEL || fileConfig.openRouterModel || 'openrouter/optimus-alpha',
+    openRouterModel: process.env.OPENROUTER_MODEL || fileConfig.openRouterModel || 'deepseek/deepseek-v3.2',
     scraplingPort: parseInt(process.env.OHWOW_SCRAPLING_PORT || '', 10) || fileConfig.scraplingPort || 8100,
     scraplingAutoStart: process.env.OHWOW_SCRAPLING_AUTO_START === 'false' ? false : (fileConfig.scraplingAutoStart !== false),
     scraplingProxy: process.env.OHWOW_SCRAPLING_PROXY || fileConfig.scraplingProxy || '',
