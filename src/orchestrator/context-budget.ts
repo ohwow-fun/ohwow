@@ -335,7 +335,7 @@ export function preflightCheck(opts: {
 }): PreflightResult {
   const reserved = opts.reservedForResponse ?? 4096;
   const warnPct = opts.warnPct ?? 90;
-  const usableCapacity = opts.modelCapacity - reserved;
+  const usableCapacity = Math.max(1, opts.modelCapacity - reserved);
 
   let totalTokens = estimateTokens(opts.systemPrompt);
   for (const msg of opts.messages) {

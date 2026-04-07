@@ -3,7 +3,7 @@
  * Handles initialization, document sync, and typed request methods.
  */
 
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, statSync, existsSync } from 'fs';
 import { pathToFileURL } from 'url';
 import { logger } from '../lib/logger.js';
 import { LspTransport } from './lsp-transport.js';
@@ -77,9 +77,19 @@ export class LspClient {
 
   /** Ensure a document is open and up-to-date. Reopens if file has changed on disk. */
   private async ensureDocument(filePath: string): Promise<string> {
+    if (!existsSync(filePath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+
     const uri = pathToFileURL(filePath).toString();
     const existing = this.openDocuments.get(uri);
-    const currentMtime = statSync(filePath).mtimeMs;
+
+    let currentMtime: number;
+    try {
+      currentMtime = statSync(filePath).mtimeMs;
+    } catch (err) {
+      throw new Error(`Cannot access file: ${filePath} (${err instanceof Error ? err.message : 'unknown error'})`);
+    }
 
     if (existing && existing.mtime === currentMtime) return uri;
 
@@ -90,7 +100,13 @@ export class LspClient {
       });
     }
 
-    const content = readFileSync(filePath, 'utf-8');
+    // Skip binary files (check for null bytes in first 8KB)
+    const buf = readFileSync(filePath);
+    const sample = buf.subarray(0, 8192);
+    if (sample.includes(0)) {
+      throw new Error(`File appears to be binary: ${filePath}. LSP only supports text files.`);
+    }
+    const content = buf.toString('utf-8');
     const version = (existing?.version ?? 0) + 1;
 
     this.transport.notify('textDocument/didOpen', {

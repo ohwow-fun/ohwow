@@ -25,9 +25,9 @@ function toPosition(line: number, character: number) {
 function uriToRelative(uri: string, cwd: string): string {
   try {
     const abs = fileURLToPath(uri);
-    if (abs.startsWith(cwd)) {
-      const rel = abs.slice(cwd.length);
-      return rel.startsWith('/') ? rel.slice(1) : rel;
+    const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
+    if (abs.startsWith(cwdWithSlash)) {
+      return abs.slice(cwdWithSlash.length);
     }
     return abs;
   } catch {
@@ -111,7 +111,7 @@ export async function lspHover(
   const file = input.file as string;
   const line = input.line as number;
   const character = input.character as number;
-  if (!file || !line || !character) return { success: false, error: 'Missing required parameters: file, line, character' };
+  if (!file || line == null || character == null) return { success: false, error: 'Missing required parameters: file, line, character' };
   if (!ctx.lspManager) return { success: false, error: 'LSP is not available.' };
 
   const filePath = resolveFile(ctx, file);
@@ -134,7 +134,7 @@ export async function lspGoToDefinition(
   const file = input.file as string;
   const line = input.line as number;
   const character = input.character as number;
-  if (!file || !line || !character) return { success: false, error: 'Missing required parameters: file, line, character' };
+  if (!file || line == null || character == null) return { success: false, error: 'Missing required parameters: file, line, character' };
   if (!ctx.lspManager) return { success: false, error: 'LSP is not available.' };
 
   const filePath = resolveFile(ctx, file);
@@ -171,7 +171,7 @@ export async function lspReferences(
   const file = input.file as string;
   const line = input.line as number;
   const character = input.character as number;
-  if (!file || !line || !character) return { success: false, error: 'Missing required parameters: file, line, character' };
+  if (!file || line == null || character == null) return { success: false, error: 'Missing required parameters: file, line, character' };
   if (!ctx.lspManager) return { success: false, error: 'LSP is not available.' };
 
   const filePath = resolveFile(ctx, file);
@@ -210,7 +210,7 @@ export async function lspCompletions(
   const file = input.file as string;
   const line = input.line as number;
   const character = input.character as number;
-  if (!file || !line || !character) return { success: false, error: 'Missing required parameters: file, line, character' };
+  if (!file || line == null || character == null) return { success: false, error: 'Missing required parameters: file, line, character' };
   if (!ctx.lspManager) return { success: false, error: 'LSP is not available.' };
 
   const filePath = resolveFile(ctx, file);

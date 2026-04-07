@@ -39,7 +39,7 @@ export function classifyError(error: string | Error): ErrorCategory {
   if (/429|rate.?limit|too many requests|quota.*exceeded/i.test(msg)) return 'rate_limit';
   if (/context.*length|token.*limit|too.*long|maximum.*context|content.*too.*large/i.test(msg)) return 'context_overflow';
   if (/unknown.?tool|no such tool|tool.*not.*found/i.test(msg)) return 'tool_not_found';
-  if (/compile|type\s*error|cannot find module|unexpected.*eof|unterminated/i.test(msg)) return 'compile_error';
+  if (/compile|cannot find module|unexpected.*eof|unterminated|type\s*error(?!.*(?:fetch|network|connect))/i.test(msg)) return 'compile_error';
   if (/conflict|stale|outdated|merge conflict|diverged|behind.*main/i.test(msg)) return 'stale_state';
   if (NETWORK_PATTERNS.some(p => p.test(msg))) return 'transient';
   if (/parse|json|syntax|unexpected token/i.test(msg)) return 'parse';
@@ -82,8 +82,13 @@ const RECOVERY_RECIPES: Record<ErrorCategory, RecoveryRecipe> = {
     },
   },
   context_overflow: {
-    description: 'Auto-trim context and retry',
-    action: () => ({ recovered: true, action: 'context_trimmed', shouldRetry: true }),
+    description: 'Signal context overflow to caller for trimming',
+    action: () => ({
+      recovered: false,
+      action: 'context_overflow_detected',
+      shouldRetry: false,
+      userMessage: 'Request exceeds model context window. The conversation will be automatically trimmed.',
+    }),
   },
   auth: {
     description: 'Surface authentication error to user',
@@ -95,8 +100,13 @@ const RECOVERY_RECIPES: Record<ErrorCategory, RecoveryRecipe> = {
     }),
   },
   parse: {
-    description: 'Retry with cleaned input',
-    action: () => ({ recovered: true, action: 'retry_parse', shouldRetry: true }),
+    description: 'Surface parse error for correction',
+    action: (ctx) => ({
+      recovered: false,
+      action: 'parse_error_surfaced',
+      shouldRetry: false,
+      userMessage: `Malformed response: ${ctx.error.message}`,
+    }),
   },
   tool_not_found: {
     description: 'Suggest alternative tools',
@@ -202,7 +212,7 @@ export async function retryTransient<T>(
       const category = classifyError(lastError);
 
       // Only retry transient errors
-      if (category !== 'transient' || attempt === maxRetries) {
+      if (category !== 'transient' || attempt === effectiveRetries) {
         throw lastError;
       }
 

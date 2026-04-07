@@ -7,6 +7,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { logger } from '../lib/logger.js';
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_BUFFER_SIZE = 50 * 1024 * 1024; // 50 MB safety cap
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -21,6 +22,7 @@ export class LspTransport {
   private buffer = Buffer.alloc(0);
   private onNotification?: (method: string, params: unknown) => void;
   private _alive = false;
+  private _destroyed = false;
 
   constructor(
     private command: string,
@@ -40,25 +42,39 @@ export class LspTransport {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this._alive = true;
+    this._destroyed = false;
 
     this.process.stdout!.on('data', (chunk: Buffer) => this.handleData(chunk));
     this.process.stderr!.on('data', (chunk: Buffer) => {
       logger.debug({ stderr: chunk.toString().slice(0, 200) }, '[LSP] Server stderr');
     });
+
+    // Handle stdin errors (broken pipe when server crashes)
+    this.process.stdin!.on('error', (err) => {
+      logger.debug({ err: err.message }, '[LSP] stdin error (server may have crashed)');
+    });
+
     this.process.on('exit', (code) => {
       this._alive = false;
       logger.info({ code, command: this.command }, '[LSP] Server exited');
-      // Reject all pending requests
-      for (const [, pending] of this.pendingRequests) {
-        clearTimeout(pending.timer);
-        pending.reject(new Error(`LSP server exited with code ${code}`));
-      }
-      this.pendingRequests.clear();
+      this.rejectAllPending(new Error(`LSP server exited with code ${code}`));
     });
+
     this.process.on('error', (err) => {
       this._alive = false;
       logger.error({ err, command: this.command }, '[LSP] Server error');
+      // Reject pending requests on spawn failure (error may fire without exit)
+      this.rejectAllPending(err instanceof Error ? err : new Error(String(err)));
     });
+  }
+
+  /** Reject all pending requests and clear the map. */
+  private rejectAllPending(reason: Error): void {
+    for (const [, pending] of this.pendingRequests) {
+      clearTimeout(pending.timer);
+      pending.reject(reason);
+    }
+    this.pendingRequests.clear();
   }
 
   /** Send a JSON-RPC request and wait for the response. */
@@ -95,34 +111,45 @@ export class LspTransport {
     this.process.stdin!.write(frame);
   }
 
-  /** Kill the server process. */
+  /** Kill the server process. Safe to call multiple times. */
   async destroy(): Promise<void> {
-    if (!this.process) return;
+    if (this._destroyed || !this.process) return;
+    this._destroyed = true;
     this._alive = false;
 
-    for (const [, pending] of this.pendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error('LSP transport destroyed'));
-    }
-    this.pendingRequests.clear();
+    this.rejectAllPending(new Error('LSP transport destroyed'));
 
-    this.process.kill('SIGTERM');
+    const proc = this.process;
+    this.process = null;
+
+    try {
+      proc.kill('SIGTERM');
+    } catch {
+      // Process may already be dead
+    }
+
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.process?.kill('SIGKILL');
+        try { proc.kill('SIGKILL'); } catch { /* already dead */ }
         resolve();
       }, 3000);
-      this.process!.on('exit', () => {
+      proc.on('exit', () => {
         clearTimeout(timer);
         resolve();
       });
     });
-    this.process = null;
   }
 
   /** Parse Content-Length framed messages from the server's stdout. */
   private handleData(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk]);
+
+    // Safety cap: discard buffer if it grows too large (malformed server output)
+    if (this.buffer.length > MAX_BUFFER_SIZE) {
+      logger.warn({ size: this.buffer.length }, '[LSP] Buffer exceeded safety cap, resetting');
+      this.buffer = Buffer.alloc(0);
+      return;
+    }
 
     while (true) {
       // Find header/body separator

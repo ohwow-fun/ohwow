@@ -326,10 +326,16 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     lspEnabled: process.env.OHWOW_LSP_ENABLED === 'false' ? false : (fileConfig.lspEnabled !== false),
     tokenPreflightEnabled: process.env.OHWOW_TOKEN_PREFLIGHT_ENABLED === 'false' ? false : (fileConfig.tokenPreflightEnabled !== false),
     tokenPreflightAction: (process.env.OHWOW_TOKEN_PREFLIGHT_ACTION as 'trim' | 'reject') || fileConfig.tokenPreflightAction || 'trim',
-    tokenPreflightWarnPct: parseInt(process.env.OHWOW_TOKEN_PREFLIGHT_WARN_PCT || '', 10) || fileConfig.tokenPreflightWarnPct || 90,
+    tokenPreflightWarnPct: (() => {
+      const env = parseInt(process.env.OHWOW_TOKEN_PREFLIGHT_WARN_PCT || '', 10);
+      return !isNaN(env) ? env : (fileConfig.tokenPreflightWarnPct ?? 90);
+    })(),
     recoveryAuditEnabled: process.env.OHWOW_RECOVERY_AUDIT_ENABLED === 'false' ? false : (fileConfig.recoveryAuditEnabled !== false),
     staleBranchPolicy: (process.env.OHWOW_STALE_BRANCH_POLICY as RuntimeConfig['staleBranchPolicy']) || fileConfig.staleBranchPolicy || 'warn',
-    staleBranchThreshold: parseInt(process.env.OHWOW_STALE_BRANCH_THRESHOLD || '', 10) || fileConfig.staleBranchThreshold || 5,
+    staleBranchThreshold: (() => {
+      const env = parseInt(process.env.OHWOW_STALE_BRANCH_THRESHOLD || '', 10);
+      return !isNaN(env) ? env : (fileConfig.staleBranchThreshold ?? 5);
+    })(),
   };
 
 

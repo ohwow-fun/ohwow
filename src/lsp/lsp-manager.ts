@@ -28,22 +28,24 @@ export class LspManager {
     const existing = this.clients.get(language);
     if (existing?.alive) return existing;
 
-    // Clean up dead client
+    // Clean up dead client (but don't clear startPromises — a concurrent start may be in progress)
     if (existing && !existing.alive) {
       this.clients.delete(language);
-      this.startPromises.delete(language);
     }
 
-    // Promise latch: prevent concurrent starts of the same server
+    // Promise latch: prevent concurrent starts of the same server.
+    // The promise stays in the map until it resolves/rejects, so all concurrent
+    // callers share the same startup attempt. No eager deletion.
     const pendingStart = this.startPromises.get(language);
     if (pendingStart) return pendingStart;
 
-    const startPromise = this.startClient(language);
+    const startPromise = this.startClient(language).finally(() => {
+      // Clean up the latch only after all awaiters have been notified
+      this.startPromises.delete(language);
+    });
     this.startPromises.set(language, startPromise);
 
-    const client = await startPromise;
-    this.startPromises.delete(language);
-    return client;
+    return startPromise;
   }
 
   private async startClient(language: LspLanguage): Promise<LspClient | null> {
@@ -81,11 +83,10 @@ export class LspManager {
   }
 
   /** Update the root path (e.g., when working directory changes). */
-  setRootPath(rootPath: string): void {
+  async setRootPath(rootPath: string): Promise<void> {
     if (rootPath !== this.rootPath) {
       this.rootPath = rootPath;
-      // Servers are tied to the old root, stop them so they restart with the new root
-      this.stopAll().catch(() => {});
+      await this.stopAll();
     }
   }
 }
