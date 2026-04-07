@@ -660,6 +660,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
     });
     orchestrator.setConnectorRegistry(connectorRegistry);
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
+
+    // LSP manager — lazy-start language servers on first tool call
+    if (config.lspEnabled) {
+      const { LspManager } = await import('../lsp/lsp-manager.js');
+      const lspManager = new LspManager(process.cwd());
+      orchestrator.setLspManager(lspManager);
+      bus.on('shutdown', () => { lspManager.stopAll().catch(() => {}); });
+    }
     if (inferenceCapabilities) {
       orchestrator.setInferenceCapabilities(inferenceCapabilities);
       bus.emit('inference:capabilities-changed', inferenceCapabilities);

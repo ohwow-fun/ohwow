@@ -138,6 +138,7 @@ export class LocalOrchestrator {
   private toolCache = new ToolCache();
   private mcpClients: McpClientManager | null = null;
   private mcpServers: McpServerConfig[];
+  private _lspManager?: import('../lsp/lsp-manager.js').LspManager;
   /** Unified Brain: philosophical cognitive coordinator. */
   private brain: Brain | null = null;
   /** Soul: deep human persona awareness (Aristotle's Psyche). */
@@ -194,6 +195,7 @@ export class LocalOrchestrator {
       rerankerEnabled: this._rerankerEnabled,
       meshRagEnabled: this._meshRagEnabled,
       connectorRegistry: this._connectorRegistry || undefined,
+      lspManager: this._lspManager,
     };
   }
 
@@ -398,6 +400,11 @@ export class LocalOrchestrator {
     this._ragBm25Weight = opts.ragBm25Weight;
     this._rerankerEnabled = opts.rerankerEnabled;
     this._meshRagEnabled = opts.meshRagEnabled;
+  }
+
+  /** Set LSP manager for code intelligence tools. */
+  setLspManager(manager: import('../lsp/lsp-manager.js').LspManager): void {
+    this._lspManager = manager;
   }
 
   /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */

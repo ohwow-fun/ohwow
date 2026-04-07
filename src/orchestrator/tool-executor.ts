@@ -30,7 +30,7 @@ import { isMcpTool } from '../mcp/tool-adapter.js';
 import type { McpClientManager } from '../mcp/client.js';
 import { saveMediaFile, saveMediaFromUrl } from '../media/storage.js';
 import { summarizeToolResult } from './result-summarizer.js';
-import { retryTransient, CircuitBreaker } from './error-recovery.js';
+import { retryTransient, CircuitBreaker, attemptRecovery, classifyError } from './error-recovery.js';
 import { estimateMediaCost } from '../media/media-router.js';
 import type { ImmuneSystem } from '../immune/immune-system.js';
 import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
@@ -665,7 +665,44 @@ export async function* executeToolCall(
       isError: !result.success,
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : 'Tool execution failed';
+    const lastError = err instanceof Error ? err : new Error(String(err));
+    const errorMsg = lastError.message;
+    const category = classifyError(lastError);
+
+    // Attempt structured recovery for non-transient errors
+    // (transient errors are already handled by retryTransient above)
+    if (category !== 'transient') {
+      try {
+        const outcome = await attemptRecovery(lastError, {
+          error: lastError,
+          toolName: request.name,
+          workingDirectory: ctx.toolCtx.workingDirectory,
+        });
+
+        if (outcome.shouldRetry) {
+          // Recovery succeeded — retry the tool once
+          try {
+            const retryResult = await handler(ctx.toolCtx, toolInput);
+            cb?.recordSuccess(request.name);
+            ctx.executedToolCalls.set(toolKey, retryResult);
+            yield { type: 'tool_done', name: request.name, result: retryResult };
+            const rawContent = retryResult.success ? JSON.stringify(retryResult.data) : `Error: ${retryResult.error}`;
+            return { toolName: request.name, result: retryResult, resultContent: summarizeToolResult(request.name, rawContent, !retryResult.success), isError: !retryResult.success };
+          } catch {
+            // Retry also failed — fall through to error path
+          }
+        }
+
+        // Surface recovery message to user if provided
+        if (outcome.userMessage) {
+          const recoveryResult: ToolResult = { success: false, error: outcome.userMessage };
+          yield { type: 'tool_done', name: request.name, result: recoveryResult };
+          return { toolName: request.name, result: recoveryResult, resultContent: `Error: ${outcome.userMessage}`, isError: true };
+        }
+      } catch {
+        // Recovery itself failed, fall through to standard error handling
+      }
+    }
 
     // Record failure in circuit breaker
     if (cb) {
