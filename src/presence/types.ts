@@ -41,12 +41,9 @@ export type PresenceState =
 
 export type PresenceEventType = 'arrival' | 'departure' | 'still_here';
 
-export interface PresenceEventPayload {
-  eventType: PresenceEventType;
-  confidence: number;
-  deviceId: string;
-  timestamp: number;
-}
+// PresenceEventPayload is defined in control-plane/types.ts (canonical source).
+// Re-export for convenience.
+export type { PresenceEventPayload } from '../control-plane/types.js';
 
 // ============================================================================
 // INNER THOUGHTS — Background context accumulation

@@ -22,7 +22,6 @@ import { EventEmitter } from 'node:events';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { GlobalWorkspace } from '../brain/global-workspace.js';
-import type { NervousSystem } from '../body/nervous-system.js';
 import type { VoiceSession } from '../voice/voice-session.js';
 import type { InnerThoughtsLoop } from './inner-thoughts.js';
 import { GreetingAssembler } from './greeting-assembler.js';
@@ -61,7 +60,6 @@ const PROACTIVE_THRESHOLD = 0.6;
 export interface PresenceEngineOptions {
   innerThoughts: InnerThoughtsLoop;
   workspace: GlobalWorkspace;
-  nervousSystem?: NervousSystem;
   modelRouter: ModelRouter;
   db: DatabaseAdapter;
   workspaceId: string;
@@ -74,8 +72,6 @@ export class PresenceEngine extends EventEmitter {
   private innerThoughts: InnerThoughtsLoop;
   private greetingAssembler: GreetingAssembler;
   private workspace: GlobalWorkspace;
-  private nervousSystem?: NervousSystem;
-  private modelRouter: ModelRouter;
   private voiceSessionFactory?: () => Promise<VoiceSession>;
   private activeVoiceSession: VoiceSession | null = null;
 
@@ -88,8 +84,6 @@ export class PresenceEngine extends EventEmitter {
     super();
     this.innerThoughts = opts.innerThoughts;
     this.workspace = opts.workspace;
-    this.nervousSystem = opts.nervousSystem;
-    this.modelRouter = opts.modelRouter;
     this.voiceSessionFactory = opts.voiceSessionFactory;
 
     this.greetingAssembler = new GreetingAssembler(
@@ -163,15 +157,20 @@ export class PresenceEngine extends EventEmitter {
   // EVENT HANDLERS
   // --------------------------------------------------------------------------
 
-  private handleArrival(confidence: number): void {
+  private handleArrival(_confidence: number): void {
     if (this.state === 'absent') {
-      // Start arrival confirmation timer
+      // Start arrival confirmation timer (fix #5: clear any stale timer first)
+      this.clearTimer('arrival');
       this.transitionTo('arriving');
       this.clearTimer('departure');
 
       this.arrivalTimer = setTimeout(() => {
         if (this.state === 'arriving') {
-          this.confirmArrival();
+          // Fix #4: handle async rejection
+          this.confirmArrival().catch(err => {
+            logger.error(`[Presence] confirmArrival failed: ${err instanceof Error ? err.message : err}`);
+            this.transitionTo('voice_active');
+          });
         }
       }, ARRIVAL_CONFIRM_MS);
 

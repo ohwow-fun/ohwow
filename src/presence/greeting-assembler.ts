@@ -146,12 +146,9 @@ export class GreetingAssembler {
   ): string[] {
     const steps: string[] = [];
 
-    // Approvals first
-    const approvalTasks = snapshot.pendingTasks.filter(t =>
-      snapshot.pendingTasks.some(pt => pt.id === t.id)
-    );
-    if (approvalTasks.length > 0) {
-      steps.push(`Review ${approvalTasks.length} pending task${approvalTasks.length > 1 ? 's' : ''}`);
+    // Pending tasks to review
+    if (snapshot.pendingTasks.length > 0) {
+      steps.push(`Review ${snapshot.pendingTasks.length} pending task${snapshot.pendingTasks.length > 1 ? 's' : ''}`);
     }
 
     // Recent completions to review

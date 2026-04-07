@@ -51,6 +51,7 @@ export class InnerThoughtsLoop {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private lastUserActive = true;
+  private lastSnapshotHash = '';
 
   constructor(
     private db: DatabaseAdapter,
@@ -144,6 +145,14 @@ export class InnerThoughtsLoop {
 
     try {
       const snapshot = await this.gatherContext();
+
+      // Fix #8: skip LLM call if context hasn't changed since last tick
+      const hash = `${snapshot.pendingTasks.length}:${snapshot.recentCompletions.length}:${snapshot.overnightActivity.errors}:${snapshot.overnightActivity.tasksCompleted}`;
+      if (hash === this.lastSnapshotHash) {
+        return;
+      }
+      this.lastSnapshotHash = hash;
+
       const thought = await this.distill(snapshot);
 
       if (thought) {
