@@ -798,12 +798,26 @@ export class OllamaProvider implements ModelProvider {
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
+/** Model info returned by OpenRouter's /models endpoint. */
+export interface OpenRouterModelInfo {
+  id: string;
+  name: string;
+  contextLength: number;
+  pricing: { prompt: number; completion: number };
+  supportsTools: boolean;
+  supportsVision: boolean;
+  isFree: boolean;
+}
+
 export class OpenRouterProvider implements ModelProvider {
   readonly name = 'openrouter';
   private apiKey: string;
   private defaultModel: string;
   private _available: boolean | null = null;
   private _availableCheckedAt = 0;
+  private _modelsCache: OpenRouterModelInfo[] | null = null;
+  private _modelsCachedAt = 0;
+  private static MODELS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(apiKey: string, defaultModel: string = 'openrouter/optimus-alpha') {
     this.apiKey = apiKey;
@@ -999,6 +1013,55 @@ export class OpenRouterProvider implements ModelProvider {
     }
   }
 
+  /** Fetch available models from OpenRouter with caching. */
+  async listModels(forceRefresh = false): Promise<OpenRouterModelInfo[]> {
+    if (!forceRefresh && this._modelsCache && (Date.now() - this._modelsCachedAt) < OpenRouterProvider.MODELS_CACHE_TTL_MS) {
+      return this._modelsCache;
+    }
+
+    try {
+      const response = await fetch(`${OPENROUTER_BASE_URL}/models`, {
+        headers: { 'Authorization': `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) return this._modelsCache || [];
+
+      const data = await response.json() as {
+        data: Array<{
+          id: string;
+          name: string;
+          context_length?: number;
+          pricing?: { prompt?: string; completion?: string };
+          architecture?: { modality?: string; tokenizer?: string };
+          supported_parameters?: string[];
+        }>;
+      };
+
+      this._modelsCache = (data.data || []).map(m => {
+        const promptPrice = parseFloat(m.pricing?.prompt || '0');
+        const completionPrice = parseFloat(m.pricing?.completion || '0');
+        const modality = m.architecture?.modality || '';
+        return {
+          id: m.id,
+          name: m.name || m.id,
+          contextLength: m.context_length || 4096,
+          pricing: { prompt: promptPrice, completion: completionPrice },
+          supportsTools: (m.supported_parameters || []).includes('tools'),
+          supportsVision: modality.includes('image') || modality.includes('vision'),
+          isFree: promptPrice === 0 && completionPrice === 0,
+        };
+      });
+      this._modelsCachedAt = Date.now();
+      return this._modelsCache;
+    } catch {
+      return this._modelsCache || [];
+    }
+  }
+
+  getDefaultModel(): string {
+    return this.defaultModel;
+  }
+
   setDefaultModel(model: string): void {
     this.defaultModel = model;
   }
@@ -1007,6 +1070,8 @@ export class OpenRouterProvider implements ModelProvider {
     this.apiKey = key;
     this._available = null;
     this._availableCheckedAt = 0;
+    this._modelsCache = null;
+    this._modelsCachedAt = 0;
   }
 
   resetAvailability(): void {
