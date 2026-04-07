@@ -45,6 +45,17 @@ interface Message {
   created_at: string;
 }
 
+interface Deliverable {
+  id: string;
+  deliverable_type: string;
+  title: string;
+  content: string;
+  status: string;
+  rejection_reason: string | null;
+  auto_created: number;
+  created_at: string;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Collapsible Section                                                */
 /* ------------------------------------------------------------------ */
@@ -278,6 +289,7 @@ export function TaskDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: task, loading } = useApi<Task>(id ? `/api/tasks/${id}` : null);
   const { data: messages } = useApi<Message[]>(id ? `/api/tasks/${id}/messages` : null);
+  const { data: deliverables } = useApi<Deliverable[]>(id ? `/api/tasks/${id}/deliverables` : null);
   const { data: agent } = useApi<Agent>(
     task?.agent_id ? `/api/agents/${task.agent_id}` : null,
   );
@@ -395,6 +407,54 @@ export function TaskDetailPage() {
         <CollapsibleSection title="Output">
           <div className="border border-white/[0.08] rounded-lg p-4">
             <pre className="text-sm whitespace-pre-wrap break-words">{typeof task.output === 'string' ? task.output : JSON.stringify(task.output, null, 2)}</pre>
+          </div>
+        </CollapsibleSection>
+      )}
+
+      {/* Deliverables */}
+      {deliverables && deliverables.length > 0 && (
+        <CollapsibleSection title="Deliverables">
+          <div className="space-y-3">
+            {deliverables.map(d => {
+              const typeBadge: Record<string, string> = {
+                email: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+                code: 'bg-green-500/15 text-green-400 border-green-500/30',
+                report: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+                creative: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+                plan: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+                data: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+              };
+              const typeStyle = typeBadge[d.deliverable_type] || 'bg-white/5 text-neutral-400 border-white/10';
+
+              let preview = '';
+              try {
+                const parsed = JSON.parse(d.content);
+                preview = parsed.text || parsed.body || parsed.content || JSON.stringify(parsed, null, 2);
+              } catch {
+                preview = d.content;
+              }
+
+              return (
+                <div key={d.id} className="border border-white/[0.08] rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-sm font-medium truncate flex-1">{d.title}</span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${typeStyle}`}>
+                      {d.deliverable_type}
+                    </span>
+                    <StatusBadge status={d.status} />
+                    {d.auto_created === 1 && (
+                      <span className="text-[10px] text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded">auto</span>
+                    )}
+                  </div>
+                  <pre className="text-sm whitespace-pre-wrap break-words text-neutral-300">
+                    {typeof preview === 'string' ? preview.slice(0, 2000) : preview}
+                  </pre>
+                  {d.rejection_reason && (
+                    <p className="mt-2 text-sm text-red-400 bg-red-500/10 rounded p-2">{d.rejection_reason}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </CollapsibleSection>
       )}

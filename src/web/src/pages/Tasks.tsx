@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { ListChecks, Plus, MagnifyingGlass } from '@phosphor-icons/react';
+import { ListChecks, Plus, MagnifyingGlass, FileText } from '@phosphor-icons/react';
 import { useApi } from '../hooks/useApi';
 import { useWsRefresh } from '../hooks/useWebSocket';
 import { StatusBadge } from '../components/StatusBadge';
@@ -25,7 +25,18 @@ interface Agent {
   name: string;
 }
 
+interface DeliverableRow {
+  id: string;
+  task_id: string | null;
+  deliverable_type: string;
+  title: string;
+  status: string;
+  auto_created: number;
+  created_at: string;
+}
+
 const STATUSES = ['all', 'pending', 'in_progress', 'completed', 'needs_approval', 'failed'] as const;
+const DELIVERABLE_STATUSES = ['all', 'pending_review', 'approved', 'delivered', 'rejected'] as const;
 
 type SortMode = 'date' | 'priority' | 'status';
 
@@ -34,7 +45,9 @@ const STATUS_ORDER: Record<string, number> = { in_progress: 0, pending: 1, needs
 
 export function TasksPage() {
   const wsTick = useWsRefresh(['task:started', 'task:completed', 'task:failed']);
+  const [viewMode, setViewMode] = useState<'tasks' | 'deliverables'>('tasks');
   const [filter, setFilter] = useState('all');
+  const [delFilter, setDelFilter] = useState('all');
   const [showDispatch, setShowDispatch] = useState(false);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortMode>('date');
@@ -42,6 +55,12 @@ export function TasksPage() {
   const statusParam = filter === 'all' ? '' : `&status=${filter}`;
   const { data: tasks, loading, refetch } = useApi<Task[]>(`/api/tasks?limit=50${statusParam}`, [wsTick, filter]);
   const { data: agents } = useApi<Agent[]>('/api/agents');
+
+  const delStatusParam = delFilter === 'all' ? '' : `?status=${delFilter}`;
+  const { data: deliverables, loading: delLoading } = useApi<DeliverableRow[]>(
+    viewMode === 'deliverables' ? `/api/deliverables${delStatusParam}` : null,
+    [wsTick, delFilter, viewMode],
+  );
 
   const agentMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -96,77 +115,163 @@ export function TasksPage() {
         }
       />
 
-      {showDispatch && agents?.length ? (
-        <DispatchForm agents={agents} onClose={() => setShowDispatch(false)} onSuccess={refetch} />
-      ) : null}
-
-      {/* Filter tabs */}
-      <div className="flex gap-1 mb-4 overflow-x-auto">
-        {STATUSES.map(s => (
-          <button
-            key={s}
-            onClick={() => setFilter(s)}
-            className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors ${
-              filter === s ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
-            }`}
-          >
-            {s.replace(/_/g, ' ')}
-          </button>
-        ))}
-      </div>
-
-      {/* Search + Sort */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="relative flex-1">
-          <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Search by title or agent..."
-            className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
-          />
-        </div>
-        <select
-          value={sort}
-          onChange={e => setSort(e.target.value as SortMode)}
-          className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20"
+      {/* View mode toggle */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setViewMode('tasks')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${viewMode === 'tasks' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'}`}
         >
-          <option value="date">Sort by date</option>
-          <option value="priority">Sort by priority</option>
-          <option value="status">Sort by status</option>
-        </select>
+          <ListChecks size={14} /> Tasks
+        </button>
+        <button
+          onClick={() => setViewMode('deliverables')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm transition-colors ${viewMode === 'deliverables' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'}`}
+        >
+          <FileText size={14} /> Deliverables
+        </button>
       </div>
 
-      {loading ? (
-        <RowSkeleton count={5} />
-      ) : !filteredAndSorted.length ? (
-        <EmptyState
-          icon={<ListChecks size={32} />}
-          title="Nothing here yet"
-          description={search ? `No tasks matching "${search}".` : filter === 'all' ? 'Tasks will appear as agents work.' : `No ${filter.replace(/_/g, ' ')} tasks.`}
-        />
+      {viewMode === 'tasks' ? (
+        <>
+          {showDispatch && agents?.length ? (
+            <DispatchForm agents={agents} onClose={() => setShowDispatch(false)} onSuccess={refetch} />
+          ) : null}
+
+          {/* Filter tabs */}
+          <div className="flex gap-1 mb-4 overflow-x-auto">
+            {STATUSES.map(s => (
+              <button
+                key={s}
+                onClick={() => setFilter(s)}
+                className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors ${
+                  filter === s ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                {s.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+
+          {/* Search + Sort */}
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative flex-1">
+              <MagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search by title or agent..."
+                className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
+              />
+            </div>
+            <select
+              value={sort}
+              onChange={e => setSort(e.target.value as SortMode)}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white/20"
+            >
+              <option value="date">Sort by date</option>
+              <option value="priority">Sort by priority</option>
+              <option value="status">Sort by status</option>
+            </select>
+          </div>
+
+          {loading ? (
+            <RowSkeleton count={5} />
+          ) : !filteredAndSorted.length ? (
+            <EmptyState
+              icon={<ListChecks size={32} />}
+              title="Nothing here yet"
+              description={search ? `No tasks matching "${search}".` : filter === 'all' ? 'Tasks will appear as agents work.' : `No ${filter.replace(/_/g, ' ')} tasks.`}
+            />
+          ) : (
+            <div className="bg-white/5 border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
+              {filteredAndSorted.map(task => (
+                <Link key={task.id} to={`/tasks/${task.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors">
+                  <div className="min-w-0 mr-3">
+                    <p className="text-sm font-medium truncate">{task.title}</p>
+                    <p className="text-xs text-neutral-400">
+                      {agentMap.get(task.agent_id) && <span className="text-white">{agentMap.get(task.agent_id)}</span>}
+                      {agentMap.get(task.agent_id) && ' · '}
+                      {new Date(task.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    {task.priority && task.priority !== 'normal' && (
+                      <span className="text-xs text-warning">{task.priority}</span>
+                    )}
+                    {task.tokens_used ? <span className="text-xs text-neutral-400">{task.tokens_used.toLocaleString()} tok</span> : null}
+                    <StatusBadge status={task.status} />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </>
       ) : (
-        <div className="bg-white/5 border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
-          {filteredAndSorted.map(task => (
-            <Link key={task.id} to={`/tasks/${task.id}`} className="flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors">
-              <div className="min-w-0 mr-3">
-                <p className="text-sm font-medium truncate">{task.title}</p>
-                <p className="text-xs text-neutral-400">
-                  {agentMap.get(task.agent_id) && <span className="text-white">{agentMap.get(task.agent_id)}</span>}
-                  {agentMap.get(task.agent_id) && ' · '}
-                  {new Date(task.created_at).toLocaleString()}
-                </p>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                {task.priority && task.priority !== 'normal' && (
-                  <span className="text-xs text-warning">{task.priority}</span>
-                )}
-                {task.tokens_used ? <span className="text-xs text-neutral-400">{task.tokens_used.toLocaleString()} tok</span> : null}
-                <StatusBadge status={task.status} />
-              </div>
-            </Link>
-          ))}
-        </div>
+        <>
+          {/* Deliverables filter tabs */}
+          <div className="flex gap-1 mb-4 overflow-x-auto">
+            {DELIVERABLE_STATUSES.map(s => (
+              <button
+                key={s}
+                onClick={() => setDelFilter(s)}
+                className={`px-3 py-1.5 rounded-md text-xs capitalize transition-colors ${
+                  delFilter === s ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                {s.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+
+          {delLoading ? (
+            <RowSkeleton count={5} />
+          ) : !deliverables?.length ? (
+            <EmptyState
+              icon={<FileText size={32} />}
+              title="No deliverables yet"
+              description="Deliverables are created when agents produce work products like drafts, reports, and plans."
+            />
+          ) : (
+            <div className="bg-white/5 border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
+              {deliverables.map(d => {
+                const typeBadge: Record<string, string> = {
+                  email: 'bg-blue-500/15 text-blue-400',
+                  code: 'bg-green-500/15 text-green-400',
+                  report: 'bg-purple-500/15 text-purple-400',
+                  creative: 'bg-pink-500/15 text-pink-400',
+                  plan: 'bg-cyan-500/15 text-cyan-400',
+                  data: 'bg-amber-500/15 text-amber-400',
+                  document: 'bg-white/5 text-neutral-400',
+                };
+                const typeStyle = typeBadge[d.deliverable_type] || 'bg-white/5 text-neutral-400';
+
+                return (
+                  <div key={d.id} className="flex items-center justify-between px-4 py-3">
+                    <div className="min-w-0 mr-3 flex items-center gap-2">
+                      {d.task_id ? (
+                        <Link to={`/tasks/${d.task_id}`} className="text-sm font-medium truncate hover:text-blue-400 transition-colors">
+                          {d.title}
+                        </Link>
+                      ) : (
+                        <span className="text-sm font-medium truncate">{d.title}</span>
+                      )}
+                      {d.auto_created === 1 && (
+                        <span className="text-[10px] text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded shrink-0">auto</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${typeStyle}`}>
+                        {d.deliverable_type}
+                      </span>
+                      <StatusBadge status={d.status} />
+                      <span className="text-xs text-neutral-500">{new Date(d.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
