@@ -1702,10 +1702,8 @@ export class RuntimeEngine {
         finalStatus = responseType === 'informational' ? 'completed' : 'needs_approval';
       }
 
-      // L2 (Supervised): Irreversible actions need approval
-      // Note: local engine doesn't track tool call summaries with reversibility metadata,
-      // so this relies on the approvalRequired flag for now
-      if (autonomyLevel <= 2 && approvalRequired && responseType === 'deliverable') {
+      // L2 (Supervised): Deliverable outputs need approval
+      if (autonomyLevel <= 2 && responseType === 'deliverable') {
         finalStatus = 'needs_approval';
       }
 

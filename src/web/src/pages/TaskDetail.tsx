@@ -129,8 +129,8 @@ function Timeline({ events }: { events: TimelineEvent[] }) {
         <div className="absolute left-[7px] top-1 bottom-1 w-px bg-white/[0.12]" />
 
         <div className="space-y-4">
-          {events.map((ev, i) => (
-            <div key={i} className="relative flex items-start gap-3">
+          {events.map((ev) => (
+            <div key={ev.label} className="relative flex items-start gap-3">
               {/* Dot */}
               <div
                 className="absolute -left-6 top-0.5 flex items-center justify-center w-[15px] h-[15px] rounded-full ring-2 ring-black"
@@ -248,7 +248,7 @@ function MessageContent({ content }: { content: string }) {
     return (
       <div className="space-y-1">
         {toolCalls.map((tc, i) => (
-          <ToolCallCard key={i} call={tc} />
+          <ToolCallCard key={`${tc.name}-${i}`} call={tc} />
         ))}
       </div>
     );
