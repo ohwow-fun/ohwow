@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0] — 2026-04-07
+
+### Added
+- Local Eye page with voice + camera companion
+- Camera presence system: presence engine, greeting assembler, eye organ, inner thoughts loop
+- Presence API route with event bus wiring, endocrine hints, and narrative beats in presence signals
+- speakGreeting and auto_start voice activation
+- Agent genesis and promotion lifecycle (local runtime)
+- Sequential multi-agent coordination engine (Phases 1–7): decomposer, abstention protocol, cost estimation, budget governance, TUI wiring, experience learning, cross-environment chains
+- OpenRouter integration: live model catalog, searchable web picker, cloud provider routing, cost estimation, budget governance
+- Claude Code as third model source option in onboarding and model picker
+- Doc mount system: browsable documentation filesystems, RAG enrichment, per-agent declarative mounted_docs, mesh propagation
+- Rewritten ClaudeCodeProvider using CLI instead of MCP sampling bridge
+
+### Fixed
+- QA round 2 fixes for local Eye
+- QA issues in presence engine, greeting, and inner thoughts
+- 9 bugs from QA reviews of OpenRouter integration
+- QA audit findings across doc mount system
+
+### Changed
+- Curated OpenRouter model catalog mirroring cloud dashboard
+- Widened model source types to include claude-code across the stack
+- Updated env docs for cloudProvider, fixed model source hints
+
 ## [0.4.8] — 2026-04-06
 
 ### Added
