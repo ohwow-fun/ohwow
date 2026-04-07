@@ -50,11 +50,13 @@ export function createDeliverablesRouter(db: DatabaseAdapter): Router {
       const { workspaceId } = req;
       const { status, type, limit = '50' } = req.query;
 
+      const parsedLimit = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 200);
+
       let query = db.from('agent_workforce_deliverables')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false })
-        .limit(parseInt(limit as string, 10));
+        .limit(parsedLimit);
 
       if (status) query = query.eq('status', status as string);
       if (type) query = query.eq('deliverable_type', type as string);

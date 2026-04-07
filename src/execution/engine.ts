@@ -1813,6 +1813,7 @@ export class RuntimeEngine {
             title: deliverableTitle,
             content: JSON.stringify(deferredAction?.params || { text: cleanContent }),
             status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
+            auto_created: 0,
           });
         } catch (err) {
           logger.error({ err }, '[RuntimeEngine] Deliverable creation failed');

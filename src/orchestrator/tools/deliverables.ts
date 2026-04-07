@@ -25,6 +25,10 @@ export async function saveDeliverable(
     return { success: false, error: `type must be one of: ${VALID_TYPES.join(', ')}` };
   }
 
+  if (content.length > 500_000) {
+    return { success: false, error: 'Content exceeds 500KB limit' };
+  }
+
   try {
     const { data, error } = await ctx.db.from('agent_workforce_deliverables').insert({
       workspace_id: ctx.workspaceId,
