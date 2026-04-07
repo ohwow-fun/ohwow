@@ -91,7 +91,9 @@ export type ExperienceType =
   // Voice experience types (Auditory Modality)
   | 'voice_session_started'   // Voice session opened (mic + speaker active)
   | 'voice_session_ended'     // Voice session closed
-  | 'voice_processed';        // Complete STT → orchestrator → TTS cycle
+  | 'voice_processed'         // Complete STT → orchestrator → TTS cycle
+  // Sequential multi-agent coordination
+  | 'sequence_completed';     // A multi-agent Sequential chain finished
 
 /**
  * An Experience is the atomic unit of the brain's process ontology.
