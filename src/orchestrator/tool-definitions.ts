@@ -202,6 +202,24 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'save_deliverable',
+    description:
+      'Save a work product from this conversation as a deliverable. Use when you have produced substantial content the user may want to reference later (a draft, report, plan, analysis, creative writing, code, etc.). Always ask the user before saving.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'Descriptive title for the deliverable' },
+        content: { type: 'string', description: 'The full deliverable content to save' },
+        type: {
+          type: 'string',
+          enum: ['document', 'email', 'report', 'code', 'creative', 'plan', 'data', 'other'],
+          description: 'Type of deliverable',
+        },
+      },
+      required: ['title', 'content', 'type'],
+    },
+  },
+  {
     name: 'get_workspace_stats',
     description:
       'Get workspace statistics: total tasks, completed this week, failed, agent count, costs.',

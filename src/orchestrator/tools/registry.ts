@@ -38,6 +38,7 @@ import { getAgentState, setAgentState, listAgentState, deleteAgentState } from '
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
+import { saveDeliverable } from './deliverables.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -217,4 +218,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Audio transcription
   ['transcribe_audio', (ctx, input) => transcribeAudio(ctx, input)],
+
+  // Deliverables
+  ['save_deliverable', (ctx, input) => saveDeliverable(ctx, input)],
 ]);
