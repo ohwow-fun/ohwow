@@ -1628,7 +1628,7 @@ export class ModelRouter {
   // ============================================================================
 
   /**
-   * Select a model provider using biological/psychological signals.
+   * Select a model provider using biological/philosophical signals.
    * Wraps getProvider() with endocrine modulation, self-model confidence,
    * and predictive engine feedback to make routing decisions organic.
    */

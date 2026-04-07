@@ -1,7 +1,7 @@
 /**
  * BPP Hot-Path Integration Tests
  *
- * Tests the wiring between biological/psychological/philosophical (BPP) subsystems
+ * Tests the wiring between biological/philosophical (BPP) subsystems
  * and the core orchestrator hot path: immune scanning, affect novelty, endocrine
  * model routing, homeostasis throttle, rate limiter modulation, context budget
  * trimming, health vitals, immune-aware retry, and cross-system events.
