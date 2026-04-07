@@ -39,12 +39,22 @@ type FlatItem =
   | { kind: 'catalog'; data: CatalogModel }
   | { kind: 'too_large'; data: CatalogModel };
 
-type Step = 'source' | 'list' | 'cloud_auth';
+type Step = 'source' | 'list' | 'cloud_auth' | 'cloud_provider' | 'openrouter_auth' | 'openrouter_list';
 
 const CLOUD_MODELS = [
   { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
 ];
+
+interface OpenRouterModel {
+  id: string;
+  name: string;
+  contextLength: number;
+  pricing: { prompt: number; completion: number };
+  supportsTools: boolean;
+  supportsVision: boolean;
+  isFree: boolean;
+}
 
 const MAX_VISIBLE = 12;
 
@@ -54,11 +64,14 @@ export interface ModelPickerProps {
   currentModel: string;
   anthropicApiKey?: string;
   anthropicOAuthToken?: string;
+  openRouterApiKey?: string;
   cloudModel?: string;
   modelSource?: ModelSource;
-  onSelect: (model: string, source: 'cloud' | 'local' | 'claude-code') => void;
+  cloudProvider?: 'anthropic' | 'openrouter';
+  onSelect: (model: string, source: 'cloud' | 'local' | 'claude-code', cloudProvider?: 'anthropic' | 'openrouter') => void;
   onClose: () => void;
   onApiKeySet?: (key: string) => void;
+  onOpenRouterKeySet?: (key: string) => void;
   isActive: boolean;
 }
 
@@ -68,17 +81,30 @@ export function ModelPicker({
   currentModel,
   anthropicApiKey,
   anthropicOAuthToken,
+  openRouterApiKey,
   cloudModel,
   modelSource,
+  cloudProvider,
   onSelect,
   onClose,
   onApiKeySet,
+  onOpenRouterKeySet,
   isActive,
 }: ModelPickerProps) {
   // --- Step / source ---
   const [step, setStep] = useState<Step>('source');
   const [source, setSource] = useState<'cloud' | 'local' | 'claude-code'>('local');
   const [sourceIdx, setSourceIdx] = useState(0);
+
+  // --- Cloud provider sub-step ---
+  const [cloudProviderIdx, setCloudProviderIdx] = useState(0);
+
+  // --- OpenRouter ---
+  const [orModels, setOrModels] = useState<OpenRouterModel[]>([]);
+  const [orLoading, setOrLoading] = useState(false);
+  const [orKey, setOrKey] = useState('');
+  const [orKeyValidating, setOrKeyValidating] = useState(false);
+  const [orKeyError, setOrKeyError] = useState('');
 
   // --- Model data ---
   const [installed, setInstalled] = useState<InstalledModel[]>([]);
@@ -330,12 +356,10 @@ export function ModelPicker({
       if (key.return) {
         const selected = sourceIdx === 0 ? 'cloud' : sourceIdx === 1 ? 'local' : 'claude-code' as const;
         if (selected === 'cloud') {
-          const hasKey = !!(anthropicApiKey || anthropicOAuthToken);
-          if (!hasKey) {
-            setStep('cloud_auth');
-            setApiKeyError('');
-            return;
-          }
+          // Go to cloud provider sub-selection
+          setStep('cloud_provider');
+          setCloudProviderIdx(cloudProvider === 'openrouter' ? 1 : 0);
+          return;
         }
         if (selected === 'claude-code') {
           // No auth or model list needed — select immediately
@@ -351,11 +375,149 @@ export function ModelPicker({
       return;
     }
 
-    // --- Cloud auth step ---
+    // --- Cloud provider sub-step ---
+    if (step === 'cloud_provider') {
+      if (key.escape) { setStep('source'); setSourceIdx(0); return; }
+      if (input === 'j' || key.downArrow) { setCloudProviderIdx(i => Math.min(i + 1, 1)); return; }
+      if (input === 'k' || key.upArrow) { setCloudProviderIdx(i => Math.max(i - 1, 0)); return; }
+      if (key.return) {
+        if (cloudProviderIdx === 0) {
+          // Anthropic
+          const hasKey = !!(anthropicApiKey || anthropicOAuthToken);
+          if (!hasKey) {
+            setStep('cloud_auth');
+            setApiKeyError('');
+          } else {
+            setSource('cloud');
+            setStep('list');
+            setListIdx(0);
+          }
+        } else {
+          // OpenRouter
+          if (!openRouterApiKey) {
+            setStep('openrouter_auth');
+            setOrKeyError('');
+          } else {
+            setStep('openrouter_list');
+            setSearchQuery('');
+            setListIdx(0);
+            setScrollOffset(0);
+            setOrLoading(true);
+            apiFetch<{ data: { models: OpenRouterModel[] } }>('/api/models/openrouter')
+              .then(res => { setOrModels(res.data.models); setOrLoading(false); })
+              .catch(() => { setOrLoading(false); });
+          }
+        }
+        return;
+      }
+      return;
+    }
+
+    // --- OpenRouter auth step ---
+    if (step === 'openrouter_auth') {
+      if (key.escape) { setStep('cloud_provider'); setOrKey(''); setOrKeyError(''); return; }
+      if (orKeyValidating) return;
+      if (key.backspace || key.delete) { setOrKey(k => k.slice(0, -1)); setOrKeyError(''); return; }
+      if (key.return) {
+        if (!orKey.trim()) return;
+        setOrKeyValidating(true);
+        setOrKeyError('');
+        // Validate by trying to fetch models
+        fetch(`http://127.0.0.1:${port}/api/settings/openrouter_api_key`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+          },
+          body: JSON.stringify({ value: orKey.trim() }),
+        }).then(async (resp) => {
+          setOrKeyValidating(false);
+          if (resp.ok) {
+            onOpenRouterKeySet?.(orKey.trim());
+            setStep('openrouter_list');
+            setSearchQuery('');
+            setListIdx(0);
+            setScrollOffset(0);
+            setOrLoading(true);
+            setOrKey('');
+            // Fetch models with the new key
+            try {
+              const res = await apiFetch<{ data: { models: OpenRouterModel[] } }>('/api/models/openrouter');
+              setOrModels(res.data.models);
+            } catch { /* empty */ }
+            setOrLoading(false);
+          } else {
+            setOrKeyError('Couldn\'t validate key. Check and try again.');
+          }
+        }).catch(() => {
+          setOrKeyValidating(false);
+          setOrKeyError('Couldn\'t reach the server.');
+        });
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) { setOrKey(k => k + input); setOrKeyError(''); }
+      return;
+    }
+
+    // --- OpenRouter model list ---
+    if (step === 'openrouter_list') {
+      if (key.escape) {
+        if (searchQuery) {
+          setSearchQuery('');
+          setListIdx(0);
+          setScrollOffset(0);
+          return;
+        }
+        setStep('cloud_provider');
+        setCloudProviderIdx(1);
+        return;
+      }
+      const filtered = orModels.filter(m => {
+        const q = searchQuery.toLowerCase().trim();
+        if (!q) return true;
+        return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+      });
+      if (input === 'j' || key.downArrow) {
+        setListIdx(i => {
+          const next = Math.min(i + 1, filtered.length - 1);
+          if (next >= scrollOffset + MAX_VISIBLE) setScrollOffset(next - MAX_VISIBLE + 1);
+          return next;
+        });
+        return;
+      }
+      if (input === 'k' || key.upArrow) {
+        setListIdx(i => {
+          const next = Math.max(i - 1, 0);
+          if (next < scrollOffset) setScrollOffset(next);
+          return next;
+        });
+        return;
+      }
+      if (key.return && filtered.length > 0) {
+        const selected = filtered[listIdx];
+        if (selected) onSelect(selected.id, 'cloud', 'openrouter');
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSearchQuery(q => q.slice(0, -1));
+        setListIdx(0);
+        setScrollOffset(0);
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !key.escape) {
+        setSearchQuery(q => q + input);
+        setListIdx(0);
+        setScrollOffset(0);
+        return;
+      }
+      return;
+    }
+
+    // --- Cloud auth step (Anthropic) ---
     if (step === 'cloud_auth') {
       if (key.escape) {
-        setStep('source');
-        setSourceIdx(0);
+        setStep('cloud_provider');
+        setCloudProviderIdx(0);
         setApiKey('');
         setApiKeyError('');
         return;
@@ -391,15 +553,15 @@ export function ModelPicker({
       return;
     }
 
-    // --- List step (cloud) ---
+    // --- List step (cloud / Anthropic) ---
     if (step === 'list' && source === 'cloud') {
       const cloudList = CLOUD_MODELS;
-      if (key.escape) { setStep('source'); setSourceIdx(0); return; }
+      if (key.escape) { setStep('cloud_provider'); setCloudProviderIdx(0); return; }
       if (input === 'j' || key.downArrow) { setListIdx(i => Math.min(i + 1, cloudList.length - 1)); return; }
       if (input === 'k' || key.upArrow) { setListIdx(i => Math.max(i - 1, 0)); return; }
       if (key.return) {
         const selected = cloudList[listIdx];
-        if (selected) onSelect(selected.id, 'cloud');
+        if (selected) onSelect(selected.id, 'cloud', 'anthropic');
         return;
       }
       return;
@@ -499,11 +661,13 @@ export function ModelPicker({
   // --- Source step ---
   if (step === 'source') {
     const hasCloudKey = !!(anthropicApiKey || anthropicOAuthToken);
-    const cloudCount = hasCloudKey ? CLOUD_MODELS.length : 0;
+    const hasOrKey = !!openRouterApiKey;
+    const cloudProviderCount = (hasCloudKey ? 1 : 0) + (hasOrKey ? 1 : 0);
+    const cloudLabel = cloudProviderCount > 0 ? `${cloudProviderCount} provider${cloudProviderCount > 1 ? 's' : ''}` : 'set up';
     const localCount = installed.length || '...';
     const isCC = modelSource === 'claude-code';
     const sources = [
-      { key: 'cloud' as const, icon: '\u2601', label: 'Cloud', count: cloudCount === 0 ? 'set up' : String(cloudCount), color: 'magenta' as const },
+      { key: 'cloud' as const, icon: '\u2601', label: 'Cloud', count: cloudLabel, color: 'magenta' as const },
       { key: 'local' as const, icon: '\u2299', label: 'Local', count: String(localCount), color: 'cyan' as const },
       { key: 'claude-code' as const, icon: '\u2318', label: 'Claude Code', count: isCC ? 'active' : 'CLI', color: 'blue' as const },
     ];
@@ -529,7 +693,130 @@ export function ModelPicker({
     );
   }
 
-  // --- Cloud auth step ---
+  // --- Cloud provider sub-step ---
+  if (step === 'cloud_provider') {
+    const hasAnthropicKey = !!(anthropicApiKey || anthropicOAuthToken);
+    const hasOrKeyConfigured = !!openRouterApiKey;
+    const providers = [
+      { key: 'anthropic', icon: '\u2601', label: 'Anthropic', detail: hasAnthropicKey ? 'Claude Haiku, Sonnet' : 'set up API key', color: 'magenta' as const, configured: hasAnthropicKey },
+      { key: 'openrouter', icon: '\u2295', label: 'OpenRouter', detail: hasOrKeyConfigured ? '300+ models' : 'set up API key', color: 'yellow' as const, configured: hasOrKeyConfigured },
+    ];
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
+        <Text bold>Switch Model  <Text color="magenta">{'\u2601'} Cloud</Text></Text>
+        <Text color="gray" dimColor>Choose a cloud provider</Text>
+        <Box marginTop={1} flexDirection="column">
+          {providers.map((p, i) => {
+            const isSelected = i === cloudProviderIdx;
+            return (
+              <Text key={p.key}>
+                <Text color={isSelected ? 'cyan' : 'white'}>{isSelected ? '\u276F ' : '  '}</Text>
+                <Text color={isSelected ? 'cyan' : p.color}>
+                  {p.icon} {p.label}
+                </Text>
+                <Text color="gray">  {p.detail}</Text>
+              </Text>
+            );
+          })}
+        </Box>
+        <Text color="gray" dimColor>j/k to navigate {'\u00B7'} Enter to select {'\u00B7'} Esc to go back</Text>
+      </Box>
+    );
+  }
+
+  // --- OpenRouter auth step ---
+  if (step === 'openrouter_auth') {
+    const masked = orKey.length <= 8
+      ? '\u2022'.repeat(orKey.length)
+      : orKey.slice(0, 7) + '\u2022'.repeat(Math.min(orKey.length - 7, 20));
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
+        <Text bold>Switch Model  <Text color="yellow">{'\u2295'} OpenRouter</Text></Text>
+        <Text bold>Connect to OpenRouter</Text>
+        <Box marginTop={1} flexDirection="column">
+          <Text color="gray">Paste your OpenRouter API key:</Text>
+          <Box marginTop={1}>
+            <Text color="cyan">API key: </Text>
+            <Text>{masked}</Text>
+            <Text color="cyan">{'\u2588'}</Text>
+          </Box>
+        </Box>
+        {orKeyValidating && (
+          <Box marginTop={1}><Text color="yellow">Saving key...</Text></Box>
+        )}
+        {orKeyError !== '' && (
+          <Box marginTop={1}><Text color="red">{orKeyError}</Text></Box>
+        )}
+        <Box marginTop={1}>
+          <Text color="gray" dimColor>Enter to confirm {'\u00B7'} Esc to go back</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // --- OpenRouter model list ---
+  if (step === 'openrouter_list') {
+    const filtered = orModels.filter(m => {
+      const q = searchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+    });
+    const visibleOR = filtered.slice(scrollOffset, scrollOffset + MAX_VISIBLE);
+    const hasMoreOR = filtered.length > scrollOffset + MAX_VISIBLE;
+    const hasAboveOR = scrollOffset > 0;
+
+    return (
+      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={2} paddingY={1}>
+        <Text bold>Switch Model  <Text color="yellow">{'\u2295'} OpenRouter</Text></Text>
+        <Text color="gray" dimColor>{filtered.length} model{filtered.length !== 1 ? 's' : ''}</Text>
+
+        {/* Search input */}
+        <Box marginTop={1}>
+          <Text color="cyan">Search: </Text>
+          <Text>{searchQuery}</Text>
+          <Text color="cyan">{'\u2588'}</Text>
+        </Box>
+
+        {orLoading ? (
+          <Box marginTop={1}><Text color="gray">Loading models...</Text></Box>
+        ) : filtered.length === 0 ? (
+          <Box marginTop={1}><Text color="gray">{searchQuery ? 'No models match your search' : 'No models available'}</Text></Box>
+        ) : (
+          <Box marginTop={1} flexDirection="column">
+            {hasAboveOR && <Text color="gray" dimColor>  {'\u2191'} {scrollOffset} more above</Text>}
+            {visibleOR.map((m, vi) => {
+              const globalIdx = vi + scrollOffset;
+              const isSelected = globalIdx === listIdx;
+              const badges: string[] = [];
+              if (m.isFree) badges.push('[free]');
+              if (m.supportsTools) badges.push('[tools]');
+              if (m.supportsVision) badges.push('[vision]');
+              const ctx = m.contextLength >= 1_000_000 ? `${Math.round(m.contextLength / 1_000_000)}M`
+                : m.contextLength >= 1_000 ? `${Math.round(m.contextLength / 1_000)}K`
+                : String(m.contextLength);
+              badges.push(ctx);
+              return (
+                <Text key={m.id}>
+                  <Text color={isSelected ? 'cyan' : 'white'}>{isSelected ? '\u276F ' : '  '}</Text>
+                  <Text color={isSelected ? 'cyan' : m.isFree ? 'green' : 'yellow'}>{m.name}</Text>
+                  <Text color="gray">  {badges.join(' ')}</Text>
+                </Text>
+              );
+            })}
+            {hasMoreOR && <Text color="gray" dimColor>  {'\u2193'} {filtered.length - scrollOffset - MAX_VISIBLE} more below</Text>}
+          </Box>
+        )}
+
+        <Box marginTop={1}>
+          <Text color="gray" dimColor>
+            j/k navigate {'\u00B7'} Enter select {'\u00B7'} type to search {'\u00B7'} Esc back
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // --- Cloud auth step (Anthropic) ---
   if (step === 'cloud_auth') {
     const masked = apiKey.length <= 8
       ? '\u2022'.repeat(apiKey.length)

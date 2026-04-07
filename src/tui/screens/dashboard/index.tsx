@@ -1153,13 +1153,14 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   };
 
   // Model picker callbacks
-  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local' | 'claude-code') => {
+  const handleModelSelect = useCallback((model: string, source: 'cloud' | 'local' | 'claude-code', cloudProv?: 'anthropic' | 'openrouter') => {
     if (source === 'claude-code') {
       updateConfigFile({ modelSource: 'claude-code' });
       onConfigChange?.({ ...config, modelSource: 'claude-code' });
     } else if (source === 'cloud') {
-      updateConfigFile({ modelSource: 'cloud', cloudModel: model });
-      onConfigChange?.({ ...config, modelSource: 'cloud', cloudModel: model });
+      const provider = cloudProv || 'anthropic';
+      updateConfigFile({ modelSource: 'cloud', cloudModel: model, cloudProvider: provider });
+      onConfigChange?.({ ...config, modelSource: 'cloud', cloudModel: model, cloudProvider: provider });
     } else {
       updateConfigFile({ modelSource: 'local' });
       onConfigChange?.({ ...config, modelSource: 'local' });
@@ -1168,7 +1169,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     fetch(`http://127.0.0.1:${config.port}/api/models/orchestrator`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${runtime.sessionToken}` },
-      body: JSON.stringify({ model, modelSource: source }),
+      body: JSON.stringify({ model, modelSource: source, cloudProvider: cloudProv }),
     }).catch(() => {});
     orchestrator.setModel(model, source);
     setShowModelPicker(false);
@@ -1415,11 +1416,17 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
               currentModel={orchestrator.currentModel}
               anthropicApiKey={config.anthropicApiKey}
               anthropicOAuthToken={config.anthropicOAuthToken}
+              openRouterApiKey={config.openRouterApiKey}
               cloudModel={config.cloudModel}
               modelSource={config.modelSource}
+              cloudProvider={config.cloudProvider}
               onSelect={handleModelSelect}
               onClose={() => setShowModelPicker(false)}
               onApiKeySet={handleApiKeySet}
+              onOpenRouterKeySet={(key) => {
+                updateConfigFile({ openRouterApiKey: key });
+                onConfigChange?.({ ...config, openRouterApiKey: key });
+              }}
               isActive={showModelPicker}
             />
           ) : null}
