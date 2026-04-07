@@ -22,6 +22,9 @@ export type OrchestratorEvent =
   | { type: 'screenshot'; path: string }
   | { type: 'media_generated'; path: string }
   | { type: 'cost_confirmation'; requestId: string; toolName: string; estimatedCredits: number; description: string }
+  | { type: 'sequence_start'; name: string; totalSteps: number; waves: number }
+  | { type: 'sequence_step'; stepId: string; agentName: string; status: 'running' | 'done' | 'skipped' | 'abstained'; wave: number; reason?: string }
+  | { type: 'sequence_done'; success: boolean; participatedCount: number; abstainedCount: number; totalCostCents: number }
   | { type: 'done'; inputTokens: number; outputTokens: number; traceId?: string };
 
 // ============================================================================

@@ -281,6 +281,56 @@ export async function* executeToolCall(
     return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !subResult.success), isError: !subResult.success };
   }
 
+  // --- Sequential multi-agent execution ---
+  if (request.name === 'run_sequence') {
+    yield { type: 'status', message: 'Planning multi-agent sequence...' };
+
+    // Collect sequence events to emit after execution
+    const sequenceEvents: OrchestratorEvent[] = [];
+    const { runSequenceWithEvents } = await import('./tools/sequences.js');
+    const seqResult = await runSequenceWithEvents(ctx.toolCtx, toolInput, (event) => {
+      if (event.type === 'sequence_start') {
+        sequenceEvents.push(event as unknown as OrchestratorEvent);
+      } else if (event.type === 'step_start') {
+        const e = event as { stepId: string; agentName: string; wave: number };
+        sequenceEvents.push({
+          type: 'sequence_step', stepId: e.stepId, agentName: e.agentName,
+          status: 'running', wave: e.wave,
+        });
+      } else if (event.type === 'step_abstained') {
+        const e = event as unknown as { stepId: string; agentName: string; reason: string };
+        sequenceEvents.push({
+          type: 'sequence_step', stepId: e.stepId, agentName: e.agentName,
+          status: 'abstained', wave: 0, reason: e.reason,
+        });
+      } else if (event.type === 'sequence_complete') {
+        const e = event as { result: { success: boolean; participatedCount: number; abstainedCount: number; totalCostCents: number } };
+        sequenceEvents.push({
+          type: 'sequence_done', success: e.result.success,
+          participatedCount: e.result.participatedCount,
+          abstainedCount: e.result.abstainedCount,
+          totalCostCents: e.result.totalCostCents,
+        });
+      }
+    });
+
+    // Emit collected events
+    for (const seqEvent of sequenceEvents) {
+      yield seqEvent;
+    }
+
+    const result: ToolResult = seqResult.success
+      ? { success: true, data: seqResult.data }
+      : { success: false, error: seqResult.error };
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+
+    const content = seqResult.success
+      ? `Sequence completed: ${JSON.stringify(seqResult.data)}`
+      : `Sequence failed: ${seqResult.error}`;
+    return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !seqResult.success), isError: !seqResult.success };
+  }
+
   // --- Browser tool execution ---
   if (isBrowserTool(request.name) && ctx.browserState.service) {
     const browserResult = await executeBrowserTool(ctx.browserState.service, request.name, toolInput);
