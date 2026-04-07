@@ -39,6 +39,7 @@ import { listConnectors, addConnector, removeConnector, syncConnector, testConne
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
 import { saveDeliverable } from './deliverables.js';
+import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -221,4 +222,11 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Deliverables
   ['save_deliverable', (ctx, input) => saveDeliverable(ctx, input)],
+
+  // LSP (code intelligence)
+  ['lsp_diagnostics', (ctx, input) => lspDiagnostics(ctx, input)],
+  ['lsp_hover', (ctx, input) => lspHover(ctx, input)],
+  ['lsp_go_to_definition', (ctx, input) => lspGoToDefinition(ctx, input)],
+  ['lsp_references', (ctx, input) => lspReferences(ctx, input)],
+  ['lsp_completions', (ctx, input) => lspCompletions(ctx, input)],
 ]);

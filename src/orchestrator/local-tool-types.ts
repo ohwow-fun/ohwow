@@ -10,6 +10,7 @@ import type { ControlPlaneClient } from '../control-plane/client.js';
 import type { ScraplingService } from '../execution/scrapling/index.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
+import type { LspManager } from '../lsp/lsp-manager.js';
 
 export interface LocalToolContext {
   db: DatabaseAdapter;
@@ -36,6 +37,8 @@ export interface LocalToolContext {
   meshRagEnabled?: boolean;
   /** Connector registry for data source sync */
   connectorRegistry?: ConnectorRegistry;
+  /** LSP manager for code intelligence tools */
+  lspManager?: LspManager;
 }
 
 export interface ToolResult {

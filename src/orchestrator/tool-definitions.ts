@@ -1731,12 +1731,83 @@ import {
 export { BASH_TOOL_DEFINITIONS };
 
 // =========================================================================
+// LSP CODE INTELLIGENCE TOOLS
+// =========================================================================
+
+export const LSP_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'lsp_diagnostics',
+    description: 'Get compiler errors and warnings for a file using the language server. Use before and after edits to verify correctness.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path (absolute or relative to workspace)' },
+      },
+      required: ['file'],
+    },
+  },
+  {
+    name: 'lsp_hover',
+    description: 'Get type information and documentation for a symbol at a specific position in a file.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_go_to_definition',
+    description: 'Jump to the definition of a symbol at a given position. Returns the file and location with surrounding code context.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_references',
+    description: 'Find all references to a symbol at a given position across the project.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_completions',
+    description: 'Get code completions at a position. Useful for discovering available methods, properties, or imports.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+];
+
+// =========================================================================
 // INTENT-BASED TOOL FILTERING
 // =========================================================================
 
 export type IntentSection =
   | 'pulse' | 'agents' | 'projects' | 'business' | 'memory' | 'rag'
-  | 'vision' | 'filesystem' | 'channels' | 'browser' | 'desktop' | 'project_instructions';
+  | 'vision' | 'filesystem' | 'channels' | 'browser' | 'desktop' | 'project_instructions'
+  | 'dev';
 
 /**
  * Maps each tool name to the intent sections where it's relevant.
@@ -1891,6 +1962,13 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // File access gateway → 'filesystem'
   request_file_access: ['filesystem'],
 
+  // LSP code intelligence → 'dev' + 'filesystem'
+  lsp_diagnostics: ['dev', 'filesystem'],
+  lsp_hover: ['dev', 'filesystem'],
+  lsp_go_to_definition: ['dev', 'filesystem'],
+  lsp_references: ['dev', 'filesystem'],
+  lsp_completions: ['dev', 'filesystem'],
+
   // Browser tools → 'browser'
   request_browser: ['browser'],
 
@@ -1922,11 +2000,13 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   send_telegram_message: 1, list_telegram_chats: 1,
   ocr_extract_text: 1, analyze_image: 1,
   search_knowledge: 1,
+  lsp_diagnostics: 1,
 
   // P2: Common extensions (default for unlisted tools)
   queue_task: 2, reject_task: 2, retry_task: 2, cancel_task: 2,
   get_pending_approvals: 2, spawn_agents: 2, await_agent_results: 2,
   local_search_files: 2, local_search_content: 2, local_edit_file: 2,
+  lsp_hover: 2, lsp_go_to_definition: 2, lsp_references: 2, lsp_completions: 3,
   update_contact: 2, log_contact_event: 2,
   get_business_pulse: 2, get_body_state: 2, get_contact_pipeline: 2, get_daily_reps_status: 2,
   get_whatsapp_status: 2, add_whatsapp_chat: 2, remove_whatsapp_chat: 2,
