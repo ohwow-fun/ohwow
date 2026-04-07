@@ -939,6 +939,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
             logger.debug('[daemon] Wired bios boundary -> scheduler');
           }
         } catch { /* bios wiring is non-fatal */ }
+
+        // Wire BPP modules into control plane for cloud sync
+        if (controlPlane) {
+          controlPlane.setBppModules(bpp);
+          logger.debug('[daemon] Wired BPP modules -> control plane');
+        }
       }, 2000);
     }
 

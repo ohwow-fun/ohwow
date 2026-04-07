@@ -46,6 +46,23 @@ import { getMachineId } from '../lib/machine-id.js';
 import { OutboundQueue } from './outbound-queue.js';
 import type { OutboundQueueItem } from './outbound-queue.js';
 import type { ConsciousnessBridge, CloudConsciousnessItem } from '../brain/consciousness-bridge.js';
+import type { AffectEngine } from '../affect/affect-engine.js';
+import type { EndocrineSystem } from '../endocrine/endocrine-system.js';
+import type { HomeostasisController } from '../homeostasis/homeostasis-controller.js';
+import type { ImmuneSystem } from '../immune/immune-system.js';
+import type { NarrativeEngine } from '../narrative/narrative-engine.js';
+import type { EthicsEngine } from '../ethos/ethics-engine.js';
+import type { HabitEngine } from '../hexis/habit-engine.js';
+
+export interface BppModules {
+  affect?: AffectEngine | null;
+  endocrine?: EndocrineSystem | null;
+  homeostasis?: HomeostasisController | null;
+  immune?: ImmuneSystem | null;
+  narrative?: NarrativeEngine | null;
+  ethics?: EthicsEngine | null;
+  habits?: HabitEngine | null;
+}
 
 export interface ControlPlaneCallbacks {
   onTaskDispatch: (agentId: string, taskId: string, taskPayload: Record<string, unknown>) => void;
@@ -94,6 +111,7 @@ export class ControlPlaneClient {
   }
   private outboundQueue: OutboundQueue;
   private consciousnessBridge: ConsciousnessBridge | null = null;
+  private bppModules: BppModules | null = null;
 
   constructor(
     private config: RuntimeConfig,
@@ -126,6 +144,14 @@ export class ControlPlaneClient {
    */
   setConsciousnessBridge(bridge: ConsciousnessBridge): void {
     this.consciousnessBridge = bridge;
+  }
+
+  /**
+   * Set BPP modules for periodic state sync to cloud.
+   * Call after philosophical layers finish async initialization.
+   */
+  setBppModules(modules: BppModules): void {
+    this.bppModules = modules;
   }
 
   /** Late-bind a handler for presence events from the phone eye. */
@@ -889,6 +915,11 @@ export class ControlPlaneClient {
       this.syncConsciousness().catch(() => {});
     }
 
+    // Sync BPP state every 6th heartbeat (~90s)
+    if (this.bppModules && this.heartbeatCount % 6 === 0) {
+      this.syncBpp().catch(() => {});
+    }
+
     // Piggyback drain on successful heartbeats
     this.drainOutboundQueue().catch(() => {});
   }
@@ -928,6 +959,78 @@ export class ControlPlaneClient {
       }
     } catch (err) {
       logger.debug({ err }, '[ControlPlane] Consciousness sync failed');
+    }
+  }
+
+  /**
+   * Send BPP state summary to cloud for cross-environment awareness.
+   * Lightweight sync: endocrine tone, immune level, narratives, habits, moral profile.
+   */
+  private async syncBpp(): Promise<void> {
+    if (!this.bppModules || !this.sessionToken) return;
+
+    try {
+      const payload: Record<string, unknown> = {};
+
+      // Endocrine tone
+      if (this.bppModules.endocrine) {
+        const profile = this.bppModules.endocrine.getProfile();
+        payload.endocrineTone = profile.overallTone;
+      }
+
+      // Immune alert level
+      if (this.bppModules.immune) {
+        const state = this.bppModules.immune.getInflammatoryState();
+        payload.immuneAlertLevel = state.alertLevel;
+      }
+
+      // Active narrative episodes
+      if (this.bppModules.narrative) {
+        const state = this.bppModules.narrative.getState();
+        payload.activeNarrativeEpisodes = state.activeEpisodes.map(ep => ep.title);
+      }
+
+      // Habit library (top 10 by strength)
+      if (this.bppModules.habits) {
+        const habits = this.bppModules.habits.getHabits();
+        payload.habits = habits
+          .sort((a, b) => b.strength - a.strength)
+          .slice(0, 10)
+          .map(h => ({
+            name: h.name,
+            cue: h.cue,
+            routine: h.routine,
+            reward: h.reward,
+            strength: h.strength,
+            automaticity: h.automaticity,
+          }));
+      }
+
+      // Moral profile
+      if (this.bppModules.ethics) {
+        const profile = this.bppModules.ethics.getMoralProfile();
+        payload.moralProfile = {
+          stage: profile.stage,
+          consistencyScore: profile.consistencyScore,
+        };
+      }
+
+      // Only sync if there's something to send
+      const hasData = Object.keys(payload).length > 0;
+      if (!hasData) return;
+
+      await fetch(`${this.config.cloudUrl}/api/local-runtime/bpp-sync`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      logger.debug({ tone: payload.endocrineTone, immune: payload.immuneAlertLevel }, '[ControlPlane] BPP state synced to cloud');
+    } catch (err) {
+      logger.debug({ err }, '[ControlPlane] BPP sync failed');
     }
   }
 
