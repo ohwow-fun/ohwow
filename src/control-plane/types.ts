@@ -108,7 +108,7 @@ export interface DeviceConflictResponse {
 // POLL
 // ============================================================================
 
-export type CommandType = 'config_sync' | 'task_dispatch' | 'task_cancel' | 'runtime_replaced' | 'webhook_relay' | 'workflow_execute' | 'desktop_emergency_stop';
+export type CommandType = 'config_sync' | 'task_dispatch' | 'task_cancel' | 'runtime_replaced' | 'webhook_relay' | 'workflow_execute' | 'desktop_emergency_stop' | 'presence_event';
 
 export interface PollMessage {
   id: string;
@@ -305,4 +305,15 @@ export interface ExecuteDeferredActionResponse {
   success: boolean;
   error?: string;
   result?: string;
+}
+
+// ============================================================================
+// PRESENCE EVENT — Phone eye → local runtime
+// ============================================================================
+
+export interface PresenceEventPayload {
+  eventType: 'arrival' | 'departure' | 'still_here';
+  confidence: number;
+  deviceId: string;
+  timestamp: number;
 }

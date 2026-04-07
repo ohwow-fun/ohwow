@@ -34,6 +34,7 @@ import type {
   DeviceCapabilities,
   MemorySyncPayload,
   StateSyncEntry,
+  PresenceEventPayload,
 } from './types.js';
 import { dirname } from 'path';
 import type { OllamaMonitor } from '../lib/ollama-monitor.js';
@@ -55,6 +56,7 @@ export interface ControlPlaneCallbacks {
   onReplaced?: () => Promise<void>;
   onDesktopEmergencyStop?: () => void;
   onDesktopConfirmationRequired?: (agentId: string, agentName: string) => void;
+  onPresenceEvent?: (payload: PresenceEventPayload) => void;
 }
 
 export class ControlPlaneClient {
@@ -659,6 +661,15 @@ export class ControlPlaneClient {
           this.callbacks.onDesktopEmergencyStop();
         } else {
           logger.warn('[ControlPlane] No desktop emergency stop handler registered');
+        }
+        break;
+      }
+      case 'presence_event': {
+        const presencePayload = msg.payload as unknown as PresenceEventPayload;
+        if (this.callbacks.onPresenceEvent) {
+          this.callbacks.onPresenceEvent(presencePayload);
+        } else {
+          logger.warn('[ControlPlane] Received presence_event but no handler registered');
         }
         break;
       }
