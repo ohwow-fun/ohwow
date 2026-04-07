@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { CircleNotch, PencilSimple, Check, X, Warning, Lightning } from '@phosphor-icons/react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { CircleNotch, PencilSimple, Check, X, Warning, Lightning, MagnifyingGlass } from '@phosphor-icons/react';
 import { useApi } from '../../hooks/useApi';
 import { api } from '../../api/client';
 import { toast } from '../../components/Toast';
@@ -25,6 +25,15 @@ export function ModelSection() {
   const [editingOpenRouterKey, setEditingOpenRouterKey] = useState(false);
   const [openRouterKeyInput, setOpenRouterKeyInput] = useState('');
   const [savingOpenRouterKey, setSavingOpenRouterKey] = useState(false);
+
+  // OpenRouter live model list
+  const [orModelSearch, setOrModelSearch] = useState('');
+  const [orModels, setOrModels] = useState<Array<{
+    id: string; name: string; contextLength: number;
+    pricing: { prompt: number; completion: number };
+    supportsTools: boolean; supportsVision: boolean; isFree: boolean;
+  }>>([]);
+  const [orModelsLoading, setOrModelsLoading] = useState(false);
 
   const {
     installed,
@@ -79,6 +88,23 @@ export function ModelSection() {
     fetchInstalled();
     fetchOpenRouter();
   }, [fetchInstalled, fetchOpenRouter]);
+
+  // Fetch OpenRouter models when connected
+  useEffect(() => {
+    if (!openRouterConnected) return;
+    setOrModelsLoading(true);
+    api<{ data: { models: typeof orModels } }>('/api/models/openrouter')
+      .then(res => { setOrModels(res.data.models); setOrModelsLoading(false); })
+      .catch(() => setOrModelsLoading(false));
+  }, [openRouterConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filteredOrModels = useMemo(() => {
+    const q = orModelSearch.toLowerCase().trim();
+    if (!q) return orModels;
+    return orModels.filter(m =>
+      m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q),
+    );
+  }, [orModels, orModelSearch]);
 
   const maskedKey = (val: string | undefined | null, showLen = 8) => {
     if (!val) return 'Not set';
@@ -224,7 +250,7 @@ export function ModelSection() {
                 </button>
               </div>
               <p className="text-[10px] text-neutral-500 mt-1.5">
-                Free frontier models. Leave empty to remove.
+                300+ models from every AI lab. Leave empty to remove.
               </p>
             </div>
           ) : (
@@ -244,19 +270,70 @@ export function ModelSection() {
 
           {/* Model Selector */}
           {openRouterConnected && (
-            <div className="flex items-center justify-between px-4 py-3">
-              <div className="flex items-center gap-2">
+            <div className="px-4 py-3">
+              <div className="flex items-center gap-2 mb-2">
                 <Lightning size={14} className="text-amber-400" />
                 <span className="text-sm text-neutral-400">Model</span>
+                {openRouterModel && (
+                  <span className="text-xs text-white/60 ml-auto">{openRouterModel}</span>
+                )}
               </div>
-              <select
-                value={openRouterModel || 'openrouter/optimus-alpha'}
-                onChange={e => setOpenRouterModel(e.target.value)}
-                className="bg-white/[0.06] border border-white/[0.08] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-white/20 cursor-pointer"
-              >
-                <option value="openrouter/optimus-alpha">Hunter Alpha (reasoning, 1M ctx)</option>
-                <option value="openrouter/optimus-alpha">Healer Alpha (multimodal, 262K ctx)</option>
-              </select>
+              {/* Search */}
+              <div className="relative mb-2">
+                <MagnifyingGlass size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500" />
+                <input
+                  type="text"
+                  value={orModelSearch}
+                  onChange={e => setOrModelSearch(e.target.value)}
+                  placeholder="Search 300+ models..."
+                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
+                />
+              </div>
+              {/* Model list */}
+              {orModelsLoading ? (
+                <div className="flex items-center gap-1.5 py-2 text-xs text-neutral-400">
+                  <CircleNotch size={12} className="animate-spin" /> Loading models...
+                </div>
+              ) : (
+                <div className="max-h-48 overflow-y-auto space-y-px">
+                  {filteredOrModels.slice(0, 50).map(m => {
+                    const isActive = m.id === openRouterModel;
+                    const ctx = m.contextLength >= 1_000_000 ? `${Math.round(m.contextLength / 1_000_000)}M`
+                      : m.contextLength >= 1_000 ? `${Math.round(m.contextLength / 1_000)}K`
+                      : String(m.contextLength);
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => setOpenRouterModel(m.id)}
+                        className={`w-full text-left px-2.5 py-1.5 rounded text-xs transition-colors ${
+                          isActive ? 'bg-white/10 text-white' : 'text-neutral-300 hover:bg-white/[0.06]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="truncate font-medium">{m.name}</span>
+                          <span className="flex items-center gap-1.5 text-neutral-500 shrink-0 ml-2">
+                            {m.isFree && <span className="text-green-400">free</span>}
+                            {m.supportsTools && <span>tools</span>}
+                            {m.supportsVision && <span>vision</span>}
+                            <span>{ctx}</span>
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-neutral-500 truncate">{m.id}</div>
+                      </button>
+                    );
+                  })}
+                  {filteredOrModels.length > 50 && (
+                    <p className="text-[10px] text-neutral-500 px-2.5 py-1">
+                      {filteredOrModels.length - 50} more. Refine your search.
+                    </p>
+                  )}
+                  {filteredOrModels.length === 0 && (
+                    <p className="text-xs text-neutral-500 px-2.5 py-2">
+                      {orModelSearch ? 'No models match your search' : 'No models available'}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
