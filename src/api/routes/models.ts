@@ -5,8 +5,9 @@
 
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import type { EventEmitter } from 'events';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import type { TypedEventBus } from '../../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../../tui/types.js';
 import { MODEL_CATALOG, isModelInstalled, getMLXModelId } from '../../lib/ollama-models.js';
 import { detectDevice, getMemoryTier } from '../../lib/device-info.js';
 import { isOllamaRunning, listInstalledModels, unloadModel, loadModel, pullModel } from '../../lib/ollama-installer.js';
@@ -15,7 +16,7 @@ import type { LocalOrchestrator } from '../../orchestrator/local-orchestrator.js
 
 const OLLAMA_URL = process.env.OHWOW_OLLAMA_URL || 'http://localhost:11434';
 
-export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter, orchestrator?: LocalOrchestrator | null): Router {
+export function createModelsRouter(db: DatabaseAdapter, eventBus?: TypedEventBus<RuntimeEvents>, orchestrator?: LocalOrchestrator | null): Router {
   const router = Router();
 
   /**
@@ -462,7 +463,7 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
           await db.from('runtime_settings')
             .insert({ key: 'cloud_provider', value: cloudProvider });
         }
-        eventBus?.emit('cloud:provider-changed' as string, { provider: cloudProvider, model });
+        eventBus?.emit('cloud:provider-changed', { provider: cloudProvider, model });
       }
       eventBus?.emit('ollama:model-changed', { model });
       res.json({ data: { orchestratorModel: model } });

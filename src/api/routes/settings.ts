@@ -5,8 +5,9 @@
  */
 
 import { Router } from 'express';
-import type { EventEmitter } from 'events';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import type { TypedEventBus } from '../../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../../tui/types.js';
 
 const ALLOWED_SETTINGS = new Set([
   'anthropic_api_key',
@@ -36,7 +37,7 @@ function maskSensitiveValue(value: string): string {
   return '****' + value.slice(-4);
 }
 
-export function createSettingsRouter(db: DatabaseAdapter, eventBus?: EventEmitter): Router {
+export function createSettingsRouter(db: DatabaseAdapter, eventBus?: TypedEventBus<RuntimeEvents>): Router {
   const router = Router();
 
   // Read a single setting

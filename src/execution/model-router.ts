@@ -1219,6 +1219,24 @@ export class ModelRouter {
     }
   }
 
+  /** Try cloud providers in order of cloudProvider preference. Returns null if none available. */
+  private async tryCloudProvider(): Promise<ModelProvider | null> {
+    if (this.cloudProvider === 'openrouter') {
+      if (this.openrouter) {
+        const available = await this.openrouter.isAvailable();
+        if (available) return this.openrouter;
+      }
+      if (this.anthropic) return this.anthropic;
+    } else {
+      if (this.anthropic) return this.anthropic;
+      if (this.openrouter) {
+        const available = await this.openrouter.isAvailable();
+        if (available) return this.openrouter;
+      }
+    }
+    return null;
+  }
+
   /**
    * Get the appropriate provider for a task type.
    * Behavior depends on modelSource (and optionally, execution policy):
@@ -1293,19 +1311,13 @@ export class ModelRouter {
         }
         // Fall back based on policy
         if (policy.fallback === 'cloud') {
-          if (this.openrouter) {
-            const available = await this.openrouter.isAvailable();
-            if (available) return this.openrouter;
-          }
-          if (this.anthropic) return this.anthropic;
+          const cloudResult = await this.tryCloudProvider();
+          if (cloudResult) return cloudResult;
         }
       } else if (policy.modelSource === 'cloud') {
-        // Policy explicitly wants cloud
-        if (this.anthropic) return this.anthropic;
-        if (this.openrouter) {
-          const available = await this.openrouter.isAvailable();
-          if (available) return this.openrouter;
-        }
+        // Policy explicitly wants cloud — respect cloudProvider preference
+        const cloudResult = await this.tryCloudProvider();
+        if (cloudResult) return cloudResult;
         // Fall back to local if policy allows
         if (policy.fallback === 'local' && this.ollama) {
           const available = await this.ollama.isAvailable();
@@ -1422,13 +1434,9 @@ export class ModelRouter {
       // Fall back to cloud providers
     }
 
-    // Try OpenRouter as middle tier (free, cloud-quality)
-    if (this.openrouter) {
-      const available = await this.openrouter.isAvailable();
-      if (available) return this.openrouter;
-    }
-
-    if (this.anthropic) return this.anthropic;
+    // Try cloud providers (respects cloudProvider preference order)
+    const cloudResult = await this.tryCloudProvider();
+    if (cloudResult) return cloudResult;
 
     // Last resort: try OpenAI-compatible → Ollama even for non-preferred tasks (free tier)
     if (this.openaiCompatible) {

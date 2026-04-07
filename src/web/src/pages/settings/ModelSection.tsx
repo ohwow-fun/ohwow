@@ -27,12 +27,13 @@ export function ModelSection() {
   const [savingOpenRouterKey, setSavingOpenRouterKey] = useState(false);
 
   // OpenRouter live model list
-  const [orModelSearch, setOrModelSearch] = useState('');
-  const [orModels, setOrModels] = useState<Array<{
+  interface ORModel {
     id: string; name: string; contextLength: number;
     pricing: { prompt: number; completion: number };
     supportsTools: boolean; supportsVision: boolean; isFree: boolean;
-  }>>([]);
+  }
+  const [orModelSearch, setOrModelSearch] = useState('');
+  const [orModels, setOrModels] = useState<ORModel[]>([]);
   const [orModelsLoading, setOrModelsLoading] = useState(false);
 
   const {
@@ -60,6 +61,9 @@ export function ModelSection() {
     fetchOpenRouter,
     saveOpenRouterKey,
     setOpenRouterModel,
+    cloudProvider,
+    fetchCloudProvider,
+    setCloudProvider,
   } = useModels();
 
   const { status: inferenceStatus } = useInferenceStatus();
@@ -87,13 +91,14 @@ export function ModelSection() {
   useEffect(() => {
     fetchInstalled();
     fetchOpenRouter();
-  }, [fetchInstalled, fetchOpenRouter]);
+    fetchCloudProvider();
+  }, [fetchInstalled, fetchOpenRouter, fetchCloudProvider]);
 
   // Fetch OpenRouter models when connected
   useEffect(() => {
     if (!openRouterConnected) return;
     setOrModelsLoading(true);
-    api<{ data: { models: typeof orModels } }>('/api/models/openrouter')
+    api<{ data: { models: ORModel[] } }>('/api/models/openrouter')
       .then(res => { setOrModels(res.data.models); setOrModelsLoading(false); })
       .catch(() => setOrModelsLoading(false));
   }, [openRouterConnected]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -163,6 +168,36 @@ export function ModelSection() {
 
   return (
     <>
+      {/* Cloud Provider Toggle */}
+      <div className="mb-6">
+        <h2 className="text-sm font-medium text-neutral-400 uppercase tracking-wider mb-3">Cloud Provider</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setCloudProvider('anthropic')}
+            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
+              cloudProvider === 'anthropic'
+                ? 'bg-white/10 border-white/20 text-white'
+                : 'bg-white/[0.03] border-white/[0.06] text-neutral-400 hover:bg-white/[0.06]'
+            }`}
+          >
+            Anthropic
+          </button>
+          <button
+            onClick={() => setCloudProvider('openrouter')}
+            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors border ${
+              cloudProvider === 'openrouter'
+                ? 'bg-white/10 border-white/20 text-white'
+                : 'bg-white/[0.03] border-white/[0.06] text-neutral-400 hover:bg-white/[0.06]'
+            }`}
+          >
+            OpenRouter
+          </button>
+        </div>
+        <p className="text-[10px] text-neutral-500 mt-1.5">
+          Which provider to use when running in cloud mode
+        </p>
+      </div>
+
       {/* Anthropic API Key */}
       <div className="mb-6">
         <h2 className="text-sm font-medium text-neutral-400 uppercase tracking-wider mb-3">Anthropic API</h2>

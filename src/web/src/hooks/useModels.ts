@@ -23,6 +23,7 @@ interface ModelsState {
   openRouterKey: string;
   openRouterModel: string;
   openRouterConnected: boolean;
+  cloudProvider: 'anthropic' | 'openrouter';
 }
 
 interface SSEProgress {
@@ -91,6 +92,7 @@ export function useModels() {
     openRouterKey: '',
     openRouterModel: '',
     openRouterConnected: false,
+    cloudProvider: 'anthropic',
   });
 
   const abortRef = useRef<AbortController | null>(null);
@@ -339,37 +341,61 @@ export function useModels() {
     }
   }, [fetchInstalled]);
 
-  /** Fetch OpenRouter configuration status. */
+  /** Fetch OpenRouter configuration status. Validates by checking if models endpoint returns data. */
   const fetchOpenRouter = useCallback(async () => {
     try {
       const [keyRes, modelRes] = await Promise.all([
         api<{ data: { key: string; value: string } | null }>('/api/settings/openrouter_api_key'),
         api<{ data: { key: string; value: string } | null }>('/api/settings/openrouter_model'),
       ]);
+      const hasKey = !!keyRes.data?.value;
+      let connected = false;
+      if (hasKey) {
+        // Validate by checking if the models endpoint returns data
+        try {
+          const modelsRes = await api<{ data: { configured: boolean } }>('/api/models/openrouter');
+          connected = modelsRes.data.configured;
+        } catch {
+          connected = false;
+        }
+      }
       setState(s => ({
         ...s,
         openRouterKey: keyRes.data?.value || '',
         openRouterModel: modelRes.data?.value || '',
-        openRouterConnected: !!keyRes.data?.value,
+        openRouterConnected: connected,
       }));
     } catch {
       // Settings may not exist yet
     }
   }, []);
 
-  /** Save OpenRouter API key. */
+  /** Save OpenRouter API key. Validates by attempting to fetch models after saving. */
   const saveOpenRouterKey = useCallback(async (key: string) => {
     try {
       await api('/api/settings/openrouter_api_key', {
         method: 'PUT',
         body: JSON.stringify({ value: key }),
       });
-      setState(s => ({
-        ...s,
-        openRouterKey: key ? '****' + key.slice(-4) : '',
-        openRouterConnected: !!key,
-      }));
-      toast('success', key ? 'OpenRouter API key saved' : 'OpenRouter API key removed');
+      if (key) {
+        // Validate: wait briefly for daemon to pick up the key, then test
+        try {
+          const modelsRes = await api<{ data: { configured: boolean; models: unknown[] } }>('/api/models/openrouter');
+          const connected = modelsRes.data.configured && modelsRes.data.models.length > 0;
+          setState(s => ({
+            ...s,
+            openRouterKey: '****' + key.slice(-4),
+            openRouterConnected: connected,
+          }));
+          toast('success', connected ? 'OpenRouter connected' : 'Key saved but couldn\'t reach OpenRouter');
+        } catch {
+          setState(s => ({ ...s, openRouterKey: '****' + key.slice(-4), openRouterConnected: false }));
+          toast('success', 'OpenRouter API key saved');
+        }
+      } else {
+        setState(s => ({ ...s, openRouterKey: '', openRouterConnected: false }));
+        toast('success', 'OpenRouter API key removed');
+      }
     } catch {
       toast('error', 'Couldn\'t save OpenRouter API key');
     }
@@ -389,6 +415,33 @@ export function useModels() {
     }
   }, []);
 
+  /** Fetch the current cloud provider setting. */
+  const fetchCloudProvider = useCallback(async () => {
+    try {
+      const res = await api<{ data: { key: string; value: string } | null }>('/api/settings/cloud_provider');
+      const val = res.data?.value as 'anthropic' | 'openrouter' | undefined;
+      if (val === 'anthropic' || val === 'openrouter') {
+        setState(s => ({ ...s, cloudProvider: val }));
+      }
+    } catch {
+      // Setting may not exist yet
+    }
+  }, []);
+
+  /** Set the cloud provider (anthropic or openrouter). */
+  const setCloudProvider = useCallback(async (provider: 'anthropic' | 'openrouter') => {
+    try {
+      await api('/api/settings/cloud_provider', {
+        method: 'PUT',
+        body: JSON.stringify({ value: provider }),
+      });
+      setState(s => ({ ...s, cloudProvider: provider }));
+      toast('success', `Cloud provider set to ${provider === 'anthropic' ? 'Anthropic' : 'OpenRouter'}`);
+    } catch {
+      toast('error', 'Couldn\'t update cloud provider');
+    }
+  }, []);
+
   return {
     ...state,
     fetchInstalled,
@@ -403,5 +456,7 @@ export function useModels() {
     fetchOpenRouter,
     saveOpenRouterKey,
     setOpenRouterModel,
+    fetchCloudProvider,
+    setCloudProvider,
   };
 }
