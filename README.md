@@ -222,6 +222,30 @@ This routes all model calls through `claude --print`, using your existing Claude
 - **Provider mode** (`modelSource: claude-code`): single-turn completions for orchestrator chat, memory extraction, planning
 - **Full delegation** (`modelSource: claude-code-cli`): entire tasks delegated to Claude Code with its own tool loop
 
+## If You Already Use AI Agents
+
+You probably already have an AI assistant with memory, tool use, and web browsing. ChatGPT remembers things about you. Claude Code edits your files. Gemini searches the web. They're good. So why would you also want ohwow?
+
+Because there's a gap between "AI that can answer questions and use tools" and "AI that actually runs part of your business." That gap is what ohwow fills.
+
+**Your agent's memory is rented.** ChatGPT's memory lives on OpenAI's servers. Claude's lives on Anthropic's. If you switch providers, cancel a subscription, or the service changes its terms, your agent's learned context disappears. ohwow stores everything in SQLite on your machine. Your agent's memory, skills, identity, and full task history belong to you. Back it up, fork it, migrate it. No vendor can take it away.
+
+**Your agent is locked to one provider.** A Custom GPT only runs on OpenAI. A Claude project only runs on Anthropic. ohwow's model router runs any model from any provider through the same persistent body. Use Llama locally for simple tasks, Claude for complex reasoning, GPT for specific workflows. Switch models without losing a single memory, skill, or learned pattern. Your agent's intelligence accumulates regardless of which brain is powering it today.
+
+**Your agent doesn't learn from its own work.** ChatGPT remembers facts you tell it. ohwow agents learn from execution. After 200 outreach messages, the Sales Agent knows which opening lines get responses. After 50 support tickets, the Support Agent knows which issues it can resolve alone. This isn't prompt engineering. It's skill synthesis from real outcomes: Thompson sampling routes tasks to the agent most likely to succeed, strategic principles emerge from patterns in what worked, and practice sessions let agents rehearse before doing.
+
+**Your agent doesn't self-regulate.** When a tool starts failing silently, your current agent doesn't notice. ohwow runs homeostatic control loops that detect drift in error rates, throughput, and cognitive load, then trigger corrective action automatically. An immune system learns threat signatures and escalates alert levels. Somatic markers tag tool outcomes with emotional valence, so the agent develops intuition: not just "this failed once" but "this approach in this context feels wrong."
+
+**Your agent waits to be asked.** It doesn't notice that your lead pipeline is drying up, or that a task it completed yesterday created a follow-up opportunity, or that Tuesday mornings are when you're sharpest for strategic decisions. ohwow's BIOS layer learns your circadian rhythm from activity patterns, estimates cognitive load in real time, and uses that to act at the right moment. It surfaces the competitive analysis when you're sharp enough to make decisions on it. It notices a lead went cold and drafts a follow-up before you think to ask. It detects that you've been sprinting all week and shifts toward reflective work. The goal isn't fewer interruptions. It's an agent that reads the room and moves first.
+
+**Your agent works alone.** ohwow agents coordinate. A multi-device mesh shares discoveries across your machines with zero configuration. When one device learns something, every peer knows. Tasks route to the best device. If one goes offline, another picks up. Agents delegate to each other via the A2A protocol, with trust earned per domain, not granted all at once.
+
+None of this replaces your existing AI tools. It gives them a persistent, self-improving, provider-independent body that's yours to keep.
+
+```bash
+npm install ohwow -g && ohwow
+```
+
 ## Desktop Control
 
 Your agents aren't trapped in a chat window. They operate your computer.
