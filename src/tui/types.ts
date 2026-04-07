@@ -218,6 +218,9 @@ export interface RuntimeEvents {
   // Budget guard
   'budget:warning': { agentId: string; taskId: string; pct: number };
   'budget:exceeded': { agentId: string; taskId: string; reason: string };
+
+  // Presence (phone eye → presence engine)
+  'presence:event': { eventType: 'arrival' | 'departure' | 'still_here'; confidence: number; deviceId: string; timestamp: number };
 }
 
 export type RuntimeEventName = keyof RuntimeEvents;

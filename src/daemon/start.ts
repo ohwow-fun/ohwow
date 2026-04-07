@@ -974,12 +974,17 @@ export async function startDaemon(): Promise<DaemonHandle> {
         workspaceId,
       });
 
-      // Wire presence events from control plane
+      // Wire presence events from control plane (cloud → local dispatch)
       if (controlPlane) {
         controlPlane.setPresenceHandler((event) => {
           presenceEngine.handlePresenceEvent(event);
         });
       }
+
+      // Wire presence events from local API route (direct, no cloud)
+      bus.on('presence:event', (event) => {
+        presenceEngine.handlePresenceEvent(event);
+      });
 
       // Register as a body organ (the agent's "eye")
       digitalBody.setOrgan('eye', {

@@ -27,6 +27,7 @@ import { createSchedulesRouter } from './routes/schedules.js';
 import { createSystemRouter } from './routes/system.js';
 import { createOrchestratorRouter } from './routes/orchestrator.js';
 import { createVoiceRouter } from './routes/voice.js';
+import { createPresenceRouter } from './routes/presence.js';
 import { createPodcastRouter } from './routes/podcast.js';
 import { createSettingsRouter } from './routes/settings.js';
 import { createOnboardingRouter } from './routes/onboarding.js';
@@ -287,6 +288,7 @@ export function createServer(deps: ServerDeps): {
     app.use(createOrchestratorRouter(orchestrator));
   }
   app.use(createVoiceRouter(voiceboxService || undefined));
+  app.use(createPresenceRouter(eventBus));
   app.use(createPodcastRouter(vibeVoiceService || undefined));
   app.use(createSettingsRouter(db, eventBus));
   app.use(createModelsRouter(db, eventBus, orchestrator));
