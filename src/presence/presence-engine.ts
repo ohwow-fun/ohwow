@@ -342,24 +342,45 @@ export class PresenceEngine extends EventEmitter {
 
     logger.info(`[Presence] ${oldState} → ${newState}`);
 
-    // Broadcast to nervous system
-    if (newState === 'present' || newState === 'arriving') {
+    // Broadcast to global workspace (bridges to consciousness + endocrine)
+    if (newState === 'present') {
+      // High-salience arrival signal — triggers warm greeting tone
       this.workspace.broadcast({
         source: 'presence',
         type: 'signal',
-        content: `User presence: ${newState}`,
-        salience: newState === 'present' ? 0.9 : 0.5,
+        content: 'User arrived at desk. Endocrine hint: dopamine +0.2, oxytocin +0.3 (warmth).',
+        salience: 0.9,
         timestamp: Date.now(),
+        metadata: {
+          endocrineHints: [
+            { hormone: 'dopamine', delta: 0.2, source: 'presence:arrival' },
+            { hormone: 'oxytocin', delta: 0.3, source: 'presence:arrival' },
+            { hormone: 'serotonin', delta: 0.1, source: 'presence:arrival' },
+          ],
+          narrativeBeat: 'The day begins. The user has arrived.',
+        },
       });
-    }
-
-    if (newState === 'absent') {
+    } else if (newState === 'arriving') {
       this.workspace.broadcast({
         source: 'presence',
         type: 'signal',
-        content: 'User departed',
+        content: 'User approaching desk',
         salience: 0.5,
         timestamp: Date.now(),
+      });
+    } else if (newState === 'absent') {
+      this.workspace.broadcast({
+        source: 'presence',
+        type: 'signal',
+        content: 'User departed. Endocrine hint: serotonin +0.1 (calm maintenance mode).',
+        salience: 0.5,
+        timestamp: Date.now(),
+        metadata: {
+          endocrineHints: [
+            { hormone: 'serotonin', delta: 0.1, source: 'presence:departure' },
+          ],
+          narrativeBeat: 'The user has left. Time for background work.',
+        },
       });
     }
   }
