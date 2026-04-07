@@ -29,5 +29,11 @@ export type { DecomposeInput } from './sequence-decomposer.js';
 export { checkAbstention } from './abstention-check.js';
 export type { AbstentionDecision, AbstentionCheckInput } from './abstention-check.js';
 
+export { createEphemeralAgent } from './agent-factory.js';
+export type { AgentGenesisInput, AgentGenesisResult } from './agent-factory.js';
+
+export { checkPromotion, checkSequencePromotions } from './promotion-engine.js';
+export type { PromotionCheckResult } from './promotion-engine.js';
+
 export { estimateSequenceCost, checkSequenceBudget } from './cost-estimator.js';
 export type { StepCostEstimate, SequenceCostEstimate } from './cost-estimator.js';

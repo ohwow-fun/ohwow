@@ -8,7 +8,9 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { ModelRouter, ModelProvider } from '../../execution/model-router.js';
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { SequenceDefinition, SequenceStep } from './types.js';
+import { createEphemeralAgent } from './agent-factory.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================================
@@ -28,6 +30,10 @@ export interface DecomposeInput {
   modelRouter?: ModelRouter | null;
   /** Ollama model name to use for decomposition. */
   ollamaModel?: string;
+  /** Database adapter (needed for ephemeral agent creation). */
+  db?: DatabaseAdapter;
+  /** Workspace ID (needed for ephemeral agent creation). */
+  workspaceId?: string;
 }
 
 // ============================================================================
@@ -42,6 +48,7 @@ Rules:
 - Each step's prompt should tell the agent what to do, not what to be.
 - Use dependsOn to create the sequence: step-2 depends on step-1, etc.
 - Keep sequences short: 2-4 steps.
+- If no available agent has the right expertise for a step, set agentId to "NEW" and describe the needed expertise in the expectedRole field. A specialist will be created automatically.
 
 Respond in this exact JSON format (no markdown, no explanation):
 {
@@ -49,9 +56,10 @@ Respond in this exact JSON format (no markdown, no explanation):
   "steps": [
     {
       "id": "step-1",
-      "agentId": "agent-uuid",
+      "agentId": "agent-uuid or NEW",
       "prompt": "What this agent should do",
-      "dependsOn": []
+      "dependsOn": [],
+      "expectedRole": "only if agentId is NEW"
     }
   ]
 }`;
@@ -127,21 +135,43 @@ export async function decomposeIntoSequence(
       return null;
     }
 
-    // Validate steps
+    // Validate steps (with ephemeral agent creation for NEW agents)
     const validAgentIds = new Set(agents.map((a) => a.id));
     const steps: SequenceStep[] = [];
 
-    for (const raw of parsed.steps) {
-      const step = raw as Record<string, unknown>;
+    for (const rawStep of parsed.steps) {
+      const step = rawStep as Record<string, unknown>;
       const id = step.id as string;
-      const agentId = step.agentId as string;
+      let agentId = step.agentId as string;
       const stepPrompt = step.prompt as string;
       const dependsOn = (step.dependsOn as string[]) ?? [];
+      const expectedRole = step.expectedRole as string | undefined;
 
       if (!id || !agentId || !stepPrompt) continue;
+
+      // Handle NEW agent requests — create ephemeral agent via factory
+      if (agentId === 'NEW' && expectedRole && input.db && input.workspaceId) {
+        const genesis = await createEphemeralAgent({
+          expertiseNeeded: expectedRole,
+          taskContext: stepPrompt,
+          existingAgents: agents.map((a) => ({ name: a.name, role: a.role })),
+          db: input.db,
+          workspaceId: input.workspaceId,
+          anthropic: input.anthropic,
+          modelRouter: input.modelRouter,
+        });
+
+        if (genesis?.success) {
+          agentId = genesis.agentId;
+          validAgentIds.add(agentId);
+        } else {
+          continue;
+        }
+      }
+
       if (!validAgentIds.has(agentId)) continue;
 
-      steps.push({ id, agentId, prompt: stepPrompt, dependsOn });
+      steps.push({ id, agentId, prompt: stepPrompt, dependsOn, expectedRole });
     }
 
     if (steps.length === 0) return null;
