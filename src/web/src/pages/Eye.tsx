@@ -36,6 +36,8 @@ export function EyePage() {
   const [transcriptVisible, setTranscriptVisible] = useState(false);
   const lastEventRef = useRef(0);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoVoiceRetriesRef = useRef(0);
+  const MAX_AUTO_VOICE_RETRIES = 2;
 
   // ---- Presence detection (camera) ----
   const sendPresenceEvent = useCallback(async (event: { type: 'arrival' | 'departure' | 'still_here'; confidence: number }) => {
@@ -87,11 +89,19 @@ export function EyePage() {
   // ---- Auto-start voice on presence confirmation ----
   const voiceState = voice.state;
   const voiceStartCall = voice.startCall;
+  const voiceError = voice.error;
+
+  // Reset retry counter when voice connects successfully
   useEffect(() => {
-    if (autoVoice && camera.phase === 'confirmed' && voiceState === 'idle') {
+    if (voiceState !== 'idle') autoVoiceRetriesRef.current = 0;
+  }, [voiceState]);
+
+  useEffect(() => {
+    if (autoVoice && camera.phase === 'confirmed' && voiceState === 'idle' && !voiceError && autoVoiceRetriesRef.current < MAX_AUTO_VOICE_RETRIES) {
+      autoVoiceRetriesRef.current++;
       voiceStartCall().catch(() => {});
     }
-  }, [camera.phase, autoVoice, voiceState, voiceStartCall]);
+  }, [camera.phase, autoVoice, voiceState, voiceError, voiceStartCall]);
 
   // ---- Transcript fade ----
   useEffect(() => {
