@@ -370,6 +370,16 @@ export class LocalOrchestrator {
     this.modelRouter?.setModelSource(source);
   }
 
+  /** Set which cloud provider to use when modelSource === 'cloud'. */
+  setCloudProvider(provider: 'anthropic' | 'openrouter'): void {
+    this.modelRouter?.setCloudProvider(provider);
+  }
+
+  /** Get the underlying ModelRouter (for provider access in API routes). */
+  getModelRouter(): ModelRouter | null {
+    return this.modelRouter;
+  }
+
   /** Set whether to skip cost confirmation for cloud media tools. */
   setSkipMediaCostConfirmation(skip: boolean): void {
     this.skipMediaCostConfirmation = skip;

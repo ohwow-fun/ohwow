@@ -386,7 +386,11 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
    */
   router.put('/api/models/orchestrator', async (req: Request, res: Response) => {
     try {
-      const { model, modelSource } = req.body as { model?: string; modelSource?: 'local' | 'cloud' | 'auto' | 'claude-code' };
+      const { model, modelSource, cloudProvider } = req.body as {
+        model?: string;
+        modelSource?: 'local' | 'cloud' | 'auto' | 'claude-code';
+        cloudProvider?: 'anthropic' | 'openrouter';
+      };
       if (model === undefined) {
         res.status(400).json({ error: 'model is required' });
         return;
@@ -425,7 +429,9 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
       }
 
       // Persist to config file
-      updateConfigFile({ orchestratorModel: model });
+      const configUpdate: Record<string, string> = { orchestratorModel: model };
+      if (cloudProvider) configUpdate.cloudProvider = cloudProvider;
+      updateConfigFile(configUpdate);
 
       // Update orchestrator in-memory if available
       if (orchestrator) {
@@ -433,8 +439,14 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
         if (modelSource) {
           orchestrator.setModelSource(modelSource);
         }
+        if (cloudProvider) {
+          orchestrator.setCloudProvider(cloudProvider);
+        }
       }
 
+      if (cloudProvider) {
+        eventBus?.emit('cloud:provider-changed' as string, { provider: cloudProvider, model });
+      }
       eventBus?.emit('ollama:model-changed', { model });
       res.json({ data: { orchestratorModel: model } });
     } catch (err) {
@@ -444,41 +456,17 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
 
   /**
    * GET /api/models/openrouter
-   * Returns available OpenRouter models (hardcoded catalog).
+   * Returns available OpenRouter models from the live API.
+   * Query params: ?search=query&free=true&tools=true
    */
-  router.get('/api/models/openrouter', async (_req: Request, res: Response) => {
+  router.get('/api/models/openrouter', async (req: Request, res: Response) => {
     try {
-      const catalog = [
-        {
-          id: 'openrouter/optimus-alpha',
-          alias: 'hunter-alpha',
-          label: 'Hunter Alpha',
-          description: '1T parameter reasoning model, 1M context, agentic tool calling',
-          contextWindow: 1_000_000,
-          multimodal: false,
-          toolCalling: true,
-          reasoning: true,
-          free: true,
-        },
-        {
-          id: 'openrouter/optimus-alpha',
-          alias: 'healer-alpha',
-          label: 'Healer Alpha',
-          description: 'Multimodal model with vision, audio, and video understanding',
-          contextWindow: 262_000,
-          multimodal: true,
-          toolCalling: true,
-          reasoning: false,
-          free: true,
-        },
-      ];
-
       // Check if OpenRouter is configured
       const { data: keySetting } = await db.from('runtime_settings')
         .select('value')
         .eq('key', 'openrouter_api_key')
         .maybeSingle();
-      const hasKey = !!(keySetting as { value: string } | null)?.value;
+      const apiKey = (keySetting as { value: string } | null)?.value || '';
 
       const { data: modelSetting } = await db.from('runtime_settings')
         .select('value')
@@ -486,10 +474,32 @@ export function createModelsRouter(db: DatabaseAdapter, eventBus?: EventEmitter,
         .maybeSingle();
       const activeModel = (modelSetting as { value: string } | null)?.value || '';
 
+      if (!apiKey) {
+        res.json({ data: { models: [], configured: false, activeModel } });
+        return;
+      }
+
+      // Fetch live models via the orchestrator's OpenRouter provider
+      const provider = orchestrator?.getModelRouter()?.getOpenRouterProvider();
+      let models = provider ? await provider.listModels() : [];
+
+      // Apply filters from query params
+      const search = (req.query.search as string || '').toLowerCase().trim();
+      const freeOnly = req.query.free === 'true';
+      const toolsOnly = req.query.tools === 'true';
+
+      if (search) {
+        models = models.filter(m =>
+          m.id.toLowerCase().includes(search) || m.name.toLowerCase().includes(search),
+        );
+      }
+      if (freeOnly) models = models.filter(m => m.isFree);
+      if (toolsOnly) models = models.filter(m => m.supportsTools);
+
       res.json({
         data: {
-          catalog,
-          configured: hasKey,
+          models,
+          configured: true,
           activeModel,
         },
       });
