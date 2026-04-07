@@ -41,6 +41,7 @@ import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
+import { PresenceEngine } from '../presence/presence-engine.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
@@ -959,11 +960,43 @@ export async function startDaemon(): Promise<DaemonHandle> {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
 
-    // Inner thoughts loop: background context accumulation for proactive greetings
+    // Inner thoughts loop + presence engine: ambient awareness for proactive greetings
     const orchWorkspace = orchestrator?.getBrain()?.workspace;
     if (orchWorkspace) {
       const innerThoughts = new InnerThoughtsLoop(db, orchWorkspace, modelRouter, workspaceId);
       innerThoughts.start();
+
+      const presenceEngine = new PresenceEngine({
+        innerThoughts,
+        workspace: orchWorkspace,
+        modelRouter,
+        db,
+        workspaceId,
+      });
+
+      // Wire presence events from control plane
+      if (controlPlane) {
+        controlPlane.setPresenceHandler((event) => {
+          presenceEngine.handlePresenceEvent(event);
+        });
+      }
+
+      // Register as a body organ (the agent's "eye")
+      digitalBody.setOrgan('eye', {
+        id: 'eye',
+        name: 'Eye (Presence)',
+        domain: 'digital' as const,
+        isActive: () => presenceEngine.isActive(),
+        getHealth: () => presenceEngine.isActive() ? 'healthy' as const : 'dormant' as const,
+        getAffordances: () => [],
+        getUmwelt: () => [{
+          modality: 'user_presence',
+          organId: 'eye',
+          currentValue: presenceEngine.getState(),
+          lastUpdated: presenceEngine.getLastDetection() || Date.now(),
+          updateFrequencyMs: 3000,
+        }],
+      });
     }
 
     // Connector sync scheduler: periodically syncs data source connectors

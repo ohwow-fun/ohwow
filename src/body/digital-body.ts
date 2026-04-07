@@ -416,3 +416,49 @@ export function createMcpOrgan(manager: McpManagerLike): BodyPart {
 export function createVoiceOrgan(service: VoiceServiceLike): BodyPart {
   return new VoiceOrgan(service);
 }
+
+// ============================================================================
+// PRESENCE ORGAN — The agent's eye (phone camera presence detection)
+// ============================================================================
+
+/** Minimal interface for a presence-aware service. */
+export interface PresenceServiceLike {
+  isActive(): boolean;
+  getState(): string;
+  getLastDetection(): number | null;
+}
+
+class PresenceOrgan extends BaseOrgan {
+  readonly id = 'eye';
+  readonly name = 'Eye (Presence)';
+
+  constructor(private service: PresenceServiceLike) { super(); }
+
+  isActive(): boolean { return this.service.isActive(); }
+
+  getHealth(): OrganHealth {
+    if (!this.service.isActive()) return 'dormant';
+    const state = this.service.getState();
+    if (state === 'absent') return 'dormant';
+    return 'healthy';
+  }
+
+  getAffordances(): Affordance[] {
+    const active = this.service.isActive();
+    return [
+      { action: 'detect_presence', organId: this.id, domain: 'digital', readiness: active ? 1 : 0, estimatedLatencyMs: 3000, risk: 'none', prerequisites: ['phone_eye_connected'] },
+      { action: 'greet_user', organId: this.id, domain: 'digital', readiness: active && this.service.getState() === 'present' ? 1 : 0, estimatedLatencyMs: 5000, risk: 'none', prerequisites: ['user_present', 'voice_available'] },
+    ];
+  }
+
+  getUmwelt(): UmweltDimension[] {
+    return [
+      { modality: 'user_presence', organId: this.id, currentValue: this.service.getState(), lastUpdated: this.service.getLastDetection() || Date.now(), updateFrequencyMs: 3000 },
+    ];
+  }
+}
+
+/** Create a PresenceOrgan (Eye) from a presence engine. */
+export function createPresenceOrgan(service: PresenceServiceLike): BodyPart {
+  return new PresenceOrgan(service);
+}

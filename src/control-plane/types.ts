@@ -108,7 +108,7 @@ export interface DeviceConflictResponse {
 // POLL
 // ============================================================================
 
-export type CommandType = 'config_sync' | 'task_dispatch' | 'task_cancel' | 'runtime_replaced' | 'webhook_relay' | 'workflow_execute' | 'desktop_emergency_stop' | 'presence_event';
+export type CommandType = 'config_sync' | 'task_dispatch' | 'task_cancel' | 'runtime_replaced' | 'webhook_relay' | 'workflow_execute' | 'desktop_emergency_stop' | 'presence_event' | 'sequence_step_dispatch';
 
 export interface PollMessage {
   id: string;

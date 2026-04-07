@@ -128,6 +128,11 @@ export class ControlPlaneClient {
     this.consciousnessBridge = bridge;
   }
 
+  /** Late-bind a handler for presence events from the phone eye. */
+  setPresenceHandler(handler: (event: PresenceEventPayload) => void): void {
+    this.callbacks.onPresenceEvent = handler;
+  }
+
   /**
    * Connect to the cloud control plane.
    * Validates license, receives session token and agent configs.
@@ -445,6 +450,36 @@ export class ControlPlaneClient {
   }
 
   /**
+   * Proxy a POST request to the cloud API with session auth.
+   * Used for cross-environment Sequential step dispatch.
+   */
+  async proxyCloudPost(path: string, body: unknown): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+    if (!this.sessionToken) {
+      return { ok: false, error: 'Not connected to cloud' };
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.sessionToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        return { ok: false, error: `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      return { ok: true, data };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Network error' };
+    }
+  }
+
+  /**
    * Graceful disconnect — notifies cloud, cancels pending commands.
    */
   async disconnect(): Promise<void> {
@@ -671,6 +706,29 @@ export class ControlPlaneClient {
         } else {
           logger.warn('[ControlPlane] Received presence_event but no handler registered');
         }
+        break;
+      }
+      case 'sequence_step_dispatch': {
+        const stepPayload = msg.payload as {
+          stepId: string;
+          agentId: string;
+          taskInput: string;
+          sequenceRunId?: string;
+          predecessorContext?: string;
+        };
+        // Sequence steps reuse the task_dispatch pathway
+        // Create a task and dispatch like a regular agent task
+        const stepTask = {
+          title: `[Sequence Step] ${stepPayload.stepId}`,
+          input: stepPayload.taskInput,
+          status: 'pending',
+        };
+        const stepTaskId = `seq_step_${stepPayload.stepId}_${Date.now()}`;
+        await this.syncTaskToLocal(stepTaskId, stepPayload.agentId, stepTask);
+        this.callbacks.onTaskDispatch(stepPayload.agentId, stepTaskId, {
+          source: 'sequence_step',
+          sequenceRunId: stepPayload.sequenceRunId,
+        });
         break;
       }
       case 'runtime_replaced': {

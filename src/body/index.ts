@@ -48,6 +48,7 @@ export {
   createChannelsOrgan,
   createMcpOrgan,
   createVoiceOrgan,
+  createPresenceOrgan,
 } from './digital-body.js';
 export type {
   DigitalBodyOptions,
@@ -56,6 +57,7 @@ export type {
   ChannelRegistryLike,
   McpManagerLike,
   VoiceServiceLike,
+  PresenceServiceLike,
 } from './digital-body.js';
 
 // Phase 2: Digital Nervous System
