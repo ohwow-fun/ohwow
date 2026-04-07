@@ -99,7 +99,7 @@ async function handleControlMessage(
   raw: string,
   createVoiceSession: VoiceWebSocketDeps['createVoiceSession'],
 ): Promise<void> {
-  let msg: { type: string; agentId?: string; voiceProfileId?: string; mode?: VoiceMode; text?: string };
+  let msg: { type: string; agentId?: string; voiceProfileId?: string; mode?: VoiceMode; text?: string; greetingText?: string; trigger?: string };
   try {
     msg = JSON.parse(raw);
   } catch {
@@ -174,6 +174,60 @@ async function handleControlMessage(
 
       session.processTextDirect(msg.text).catch((err: Error) => {
         sendJson(ws, { type: 'error', message: err.message });
+      });
+      break;
+    }
+
+    case 'auto_start': {
+      // Presence-triggered: start session and speak greeting, then enter listening mode
+      if (!msg.agentId) {
+        sendJson(ws, { type: 'error', message: 'agentId is required' });
+        return;
+      }
+
+      if (ws.activeSession) {
+        ws.activeSession.stop();
+      }
+
+      const autoMode = msg.mode || 'full';
+      const autoSession = await createVoiceSession(msg.agentId, msg.voiceProfileId, autoMode);
+      ws.activeSession = autoSession;
+      ws.agentId = msg.agentId;
+      ws.voiceMode = autoMode;
+
+      // Wire events
+      autoSession.on('state:changed', (state: VoiceSessionState) => {
+        sendJson(ws, { type: 'state', state });
+      });
+      autoSession.on('transcription', (result: { text: string }) => {
+        sendJson(ws, { type: 'transcription', text: result.text });
+      });
+      autoSession.on('response', (text: string) => {
+        sendJson(ws, { type: 'response', text });
+      });
+      autoSession.on('audio_chunk', (chunk: AudioChunk) => {
+        if (ws.voiceMode === 'browser-native') return;
+        if (Buffer.isBuffer(chunk.audio) && ws.readyState === WebSocket.OPEN) {
+          ws.send(chunk.audio, { binary: true });
+        }
+        if (chunk.isLast) {
+          sendJson(ws, { type: 'state', state: 'idle' as VoiceSessionState });
+        }
+      });
+      autoSession.on('error', (err: Error) => {
+        sendJson(ws, { type: 'error', message: err.message });
+      });
+
+      autoSession.start().then(async () => {
+        sendJson(ws, { type: 'state', state: 'idle' as VoiceSessionState });
+        // Speak greeting if provided
+        if (msg.greetingText?.trim()) {
+          await autoSession.speakGreeting(msg.greetingText);
+        }
+        sendJson(ws, { type: 'auto_started', trigger: msg.trigger || 'presence' });
+      }).catch((err: Error) => {
+        sendJson(ws, { type: 'error', message: `Couldn't start voice session: ${err.message}` });
+        ws.activeSession = undefined;
       });
       break;
     }

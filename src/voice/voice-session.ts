@@ -192,6 +192,48 @@ export class VoiceSession extends EventEmitter implements MessagingChannel {
     return { responseText };
   }
 
+  /**
+   * Speak a greeting text without STT (TTS only).
+   * Used by the presence engine to deliver the arrival greeting.
+   * The session must be started first.
+   */
+  async speakGreeting(text: string, options?: TTSOptions): Promise<void> {
+    if (!this._active) throw new Error('Voice session is not active');
+    if (!text.trim()) return;
+
+    this.setState('speaking');
+    this.emit('response', text);
+
+    const ttsOpts = { ...this.ttsOptions, ...options };
+    const sentences = splitIntoSentences(text);
+
+    for (let i = 0; i < sentences.length; i++) {
+      const sentence = sentences[i];
+      if (!sentence) continue;
+
+      try {
+        const ttsResult = await this.tts.synthesize(sentence, ttsOpts);
+        this.emit('audio_chunk', {
+          audio: ttsResult.audio,
+          index: i,
+          total: sentences.length,
+          sentence,
+          isLast: i === sentences.length - 1,
+        });
+      } catch (err) {
+        this.emit('error', err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+
+    this.experienceStream?.append('voice_greeting_spoken', {
+      ttsProvider: this.tts.name,
+      sentenceCount: sentences.length,
+      textLength: text.length,
+    }, 'voice');
+
+    this.setState('idle');
+  }
+
   async start(): Promise<void> {
     const [sttOk, ttsOk] = await Promise.all([
       this.stt.isAvailable(),

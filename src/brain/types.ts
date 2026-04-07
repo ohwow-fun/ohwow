@@ -92,6 +92,7 @@ export type ExperienceType =
   | 'voice_session_started'   // Voice session opened (mic + speaker active)
   | 'voice_session_ended'     // Voice session closed
   | 'voice_processed'         // Complete STT → orchestrator → TTS cycle
+  | 'voice_greeting_spoken'   // Proactive greeting spoken via TTS (no STT)
   // Sequential multi-agent coordination
   | 'sequence_completed';     // A multi-agent Sequential chain finished
 
