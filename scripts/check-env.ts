@@ -100,7 +100,8 @@ const localGroups: EnvGroup[] = [
     vars: [
       { key: 'ANTHROPIC_API_KEY', optional: true, hint: 'needed for Claude models' },
       { key: 'ANTHROPIC_OAUTH_TOKEN', optional: true, hint: 'alternative to API key' },
-      { key: 'OHWOW_MODEL_SOURCE', optional: true, hint: 'anthropic, ollama, or openrouter' },
+      { key: 'OHWOW_MODEL_SOURCE', optional: true, hint: 'local, cloud, auto, or claude-code' },
+      { key: 'OHWOW_CLOUD_PROVIDER', optional: true, hint: 'anthropic or openrouter' },
       { key: 'OHWOW_CLOUD_MODEL', optional: true },
       { key: 'OHWOW_PREFER_LOCAL', optional: true },
     ],
