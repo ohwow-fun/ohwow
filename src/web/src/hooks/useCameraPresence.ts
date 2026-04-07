@@ -1,7 +1,5 @@
-
-
 /**
- * useCameraPresence
+ * useCameraPresence (Local Runtime Web UI)
  * Opens the front camera, detects faces on-device, and fires presence events.
  * Runs entirely in the browser (no frames leave the device).
  *

@@ -66,6 +66,8 @@ export function EyePage() {
   const voice = useVoiceChat('orchestrator');
 
   // ---- Derive eye state ----
+  // Local useVoiceChat states: idle | connecting | listening | speaking | error
+  // (no 'processing' — it jumps from listening to speaking)
   useEffect(() => {
     if (!camera.isActive) {
       setEyeState('inactive');
@@ -73,7 +75,7 @@ export function EyePage() {
     }
     if (voice.state === 'speaking') {
       setEyeState('speaking');
-    } else if (voice.state === 'processing') {
+    } else if (voice.state === 'connecting') {
       setEyeState('processing');
     } else if (voice.state === 'listening') {
       setEyeState('listening');
@@ -241,7 +243,8 @@ export function EyePage() {
       {/* Footer */}
       <div className="fixed bottom-0 inset-x-0 px-4 py-3 flex items-center justify-between">
         <span className="text-[10px] text-neutral-600">
-          local {voice.mode ? `· ${voice.mode}` : ''}
+          <span className="text-green-500/60">local</span>
+          {voice.mode ? ` · ${voice.mode}` : ''}
         </span>
         <span className="text-[10px] text-neutral-700">ohwow</span>
       </div>

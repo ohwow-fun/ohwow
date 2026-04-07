@@ -29,7 +29,7 @@ export function createPresenceRouter(eventBus: TypedEventBus<RuntimeEvents>): Ro
 
     eventBus.emit('presence:event', {
       eventType: eventType as 'arrival' | 'departure' | 'still_here',
-      confidence: confidence ?? 0.8,
+      confidence: Math.max(0, Math.min(1, confidence ?? 0.8)),
       deviceId: deviceId || 'unknown',
       timestamp: Date.now(),
     });
