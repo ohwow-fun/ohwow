@@ -131,6 +131,20 @@ export interface RuntimeConfig {
   openaiCompatibleUrl: string;
   /** API key for OpenAI-compatible provider (optional) */
   openaiCompatibleApiKey: string;
+  /** Enable LSP integration for code intelligence tools (default: true) */
+  lspEnabled: boolean;
+  /** Enable token preflight check before API calls (default: true) */
+  tokenPreflightEnabled: boolean;
+  /** Action when tokens exceed model capacity: 'trim' auto-compresses, 'reject' blocks (default: 'trim') */
+  tokenPreflightAction: 'trim' | 'reject';
+  /** Warn when token utilization exceeds this percentage (default: 90) */
+  tokenPreflightWarnPct: number;
+  /** Enable recovery audit logging to database (default: true) */
+  recoveryAuditEnabled: boolean;
+  /** Stale branch detection policy (default: 'warn') */
+  staleBranchPolicy: 'off' | 'warn' | 'block' | 'auto-rebase' | 'auto-merge';
+  /** Number of commits behind main before triggering stale branch detection (default: 5) */
+  staleBranchThreshold: number;
 }
 
 interface ConfigFile {
@@ -196,6 +210,13 @@ interface ConfigFile {
   meshRagEnabled?: boolean;
   openaiCompatibleUrl?: string;
   openaiCompatibleApiKey?: string;
+  lspEnabled?: boolean;
+  tokenPreflightEnabled?: boolean;
+  tokenPreflightAction?: 'trim' | 'reject';
+  tokenPreflightWarnPct?: number;
+  recoveryAuditEnabled?: boolean;
+  staleBranchPolicy?: 'off' | 'warn' | 'block' | 'auto-rebase' | 'auto-merge';
+  staleBranchThreshold?: number;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -302,6 +323,13 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     meshRagEnabled: process.env.OHWOW_MESH_RAG_ENABLED === 'true' || (fileConfig.meshRagEnabled ?? false),
     openaiCompatibleUrl: process.env.OHWOW_OPENAI_COMPATIBLE_URL ?? fileConfig.openaiCompatibleUrl ?? '',
     openaiCompatibleApiKey: process.env.OHWOW_OPENAI_COMPATIBLE_API_KEY ?? fileConfig.openaiCompatibleApiKey ?? '',
+    lspEnabled: process.env.OHWOW_LSP_ENABLED === 'false' ? false : (fileConfig.lspEnabled !== false),
+    tokenPreflightEnabled: process.env.OHWOW_TOKEN_PREFLIGHT_ENABLED === 'false' ? false : (fileConfig.tokenPreflightEnabled !== false),
+    tokenPreflightAction: (process.env.OHWOW_TOKEN_PREFLIGHT_ACTION as 'trim' | 'reject') || fileConfig.tokenPreflightAction || 'trim',
+    tokenPreflightWarnPct: parseInt(process.env.OHWOW_TOKEN_PREFLIGHT_WARN_PCT || '', 10) || fileConfig.tokenPreflightWarnPct || 90,
+    recoveryAuditEnabled: process.env.OHWOW_RECOVERY_AUDIT_ENABLED === 'false' ? false : (fileConfig.recoveryAuditEnabled !== false),
+    staleBranchPolicy: (process.env.OHWOW_STALE_BRANCH_POLICY as RuntimeConfig['staleBranchPolicy']) || fileConfig.staleBranchPolicy || 'warn',
+    staleBranchThreshold: parseInt(process.env.OHWOW_STALE_BRANCH_THRESHOLD || '', 10) || fileConfig.staleBranchThreshold || 5,
   };
 
 

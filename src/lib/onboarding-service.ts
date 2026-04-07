@@ -227,6 +227,13 @@ export class OnboardingService {
       meshRagEnabled: false,
       openaiCompatibleUrl: '',
       openaiCompatibleApiKey: '',
+      lspEnabled: true,
+      tokenPreflightEnabled: true,
+      tokenPreflightAction: 'trim',
+      tokenPreflightWarnPct: 90,
+      recoveryAuditEnabled: true,
+      staleBranchPolicy: 'warn',
+      staleBranchThreshold: 5,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

@@ -7,9 +7,18 @@
 // ERROR CLASSIFICATION
 // ============================================================================
 
-export type ErrorCategory = 'transient' | 'permanent' | 'parse';
+export type ErrorCategory =
+  | 'transient'
+  | 'permanent'
+  | 'parse'
+  | 'auth'
+  | 'rate_limit'
+  | 'context_overflow'
+  | 'tool_not_found'
+  | 'compile_error'
+  | 'stale_state';
 
-const TRANSIENT_PATTERNS = [
+const NETWORK_PATTERNS = [
   /ECONNRESET/i,
   /ECONNREFUSED/i,
   /ETIMEDOUT/i,
@@ -17,19 +26,146 @@ const TRANSIENT_PATTERNS = [
   /socket hang up/i,
   /network/i,
   /timeout/i,
-  /429/,
   /503/,
   /502/,
-  /rate limit/i,
-  /too many requests/i,
   /temporarily unavailable/i,
 ];
 
 export function classifyError(error: string | Error): ErrorCategory {
   const msg = typeof error === 'string' ? error : error.message;
-  if (TRANSIENT_PATTERNS.some(p => p.test(msg))) return 'transient';
+
+  // Specific categories first (most to least specific)
+  if (/401|403|unauthorized|forbidden|invalid.*key|authentication.*fail/i.test(msg)) return 'auth';
+  if (/429|rate.?limit|too many requests|quota.*exceeded/i.test(msg)) return 'rate_limit';
+  if (/context.*length|token.*limit|too.*long|maximum.*context|content.*too.*large/i.test(msg)) return 'context_overflow';
+  if (/unknown.?tool|no such tool|tool.*not.*found/i.test(msg)) return 'tool_not_found';
+  if (/compile|type\s*error|cannot find module|unexpected.*eof|unterminated/i.test(msg)) return 'compile_error';
+  if (/conflict|stale|outdated|merge conflict|diverged|behind.*main/i.test(msg)) return 'stale_state';
+  if (NETWORK_PATTERNS.some(p => p.test(msg))) return 'transient';
   if (/parse|json|syntax|unexpected token/i.test(msg)) return 'parse';
+
   return 'permanent';
+}
+
+// ============================================================================
+// RECOVERY RECIPES
+// ============================================================================
+
+export interface RecoveryContext {
+  error: Error;
+  toolName?: string;
+  workingDirectory?: string;
+}
+
+export interface RecoveryOutcome {
+  recovered: boolean;
+  action: string;
+  shouldRetry: boolean;
+  userMessage?: string;
+}
+
+interface RecoveryRecipe {
+  description: string;
+  action: (ctx: RecoveryContext) => Promise<RecoveryOutcome> | RecoveryOutcome;
+}
+
+const RECOVERY_RECIPES: Record<ErrorCategory, RecoveryRecipe> = {
+  transient: {
+    description: 'Retry with exponential backoff',
+    action: () => ({ recovered: true, action: 'retry_backoff', shouldRetry: true }),
+  },
+  rate_limit: {
+    description: 'Wait and retry after rate limit cooldown',
+    action: async () => {
+      await new Promise(resolve => setTimeout(resolve, 30_000));
+      return { recovered: true, action: 'rate_limit_wait_30s', shouldRetry: true };
+    },
+  },
+  context_overflow: {
+    description: 'Auto-trim context and retry',
+    action: () => ({ recovered: true, action: 'context_trimmed', shouldRetry: true }),
+  },
+  auth: {
+    description: 'Surface authentication error to user',
+    action: (ctx) => ({
+      recovered: false,
+      action: 'auth_error_surfaced',
+      shouldRetry: false,
+      userMessage: `Authentication failed: ${ctx.error.message}. Check your API key or credentials.`,
+    }),
+  },
+  parse: {
+    description: 'Retry with cleaned input',
+    action: () => ({ recovered: true, action: 'retry_parse', shouldRetry: true }),
+  },
+  tool_not_found: {
+    description: 'Suggest alternative tools',
+    action: (ctx) => {
+      const alternatives = ctx.toolName ? TOOL_ALTERNATIVES[ctx.toolName] : undefined;
+      const suggestion = alternatives ? ` Try ${alternatives.join(' or ')} instead.` : '';
+      return {
+        recovered: false,
+        action: 'tool_not_found_suggested',
+        shouldRetry: false,
+        userMessage: `Tool "${ctx.toolName}" not found.${suggestion}`,
+      };
+    },
+  },
+  compile_error: {
+    description: 'Surface compile error output',
+    action: (ctx) => ({
+      recovered: false,
+      action: 'compile_error_surfaced',
+      shouldRetry: false,
+      userMessage: ctx.error.message,
+    }),
+  },
+  stale_state: {
+    description: 'Detect stale state and suggest refresh',
+    action: () => ({
+      recovered: false,
+      action: 'stale_state_detected',
+      shouldRetry: false,
+      userMessage: 'State appears stale or conflicted. Try pulling the latest changes and retrying.',
+    }),
+  },
+  permanent: {
+    description: 'Unrecoverable error',
+    action: (ctx) => ({
+      recovered: false,
+      action: 'permanent_error',
+      shouldRetry: false,
+      userMessage: ctx.error.message,
+    }),
+  },
+};
+
+/**
+ * Attempt structured recovery for an error.
+ * One-attempt-then-escalate: tries the recipe once, surfaces to user if it fails.
+ */
+export async function attemptRecovery(
+  error: Error,
+  ctx: RecoveryContext,
+): Promise<RecoveryOutcome> {
+  const category = classifyError(error);
+  const recipe = RECOVERY_RECIPES[category];
+  const startTime = Date.now();
+
+  try {
+    const outcome = await recipe.action(ctx);
+    outcome.action = `${category}:${outcome.action}`;
+    return outcome;
+  } catch (recoveryError) {
+    // Recovery itself failed — escalate to user
+    const duration = Date.now() - startTime;
+    return {
+      recovered: false,
+      action: `${category}:recovery_failed_after_${duration}ms`,
+      shouldRetry: false,
+      userMessage: `Recovery failed: ${error.message}`,
+    };
+  }
 }
 
 // ============================================================================

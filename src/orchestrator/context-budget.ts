@@ -300,3 +300,75 @@ export function estimateToolTokens(tools: { type: string; function: { name: stri
   }
   return total;
 }
+
+// ============================================================================
+// TOKEN PREFLIGHT CHECK
+// ============================================================================
+
+export interface PreflightResult {
+  /** Whether the request can proceed */
+  allowed: boolean;
+  /** Estimated total input tokens */
+  estimatedTokens: number;
+  /** Model's context window capacity */
+  modelCapacity: number;
+  /** Percentage of capacity used */
+  utilizationPct: number;
+  /** Warning message when approaching capacity */
+  warning?: string;
+  /** Whether messages were auto-trimmed to fit */
+  trimmed?: boolean;
+}
+
+/**
+ * Check whether a request will fit within the model's context window.
+ * Call before every provider API call to prevent wasted tokens and money.
+ */
+export function preflightCheck(opts: {
+  systemPrompt: string;
+  messages: Array<{ role: string; content: string | unknown[] }>;
+  tools?: { type: string; function: { name: string; description: string; parameters: Record<string, unknown> } }[];
+  modelCapacity: number;
+  reservedForResponse?: number;
+  action: 'trim' | 'reject';
+  warnPct?: number;
+}): PreflightResult {
+  const reserved = opts.reservedForResponse ?? 4096;
+  const warnPct = opts.warnPct ?? 90;
+  const usableCapacity = opts.modelCapacity - reserved;
+
+  let totalTokens = estimateTokens(opts.systemPrompt);
+  for (const msg of opts.messages) {
+    totalTokens += estimateMessageTokens(msg);
+  }
+  if (opts.tools && opts.tools.length > 0) {
+    totalTokens += estimateToolTokens(opts.tools);
+  }
+
+  const utilizationPct = Math.round((totalTokens / usableCapacity) * 100);
+  const overCapacity = totalTokens > usableCapacity;
+
+  let warning: string | undefined;
+  if (utilizationPct >= warnPct && !overCapacity) {
+    warning = `Context window is ${utilizationPct}% full (${totalTokens}/${usableCapacity} tokens). Consider trimming conversation history.`;
+  }
+
+  if (overCapacity && opts.action === 'reject') {
+    return {
+      allowed: false,
+      estimatedTokens: totalTokens,
+      modelCapacity: opts.modelCapacity,
+      utilizationPct,
+      warning: `Request exceeds model capacity: ${totalTokens} tokens estimated vs ${usableCapacity} usable (${opts.modelCapacity} total - ${reserved} reserved for response).`,
+    };
+  }
+
+  return {
+    allowed: true,
+    estimatedTokens: totalTokens,
+    modelCapacity: opts.modelCapacity,
+    utilizationPct,
+    warning,
+    trimmed: overCapacity && opts.action === 'trim',
+  };
+}
