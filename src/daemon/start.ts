@@ -274,6 +274,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     ocrModel: config.ocrModel || undefined,
     preferLocalModel: config.preferLocalModel,
     modelSource: config.modelSource,
+    cloudProvider: config.cloudProvider,
     mainModelHasVision,
     openRouterApiKey: config.openRouterApiKey || undefined,
     openRouterModel: config.openRouterModel || undefined,
@@ -419,6 +420,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
   bus.on('openrouter:model-changed', (payload: { model: string }) => {
     modelRouter.setOpenRouterModel(payload.model);
     logger.info(`[daemon] OpenRouter model changed to: ${payload.model}`);
+  });
+  bus.on('cloud:provider-changed', (payload: { provider: string; model?: string }) => {
+    modelRouter.setCloudProvider(payload.provider as 'anthropic' | 'openrouter');
+    if (payload.model) modelRouter.setOpenRouterModel(payload.model);
+    logger.info(`[daemon] Cloud provider changed to: ${payload.provider}`);
   });
 
   let ollamaStatus = false;
