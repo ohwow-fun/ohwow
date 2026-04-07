@@ -22,6 +22,7 @@ import type { ModelRouter } from '../../execution/model-router.js';
 import { topologicalSort } from './topological-sort.js';
 import { buildPredecessorContext } from './predecessor-context.js';
 import { checkAbstention } from './abstention-check.js';
+import { estimateSequenceCost, checkSequenceBudget } from './cost-estimator.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================================
@@ -131,6 +132,21 @@ export async function executeSequence(
     if (run) runId = (run as { id: string }).id;
   } catch (err) {
     logger.warn({ err }, 'Failed to create sequence run record');
+  }
+
+  // Pre-execution cost estimate and budget check
+  const costEstimate = estimateSequenceCost(definition);
+  const budgetCheck = checkSequenceBudget(costEstimate, definition.budgetCents);
+
+  if (!budgetCheck.allowed) {
+    const errorResult: SequenceResult = {
+      success: false, stepResults: [],
+      totalInputTokens: 0, totalOutputTokens: 0, totalCostCents: 0,
+      totalDurationMs: Date.now() - startTime,
+      participatedCount: 0, abstainedCount: 0, finalOutput: '',
+    };
+    emit(onEvent, { type: 'sequence_error', error: budgetCheck.reason ?? 'Budget exceeded' });
+    return errorResult;
   }
 
   // Execute waves

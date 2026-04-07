@@ -28,3 +28,6 @@ export type { DecomposeInput } from './sequence-decomposer.js';
 
 export { checkAbstention } from './abstention-check.js';
 export type { AbstentionDecision, AbstentionCheckInput } from './abstention-check.js';
+
+export { estimateSequenceCost, checkSequenceBudget } from './cost-estimator.js';
+export type { StepCostEstimate, SequenceCostEstimate } from './cost-estimator.js';
