@@ -19,10 +19,12 @@ import type {
 } from './types.js';
 import Anthropic from '@anthropic-ai/sdk';
 import type { ModelRouter } from '../../execution/model-router.js';
+import type { ControlPlaneClient } from '../../control-plane/client.js';
 import { topologicalSort } from './topological-sort.js';
 import { buildPredecessorContext } from './predecessor-context.js';
 import { checkAbstention } from './abstention-check.js';
 import { estimateSequenceCost, checkSequenceBudget } from './cost-estimator.js';
+import { executeStepOnCloud } from './cross-env-executor.js';
 import { logger } from '../../lib/logger.js';
 
 // ============================================================================
@@ -41,6 +43,8 @@ export interface ExecuteSequenceOptions {
   anthropic?: Anthropic;
   /** Model router for abstention checks via Ollama. */
   modelRouter?: ModelRouter | null;
+  /** Control plane client for cross-environment step dispatch. */
+  controlPlane?: ControlPlaneClient | null;
   /** Timeout per step in ms (default: 120s). */
   stepTimeoutMs?: number;
 }
@@ -245,6 +249,7 @@ export async function executeSequence(
         definition,
         stepTimeoutMs,
         onEvent,
+        controlPlane: options.controlPlane,
       })
     );
 
@@ -359,6 +364,7 @@ interface ExecuteStepOptions {
   definition: SequenceDefinition;
   stepTimeoutMs: number;
   onEvent?: (event: SequenceEvent) => void;
+  controlPlane?: ControlPlaneClient | null;
 }
 
 async function executeStep(options: ExecuteStepOptions): Promise<SequenceStepResult> {
@@ -390,6 +396,16 @@ async function executeStep(options: ExecuteStepOptions): Promise<SequenceStepRes
   const taskInput = predecessorContext
     ? `${predecessorContext}\n\n---\n\n## Your Task\n\n${step.prompt}`
     : step.prompt;
+
+  // Cross-environment routing: if step targets cloud, dispatch via control plane
+  if (step.environment === 'cloud') {
+    const cloudResult = await executeStepOnCloud({
+      step, wave, taskInput,
+      controlPlane: options.controlPlane ?? null,
+    });
+    if (cloudResult) return cloudResult;
+    // Fall through to local execution if cloud unavailable
+  }
 
   // Create task in SQLite
   const { data: task } = await db

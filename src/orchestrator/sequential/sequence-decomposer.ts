@@ -59,10 +59,13 @@ Respond in this exact JSON format (no markdown, no explanation):
       "agentId": "agent-uuid or NEW",
       "prompt": "What this agent should do",
       "dependsOn": [],
-      "expectedRole": "only if agentId is NEW"
+      "expectedRole": "only if agentId is NEW",
+      "environment": "auto or local or cloud"
     }
   ]
-}`;
+}
+
+Set environment to "local" for steps that access private data (CRM, contacts, local files). Set to "cloud" for steps that need powerful reasoning or browser access. Default to "auto".`;
 
 // ============================================================================
 // MAIN FUNCTION
@@ -146,6 +149,7 @@ export async function decomposeIntoSequence(
       const stepPrompt = step.prompt as string;
       const dependsOn = (step.dependsOn as string[]) ?? [];
       const expectedRole = step.expectedRole as string | undefined;
+      const environment = step.environment as 'local' | 'cloud' | 'auto' | undefined;
 
       if (!id || !agentId || !stepPrompt) continue;
 
@@ -171,7 +175,7 @@ export async function decomposeIntoSequence(
 
       if (!validAgentIds.has(agentId)) continue;
 
-      steps.push({ id, agentId, prompt: stepPrompt, dependsOn, expectedRole });
+      steps.push({ id, agentId, prompt: stepPrompt, dependsOn, expectedRole, environment });
     }
 
     if (steps.length === 0) return null;

@@ -35,5 +35,8 @@ export type { AgentGenesisInput, AgentGenesisResult } from './agent-factory.js';
 export { checkPromotion, checkSequencePromotions } from './promotion-engine.js';
 export type { PromotionCheckResult } from './promotion-engine.js';
 
+export { executeStepOnCloud } from './cross-env-executor.js';
+export type { CrossEnvStepInput } from './cross-env-executor.js';
+
 export { estimateSequenceCost, checkSequenceBudget } from './cost-estimator.js';
 export type { StepCostEstimate, SequenceCostEstimate } from './cost-estimator.js';
