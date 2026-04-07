@@ -19,3 +19,9 @@ export type { PredecessorContextOptions } from './predecessor-context.js';
 
 export { executeSequence } from './sequential-executor.js';
 export type { ExecuteSequenceOptions } from './sequential-executor.js';
+
+export { shouldSequence } from './should-sequence.js';
+export type { ShouldSequenceInput, ShouldSequenceResult } from './should-sequence.js';
+
+export { decomposeIntoSequence } from './sequence-decomposer.js';
+export type { DecomposeInput } from './sequence-decomposer.js';

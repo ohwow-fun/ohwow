@@ -1177,6 +1177,25 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // ─── Sequential Multi-Agent ──────────────────────────────────────────────
+  {
+    name: 'run_sequence',
+    description:
+      'Run a multi-agent Sequential chain: agents process in order, each seeing what predecessors actually produced. Use when a task benefits from multiple perspectives (research → analysis → synthesis). The system decides which agents participate and in what order.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'The task to accomplish through multi-agent coordination' },
+        agent_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: specific agent IDs to include. If omitted, the system selects relevant agents automatically.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+
   // ─── Automation Builder Tools ─────────────────────────────────────────────
   {
     name: 'discover_capabilities',
@@ -1716,6 +1735,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   approve_task: ['agents'],
   reject_task: ['agents'],
   run_agent: ['agents'],
+  run_sequence: ['agents'],
   spawn_agents: ['agents'],
   await_agent_results: ['agents'],
   queue_task: ['agents'],
@@ -1874,7 +1894,7 @@ const ALWAYS_INCLUDED_TOOLS = new Set(['update_plan', 'delegate_subtask']);
  */
 const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // P1: Core tools per section (3-5 per section)
-  run_agent: 1, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
+  run_agent: 1, run_sequence: 2, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
   search_contacts: 1, list_contacts: 1, create_contact: 1,
   get_workspace_stats: 1, get_activity_feed: 1,

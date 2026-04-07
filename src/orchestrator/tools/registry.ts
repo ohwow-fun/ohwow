@@ -5,6 +5,7 @@
 
 import type { ToolHandler } from '../local-tool-types.js';
 import { listAgents, updateAgentStatus, runAgent, spawnAgents, awaitAgentResults } from './agents.js';
+import { runSequence } from './sequences.js';
 import { listTasks, getTaskDetail, getPendingApprovals, approveTask, rejectTask, scheduleTask, retryTask, cancelTask } from './tasks.js';
 import { getAgentSchedules, updateAgentSchedule } from './schedules.js';
 import { listWorkflows, runWorkflow, getWorkflowDetail, createWorkflow, updateWorkflow, deleteWorkflow, generateWorkflow } from './workflows.js';
@@ -43,6 +44,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['list_agents', (ctx) => listAgents(ctx)],
   ['update_agent_status', (ctx, input) => updateAgentStatus(ctx, input)],
   ['run_agent', (ctx, input) => runAgent(ctx, input)],
+  ['run_sequence', (ctx, input) => runSequence(ctx, input)],
   ['spawn_agents', (ctx, input) => spawnAgents(ctx, input)],
   ['await_agent_results', (ctx, input) => awaitAgentResults(ctx, input)],
 
