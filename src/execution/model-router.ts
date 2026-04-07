@@ -900,6 +900,15 @@ export const CURATED_OPENROUTER_MODELS: OpenRouterModelInfo[] = [
     isFree: false,
   },
   {
+    id: 'z-ai/glm-5.1',
+    name: 'GLM 5.1',
+    contextLength: 200_000,
+    pricing: { prompt: 0.000001, completion: 0.0000032 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
+  {
     id: 'xiaomi/mimo-v2-pro',
     name: 'MiMo-V2-Pro',
     contextLength: 1_048_576,
