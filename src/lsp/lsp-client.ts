@@ -26,7 +26,11 @@ export class LspClient {
   private transport: LspTransport;
   private initialized = false;
   private diagnosticsCache = new Map<string, LspDiagnostic[]>();
+  private diagnosticsCacheOrder: string[] = [];
+  private static readonly DIAGNOSTICS_CACHE_CAP = 50;
   private openDocuments = new Map<string, DocumentState>();
+  private openDocumentsOrder: string[] = [];
+  private static readonly OPEN_DOCUMENTS_CAP = 20;
 
   constructor(
     private spec: LspServerSpec,
@@ -51,6 +55,14 @@ export class LspClient {
           source: d.source,
           code: d.code,
         })));
+        // LRU eviction for diagnostics cache
+        const orderIdx = this.diagnosticsCacheOrder.indexOf(p.uri);
+        if (orderIdx !== -1) this.diagnosticsCacheOrder.splice(orderIdx, 1);
+        this.diagnosticsCacheOrder.push(p.uri);
+        while (this.diagnosticsCacheOrder.length > LspClient.DIAGNOSTICS_CACHE_CAP) {
+          const oldest = this.diagnosticsCacheOrder.shift()!;
+          this.diagnosticsCache.delete(oldest);
+        }
       }
     });
 
@@ -75,8 +87,8 @@ export class LspClient {
     logger.info({ language: this.spec.language, root: this.rootPath }, '[LSP] Server initialized');
   }
 
-  /** Ensure a document is open and up-to-date. Reopens if file has changed on disk. */
-  private async ensureDocument(filePath: string): Promise<string> {
+  /** Ensure a document is open and up-to-date. Returns whether the document was reopened. */
+  private async ensureDocument(filePath: string): Promise<{ uri: string; reopened: boolean }> {
     if (!existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
     }
@@ -91,7 +103,13 @@ export class LspClient {
       throw new Error(`Cannot access file: ${filePath} (${err instanceof Error ? err.message : 'unknown error'})`);
     }
 
-    if (existing && existing.mtime === currentMtime) return uri;
+    if (existing && existing.mtime === currentMtime) {
+      // Refresh LRU position
+      const idx = this.openDocumentsOrder.indexOf(uri);
+      if (idx !== -1) this.openDocumentsOrder.splice(idx, 1);
+      this.openDocumentsOrder.push(uri);
+      return { uri, reopened: false };
+    }
 
     // Close stale document
     if (existing) {
@@ -119,12 +137,31 @@ export class LspClient {
     });
 
     this.openDocuments.set(uri, { uri, version, mtime: currentMtime });
-    return uri;
+
+    // LRU eviction for open documents — close oldest when over cap
+    const docOrderIdx = this.openDocumentsOrder.indexOf(uri);
+    if (docOrderIdx !== -1) this.openDocumentsOrder.splice(docOrderIdx, 1);
+    this.openDocumentsOrder.push(uri);
+    while (this.openDocumentsOrder.length > LspClient.OPEN_DOCUMENTS_CAP) {
+      const oldestUri = this.openDocumentsOrder.shift()!;
+      this.transport.notify('textDocument/didClose', {
+        textDocument: { uri: oldestUri },
+      });
+      this.openDocuments.delete(oldestUri);
+    }
+
+    return { uri, reopened: true };
   }
 
   /** Get diagnostics for a file. Waits briefly for the server to publish them. */
   async getDiagnostics(filePath: string): Promise<LspDiagnostic[]> {
-    const uri = await this.ensureDocument(filePath);
+    const { uri, reopened } = await this.ensureDocument(filePath);
+
+    // If file hasn't changed and we have cached diagnostics, return immediately
+    if (!reopened) {
+      const cached = this.diagnosticsCache.get(uri);
+      if (cached) return cached;
+    }
 
     // Clear stale diagnostics and wait for fresh ones
     this.diagnosticsCache.delete(uri);
@@ -142,7 +179,7 @@ export class LspClient {
 
   /** Get hover information at a position. */
   async hover(filePath: string, position: LspPosition): Promise<LspHoverResult | null> {
-    const uri = await this.ensureDocument(filePath);
+    const { uri } = await this.ensureDocument(filePath);
 
     const result = await this.transport.request<{
       contents: string | { kind: string; value: string } | Array<string | { kind: string; value: string }>;
@@ -168,7 +205,7 @@ export class LspClient {
 
   /** Go to definition of a symbol at a position. */
   async goToDefinition(filePath: string, position: LspPosition): Promise<LspLocation[]> {
-    const uri = await this.ensureDocument(filePath);
+    const { uri } = await this.ensureDocument(filePath);
 
     const result = await this.transport.request<
       { uri: string; range: { start: LspPosition; end: LspPosition } } |
@@ -186,7 +223,7 @@ export class LspClient {
 
   /** Find all references to a symbol at a position. */
   async references(filePath: string, position: LspPosition): Promise<LspLocation[]> {
-    const uri = await this.ensureDocument(filePath);
+    const { uri } = await this.ensureDocument(filePath);
 
     const result = await this.transport.request<
       Array<{ uri: string; range: { start: LspPosition; end: LspPosition } }> | null
@@ -201,7 +238,7 @@ export class LspClient {
 
   /** Get completions at a position. */
   async completions(filePath: string, position: LspPosition): Promise<LspCompletionItem[]> {
-    const uri = await this.ensureDocument(filePath);
+    const { uri } = await this.ensureDocument(filePath);
 
     const result = await this.transport.request<{
       items?: Array<{ label: string; kind?: number; detail?: string }>;
@@ -237,6 +274,8 @@ export class LspClient {
     await this.transport.destroy();
     this.initialized = false;
     this.openDocuments.clear();
+    this.openDocumentsOrder = [];
     this.diagnosticsCache.clear();
+    this.diagnosticsCacheOrder = [];
   }
 }

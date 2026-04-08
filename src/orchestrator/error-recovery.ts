@@ -24,10 +24,10 @@ const NETWORK_PATTERNS = [
   /ETIMEDOUT/i,
   /ENETUNREACH/i,
   /socket hang up/i,
-  /network/i,
-  /timeout/i,
-  /503/,
-  /502/,
+  /\bnetwork\b.*(?:error|fail|unavailable|unreachable)/i,
+  /\b(?:connection.*timeout|request.*timeout|read.*timeout)\b/i,
+  /\b503\b/,
+  /\b502\b/,
   /temporarily unavailable/i,
 ];
 
@@ -40,7 +40,7 @@ export function classifyError(error: string | Error): ErrorCategory {
   if (/context.*length|token.*limit|too.*long|maximum.*context|content.*too.*large/i.test(msg)) return 'context_overflow';
   if (/unknown.?tool|no such tool|tool.*not.*found/i.test(msg)) return 'tool_not_found';
   if (/compile|cannot find module|unexpected.*eof|unterminated|type\s*error(?!.*(?:fetch|network|connect))/i.test(msg)) return 'compile_error';
-  if (/conflict|stale|outdated|merge conflict|diverged|behind.*main/i.test(msg)) return 'stale_state';
+  if (/merge.?conflict|git.*stale|branch.*outdated|branch.*diverged|behind.*(?:main|master)/i.test(msg)) return 'stale_state';
   if (NETWORK_PATTERNS.some(p => p.test(msg))) return 'transient';
   if (/parse|json|syntax|unexpected token/i.test(msg)) return 'parse';
 

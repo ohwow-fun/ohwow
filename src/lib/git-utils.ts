@@ -23,7 +23,7 @@ export interface StaleBranchResult {
   recommendation: string;
 }
 
-const EXEC_OPTS = { timeout: 5000, stdio: 'pipe' as const, encoding: 'utf-8' as const };
+const EXEC_OPTS = { timeout: 10000, stdio: 'pipe' as const, encoding: 'utf-8' as const };
 
 function git(dir: string, args: string): string {
   return execSync(`git ${args}`, { ...EXEC_OPTS, cwd: dir }).trim();
@@ -65,6 +65,7 @@ export function getGitContext(dir: string): GitContext | null {
   let branch = '';
   try {
     branch = git(dir, 'branch --show-current');
+    if (branch === '') branch = 'HEAD (detached)';
   } catch {
     branch = 'HEAD (detached)';
   }
@@ -79,7 +80,7 @@ export function getGitContext(dir: string): GitContext | null {
 
   let commitsBehindMain = 0;
   try {
-    if (branch && branch !== mainBranch) {
+    if (branch && branch !== mainBranch && /^[a-zA-Z0-9._/-]+$/.test(mainBranch)) {
       const count = git(dir, `rev-list --count HEAD..origin/${mainBranch}`);
       commitsBehindMain = parseInt(count, 10) || 0;
     }

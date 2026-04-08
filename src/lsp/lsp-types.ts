@@ -103,7 +103,11 @@ export const LSP_SERVER_SPECS: Record<LspLanguage, LspServerSpec> = {
 
 /** Detect language from file extension. Returns null for unsupported files. */
 export function detectLanguage(filePath: string): LspLanguage | null {
-  const ext = filePath.slice(filePath.lastIndexOf('.'));
+  const lastDot = filePath.lastIndexOf('.');
+  const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  // No extension, or dot is part of a directory name (e.g., /home/.config/myfile)
+  if (lastDot === -1 || lastDot < lastSlash) return null;
+  const ext = filePath.slice(lastDot);
   for (const [lang, spec] of Object.entries(LSP_SERVER_SPECS)) {
     if (spec.extensions.includes(ext)) return lang as LspLanguage;
   }

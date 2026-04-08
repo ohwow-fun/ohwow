@@ -39,7 +39,11 @@ describe('classifyError', () => {
   });
 
   it('handles Error objects with transient message', () => {
-    expect(classifyError(new Error('timeout'))).toBe('transient');
+    expect(classifyError(new Error('connection timeout'))).toBe('transient');
+  });
+
+  it('does not misclassify bare "timeout" as transient', () => {
+    expect(classifyError(new Error('timeout'))).toBe('permanent');
   });
 
   it('classifies syntax error in response as parse', () => {

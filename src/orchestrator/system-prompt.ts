@@ -688,6 +688,7 @@ You are sharp, data-driven, and action-oriented. Think of yourself as the COO wh
 ${cwdSection}${args.gitContext ? `
 ## Git Context
 Branch: ${args.gitContext.branch}${args.gitContext.uncommittedChanges > 0 ? `\nUncommitted changes: ${args.gitContext.uncommittedChanges} file${args.gitContext.uncommittedChanges !== 1 ? 's' : ''}` : ''}${args.gitContext.isStale ? `\nWARNING: Branch is ${args.gitContext.commitsBehindMain} commits behind ${args.gitContext.mainBranch}. ${args.gitContext.staleBranchWarning || `Consider rebasing onto ${args.gitContext.mainBranch}.`}` : ''}${args.gitContext.recentCommits?.length ? `\nRecent commits:\n${args.gitContext.recentCommits.slice(0, 3).map(c => `  ${c}`).join('\n')}` : ''}` : ''}${args.hasLspTools ? `
+
 ## Code Intelligence (LSP)
 Language server tools are available for real-time code analysis:
 - lsp_diagnostics: Get compiler errors/warnings for a file. Use after editing to verify correctness.

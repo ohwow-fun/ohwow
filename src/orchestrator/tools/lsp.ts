@@ -10,10 +10,15 @@ import { logger } from '../../lib/logger.js';
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
 
-/** Resolve a file path relative to working directory. */
+/** Resolve a file path relative to working directory, with workspace boundary check. */
 function resolveFile(ctx: LocalToolContext, file: string): string {
-  if (file.startsWith('/')) return file;
-  return resolve(ctx.workingDirectory || process.cwd(), file);
+  const workingDir = ctx.workingDirectory || process.cwd();
+  const resolved = resolve(workingDir, file);
+  const normalizedDir = workingDir.endsWith('/') ? workingDir : workingDir + '/';
+  if (resolved !== workingDir && !resolved.startsWith(normalizedDir)) {
+    throw new Error(`Path "${file}" resolves outside working directory`);
+  }
+  return resolved;
 }
 
 /** Convert 1-based user input to 0-based LSP position. */
