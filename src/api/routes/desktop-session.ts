@@ -105,5 +105,47 @@ export function createDesktopSessionRouter(): Router {
     }
   });
 
+  // --------------------------------------------------------------------------
+  // Remote Action — execute a desktop action from the cloud orchestrator.
+  // Does NOT require the desktop lock (the human user is controlling remotely).
+  // --------------------------------------------------------------------------
+  router.post('/desktop/remote-action', async (req, res) => {
+    const { type, x, y, text, key, direction, amount, startX, startY, endX, endY, duration } = req.body;
+    if (!type) {
+      res.status(400).json({ error: 'Missing action type' });
+      return;
+    }
+
+    try {
+      const { LocalDesktopService } = await import('../../execution/desktop/local-desktop.service.js');
+      const service = new LocalDesktopService({ maxLongEdge: 1280 });
+      const result = await service.executeAction({
+        type,
+        x, y,
+        text,
+        key,
+        direction,
+        amount,
+        startX, startY, endX, endY,
+        duration,
+      });
+
+      res.json({
+        success: !result.error,
+        error: result.error ?? null,
+        screenshot: result.screenshot ?? null,
+        width: result.scaledWidth ?? null,
+        height: result.scaledHeight ?? null,
+        source: 'remote',
+      });
+    } catch (err) {
+      logger.error({ err }, '[desktop-session] Remote action execution failed');
+      res.status(500).json({
+        error: 'Remote action execution failed',
+        detail: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  });
+
   return router;
 }
