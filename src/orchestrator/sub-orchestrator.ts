@@ -30,6 +30,8 @@ import { getWorkingNumCtx } from '../lib/ollama-models.js';
 import { detectDevice } from '../lib/device-info.js';
 import { ContextBudget } from './context-budget.js';
 import { summarizeToolResult } from './result-summarizer.js';
+import type { FoldResult } from '../execution/fold-types.js';
+import { emptyFold } from '../execution/fold-types.js';
 
 // ============================================================================
 // TYPES
@@ -38,6 +40,8 @@ import { summarizeToolResult } from './result-summarizer.js';
 export interface SubOrchestratorOptions {
   prompt: string;
   sections: IntentSection[];
+  /** Recursive fold depth (0 = first level, max 3). Controls nested delegate_subtask. */
+  depth?: number;
   parentToolCtx: LocalToolContext;
   modelRouter: ModelRouter | null;
   anthropic: Anthropic;
@@ -51,9 +55,94 @@ export interface SubOrchestratorOptions {
 
 export interface SubOrchestratorResult {
   summary: string;
+  /** Structured fold of the exploration (when available, prefer over raw summary) */
+  fold: FoldResult;
   toolsCalled: string[];
   tokensUsed: { input: number; output: number };
   success: boolean;
+}
+
+// ============================================================================
+// FOLD EXTRACTION
+// ============================================================================
+
+/**
+ * Extract a structured FoldResult from the model's raw text output.
+ * Looks for structured patterns (bullet points, headings) and extracts
+ * into the typed fold format. Falls back to treating the full text as
+ * the conclusion if no structure is found.
+ */
+function extractFoldResult(rawText: string, toolsCalled: string[]): FoldResult {
+  const fold = emptyFold();
+  if (!rawText || rawText.trim().length === 0) return fold;
+
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // Try to identify structured sections
+  const deadEnds: Array<{ approach: string; failure_reason: string; learning: string }> = [];
+  const evidence: string[] = [];
+  const decisions: string[] = [];
+  let conclusion = '';
+
+  let currentSection = 'general';
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+
+    // Detect section headers
+    if (lower.includes('conclusion') || lower.includes('summary') || lower.includes('result')) {
+      currentSection = 'conclusion';
+      continue;
+    }
+    if (lower.includes('evidence') || lower.includes('finding') || lower.includes('found')) {
+      currentSection = 'evidence';
+      continue;
+    }
+    if (lower.includes('decision') || lower.includes('chose') || lower.includes('selected')) {
+      currentSection = 'decisions';
+      continue;
+    }
+    if (lower.includes('dead end') || lower.includes('failed') || lower.includes('didn\'t work')) {
+      currentSection = 'dead_ends';
+      continue;
+    }
+
+    // Strip bullet markers
+    const cleaned = line.replace(/^[-*•]\s*/, '').replace(/^\d+\.\s*/, '');
+
+    switch (currentSection) {
+      case 'conclusion':
+        conclusion += (conclusion ? ' ' : '') + cleaned;
+        break;
+      case 'evidence':
+        if (cleaned.length > 10) evidence.push(cleaned);
+        break;
+      case 'decisions':
+        if (cleaned.length > 10) decisions.push(cleaned);
+        break;
+      case 'dead_ends':
+        if (cleaned.length > 10) {
+          deadEnds.push({ approach: cleaned, failure_reason: 'See context', learning: cleaned });
+        }
+        break;
+      default:
+        // General text goes to conclusion
+        conclusion += (conclusion ? ' ' : '') + cleaned;
+    }
+  }
+
+  // If no structured conclusion was found, use the full text
+  if (!conclusion) conclusion = rawText.slice(0, 500);
+
+  fold.conclusion = conclusion;
+  fold.evidence = evidence.slice(0, 10);
+  fold.decisions_made = decisions.slice(0, 5);
+  fold.dead_ends = deadEnds.slice(0, 5);
+  fold.artifacts_created = toolsCalled.filter(t =>
+    ['create_file', 'write_file', 'run_agent', 'queue_task', 'set_state'].includes(t),
+  );
+
+  return fold;
 }
 
 /** Focus areas map to tool intent sections. */
@@ -151,7 +240,7 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
       try {
         provider = await modelRouter.getProvider('orchestrator');
       } catch {
-        return { summary: 'No model available for sub-orchestrator.', toolsCalled, tokensUsed: { input: 0, output: 0 }, success: false };
+        return { summary: 'No model available for sub-orchestrator.', fold: emptyFold(), toolsCalled, tokensUsed: { input: 0, output: 0 }, success: false };
       }
 
       if (provider.name === 'ollama' && provider.createMessageWithTools) {
@@ -174,6 +263,7 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
     const msg = err instanceof Error ? err.message : 'Sub-orchestrator failed';
     return {
       summary: `Sub-orchestrator error: ${msg}`,
+      fold: emptyFold(),
       toolsCalled,
       tokensUsed: { input: 0, output: 0 },
       success: false,
@@ -266,9 +356,11 @@ async function runAnthropicSubLoop(
     });
   }
 
+  const uniqueTools = [...new Set(toolsCalled)];
   return {
     summary: fullContent || 'No results found.',
-    toolsCalled: [...new Set(toolsCalled)],
+    fold: extractFoldResult(fullContent, uniqueTools),
+    toolsCalled: uniqueTools,
     tokensUsed: { input: totalInput, output: totalOutput },
     success: true,
   };
@@ -392,9 +484,11 @@ async function runOllamaSubLoop(
     }
   }
 
+  const uniqueToolsOllama = [...new Set(toolsCalled)];
   return {
     summary: fullContent || 'No results found.',
-    toolsCalled: [...new Set(toolsCalled)],
+    fold: extractFoldResult(fullContent, uniqueToolsOllama),
+    toolsCalled: uniqueToolsOllama,
     tokensUsed: { input: totalInput, output: totalOutput },
     success: true,
   };
