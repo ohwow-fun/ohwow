@@ -10,6 +10,13 @@ import { Box, Text } from 'ink';
 const MAX_RESULT_LINES = 20;
 const MAX_LINE_WIDTH = 100;
 
+/** Tools that render rich inline results in the TUI. Shared with chat-message.tsx. */
+export const CODE_TOOL_NAMES = new Set([
+  'local_read_file', 'local_edit_file', 'local_write_file',
+  'run_bash', 'local_search_content', 'local_search_files',
+  'local_list_directory',
+]);
+
 function truncLine(line: string): string {
   return line.length > MAX_LINE_WIDTH ? line.slice(0, MAX_LINE_WIDTH) + '…' : line;
 }
@@ -203,14 +210,14 @@ function SearchResultView({ input, result }: { input: Record<string, unknown>; r
       <Text color="yellow" dimColor>search: {pattern}</Text>
       {displayLines.map((line, i) => {
         // Lines often look like "path/file.ts:42:  matched content"
-        const colonIdx = line.indexOf(':');
-        if (colonIdx > 0 && colonIdx < 100) {
-          const path = line.slice(0, colonIdx);
-          const rest = line.slice(colonIdx);
+        // Use regex to match path:linenum: pattern (avoid splitting on colons in content)
+        const match = line.match(/^(.+?\.\w+):(\d+):(.*)/);
+        if (match) {
+          const [, filePath, lineNum, content] = match;
           return (
             <Box key={i}>
-              <Text color="cyan" dimColor>{shortenPath(path)}</Text>
-              <Text color="gray">{truncLine(rest)}</Text>
+              <Text color="cyan" dimColor>{shortenPath(filePath)}</Text>
+              <Text color="gray">:{lineNum}:{truncLine(content)}</Text>
             </Box>
           );
         }
@@ -284,7 +291,7 @@ export function ToolResultView({ toolName, input, result, status }: ToolResultVi
 
   // Skip empty or trivial results
   const trimmed = result.trim();
-  if (!trimmed || trimmed === 'ok' || trimmed === 'success' || trimmed.length < 5) return null;
+  if (!trimmed || trimmed === 'ok' || trimmed === 'success') return null;
 
   // Edit tools always show diff from input, not result
   if (toolName === 'local_edit_file') {

@@ -17,7 +17,9 @@ export interface ProjectStack {
 
 function tryReadJson(path: string): Record<string, unknown> | null {
   try {
-    return JSON.parse(readFileSync(path, 'utf-8'));
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
   } catch {
     return null;
   }

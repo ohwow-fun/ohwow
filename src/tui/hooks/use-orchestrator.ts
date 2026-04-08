@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { CODE_TOOL_NAMES } from '../components/tool-result-view.js';
 
 export interface AutomationProposalTUI {
   name: string;
@@ -37,16 +38,9 @@ export type PlanTask = {
   status: 'pending' | 'in_progress' | 'done';
 };
 
-/** Tools whose results are rendered inline — they get a larger budget. */
-const CODE_TOOLS = new Set([
-  'local_read_file', 'local_edit_file', 'local_write_file',
-  'run_bash', 'local_search_content', 'local_search_files',
-  'local_list_directory',
-]);
-
 function summarizeResult(data: unknown, toolName?: string): string {
-  const maxLines = CODE_TOOLS.has(toolName ?? '') ? 30 : 10;
-  const maxChars = CODE_TOOLS.has(toolName ?? '') ? 3000 : 400;
+  const maxLines = CODE_TOOL_NAMES.has(toolName ?? '') ? 30 : 10;
+  const maxChars = CODE_TOOL_NAMES.has(toolName ?? '') ? 3000 : 400;
 
   if (typeof data === 'string') {
     const lines = data.split('\n');

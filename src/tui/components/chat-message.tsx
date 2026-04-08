@@ -8,7 +8,7 @@ import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import type { ChatMessage as ChatMessageType, TurnStep } from '../hooks/use-orchestrator.js';
 import { AutomationProposal } from './automation-proposal.js';
-import { ToolResultView } from './tool-result-view.js';
+import { ToolResultView, CODE_TOOL_NAMES } from './tool-result-view.js';
 
 /** Basic markdown-to-terminal formatting */
 function formatContent(content: string): string {
@@ -120,11 +120,7 @@ function StepsView({ steps, elapsedMs, tokensSoFar }: StepsViewProps) {
 
         // tool step — done
         if (step.status === 'done') {
-          const isCodeTool = [
-            'local_read_file', 'local_edit_file', 'local_write_file',
-            'run_bash', 'local_search_content', 'local_search_files',
-            'local_list_directory',
-          ].includes(step.name);
+          const isCodeTool = CODE_TOOL_NAMES.has(step.name);
           return (
             <Box key={i} flexDirection="column">
               <Box>
