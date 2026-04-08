@@ -331,6 +331,25 @@ export async function* executeToolCall(
     return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !seqResult.success), isError: !seqResult.success };
   }
 
+  // --- Co-evolution multi-agent execution ---
+  if (request.name === 'evolve_task') {
+    yield { type: 'status', message: 'Starting co-evolution...' };
+
+    const { evolveTask } = await import('./tools/co-evolution.js');
+    const evoResult = await evolveTask(ctx.toolCtx, toolInput);
+
+    const result: ToolResult = evoResult.success
+      ? { success: true, data: evoResult.data }
+      : { success: false, error: evoResult.error };
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+
+    const content = evoResult.success
+      ? `Co-evolution completed: ${JSON.stringify(evoResult.data)}`
+      : `Co-evolution failed: ${evoResult.error}`;
+    return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !evoResult.success), isError: !evoResult.success };
+  }
+
   // --- Browser tool execution ---
   if (isBrowserTool(request.name) && ctx.browserState.service) {
     const browserResult = await executeBrowserTool(ctx.browserState.service, request.name, toolInput);

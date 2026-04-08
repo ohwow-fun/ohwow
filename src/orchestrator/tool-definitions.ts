@@ -1214,6 +1214,29 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // ─── Co-Evolution ────────────────────────────────────────────────────────
+  {
+    name: 'evolve_task',
+    description:
+      'Run a co-evolution session: multiple agents independently attempt the same task across multiple rounds, each building on the best prior attempts. Use when quality matters more than speed and the task benefits from diverse approaches and iteration (strategy, writing, analysis, creative work). Returns the highest-scoring deliverable.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'The task or objective for agents to co-evolve a solution for' },
+        agent_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: specific agent IDs to include (min 2). If omitted, active agents are selected automatically.',
+        },
+        max_rounds: {
+          type: 'number',
+          description: 'Maximum evolution rounds (default 3). More rounds = higher quality but more cost.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+
   // ─── Automation Builder Tools ─────────────────────────────────────────────
   {
     name: 'discover_capabilities',
@@ -1825,6 +1848,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   reject_task: ['agents'],
   run_agent: ['agents'],
   run_sequence: ['agents'],
+  evolve_task: ['agents'],
   spawn_agents: ['agents'],
   await_agent_results: ['agents'],
   queue_task: ['agents'],
@@ -1990,7 +2014,7 @@ const ALWAYS_INCLUDED_TOOLS = new Set(['update_plan', 'delegate_subtask']);
  */
 const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // P1: Core tools per section (3-5 per section)
-  run_agent: 1, run_sequence: 2, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
+  run_agent: 1, run_sequence: 2, evolve_task: 2, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
   search_contacts: 1, list_contacts: 1, create_contact: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
