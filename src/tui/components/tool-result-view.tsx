@@ -32,18 +32,20 @@ function shortenPath(path: string): string {
  * Render a file read result with line numbers
  */
 function ReadFileView({ input, result }: { input: Record<string, unknown>; result: string }) {
-  const filePath = (input.path || input.file_path || '') as string;
+  const filePath = (input.path || '') as string;
   const lines = result.split('\n');
-  const startLine = typeof input.start_line === 'number' ? input.start_line : 1;
+  const totalLines = lines.length;
   const displayLines = lines.slice(0, MAX_RESULT_LINES);
-  const remaining = lines.length - displayLines.length;
+  const remaining = totalLines - displayLines.length;
+  // Pad width adapts to total line count (3 digits for <1000, 4 for larger)
+  const padWidth = totalLines >= 1000 ? 5 : totalLines >= 100 ? 4 : 3;
 
   return (
     <Box flexDirection="column" marginLeft={2}>
       <Text color="cyan" dimColor>{shortenPath(filePath)}</Text>
       {displayLines.map((line, i) => {
-        const lineNum = startLine + i;
-        const numStr = String(lineNum).padStart(4, ' ');
+        const lineNum = i + 1;
+        const numStr = String(lineNum).padStart(padWidth, ' ');
         return (
           <Box key={i}>
             <Text color="gray" dimColor>{numStr} │ </Text>

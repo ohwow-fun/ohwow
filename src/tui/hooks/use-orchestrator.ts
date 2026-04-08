@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { CODE_TOOL_NAMES } from '../components/tool-result-view.js';
+import { logger } from '../../lib/logger.js';
 
 export interface AutomationProposalTUI {
   name: string;
@@ -369,12 +370,15 @@ export function useOrchestrator(
                 break;
             }
           } catch (parseErr) {
-            // If it's a thrown Error from 'error' event type, re-throw
-            if (parseErr instanceof Error && parseErr.message !== 'Stream error') {
-              // Check if it's a JSON parse error or our re-thrown error
-              if (!(parseErr instanceof SyntaxError)) throw parseErr;
+            if (parseErr instanceof SyntaxError) {
+              // Malformed SSE JSON line — expected for partial chunks, safe to skip
+              continue;
             }
-            // Ignore malformed SSE lines
+            if (parseErr instanceof Error) {
+              // Re-thrown stream errors (type: 'error') or unexpected failures
+              logger.debug({ err: parseErr.message }, 'stream event error');
+              throw parseErr;
+            }
           }
         }
       }
