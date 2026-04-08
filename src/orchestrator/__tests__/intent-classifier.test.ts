@@ -78,11 +78,28 @@ describe('classifyIntent', () => {
     }
   });
 
+  // ── Dev ──
+  describe('dev intent', () => {
+    const devCases = [
+      'fix the bug in the login handler',
+      'refactor the authentication module',
+      'search the codebase for the login function',
+      'add a test for the payment endpoint',
+      'run npm test and fix any failures',
+      'git commit these changes',
+      'implement the new user profile feature',
+    ];
+    for (const msg of devCases) {
+      it(`"${msg.slice(0, 55)}" → dev`, () => {
+        expect(classifyIntent(msg).intent).toBe('dev');
+      });
+    }
+  });
+
   // ── File ──
   describe('file intent', () => {
     const fileCases = [
       'read the config file and show me the settings',
-      'search the codebase for the login function',
       'edit the README.md to add installation steps',
       'list all .tsx files in the components folder',
       'open the config.json file and edit the port number',
