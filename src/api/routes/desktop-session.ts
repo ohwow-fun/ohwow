@@ -111,8 +111,12 @@ export function createDesktopSessionRouter(): Router {
   // --------------------------------------------------------------------------
   router.post('/desktop/remote-action', async (req, res) => {
     const { type, x, y, text, key, direction, amount, startX, startY, endX, endY, duration } = req.body;
-    if (!type) {
-      res.status(400).json({ error: 'Missing action type' });
+    const ALLOWED_TYPES = new Set([
+      'screenshot', 'left_click', 'right_click', 'double_click', 'triple_click',
+      'type_text', 'typewrite', 'key', 'scroll', 'mouse_move', 'wait', 'left_click_drag',
+    ]);
+    if (!type || !ALLOWED_TYPES.has(type)) {
+      res.status(400).json({ error: `Invalid action type: ${type || 'missing'}` });
       return;
     }
 

@@ -277,6 +277,7 @@ export function createServer(deps: ServerDeps): {
   app.use('/browser/session', auth);
   app.use('/desktop/screenshot', auth);
   app.use('/desktop/action', auth);
+  app.use('/desktop/remote-action', auth);
 
   // Register all API routes
   app.use(createTasksRouter(db, engine));
