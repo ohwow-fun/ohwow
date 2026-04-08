@@ -72,6 +72,15 @@ export interface BuildLocalSystemPromptArgs {
   };
   /** Whether LSP code intelligence tools are available */
   hasLspTools?: boolean;
+  /** Detected project stack info for code mode */
+  projectStack?: {
+    type: string;          // 'node' | 'rust' | 'python' | 'go' | 'unknown'
+    name?: string;         // from package.json name, Cargo.toml package name, etc.
+    framework?: string;    // 'next' | 'vite' | 'express' | 'django' | etc.
+    testCommand?: string;  // detected test runner command
+    buildCommand?: string; // detected build command
+    lintCommand?: string;  // detected lint command
+  };
 }
 
 /**
@@ -156,7 +165,8 @@ function formatRevenue(cents: number): string {
 // Section keys that map to static instruction blocks
 type InstructionSection =
   | 'pulse' | 'agents' | 'projects' | 'business' | 'memory' | 'rag'
-  | 'vision' | 'filesystem' | 'channels' | 'browser' | 'project_instructions';
+  | 'vision' | 'filesystem' | 'channels' | 'browser' | 'project_instructions'
+  | 'dev';
 
 // Each block tagged with the sections it's relevant to
 const INSTRUCTION_BLOCKS: Array<{ keys: InstructionSection[]; text: string }> = [
@@ -275,6 +285,52 @@ When the user's request involves research + output generation (e.g., "analyze th
 
 **Never stop mid-task to ask "could you clarify?" or "what would you like me to do with this?"** if you have enough tools to gather the context yourself. The user's original request is your goal — stay anchored to it through every tool call round-trip. Only ask for clarification if genuinely ambiguous after tool use (e.g., you found 3 separate projects and don't know which one to focus on).`,
   },
+  {
+    keys: ['dev'],
+    text: `## Code Mode
+You are a software engineer. When the user asks you to fix bugs, add features, refactor code, write tests, or work on their codebase, follow these protocols:
+
+### Read Before Edit
+- ALWAYS \`local_read_file\` before \`local_edit_file\`. Understand existing code before modifying it.
+- Use \`local_search_content\` to find all usages of a symbol before renaming or removing it.
+- Use \`local_search_files\` to locate relevant files before assuming their paths.
+
+### Edit Precisely
+- Use \`local_edit_file\` for targeted changes. Include enough surrounding context in \`old_string\` to match uniquely.
+- Prefer editing existing files over creating new ones. Don't create files unless necessary.
+- After editing, \`local_read_file\` the result to verify correctness.
+- Don't add features, refactor code, or make improvements beyond what was asked.
+- Don't add comments, docstrings, or type annotations to code you didn't change.
+
+### Validate After Changes
+- After editing code, run the project's validation command via \`run_bash\` (typecheck, lint, tests).
+- If validation fails, read the error, diagnose the root cause, and fix it. Don't retry blindly.
+- If LSP tools are available, use \`lsp_diagnostics\` after editing to catch type errors immediately.
+
+### Git Workflow
+- Use \`run_bash\` with git commands for version control.
+- Check \`git status\` and \`git diff\` before committing to verify what changed.
+- Stage files explicitly by name. Never \`git add .\` or \`git add -A\`.
+- Write descriptive commit messages that explain why, not just what.
+- One logical change per commit. Don't accumulate large diffs.
+- Commit after validation passes, not before.
+
+### Project Context
+- Read CLAUDE.md, OHWOW.md, or .cursorrules at the project root for project-specific conventions.
+- Check package.json, Cargo.toml, pyproject.toml, go.mod, etc. to understand the project stack.
+- Respect existing code conventions (indentation, naming, module structure).
+
+### Autonomous Execution
+- Complete multi-step coding tasks without asking for confirmation at each step.
+- Read → plan → edit → validate → commit is one flow. Don't stop in the middle.
+- If you encounter an error, fix it. If a test fails, investigate and fix the root cause.
+- Only ask for clarification when genuinely ambiguous after exploring the code.
+
+### Safety
+- Don't introduce security vulnerabilities (injection, XSS, SQL injection).
+- Don't commit files that contain secrets (.env, credentials, API keys).
+- For destructive git operations (force push, reset --hard), explain and ask before proceeding.`,
+  },
 ];
 
 // ============================================================================
@@ -336,6 +392,11 @@ Explore first, never ask for paths. Use \`local_list_directory\`, \`local_read_f
     keys: ['filesystem', 'rag'],
     text: `## Multi-Step Tasks
 Complete research + output autonomously. Don't stop mid-task to ask for clarification if you have tools to gather context.`,
+  },
+  {
+    keys: ['dev'],
+    text: `## Code Mode
+Read before editing. Validate after changes (typecheck, lint, tests via \`run_bash\`). Use \`lsp_diagnostics\` after edits if available. Git: stage explicitly, commit with descriptive messages, one change per commit. Don't add features beyond what's asked. Fix errors autonomously.`,
   },
 ];
 
@@ -685,7 +746,10 @@ Browser tools handle web content inside Chromium. If you encounter native OS int
   return `You are the Orchestrator — an AI business success strategist and operations partner for ${business?.name || 'the business'}, running locally in the user's terminal.
 
 You are sharp, data-driven, and action-oriented. Think of yourself as the COO who reads every metric before the morning standup. You lead with insight, not just information. Your job is to help the founder win — every single day.
-${cwdSection}${args.gitContext ? `
+${cwdSection}${args.projectStack ? `
+## Project Stack
+Type: ${args.projectStack.type}${args.projectStack.name ? ` (${args.projectStack.name})` : ''}${args.projectStack.framework ? `\nFramework: ${args.projectStack.framework}` : ''}${args.projectStack.testCommand ? `\nTest: \`${args.projectStack.testCommand}\`` : ''}${args.projectStack.buildCommand ? `\nBuild: \`${args.projectStack.buildCommand}\`` : ''}${args.projectStack.lintCommand ? `\nLint: \`${args.projectStack.lintCommand}\`` : ''}
+Use these commands via \`run_bash\` for validation.` : ''}${args.gitContext ? `
 ## Git Context
 Branch: ${args.gitContext.branch}${args.gitContext.uncommittedChanges > 0 ? `\nUncommitted changes: ${args.gitContext.uncommittedChanges} file${args.gitContext.uncommittedChanges !== 1 ? 's' : ''}` : ''}${args.gitContext.isStale ? `\nWARNING: Branch is ${args.gitContext.commitsBehindMain} commits behind ${args.gitContext.mainBranch}. ${args.gitContext.staleBranchWarning || `Consider rebasing onto ${args.gitContext.mainBranch}.`}` : ''}${args.gitContext.recentCommits?.length ? `\nRecent commits:\n${args.gitContext.recentCommits.slice(0, 3).map(c => `  ${c}`).join('\n')}` : ''}` : ''}${args.hasLspTools ? `
 

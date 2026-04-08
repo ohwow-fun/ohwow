@@ -205,25 +205,73 @@ const INTENT_SIGNALS: IntentSignals[] = [
     negative: [],
   },
 
-  // ── File: code and filesystem operations ──
+  // ── Dev: software engineering tasks (code editing, debugging, refactoring) ──
+  {
+    intent: 'dev',
+    sections: new Set<IntentSection>(['filesystem', 'project_instructions', 'memory', 'dev']),
+    statusLabel: 'Entering code mode...',
+    strong: [
+      /\bfix\s+(?:the\s+|this\s+)?(?:bug|error|issue|crash|failure)\b/,
+      /\brefactor\b/,
+      /\bimplement\b/,
+      /\badd\s+(?:a\s+)?(?:feature|test|endpoint|route|component|function|method|class|hook)\b/,
+      /\bwrite\s+(?:a\s+)?(?:test|spec|unit\s+test|e2e)\b/,
+      /\bdebug\b/,
+      /\btypecheck\b/,
+      /\blint\b/,
+      /\bmigration\b/,
+      /\bgit\s+(?:commit|push|pull|rebase|merge|diff|status|log|branch)\b/,
+      /\bpr\b.*\b(?:create|open|review)\b/,
+      /\bpull\s+request\b/,
+      /\bbuild\s+(?:error|fail|broken)\b/,
+      /\bcompile\s+error\b/,
+      /\btype\s+error\b/,
+      /\bstack\s+trace\b/,
+      /\bnpm\s+(?:run|test|install|build)\b/,
+      /\byarn\s+(?:run|test|add|build)\b/,
+      /\bcargo\s+(?:run|test|build|check)\b/,
+      /\bpip\s+(?:install|run)\b/,
+    ],
+    medium: [
+      /\bcodebase\b/,
+      /\bsource\s+code\b/,
+      /\bfunction\b/,
+      /\bmodule\b/,
+      /\bcomponent\b/,
+      /\bendpoint\b/,
+      /\bapi\s+route\b/,
+      /\bschema\b/,
+      /\.(?:tsx?|jsx?|py|rs|go)\b/,
+    ],
+    weak: [
+      /\bcode\b/,
+      /\bbug\b/,
+      /\berror\b/,
+    ],
+    negative: [
+      /\bclick\b/,
+      /\bdrag\b/,
+      /\bscroll\b/,
+    ],
+  },
+
+  // ── File: general filesystem operations ──
   {
     intent: 'file',
     sections: new Set<IntentSection>(['filesystem', 'project_instructions', 'memory']),
     statusLabel: 'Preparing filesystem access...',
     strong: [
-      /\bcodebase\b/,
-      /\.(?:tsx?|jsx?|py|md|json|yaml|yml|toml|rs|go)\b/,  // no leading \b — dot is not a word char
       /\bread\s+.*file\b/,
       /\bedit\s+.*file\b/,
       /\bwrite\s+.*file\b/,
       /\bdirectory\b/,
       /\bsearch\s+.*file\b/,
       /\blist\s+.*files?\b/,
+      /\.(?:md|json|yaml|yml|toml|csv|txt|xml|html|css)\b/,
     ],
     medium: [
       /\bfile\b/,
       /\bfolder\b/,
-      /\bcode\b/,
     ],
     weak: [],
     negative: [

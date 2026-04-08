@@ -15,6 +15,7 @@ import { retrieveRelevantMemories, retrieveKnowledgeChunks, formatRelevantMemori
 import { loadOrchestratorMemory } from './session-store.js';
 import { logger } from '../lib/logger.js';
 import { getGitContext, isStaleBranch } from '../lib/git-utils.js';
+import { detectProjectStack } from '../lib/project-detector.js';
 
 export interface PromptBuilderDeps {
   db: DatabaseAdapter;
@@ -271,6 +272,11 @@ export async function buildTargetedPrompt(
       } catch { return undefined; }
     })(),
     hasLspTools: need('filesystem') || need('dev'),
+    projectStack: (() => {
+      if (!need('dev') || !deps.workingDirectory) return undefined;
+      try { return detectProjectStack(deps.workingDirectory) ?? undefined; }
+      catch { return undefined; }
+    })(),
   };
 
   // Fire-and-forget: increment times_applied for principles injected into the prompt
