@@ -1,13 +1,16 @@
 /**
  * HandLandmarkOverlay
  * Draws hand wireframes (landmarks + connectors) on a canvas positioned
- * over the fullscreen camera background. Uses MediaPipe DrawingUtils.
+ * over the fullscreen camera background.
+ *
+ * The canvas internal resolution is set to the video element's CSS display
+ * size (clientWidth × clientHeight), so canvas coordinates = screen pixels.
+ * The X axis is flipped in code to match the video's CSS scaleX(-1) mirror.
  */
 
 import { useRef, useEffect } from 'react';
 
 // MediaPipe landmark indices for hand connections (21 landmarks)
-// Wrist(0) → Thumb(1-4) → Index(5-8) → Middle(9-12) → Ring(13-16) → Pinky(17-20)
 const HAND_CONNECTIONS: [number, number][] = [
   [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
   [0, 5], [5, 6], [6, 7], [7, 8],       // Index
@@ -24,39 +27,32 @@ interface NormalizedLandmark {
 }
 
 interface HandLandmarkOverlayProps {
-  /** All hand landmarks arrays (one per detected hand) */
   landmarks: NormalizedLandmark[][] | null;
-  /** The video element to match dimensions against */
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
 export function HandLandmarkOverlay({ landmarks, videoRef }: HandLandmarkOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Keep canvas internal resolution synced with the video's intrinsic size.
-  // The canvas uses the same object-fit:cover + scaleX(-1) CSS as the video,
-  // so the browser aligns them automatically — no manual transform math needed.
+  // Keep canvas internal resolution = video CSS display size.
+  // This ensures canvas coordinates map 1:1 to screen pixels.
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
     const syncSize = () => {
-      const vw = video.videoWidth || video.clientWidth;
-      const vh = video.videoHeight || video.clientHeight;
-      if (canvas.width !== vw) canvas.width = vw;
-      if (canvas.height !== vh) canvas.height = vh;
+      const w = video.clientWidth;
+      const h = video.clientHeight;
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
     };
 
     syncSize();
     const observer = new ResizeObserver(syncSize);
     observer.observe(video);
-    video.addEventListener('loadedmetadata', syncSize);
 
-    return () => {
-      observer.disconnect();
-      video.removeEventListener('loadedmetadata', syncSize);
-    };
+    return () => observer.disconnect();
   }, [videoRef]);
 
   // Draw landmarks on every update
@@ -74,11 +70,25 @@ export function HandLandmarkOverlay({ landmarks, videoRef }: HandLandmarkOverlay
     const cw = canvas.width;
     const ch = canvas.height;
 
-    // Canvas has the same object-fit:cover and scaleX(-1) CSS as the video,
-    // so landmarks just map directly into the video's intrinsic coordinate space.
+    // Landmarks are normalized [0,1] to the full video frame.
+    // The video uses object-fit:cover + scaleX(-1). We need to:
+    //   1. Map normalized coords to the object-cover rendered size
+    //   2. Subtract the crop offset
+    //   3. Mirror X to match scaleX(-1)
+    const vw = video.videoWidth || cw;
+    const vh = video.videoHeight || ch;
+
+    // Object-cover: scale to fill, then crop the overflow
+    const scale = Math.max(cw / vw, ch / vh);
+    const renderedW = vw * scale;
+    const renderedH = vh * scale;
+    const cropX = (renderedW - cw) / 2;
+    const cropY = (renderedH - ch) / 2;
+
     const toPixel = (lm: NormalizedLandmark): [number, number] => [
-      lm.x * cw,
-      lm.y * ch,
+      // Mirror X (video has CSS scaleX(-1)), then apply object-cover transform
+      cw - (lm.x * renderedW - cropX),
+      lm.y * renderedH - cropY,
     ];
 
     for (const hand of landmarks) {
@@ -122,8 +132,7 @@ export function HandLandmarkOverlay({ landmarks, videoRef }: HandLandmarkOverlay
   return (
     <canvas
       ref={canvasRef}
-      className="absolute inset-0 w-full h-full object-cover pointer-events-none z-[7]"
-      style={{ transform: 'scaleX(-1)' }}
+      className="absolute inset-0 w-full h-full pointer-events-none z-[7]"
     />
   );
 }
