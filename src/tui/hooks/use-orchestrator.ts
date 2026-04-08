@@ -37,16 +37,26 @@ export type PlanTask = {
   status: 'pending' | 'in_progress' | 'done';
 };
 
-function summarizeResult(data: unknown): string {
+/** Tools whose results are rendered inline — they get a larger budget. */
+const CODE_TOOLS = new Set([
+  'local_read_file', 'local_edit_file', 'local_write_file',
+  'run_bash', 'local_search_content', 'local_search_files',
+  'local_list_directory',
+]);
+
+function summarizeResult(data: unknown, toolName?: string): string {
+  const maxLines = CODE_TOOLS.has(toolName ?? '') ? 30 : 10;
+  const maxChars = CODE_TOOLS.has(toolName ?? '') ? 3000 : 400;
+
   if (typeof data === 'string') {
     const lines = data.split('\n');
-    if (lines.length > 10) {
-      return lines.slice(0, 10).join('\n') + `\n… (${lines.length - 10} more lines)`;
+    if (lines.length > maxLines) {
+      return lines.slice(0, maxLines).join('\n') + `\n… (${lines.length - maxLines} more lines)`;
     }
-    return data.length > 400 ? data.slice(0, 400) + '…' : data;
+    return data.length > maxChars ? data.slice(0, maxChars) + '…' : data;
   }
   const json = JSON.stringify(data, null, 2);
-  return json.length > 400 ? json.slice(0, 400) + '…' : json;
+  return json.length > maxChars ? json.slice(0, maxChars) + '…' : json;
 }
 
 export interface ChatMessage {
@@ -288,7 +298,7 @@ export function useOrchestrator(
                     s.status = event.result?.success ? 'done' : 'error';
                     s.error = event.result?.success ? undefined : event.result?.error;
                     s.result = event.result?.success && event.result?.data != null
-                      ? summarizeResult(event.result.data)
+                      ? summarizeResult(event.result.data, event.name)
                       : undefined;
                     break;
                   }
