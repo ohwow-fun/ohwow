@@ -471,9 +471,12 @@ export function classifyIntent(message: string, previousIntent?: ClassifiedInten
   }
 
   if (bestScore >= 3) {
-    // Merge sections from all qualifying intents into the winner's set
+    // Merge sections from qualifying intents (capped at top 3 to prevent prompt bloat)
     const mergedSections = new Set<IntentSection>(bestSignals.sections);
-    for (const q of qualifyingIntents) {
+    const topQualifying = qualifyingIntents
+      .filter(q => q !== bestSignals)
+      .slice(0, 2);
+    for (const q of topQualifying) {
       for (const s of q.sections) mergedSections.add(s);
     }
     return classify(bestSignals.intent, mergedSections, bestSignals.statusLabel, lower);
