@@ -23,6 +23,11 @@ import type {
 // TYPES
 // ============================================================================
 
+export interface CoEvolutionProgressEvent {
+  type: string;
+  [key: string]: unknown;
+}
+
 export interface ExecuteLocalCoEvolutionOptions {
   db: DatabaseAdapter;
   engine: RuntimeEngine;
@@ -30,6 +35,7 @@ export interface ExecuteLocalCoEvolutionOptions {
   config: LocalCoEvolutionConfig;
   anthropic?: Anthropic;
   modelRouter?: ModelRouter | null;
+  onEvent?: (event: CoEvolutionProgressEvent) => void;
 }
 
 // ============================================================================
@@ -39,9 +45,10 @@ export interface ExecuteLocalCoEvolutionOptions {
 export async function executeLocalCoEvolution(
   options: ExecuteLocalCoEvolutionOptions,
 ): Promise<LocalCoEvolutionResult> {
-  const { db, engine, workspaceId, config, anthropic, modelRouter } = options;
+  const { db, engine, workspaceId, config, anthropic, modelRouter, onEvent } = options;
   const startTime = Date.now();
   const topK = config.topKForContext ?? 3;
+  const emit = (event: CoEvolutionProgressEvent) => { if (onEvent) onEvent(event); };
 
   // Resolve agent names
   const agentNames = new Map<string, string>();
@@ -89,6 +96,7 @@ export async function executeLocalCoEvolution(
     const previousBest = bestScore;
 
     logger.info({ round: round + 1, maxRounds: config.maxRounds }, '[LocalCoEvolution] Starting round');
+    emit({ type: 'evolution_round_start', round });
 
     // Get top K attempts for context
     const contextAttempts = getTopK(allAttempts, topK);
@@ -115,12 +123,31 @@ export async function executeLocalCoEvolution(
         allAttempts.push(attempt);
         totalCostCents += attempt.costCents;
 
-        if (attempt.status === 'completed' && (bestScore === null || attempt.score > bestScore)) {
-          bestScore = attempt.score;
-          bestAttempt = attempt;
+        if (attempt.status === 'completed') {
+          emit({
+            type: 'evolution_attempt_complete',
+            round, agentId: attempt.agentId, agentName: attempt.agentName,
+            score: attempt.score, strategySummary: attempt.strategySummary,
+            costCents: attempt.costCents,
+          });
+          if (bestScore === null || attempt.score > bestScore) {
+            bestScore = attempt.score;
+            bestAttempt = attempt;
+          }
+        } else {
+          emit({
+            type: 'evolution_attempt_failed',
+            round, agentId: attempt.agentId, agentName: attempt.agentName,
+            error: attempt.error ?? 'Failed',
+          });
         }
       }
     }
+
+    emit({
+      type: 'evolution_round_complete',
+      round, bestScore: bestScore ?? 0, bestAgentName: bestAttempt?.agentName ?? '',
+    });
 
     // Stagnation check
     if (previousBest !== null && (bestScore === null || bestScore <= previousBest)) {

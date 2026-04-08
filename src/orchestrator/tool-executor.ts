@@ -335,8 +335,16 @@ export async function* executeToolCall(
   if (request.name === 'evolve_task') {
     yield { type: 'status', message: 'Starting co-evolution...' };
 
-    const { evolveTask } = await import('./tools/co-evolution.js');
-    const evoResult = await evolveTask(ctx.toolCtx, toolInput);
+    const evolutionEvents: OrchestratorEvent[] = [];
+    const { evolveTaskWithEvents } = await import('./tools/co-evolution.js');
+    const evoResult = await evolveTaskWithEvents(ctx.toolCtx, toolInput, (event) => {
+      evolutionEvents.push(event);
+    });
+
+    // Emit collected events
+    for (const evoEvent of evolutionEvents) {
+      yield evoEvent;
+    }
 
     const result: ToolResult = evoResult.success
       ? { success: true, data: evoResult.data }

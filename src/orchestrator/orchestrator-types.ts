@@ -25,6 +25,13 @@ export type OrchestratorEvent =
   | { type: 'sequence_start'; name: string; totalSteps: number; waves: number }
   | { type: 'sequence_step'; stepId: string; agentName: string; status: 'running' | 'done' | 'skipped' | 'abstained'; wave: number; reason?: string }
   | { type: 'sequence_done'; success: boolean; participatedCount: number; abstainedCount: number; totalCostCents: number }
+  | { type: 'evolution_start'; runId: string; objective: string; agents: Array<{ id: string; name: string }>; maxRounds: number }
+  | { type: 'evolution_round_start'; round: number }
+  | { type: 'evolution_attempt_complete'; round: number; agentId: string; agentName: string; score: number; strategySummary: string; costCents: number }
+  | { type: 'evolution_attempt_failed'; round: number; agentId: string; agentName: string; error: string }
+  | { type: 'evolution_round_complete'; round: number; bestScore: number; bestAgentName: string }
+  | { type: 'evolution_complete'; runId: string; bestScore: number | null; bestAgentName: string | null; bestDeliverable: string | null; totalRounds: number; totalAttempts: number; totalCostCents: number; stoppedReason: string }
+  | { type: 'evolution_error'; error: string }
   | { type: 'done'; inputTokens: number; outputTokens: number; traceId?: string };
 
 // ============================================================================

@@ -10,6 +10,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { executeLocalCoEvolution } from '../co-evolution/co-evolution-executor.js';
+import type { CoEvolutionProgressEvent } from '../co-evolution/co-evolution-executor.js';
+import type { OrchestratorEvent } from '../orchestrator-types.js';
 import { logger } from '../../lib/logger.js';
 
 /**
@@ -18,6 +20,17 @@ import { logger } from '../../lib/logger.js';
 export async function evolveTask(
   ctx: LocalToolContext,
   input: Record<string, unknown>,
+): Promise<ToolResult> {
+  return evolveTaskWithEvents(ctx, input);
+}
+
+/**
+ * Run co-evolution with event emission for TUI progress display.
+ */
+export async function evolveTaskWithEvents(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+  onEvent?: (event: OrchestratorEvent) => void,
 ): Promise<ToolResult> {
   const prompt = input.prompt as string;
   const agentIds = input.agent_ids as string[] | undefined;
@@ -53,17 +66,32 @@ export async function evolveTask(
   );
 
   try {
+    const selectedIds = agents.map((a) => a.id).slice(0, 4);
+
+    // Emit evolution_start event
+    onEvent?.({
+      type: 'evolution_start',
+      runId: '',
+      objective: prompt,
+      agents: selectedIds.map((id) => ({ id, name: agents.find((a) => a.id === id)?.name ?? 'Agent' })),
+      maxRounds,
+    });
+
     const result = await executeLocalCoEvolution({
       db: ctx.db,
       engine: ctx.engine,
       workspaceId: ctx.workspaceId,
       config: {
         objective: prompt,
-        agentIds: agents.map((a) => a.id).slice(0, 4),
+        agentIds: selectedIds,
         maxRounds,
       },
       anthropic: ctx.anthropicApiKey ? new Anthropic({ apiKey: ctx.anthropicApiKey }) : undefined,
       modelRouter: ctx.modelRouter ?? undefined,
+      onEvent: onEvent ? (event) => {
+        // Forward co-evolution events as OrchestratorEvents
+        onEvent(event as unknown as OrchestratorEvent);
+      } : undefined,
     });
 
     if (!result.bestAttempt) {
