@@ -132,6 +132,42 @@ export class ContextBudget {
     return this.availableForHistory < threshold;
   }
 
+  /**
+   * Check if context pressure warrants proactive folding rather than message trimming.
+   * Folding is preferred when utilization exceeds the threshold because it preserves
+   * structured learnings instead of just dropping messages.
+   *
+   * @param threshold - Utilization fraction (0-1) that triggers folding (default 0.75)
+   */
+  shouldFold(threshold: number = 0.75): boolean {
+    const state = this.getState();
+    return state.utilizationPct >= threshold * 100;
+  }
+
+  /**
+   * Identify messages that should be folded (compressed into a structured summary).
+   * Returns the middle section of messages (between the first message and recent messages)
+   * that can be folded, plus the messages to keep as-is.
+   *
+   * @param messages - Full message array
+   * @param keepRecent - Number of recent messages to preserve (default 4)
+   */
+  getMessagesToFold<T extends { role: string; content: string | unknown[] }>(
+    messages: T[],
+    keepRecent: number = 4,
+  ): { toFold: T[]; keep: { first: T | null; recent: T[] } } {
+    if (messages.length <= keepRecent + 1) {
+      return { toFold: [], keep: { first: messages[0] || null, recent: messages } };
+    }
+
+    const first = messages[0];
+    const recentStart = Math.max(1, messages.length - keepRecent);
+    const toFold = messages.slice(1, recentStart);
+    const recent = messages.slice(recentStart);
+
+    return { toFold, keep: { first, recent } };
+  }
+
   summarizeAndTrim<T extends { role: string; content: string | unknown[] }>(
     messages: T[],
     keepRecent?: number,
