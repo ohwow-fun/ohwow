@@ -1218,7 +1218,7 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'evolve_task',
     description:
-      'Run a co-evolution session: multiple agents independently attempt the same task across multiple rounds, each building on the best prior attempts. Use when quality matters more than speed and the task benefits from diverse approaches and iteration (strategy, writing, analysis, creative work). Returns the highest-scoring deliverable.',
+      'Run a co-evolution session: multiple agents independently attempt the same task across multiple rounds, each building on the best prior attempts and scored by an evaluator. Use this instead of run_agent when the user asks to "evolve", "iterate", "refine", "improve", or "optimize" something, OR when the task is creative/strategic (strategy, positioning, writing, proposals, pitches, analysis) and would benefit from diverse expert perspectives competing to produce the best version. Returns the highest-scoring deliverable.',
     input_schema: {
       type: 'object' as const,
       properties: {
