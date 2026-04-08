@@ -1936,19 +1936,15 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   log_contact_event: ['business'],
   search_contacts: ['business'],
 
-  // Scraping/research → 'rag', 'browser'
-  scrape_url: ['rag', 'browser'],
+  // Scraping/research — always available (agents need web access by default)
+  // scrape_url, scrape_search, deep_research: removed from map → always included
   scrape_bulk: ['rag', 'browser'],
-  scrape_search: ['rag', 'browser'],
-  deep_research: ['rag', 'browser'],
 
   // Audio transcription → 'rag', 'vision'
   transcribe_audio: ['rag', 'vision'],
 
-  // Internet tools → 'rag'
-  youtube_transcript: ['rag'],
-  read_rss_feed: ['rag'],
-  github_search: ['rag'],
+  // Internet tools — always available (zero-cost fetch-based, no reason to gate)
+  // youtube_transcript, read_rss_feed, github_search: removed from map → always included
 
   // OCR/vision → 'vision'
   ocr_extract_text: ['vision'],

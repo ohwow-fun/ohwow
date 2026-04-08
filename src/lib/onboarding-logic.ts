@@ -5,7 +5,7 @@
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
-import { BUSINESS_TYPES, type AgentPreset, type BusinessType } from '../tui/data/agent-presets.js';
+import { BUSINESS_TYPES, DEFAULT_AGENT_TOOLS, type AgentPreset, type BusinessType } from '../tui/data/agent-presets.js';
 import { AutomationService } from '../triggers/automation-service.js';
 import { MCP_SERVER_CATALOG } from '../mcp/catalog.js';
 
@@ -151,7 +151,7 @@ export async function createAgentsFromPresets(
         model: ollamaModel || 'qwen3:4b',
         temperature: 0.7,
         max_tokens: 4096,
-        tools_enabled: agent.tools || [],
+        tools_enabled: [...new Set([...DEFAULT_AGENT_TOOLS, ...(agent.tools || [])])],
         approval_required: false,
         web_search_enabled: true,
       }),

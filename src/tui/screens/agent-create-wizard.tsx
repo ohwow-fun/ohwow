@@ -9,6 +9,7 @@ import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { InputField } from '../components/input-field.js';
 import { KeyHints } from '../components/key-hints.js';
 import { logger } from '../../lib/logger.js';
+import { DEFAULT_AGENT_TOOLS } from '../data/agent-presets.js';
 
 interface AgentCreateWizardProps {
   db: DatabaseAdapter | null;
@@ -64,7 +65,7 @@ export function AgentCreateWizard({ db, workspaceId, onComplete, onCancel }: Age
           model: 'claude-sonnet-4-5',
           temperature: 0.7,
           max_tokens: 4096,
-          tools_enabled: [],
+          tools_enabled: [...DEFAULT_AGENT_TOOLS],
           approval_required: false,
           web_search_enabled: true,
         }),

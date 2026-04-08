@@ -9,6 +9,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ModelRouter, ModelProvider } from '../../execution/model-router.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../../lib/logger.js';
+import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
 
 // ============================================================================
 // TYPES
@@ -120,7 +121,7 @@ export async function createEphemeralAgent(
       model: 'auto',
       temperature: 0.3,
       max_tokens: 2000,
-      tools_enabled: parsed.tools ?? ['web_research'],
+      tools_enabled: [...new Set([...DEFAULT_AGENT_TOOLS, ...(parsed.tools ?? [])])],
       approval_required: true,
       autonomy_level: 1,
     });

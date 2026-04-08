@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { validate } from '../validate.js';
 import { createAgentSchema } from '../schemas/index.js';
+import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
 
 export function createAgentsRouter(db: DatabaseAdapter): Router {
   const router = Router();
@@ -59,9 +60,9 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
           model: userConfig?.model || 'qwen3:0.6b',
           temperature: userConfig?.temperature ?? 0.7,
           max_tokens: userConfig?.max_tokens ?? 4096,
-          tools_enabled: userConfig?.tools_enabled || [],
+          tools_enabled: [...new Set([...DEFAULT_AGENT_TOOLS, ...(userConfig?.tools_enabled || [])])],
           approval_required: userConfig?.approval_required ?? false,
-          web_search_enabled: userConfig?.web_search_enabled ?? false,
+          web_search_enabled: userConfig?.web_search_enabled ?? true,
         }),
         stats: JSON.stringify({
           total_tasks: 0,

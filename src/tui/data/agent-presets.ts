@@ -44,9 +44,14 @@ export interface BusinessType {
 export const TOOL_DESCRIPTIONS: Record<string, string> = {
   web_research: 'Search the web and read pages for information',
   deep_research: 'Multi-query research with synthesized reports',
+  scrape_url: 'Fetch and extract content from any URL',
+  scrape_search: 'Search the web and scrape top results for detailed content',
   ocr: 'Extract text from images and PDF documents',
   local_crm: 'Track contacts, leads, and interactions',
 };
+
+/** Tools every agent gets by default. Presets can add more on top. */
+export const DEFAULT_AGENT_TOOLS = ['web_research', 'deep_research', 'scrape_url', 'scrape_search'];
 
 export const BUSINESS_TYPES: BusinessType[] = [
   {
