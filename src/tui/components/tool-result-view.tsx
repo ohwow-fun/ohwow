@@ -52,41 +52,90 @@ function ReadFileView({ input, result }: { input: Record<string, unknown>; resul
 }
 
 /**
- * Render an edit result with red/green diff lines
+ * Build a unified diff: shared prefix context, removed lines, added lines, shared suffix context.
+ */
+function buildUnifiedDiff(oldStr: string, newStr: string): Array<{ type: 'ctx' | 'del' | 'add'; text: string }> {
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const result: Array<{ type: 'ctx' | 'del' | 'add'; text: string }> = [];
+
+  // Find common prefix lines
+  let prefixLen = 0;
+  while (prefixLen < oldLines.length && prefixLen < newLines.length && oldLines[prefixLen] === newLines[prefixLen]) {
+    prefixLen++;
+  }
+
+  // Find common suffix lines (don't overlap with prefix)
+  let suffixLen = 0;
+  while (
+    suffixLen < oldLines.length - prefixLen &&
+    suffixLen < newLines.length - prefixLen &&
+    oldLines[oldLines.length - 1 - suffixLen] === newLines[newLines.length - 1 - suffixLen]
+  ) {
+    suffixLen++;
+  }
+
+  // Show up to 2 context lines from prefix/suffix
+  const ctxBefore = Math.min(prefixLen, 2);
+  const ctxAfter = Math.min(suffixLen, 2);
+
+  for (let i = prefixLen - ctxBefore; i < prefixLen; i++) {
+    result.push({ type: 'ctx', text: oldLines[i] });
+  }
+  for (let i = prefixLen; i < oldLines.length - suffixLen; i++) {
+    result.push({ type: 'del', text: oldLines[i] });
+  }
+  for (let i = prefixLen; i < newLines.length - suffixLen; i++) {
+    result.push({ type: 'add', text: newLines[i] });
+  }
+  for (let i = oldLines.length - suffixLen; i < oldLines.length - suffixLen + ctxAfter; i++) {
+    if (i >= 0 && i < oldLines.length) {
+      result.push({ type: 'ctx', text: oldLines[i] });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Render an edit result with unified diff (context + red/green)
  */
 function EditFileView({ input }: { input: Record<string, unknown> }) {
   const filePath = (input.path || input.file_path || '') as string;
-  const oldStr = (input.old_string || input.old_text || '') as string;
-  const newStr = (input.new_string || input.new_text || '') as string;
+  const oldStr = (input.old_string || '') as string;
+  const newStr = (input.new_string || '') as string;
 
-  const oldLines = oldStr.split('\n');
-  const newLines = newStr.split('\n');
-
-  // Limit diff display
-  const maxDiffLines = 15;
-  const oldDisplay = oldLines.slice(0, maxDiffLines);
-  const newDisplay = newLines.slice(0, maxDiffLines);
-  const oldRemaining = oldLines.length - oldDisplay.length;
-  const newRemaining = newLines.length - newDisplay.length;
+  const diffLines = buildUnifiedDiff(oldStr, newStr);
+  const maxDiffLines = 20;
+  const displayLines = diffLines.slice(0, maxDiffLines);
+  const remaining = diffLines.length - displayLines.length;
 
   return (
     <Box flexDirection="column" marginLeft={2}>
       <Text color="cyan" dimColor>{shortenPath(filePath)}</Text>
-      {oldDisplay.map((line, i) => (
-        <Box key={`old-${i}`}>
-          <Text color="red">- {truncLine(line)}</Text>
-        </Box>
-      ))}
-      {oldRemaining > 0 && (
-        <Text color="red" dimColor>  … {oldRemaining} more removed</Text>
-      )}
-      {newDisplay.map((line, i) => (
-        <Box key={`new-${i}`}>
-          <Text color="green">+ {truncLine(line)}</Text>
-        </Box>
-      ))}
-      {newRemaining > 0 && (
-        <Text color="green" dimColor>  … {newRemaining} more added</Text>
+      {displayLines.map((dl, i) => {
+        if (dl.type === 'ctx') {
+          return (
+            <Box key={i}>
+              <Text color="gray" dimColor>  {truncLine(dl.text)}</Text>
+            </Box>
+          );
+        }
+        if (dl.type === 'del') {
+          return (
+            <Box key={i}>
+              <Text color="red">- {truncLine(dl.text)}</Text>
+            </Box>
+          );
+        }
+        return (
+          <Box key={i}>
+            <Text color="green">+ {truncLine(dl.text)}</Text>
+          </Box>
+        );
+      })}
+      {remaining > 0 && (
+        <Text color="gray" dimColor>  … {remaining} more lines</Text>
       )}
     </Box>
   );
