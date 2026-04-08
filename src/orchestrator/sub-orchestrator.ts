@@ -154,14 +154,28 @@ const FOCUS_SECTIONS: Record<string, IntentSection[]> = {
   data: ['pulse', 'business', 'agents'],
 };
 
-/** Tools excluded from sub-orchestrators (prevent recursion, nested browser, etc.) */
-const EXCLUDED_TOOLS = new Set([
-  'delegate_subtask',
+/** Max recursive fold depth for nested sub-orchestrators */
+const MAX_FOLD_DEPTH = 3;
+
+/** Browser tools excluded from sub-orchestrators (they'd need a browser service) */
+const EXCLUDED_BROWSER_TOOLS = new Set([
   'request_browser',
-  // All browser tools (they'd need a browser service we don't have)
   'browser_navigate', 'browser_screenshot', 'browser_click', 'browser_type',
   'browser_scroll', 'browser_back', 'browser_evaluate', 'browser_close',
 ]);
+
+/**
+ * Get excluded tools based on fold depth.
+ * At depths below MAX_FOLD_DEPTH, delegate_subtask is allowed (enabling recursive folding).
+ * At MAX_FOLD_DEPTH, delegate_subtask is excluded to prevent infinite recursion.
+ */
+function getExcludedTools(depth: number): Set<string> {
+  const excluded = new Set(EXCLUDED_BROWSER_TOOLS);
+  if (depth >= MAX_FOLD_DEPTH) {
+    excluded.add('delegate_subtask');
+  }
+  return excluded;
+}
 
 const SUB_ORCHESTRATOR_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_ITERATIONS = 5;
@@ -203,14 +217,16 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
     toolCache,
     options,
     maxIterations = DEFAULT_MAX_ITERATIONS,
+    depth = 0,
   } = opts;
 
   const sectionSet = new Set(sections);
   const toolsCalled: string[] = [];
 
-  // Build scoped tool list
+  // Build scoped tool list (depth-aware: allow delegate_subtask below MAX_FOLD_DEPTH)
+  const excludedTools = getExcludedTools(depth);
   const tools = filterToolsByIntent([...ORCHESTRATOR_TOOL_DEFINITIONS], sectionSet)
-    .filter(t => !EXCLUDED_TOOLS.has(t.name));
+    .filter(t => !excludedTools.has(t.name));
 
   const systemPrompt = buildSubOrchestratorPrompt(sectionSet);
 
