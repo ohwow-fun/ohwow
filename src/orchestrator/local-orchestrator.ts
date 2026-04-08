@@ -1314,7 +1314,7 @@ export class LocalOrchestrator {
   // ==========================================================================
 
   /** Run a sub-orchestrator for delegate_subtask tool calls. */
-  private async runDelegateSubtask(prompt: string, focus: string, options?: ChannelChatOptions): Promise<SubOrchestratorResult> {
+  private async runDelegateSubtask(prompt: string, focus: string, options?: ChannelChatOptions, depth = 0): Promise<SubOrchestratorResult> {
     return runSubOrchestrator({
       prompt,
       sections: getFocusSections(focus),
@@ -1326,6 +1326,7 @@ export class LocalOrchestrator {
       circuitBreaker: this.circuitBreaker,
       toolCache: this.toolCache,
       options,
+      depth,
     });
   }
 

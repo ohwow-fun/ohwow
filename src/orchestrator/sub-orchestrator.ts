@@ -247,6 +247,22 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
     options,
     circuitBreaker,
     toolCache,
+    // Recursive delegate_subtask: spawns a nested sub-orchestrator at depth+1
+    delegateSubtask: depth < MAX_FOLD_DEPTH
+      ? async (subPrompt: string, focus: string) => runSubOrchestrator({
+          prompt: subPrompt,
+          sections: getFocusSections(focus),
+          parentToolCtx,
+          modelRouter,
+          anthropic,
+          anthropicApiKey: opts.anthropicApiKey,
+          orchestratorModel,
+          circuitBreaker,
+          toolCache,
+          options,
+          depth: depth + 1,
+        })
+      : undefined,
   };
 
   try {
