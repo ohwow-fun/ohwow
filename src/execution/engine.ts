@@ -1281,6 +1281,7 @@ export class RuntimeEngine {
                   model: modelId as Anthropic.Messages.Model,
                   stop_reason: 'end_turn',
                   stop_sequence: null,
+                  stop_details: null,
                   usage: {
                     input_tokens: cached.responseTokens.input_tokens,
                     output_tokens: cached.responseTokens.output_tokens,

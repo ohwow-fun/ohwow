@@ -1,0 +1,94 @@
+/**
+ * Co-Evolution Tool Handler
+ *
+ * Handles the `evolve_task` orchestrator tool:
+ * 1. Loads available agents
+ * 2. Runs co-evolution across multiple rounds
+ * 3. Returns the best deliverable
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import { executeLocalCoEvolution } from '../co-evolution/co-evolution-executor.js';
+import { logger } from '../../lib/logger.js';
+
+/**
+ * Run a co-evolution session: multiple agents iterate on the same deliverable.
+ */
+export async function evolveTask(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const prompt = input.prompt as string;
+  const agentIds = input.agent_ids as string[] | undefined;
+  const maxRounds = (input.max_rounds as number | undefined) ?? 3;
+
+  if (!prompt) {
+    return { success: false, error: 'prompt is required' };
+  }
+
+  // Load available agents
+  const query = ctx.db
+    .from('agent_workforce_agents')
+    .select('id, name, role, status')
+    .eq('workspace_id', ctx.workspaceId)
+    .eq('status', 'active');
+
+  const { data: agentsRaw } = agentIds && agentIds.length > 0
+    ? await query.in('id', agentIds)
+    : await query;
+
+  if (!agentsRaw || agentsRaw.length < 2) {
+    return {
+      success: false,
+      error: 'At least 2 active agents are needed for co-evolution. Use run_agent for single-agent tasks.',
+    };
+  }
+
+  const agents = agentsRaw as Array<{ id: string; name: string; role: string }>;
+
+  logger.info(
+    { agents: agents.length, maxRounds, prompt: prompt.slice(0, 100) },
+    '[CoEvolution] Starting co-evolution',
+  );
+
+  try {
+    const result = await executeLocalCoEvolution({
+      db: ctx.db,
+      engine: ctx.engine,
+      workspaceId: ctx.workspaceId,
+      config: {
+        objective: prompt,
+        agentIds: agents.map((a) => a.id).slice(0, 4),
+        maxRounds,
+      },
+      anthropic: ctx.anthropicApiKey ? new Anthropic({ apiKey: ctx.anthropicApiKey }) : undefined,
+      modelRouter: ctx.modelRouter ?? undefined,
+    });
+
+    if (!result.bestAttempt) {
+      return {
+        success: false,
+        error: 'Co-evolution produced no successful attempts.',
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        message: `Co-evolution completed. ${result.totalAttempts} attempts across ${result.totalRounds} rounds. Best score: ${result.bestScore?.toFixed(3)}.`,
+        bestDeliverable: result.bestAttempt.deliverable,
+        bestScore: result.bestScore,
+        bestAgentName: result.bestAttempt.agentName,
+        totalRounds: result.totalRounds,
+        totalAttempts: result.totalAttempts,
+        totalCostCents: result.totalCostCents,
+        stoppedReason: result.stoppedReason,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Co-evolution failed';
+    logger.error({ err }, '[CoEvolution] Execution failed');
+    return { success: false, error: msg };
+  }
+}

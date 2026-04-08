@@ -33,6 +33,7 @@ import { getAgentSuggestions } from './agent-suggestions.js';
 import { listAvailablePresets, setupAgents, bootstrapWorkspace } from './setup-agents.js';
 import { discoverCapabilities, proposeAutomation, createAutomation } from './automation-builder.js';
 import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo, generateVoice } from './media.js';
+import { evolveTask } from './co-evolution.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
 import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
@@ -47,6 +48,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['update_agent_status', (ctx, input) => updateAgentStatus(ctx, input)],
   ['run_agent', (ctx, input) => runAgent(ctx, input)],
   ['run_sequence', (ctx, input) => runSequence(ctx, input)],
+  ['evolve_task', (ctx, input) => evolveTask(ctx, input)],
   ['spawn_agents', (ctx, input) => spawnAgents(ctx, input)],
   ['await_agent_results', (ctx, input) => awaitAgentResults(ctx, input)],
 
