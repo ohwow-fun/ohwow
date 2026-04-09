@@ -73,6 +73,11 @@ export type { DifficultyLevel, DifficultyTier } from './difficulty.js';
 // Phase 4: Arena generation
 export { generateArenaFromDescription } from './arena-generator.js';
 
+// Phase 6: Wire protocol + external interop
+export { createArenaRouter } from './server.js';
+export type { ArenaRegistry } from './server.js';
+export { ExternalArenaClient } from './client.js';
+
 // Phase 5: Training loop + skill transfer
 export { runTrainingLoop } from './training-loop.js';
 export type { TrainingConfig, TrainingResult, ActionPolicy } from './training-loop.js';
