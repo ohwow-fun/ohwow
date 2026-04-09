@@ -386,6 +386,57 @@ export class DigitalBody {
       timestamp: Date.now(),
     };
   }
+
+  /**
+   * Suggest available arenas based on active organs and their affordances.
+   *
+   * Each active organ with healthy affordances maps to a potential arena domain.
+   * Returns lightweight suggestions (not full ArenaConfigs); use generateArenaFromDescription()
+   * to produce executable configs.
+   */
+  getAvailableArenas(): ArenaSuggestion[] {
+    const suggestions: ArenaSuggestion[] = [];
+
+    for (const organ of this.organs.values()) {
+      if (!organ.isActive() || organ.getHealth() === 'failed') continue;
+
+      const affordances = organ.getAffordances().filter(a => a.readiness > 0.3);
+      if (affordances.length === 0) continue;
+
+      const domain = this.organToDomain(organ);
+      suggestions.push({
+        domain,
+        organId: organ.id,
+        organName: organ.name,
+        availableActions: affordances.map(a => a.action),
+        suggestedMaxSteps: this.estimateMaxSteps(affordances),
+      });
+    }
+
+    return suggestions;
+  }
+
+  private organToDomain(organ: BodyPart): 'browser' | 'desktop' | 'mcp' | 'composite' {
+    if (organ.id.includes('browser')) return 'browser';
+    if (organ.id.includes('desktop')) return 'desktop';
+    if (organ.id.includes('mcp')) return 'mcp';
+    return 'composite';
+  }
+
+  private estimateMaxSteps(affordances: Affordance[]): number {
+    // More affordances = more complex arena = more steps needed
+    const base = Math.max(10, affordances.length * 5);
+    return Math.min(50, base);
+  }
+}
+
+/** A suggested arena based on body capabilities. */
+export interface ArenaSuggestion {
+  domain: 'browser' | 'desktop' | 'mcp' | 'composite';
+  organId: string;
+  organName: string;
+  availableActions: string[];
+  suggestedMaxSteps: number;
 }
 
 // ============================================================================

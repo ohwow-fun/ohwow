@@ -69,3 +69,6 @@ export {
   EXPERT,
 } from './difficulty.js';
 export type { DifficultyLevel, DifficultyTier } from './difficulty.js';
+
+// Phase 4: Arena generation
+export { generateArenaFromDescription } from './arena-generator.js';
