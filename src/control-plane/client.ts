@@ -35,7 +35,9 @@ import type {
   MemorySyncPayload,
   StateSyncEntry,
   PresenceEventPayload,
+  MeetingSessionSyncPayload,
 } from './types.js';
+import type { MeetingSession } from '../meeting/meeting-session.js';
 import { dirname } from 'path';
 import type { OllamaMonitor } from '../lib/ollama-monitor.js';
 import type { RuntimeConfig } from '../config.js';
@@ -112,6 +114,7 @@ export class ControlPlaneClient {
   private outboundQueue: OutboundQueue;
   private consciousnessBridge: ConsciousnessBridge | null = null;
   private bppModules: BppModules | null = null;
+  private meetingSession: MeetingSession | null = null;
 
   constructor(
     private config: RuntimeConfig,
@@ -152,6 +155,14 @@ export class ControlPlaneClient {
    */
   setBppModules(modules: BppModules): void {
     this.bppModules = modules;
+  }
+
+  /**
+   * Set the active meeting session for periodic transcript sync.
+   * Call when a meeting listener starts; set to null when it stops.
+   */
+  setMeetingSession(session: MeetingSession | null): void {
+    this.meetingSession = session;
   }
 
   /** Late-bind a handler for presence events from the phone eye. */
@@ -920,6 +931,11 @@ export class ControlPlaneClient {
       this.syncBpp().catch(() => {});
     }
 
+    // Sync meeting session transcript every heartbeat when active (~15s)
+    if (this.meetingSession?.isActive) {
+      this.syncMeetingSession().catch(() => {});
+    }
+
     // Piggyback drain on successful heartbeats
     this.drainOutboundQueue().catch(() => {});
   }
@@ -1376,6 +1392,44 @@ export class ControlPlaneClient {
       }
     } catch {
       // DB query failed, nothing to enqueue
+    }
+  }
+
+  /**
+   * Sync active meeting session transcript + notes to cloud.
+   * Called every heartbeat while a meeting is active, and once on completion.
+   */
+  async syncMeetingSession(): Promise<void> {
+    if (!this.meetingSession || !this.sessionToken) return;
+
+    const payload = this.meetingSession.buildSyncPayload();
+    if (!payload) return;
+
+    // Skip if no new transcript data and not a completion sync
+    if (payload.transcriptDelta.length === 0 && payload.status !== 'completed') return;
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-meeting`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        this.meetingSession.markSynced();
+        logger.debug({
+          sessionId: payload.sessionId,
+          deltaEntries: payload.transcriptDelta.length,
+          status: payload.status,
+        }, '[ControlPlane] Meeting session synced');
+      } else {
+        logger.debug({ status: response.status }, '[ControlPlane] Meeting sync failed');
+      }
+    } catch (err) {
+      logger.debug({ err }, '[ControlPlane] Meeting sync error');
     }
   }
 

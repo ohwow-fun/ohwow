@@ -317,3 +317,49 @@ export interface PresenceEventPayload {
   deviceId: string;
   timestamp: number;
 }
+
+// ============================================================================
+// MEETING SESSION SYNC — Local audio capture → cloud dashboard
+// ============================================================================
+
+export interface MeetingTranscriptEntry {
+  timestampMs: number;
+  text: string;
+  speaker?: string;
+  confidence: number;
+}
+
+export interface MeetingNotesSyncPayload {
+  summary: string;
+  keyPoints: string[];
+  decisions: { decision: string; context: string }[];
+  actionItems: { item: string; assignee?: string; dueDate?: string; priority: string }[];
+  openQuestions: { question: string; context: string }[];
+  keyQuotes: { quote: string; speaker?: string }[];
+  lastUpdated: string;
+}
+
+export interface MeetingSessionSyncPayload {
+  sessionId: string;
+  status: 'listening' | 'processing' | 'completed' | 'error';
+  app: string;
+  startedAt: string;
+  endedAt?: string;
+  /** Only new transcript entries since last sync */
+  transcriptDelta: MeetingTranscriptEntry[];
+  notes: MeetingNotesSyncPayload;
+  wordCount: number;
+  chunkCount: number;
+  /** Populated only when status is 'completed' */
+  completedMeeting?: {
+    title: string;
+    fullTranscript: string;
+    durationSeconds: number;
+    attendees: { name: string; role?: string }[];
+    topics: { topic: string; summary: string }[];
+    decisions: { decision: string; context: string }[];
+    actionItems: { item: string; assignee?: string; dueDate?: string; priority: string }[];
+    openQuestions: { question: string; context: string }[];
+    keyQuotes: { quote: string; speaker?: string }[];
+  };
+}
