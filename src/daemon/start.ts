@@ -781,6 +781,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       tier: config.tier,
       contentPublicKey: controlPlane?.contentPublicKey ?? undefined,
       dataDir,
+      browserHeadless: config.browserHeadless,
     },
     db,
     rawDb,

@@ -14,11 +14,12 @@ import { logger } from '../../lib/logger.js';
 
 /** Singleton browser service — lazily created on first /session/start */
 let browserService: LocalBrowserService | null = null;
+let configuredHeadless = false;
 
 function getOrCreateService(opts?: { modelName?: string; modelApiKey?: string }): LocalBrowserService {
   if (!browserService) {
     browserService = new LocalBrowserService({
-      headless: true,
+      headless: configuredHeadless,
       modelName: opts?.modelName,
       modelApiKey: opts?.modelApiKey,
     });
@@ -26,7 +27,8 @@ function getOrCreateService(opts?: { modelName?: string; modelApiKey?: string })
   return browserService;
 }
 
-export function createBrowserSessionRouter(): Router {
+export function createBrowserSessionRouter(options?: { headless?: boolean }): Router {
+  configuredHeadless = options?.headless ?? false;
   const router = Router();
 
   // --------------------------------------------------------------------------
@@ -39,6 +41,7 @@ export function createBrowserSessionRouter(): Router {
       ok: true,
       initialized: service.isActive(),
       browserResponsive: service.isActive(),
+      headless: configuredHeadless,
     });
   });
 

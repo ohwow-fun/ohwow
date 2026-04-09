@@ -106,6 +106,7 @@ export interface ServerConfig {
   tier?: 'free' | 'connected';
   contentPublicKey?: JsonWebKey;
   dataDir?: string;
+  browserHeadless?: boolean;
 }
 
 /**
@@ -265,7 +266,7 @@ export function createServer(deps: ServerDeps): {
 
   // Browser session routes (cloud dashboard calls these for local browser automation)
   // /browser/health is public; /browser/session/* require auth
-  app.use(createBrowserSessionRouter());
+  app.use(createBrowserSessionRouter({ headless: config.browserHeadless }));
 
   // Desktop session routes (cloud dashboard calls these for live desktop viewer)
   // /desktop/health is public; /desktop/screenshot and /desktop/action require auth
