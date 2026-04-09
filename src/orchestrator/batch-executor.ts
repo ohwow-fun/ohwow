@@ -140,6 +140,7 @@ export async function* executeToolCallsBatch(
     const generators = parallel.map(req => executeToolCall(req, ctx));
     const settledResults = await Promise.allSettled(generators.map(drainGenerator));
 
+    const failedIndices: number[] = [];
     for (let i = 0; i < settledResults.length; i++) {
       const settled = settledResults[i];
       if (settled.status === 'fulfilled') {
@@ -148,10 +149,20 @@ export async function* executeToolCallsBatch(
         }
         outcomeMap.set(parallel[i], settled.value.outcome);
       } else {
+        failedIndices.push(i);
+      }
+    }
+
+    // Retry failed tools once sequentially (transient errors: network, timeout)
+    for (const i of failedIndices) {
+      try {
+        const retryOutcome = yield* executeSingle(parallel[i], ctx);
+        outcomeMap.set(parallel[i], retryOutcome);
+      } catch (retryErr) {
         const errorOutcome: ToolCallOutcome = {
           toolName: parallel[i].name,
-          result: { success: false, error: settled.reason?.message || 'Parallel execution failed' },
-          resultContent: `Error: ${settled.reason?.message || 'Parallel execution failed'}`,
+          result: { success: false, error: (retryErr as Error)?.message || 'Parallel execution failed after retry' },
+          resultContent: `Error: ${(retryErr as Error)?.message || 'Parallel execution failed after retry'}`,
           isError: true,
         };
         yield { type: 'tool_done', name: parallel[i].name, result: errorOutcome.result };

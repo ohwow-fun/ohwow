@@ -54,7 +54,7 @@ export interface ClassifiedIntent {
 export const MODE_MAX_ITERATIONS: Record<OrchestratorMode, number> = {
   explore: 5,
   execute: 10,
-  conversational: 2,
+  conversational: 5,
 };
 
 // ============================================================================
