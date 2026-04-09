@@ -41,6 +41,7 @@ import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
 import { saveDeliverable } from './deliverables.js';
 import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
+import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -231,4 +232,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['lsp_go_to_definition', (ctx, input) => lspGoToDefinition(ctx, input)],
   ['lsp_references', (ctx, input) => lspReferences(ctx, input)],
   ['lsp_completions', (ctx, input) => lspCompletions(ctx, input)],
+
+  // Cloud data tools (query cloud DB via control plane)
+  ['cloud_list_contacts', (ctx, input) => cloudListContacts(ctx, input)],
+  ['cloud_list_schedules', (ctx, input) => cloudListSchedules(ctx, input)],
+  ['cloud_list_agents', (ctx) => cloudListAgents(ctx)],
+  ['cloud_list_tasks', (ctx, input) => cloudListTasks(ctx, input)],
+  ['cloud_get_analytics', (ctx) => cloudGetAnalytics(ctx)],
+  ['cloud_list_members', (ctx) => cloudListMembers(ctx)],
 ]);

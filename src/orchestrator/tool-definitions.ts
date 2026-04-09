@@ -1821,6 +1821,61 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
       required: ['file', 'line', 'character'],
     },
   },
+
+  // Cloud data query tools
+  {
+    name: 'cloud_list_contacts',
+    description: 'List contacts from the CLOUD CRM database (not local). Use this when you need the full customer/lead list from the web dashboard.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contact_type: { type: 'string', description: 'Filter by type: lead, customer, partner' },
+        search: { type: 'string', description: 'Search by name or email' },
+        limit: { type: 'number', description: 'Max results (default 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cloud_list_schedules',
+    description: 'List agent schedules from the CLOUD database. Shows which agents have cron schedules, whether enabled, and last/next run times.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string', description: 'Filter by agent ID' },
+        enabled: { type: 'boolean', description: 'Filter by enabled status' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cloud_list_agents',
+    description: 'List all agents from the CLOUD database. Includes full config, stats, and department info. Use this when local agent list might be out of sync.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_tasks',
+    description: 'List tasks from the CLOUD database. Shows full output, truth scores, and metadata. Use this for tasks that ran on the cloud or to see the complete task history.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string', description: 'Filter by agent ID' },
+        status: { type: 'string', description: 'Filter by status: pending, completed, failed, needs_approval' },
+        limit: { type: 'number', description: 'Max results (default 50)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cloud_get_analytics',
+    description: 'Get workspace analytics from the CLOUD: total tasks, agents, contacts, credits, and weekly stats.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_members',
+    description: 'List workspace members from the CLOUD with their roles and profile info.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
 ];
 
 // =========================================================================
@@ -1862,6 +1917,14 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // Workspace stats/activity → 'pulse'
   get_workspace_stats: ['pulse'],
   get_activity_feed: ['pulse'],
+
+  // Cloud data tools → 'pulse' + 'agents' + 'business'
+  cloud_list_contacts: ['pulse', 'business'],
+  cloud_list_schedules: ['pulse', 'agents'],
+  cloud_list_agents: ['pulse', 'agents'],
+  cloud_list_tasks: ['pulse', 'agents'],
+  cloud_get_analytics: ['pulse', 'business'],
+  cloud_list_members: ['pulse'],
 
   // Automation builder → 'agents'
   discover_capabilities: ['agents'],
@@ -2014,6 +2077,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
   search_contacts: 1, list_contacts: 1, create_contact: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
+  cloud_get_analytics: 1, cloud_list_contacts: 2, cloud_list_schedules: 2, cloud_list_agents: 2, cloud_list_tasks: 2, cloud_list_members: 3,
   request_file_access: 1, request_browser: 1, request_desktop: 1,
   scrape_url: 1, deep_research: 1, mount_docs: 1, list_doc_mounts: 1, unmount_docs: 1, search_mounted_docs: 1,
   send_whatsapp_message: 1, list_whatsapp_chats: 1, connect_whatsapp: 1,
