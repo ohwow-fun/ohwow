@@ -202,6 +202,10 @@ export interface TaskReportPayload {
   errorMessage?: string;
   startedAt?: string;
   completedAt?: string;
+  /** Task output text. Sent so the cloud dashboard can display locally-executed results. */
+  taskOutput?: string;
+  /** React trace (iterations, tool calls) for the Replay tab. */
+  reactTrace?: Array<{ thought: string; actions: Array<{ tool: string; inputSummary?: string }>; iteration: number; durationMs?: number; observations?: Array<{ tool: string; success: boolean; resultSummary?: string }> }>;
   /** Memories extracted from this task, filtered by agent sync policy. Only sent when memory sync is enabled. */
   memories?: TaskReportMemories;
   /** State updates from this task, for cloud-side persistence and dashboard display. */

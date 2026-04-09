@@ -63,6 +63,10 @@ export interface TaskReport {
   errorMessage?: string;
   startedAt?: string;
   completedAt?: string;
+  /** Task output text for cloud dashboard display. */
+  taskOutput?: string;
+  /** React trace for replay tab. */
+  reactTrace?: Array<{ thought: string; actions: Array<{ tool: string; inputSummary?: string }>; iteration: number; durationMs?: number; observations?: Array<{ tool: string; success: boolean; resultSummary?: string }> }>;
   /** Memories extracted from this task, filtered by agent sync policy. */
   memories?: import('../control-plane/types.js').TaskReportMemories;
   /** State updates from this task, for cloud-side persistence. */

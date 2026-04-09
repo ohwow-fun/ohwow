@@ -637,6 +637,7 @@ export class RuntimeEngine {
         modelUsed: result.model,
         startedAt: new Date(startTime).toISOString(),
         completedAt: new Date().toISOString(),
+        taskOutput: cleanContent || undefined,
       };
       this.effects.reportToCloud(cloudReport).catch(() => {});
 
@@ -2097,6 +2098,8 @@ export class RuntimeEngine {
         modelUsed: agentConfig.model,
         startedAt: new Date(startTime).toISOString(),
         completedAt: new Date().toISOString(),
+        taskOutput: cleanContent || undefined,
+        reactTrace: reactTrace.length > 0 ? reactTrace : undefined,
       };
 
       // Include state updates modified during this task execution
