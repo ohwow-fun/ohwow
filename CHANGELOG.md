@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.5.3] — 2026-04-09
+
+### Added
+- feat(orchestrator): code mode with dev intent, project detection, and coding protocols
+- feat(tui): Claude Code-style rich tool result rendering
+- feat: evolution event emission to local runtime
+- feat: SavepointStore for named execution checkpoints
+- feat: recursive folding with depth limit, fold-aware context budget, structured fold returns
+- feat: context-folding type definitions
+- feat: web research and HTTP fetch tools enabled for all agents by default
+- feat: co-evolution for local runtime (CORAL-style parallel agent iteration)
+- feat: evolve_task wired into local orchestrator tool system
+- feat: hand gesture recognition and cloud Eye layout ported to local runtime
+- feat: git context and LSP instructions wired into system prompt
+- feat: LSP client core, tool handlers, recovery audit migration, preflight
+- feat: GLM 5.1 added to OpenRouter curated models
+- Add /desktop/remote-action endpoint for cloud orchestrator control
+
+### Fixed
+- fix: add paused column to local runtime, align with cloud schema
+- fix(orchestrator): QA round 2 — detector coverage, section cap, prompt trim
+- fix(tui): QA round 2 — line numbering, stream errors, dead code
+- fix(tui): QA fixes for code mode tool rendering
+- fix(tui): increase result budget for code tools in rich rendering
+- fix: improve evolve_task tool description for better LLM selection
+- fix: thread depth through recursive sub-orchestrators
+- fix: auth and validation for /desktop/remote-action
+- fix: hand landmark overlay using clientWidth for 1:1 canvas-to-screen mapping
+- fix: address remaining LOW/MEDIUM QA audit issues
+- fix: address QA audit findings (1 CRITICAL, 6 HIGH, 5 MEDIUM)
+
+### Changed
+- refactor(tui): unified diff rendering for file edits
+- test(orchestrator): add dev intent test cases, update file intent tests
+
+### Dependencies
+- bump hono 4.12.9 → 4.12.12
+- bump @hono/node-server 1.19.11 → 1.19.13
+- bump @anthropic-ai/sdk 0.81.0 → 0.82.0
+- bump vite 8.0.3 → 8.0.6
+- bump @types/node 25.5.0 → 25.5.2
+- bump dotenv 17.3.1 → 17.4.1
+
 ## [0.5.2] — 2026-04-07
 
 ### Added
