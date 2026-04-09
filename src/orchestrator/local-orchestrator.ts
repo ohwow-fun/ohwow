@@ -926,63 +926,69 @@ export class LocalOrchestrator {
       systemBlocks.push({ type: 'text' as const, text: `\n\n## System Warnings\n${warningText}` });
     }
 
-    // ---- NEW PHILOSOPHICAL LAYERS: Prompt injection ----
+    // ---- PHILOSOPHICAL LAYERS: Only injected for large-context models ----
+    // Claude models and unspecified models (defaults) have 100K+ context.
+    // Small local models routed through Anthropic SDK shim may not.
+    const hasAbundantContext = !this.orchestratorModel ||
+      this.orchestratorModel.startsWith('claude-') ||
+      (CLAUDE_CONTEXT_LIMITS[this.orchestratorModel as keyof typeof CLAUDE_CONTEXT_LIMITS] ?? 0) > 100_000;
 
-    // Emotional Context (Damasio's somatic markers)
-    const affectContext = this.affectEngine?.buildPromptContext();
-    if (affectContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Emotional Context\n${affectContext}` });
-    }
-
-    // Internal State (Spinoza's endocrine integration bus)
-    const endocrineContext = this.endocrineSystem?.buildPromptContext();
-    if (endocrineContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Internal State\n${endocrineContext}` });
-    }
-
-    // Self-Regulation (Cannon's homeostasis — only when corrective actions active)
-    const homeostasisContext = this.homeostasisController?.buildPromptContext();
-    if (homeostasisContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Self-Regulation\n${homeostasisContext}` });
-    }
-
-    // Security Alert (Maturana & Varela's immune system — only during elevated+ alert)
-    const immuneContext = this.immuneSystem?.buildPromptContext();
-    if (immuneContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Security Alert\n${immuneContext}` });
-    }
-
-    // Your Story (Ricoeur's narrative identity)
-    const narrativeContext = this.narrativeEngine?.buildPromptContext();
-    if (narrativeContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Your Story\n${narrativeContext}` });
-    }
-
-    // Ethical Awareness (Aristotle + Kant — only when constraints or dilemma active)
-    // Ethics context is built from last evaluation; inject only if non-trivial
-    const ethicsContext = this.ethicsEngine?.buildPromptContext(null);
-    if (ethicsContext) {
-      systemBlocks.push({ type: 'text' as const, text: `\n\n## Ethical Awareness\n${ethicsContext}` });
-    }
-
-    // Available Shortcuts (Aristotle's hexis — habit-based shortcuts)
-    if (this.habitEngine) {
-      const habitMatches = this.habitEngine.checkCues(userMessage, []);
-      if (habitMatches.length > 0) {
-        const shortcutText = habitMatches.slice(0, 3).map(m => m.suggestedShortcut).join('\n');
-        systemBlocks.push({ type: 'text' as const, text: `\n\n## Available Shortcuts\n${shortcutText}` });
+    if (hasAbundantContext) {
+      // Emotional Context (Damasio's somatic markers)
+      const affectContext = this.affectEngine?.buildPromptContext();
+      if (affectContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Emotional Context\n${affectContext}` });
       }
-    }
 
-    // Subconscious Insights (Oneiros — recent dream discoveries)
-    if (this.sleepCycle && !this.sleepCycle.isAsleep()) {
-      const dreamInsights = this.brain?.workspace.getConscious(2, {
-        types: ['dream' as WorkspaceItem['type']],
-        minSalience: 0.5,
-      }) ?? [];
-      if (dreamInsights.length > 0) {
-        const insightText = dreamInsights.map(d => d.content).join('\n');
-        systemBlocks.push({ type: 'text' as const, text: `\n\n## Subconscious Insights\n${insightText}` });
+      // Internal State (Spinoza's endocrine integration bus)
+      const endocrineContext = this.endocrineSystem?.buildPromptContext();
+      if (endocrineContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Internal State\n${endocrineContext}` });
+      }
+
+      // Self-Regulation (Cannon's homeostasis — only when corrective actions active)
+      const homeostasisContext = this.homeostasisController?.buildPromptContext();
+      if (homeostasisContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Self-Regulation\n${homeostasisContext}` });
+      }
+
+      // Security Alert (Maturana & Varela's immune system — only during elevated+ alert)
+      const immuneContext = this.immuneSystem?.buildPromptContext();
+      if (immuneContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Security Alert\n${immuneContext}` });
+      }
+
+      // Your Story (Ricoeur's narrative identity)
+      const narrativeContext = this.narrativeEngine?.buildPromptContext();
+      if (narrativeContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Your Story\n${narrativeContext}` });
+      }
+
+      // Ethical Awareness (Aristotle + Kant — only when constraints or dilemma active)
+      const ethicsContext = this.ethicsEngine?.buildPromptContext(null);
+      if (ethicsContext) {
+        systemBlocks.push({ type: 'text' as const, text: `\n\n## Ethical Awareness\n${ethicsContext}` });
+      }
+
+      // Available Shortcuts (Aristotle's hexis — habit-based shortcuts)
+      if (this.habitEngine) {
+        const habitMatches = this.habitEngine.checkCues(userMessage, []);
+        if (habitMatches.length > 0) {
+          const shortcutText = habitMatches.slice(0, 3).map(m => m.suggestedShortcut).join('\n');
+          systemBlocks.push({ type: 'text' as const, text: `\n\n## Available Shortcuts\n${shortcutText}` });
+        }
+      }
+
+      // Subconscious Insights (Oneiros — recent dream discoveries)
+      if (this.sleepCycle && !this.sleepCycle.isAsleep()) {
+        const dreamInsights = this.brain?.workspace.getConscious(2, {
+          types: ['dream' as WorkspaceItem['type']],
+          minSalience: 0.5,
+        }) ?? [];
+        if (dreamInsights.length > 0) {
+          const insightText = dreamInsights.map(d => d.content).join('\n');
+          systemBlocks.push({ type: 'text' as const, text: `\n\n## Subconscious Insights\n${insightText}` });
+        }
       }
     }
 
@@ -1037,10 +1043,12 @@ export class LocalOrchestrator {
     // Add user message
     history.push({ role: 'user', content: userMessage });
 
-    // Truncate to last 20 messages
-    const loopMessages: MessageParam[] = history.length > 20
-      ? history.slice(-20)
-      : [...history];
+    // Smart history truncation: preserve first message (original intent) + summarize middle + keep recent
+    const ctxLimit = CLAUDE_CONTEXT_LIMITS['claude-sonnet-4-5'];
+    const histBudget = new ContextBudget(ctxLimit, 4096);
+    histBudget.setSystemPrompt(systemBlocks.map(b => b.text).join(''));
+    histBudget.setToolTokens(estimateToolTokens(convertToolsToOpenAI(tools)));
+    const loopMessages = histBudget.summarizeAndTrim(history) as MessageParam[];
 
     // Track where new messages start (for saving turn context)
     const turnStartIndex = loopMessages.length;
