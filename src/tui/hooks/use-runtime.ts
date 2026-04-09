@@ -367,6 +367,17 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
     // No-op — daemon owns all services. WS cleanup handled by registerShutdown.
   };
 
+  // Poll status until cloudConnected becomes true (control plane may take a few seconds)
+  useEffect(() => {
+    if (state.cloudConnected || state.initializing) return;
+    const interval = setInterval(() => {
+      refreshStatus().catch(() => {});
+    }, 3000);
+    // Stop polling after 30s
+    const timeout = setTimeout(() => clearInterval(interval), 30_000);
+    return () => { clearInterval(interval); clearTimeout(timeout); };
+  }, [state.cloudConnected, state.initializing, refreshStatus]);
+
   return {
     db,
     rawDb,
