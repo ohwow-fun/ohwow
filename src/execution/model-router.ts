@@ -1697,6 +1697,33 @@ export class ModelRouter {
     return this.ollama.isAvailable();
   }
 
+  /** Check if any model provider is available (Anthropic, OpenRouter, Ollama, etc.) */
+  async isAnyProviderAvailable(): Promise<boolean> {
+    if (this.anthropic) return true;
+    if (this.openrouter) return true;
+    if (this.claudeCode) {
+      const available = await this.claudeCode.isAvailable();
+      if (available) return true;
+    }
+    if (this.openaiCompatible) {
+      const available = await this.openaiCompatible.isAvailable();
+      if (available) return true;
+    }
+    if (this.ollama) {
+      const available = await this.ollama.isAvailable();
+      if (available) return true;
+    }
+    if (this.llamaCpp) {
+      const available = await this.llamaCpp.isAvailable();
+      if (available) return true;
+    }
+    if (this.mlx) {
+      const available = await this.mlx.isAvailable();
+      if (available) return true;
+    }
+    return false;
+  }
+
   /** Reset Ollama availability cache (for reconnection attempts) */
   resetOllamaStatus(): void {
     this.ollama?.resetAvailability();

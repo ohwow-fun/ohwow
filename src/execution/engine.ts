@@ -673,17 +673,23 @@ export class RuntimeEngine {
    */
   async executeTask(agentId: string, taskId: string): Promise<ExecuteAgentResult> {
     return withSpan('agent.execute', { 'agent.id': agentId, 'task.id': taskId }, async () => {
-    // Pre-flight: ensure we have a model provider
+    // Pre-flight: ensure we have at least one model provider
     if (!this.config.anthropicApiKey) {
-      const ollamaAvailable = this.modelRouter
-        ? await this.modelRouter.isOllamaAvailable()
+      const anyAvailable = this.modelRouter
+        ? await this.modelRouter.isAnyProviderAvailable()
         : false;
-      if (!ollamaAvailable) {
+      if (!anyAvailable) {
+        const errorMsg = 'No AI model available. Configure an API key (Anthropic or OpenRouter) or set up a local model via Settings.';
+        await this.db.from('agent_workforce_tasks').update({
+          status: 'failed',
+          error_message: errorMsg,
+          updated_at: new Date().toISOString(),
+        }).eq('id', taskId);
         return {
           success: false,
           taskId,
           status: 'failed',
-          error: 'No AI model available. Set up a local model via Settings to run tasks.',
+          error: errorMsg,
           tokensUsed: 0,
           costCents: 0,
         };
