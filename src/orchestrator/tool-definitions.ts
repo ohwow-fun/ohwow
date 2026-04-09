@@ -1918,13 +1918,8 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   get_workspace_stats: ['pulse'],
   get_activity_feed: ['pulse'],
 
-  // Cloud data tools → 'pulse' + 'agents' + 'business'
-  cloud_list_contacts: ['pulse', 'business'],
-  cloud_list_schedules: ['pulse', 'agents'],
-  cloud_list_agents: ['pulse', 'agents'],
-  cloud_list_tasks: ['pulse', 'agents'],
-  cloud_get_analytics: ['pulse', 'business'],
-  cloud_list_members: ['pulse'],
+  // Cloud data tools — NOT in section map so they're always available.
+  // (Removing from map = included in every intent section.)
 
   // Automation builder → 'agents'
   discover_capabilities: ['agents'],
