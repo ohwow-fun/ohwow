@@ -285,6 +285,31 @@ export class ExperienceStream {
   }
 
   // --------------------------------------------------------------------------
+  // ARENA — Episode-level queries
+  // --------------------------------------------------------------------------
+
+  /**
+   * Get all arena steps for a specific episode.
+   * Returns steps in chronological order.
+   */
+  getEpisodeSteps(episodeId: string): Experience[] {
+    return this.query({ types: ['arena_step'] }).filter(exp => {
+      const data = exp.data as { episodeId?: string } | undefined;
+      return data?.episodeId === episodeId;
+    });
+  }
+
+  /**
+   * Get the summary of a completed arena episode.
+   */
+  getEpisodeEnd(episodeId: string): Experience | undefined {
+    return this.query({ types: ['arena_episode_end'] }).find(exp => {
+      const data = exp.data as { episodeId?: string } | undefined;
+      return data?.episodeId === episodeId;
+    });
+  }
+
+  // --------------------------------------------------------------------------
   // LISTENERS
   // --------------------------------------------------------------------------
 

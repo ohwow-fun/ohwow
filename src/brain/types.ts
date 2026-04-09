@@ -94,7 +94,11 @@ export type ExperienceType =
   | 'voice_processed'         // Complete STT → orchestrator → TTS cycle
   | 'voice_greeting_spoken'   // Proactive greeting spoken via TTS (no STT)
   // Sequential multi-agent coordination
-  | 'sequence_completed';     // A multi-agent Sequential chain finished
+  | 'sequence_completed'      // A multi-agent Sequential chain finished
+  // Arena training environment
+  | 'arena_episode_start'     // An arena episode began (reset called)
+  | 'arena_step'              // A single step was taken in an arena
+  | 'arena_episode_end';      // An arena episode ended (done or truncated)
 
 /**
  * An Experience is the atomic unit of the brain's process ontology.
