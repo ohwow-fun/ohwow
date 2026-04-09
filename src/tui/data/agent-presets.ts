@@ -650,6 +650,7 @@ export const BUSINESS_TYPES: BusinessType[] = [
           local_files_enabled: true,
           mcp_enabled: true,
           devops_enabled: true,
+          execution_backend: 'native',
         },
         automations: [
           {
