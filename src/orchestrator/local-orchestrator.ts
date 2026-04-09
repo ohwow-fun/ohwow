@@ -1173,6 +1173,24 @@ export class LocalOrchestrator {
       for (let i = 0; i < outcomes.length; i++) {
         const outcome = outcomes[i];
 
+        // Circuit breaker: skip disabled tools
+        if (this.circuitBreaker.isDisabled(outcome.toolName)) {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUseBlocks[i].id,
+            content: `Tool "${outcome.toolName}" is temporarily disabled after repeated failures. Try an alternative approach.`,
+            is_error: true,
+          });
+          continue;
+        }
+
+        // Record success/failure for circuit breaker
+        if (outcome.isError) {
+          this.circuitBreaker.recordFailure(outcome.toolName);
+        } else {
+          this.circuitBreaker.recordSuccess(outcome.toolName);
+        }
+
         // Handle browser activation: create service and swap tools.
         // Because batch-executor runs request_browser first (before parallel tools),
         // the browserState getter will return the updated state for subsequent tools.
@@ -1219,7 +1237,19 @@ export class LocalOrchestrator {
         if (toolResult && this.brain) {
           this.brain.recordToolExecution(block.name, block.input, toolResult.success);
         }
-        orchToolCallHashes.push(hashToolCall(block.name, block.input));
+
+        // Duplicate tool call detection
+        const hash = hashToolCall(block.name, block.input);
+        const duplicateCount = orchToolCallHashes.filter(h => h === hash).length;
+        if (duplicateCount >= 2) {
+          const warning = `\n\nDUPLICATE TOOL CALL: "${block.name}" called ${duplicateCount + 1} times with identical arguments. This approach is not working. Try a completely different strategy or report your current findings to the user.`;
+          if (toolResults.length > 0) {
+            const lastResult = toolResults[toolResults.length - 1];
+            const existingContent = typeof lastResult.content === 'string' ? lastResult.content : '';
+            toolResults[toolResults.length - 1] = { ...lastResult, content: `${existingContent}${warning}` };
+          }
+        }
+        orchToolCallHashes.push(hash);
         sessionToolNames.push(block.name);
 
         // Affect: process tool result -> emotional response (Damasio)
@@ -1684,6 +1714,18 @@ export class LocalOrchestrator {
         for (let i = 0; i < outcomes.length; i++) {
           const outcome = outcomes[i];
           const { req, toolCall } = validRequests[i];
+
+          // Circuit breaker: skip disabled tools
+          if (this.circuitBreaker.isDisabled(outcome.toolName)) {
+            loopMessages.push({ role: 'tool', content: `Tool "${outcome.toolName}" is temporarily disabled after repeated failures. Try an alternative approach.`, tool_call_id: toolCall.id });
+            toolResultsSummary.push({ name: req.name, content: 'Tool disabled by circuit breaker' });
+            continue;
+          }
+          if (outcome.isError) {
+            this.circuitBreaker.recordFailure(outcome.toolName);
+          } else {
+            this.circuitBreaker.recordSuccess(outcome.toolName);
+          }
 
           // Handle browser activation
           if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
