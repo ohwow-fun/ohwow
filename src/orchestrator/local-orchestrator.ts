@@ -28,7 +28,7 @@ import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
-import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider } from '../execution/model-router.js';
+import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
 import { repairToolCall } from './tool-call-repair.js';
@@ -754,6 +754,12 @@ export class LocalOrchestrator {
         }
         return;
       }
+
+      // OpenRouter provider → dedicated tool loop with native OpenAI format + streaming
+      if (provider.name === 'openrouter' && provider instanceof OpenRouterProvider) {
+        yield* this.runOpenRouterToolLoop(userMessage, sessionId, provider, options, seedMessages);
+        return;
+      }
       // Anthropic provider → fall through to the full Anthropic SDK path below
     }
 
@@ -1420,6 +1426,354 @@ export class LocalOrchestrator {
   // ==========================================================================
   // OLLAMA TOOL-CALLING LOOP
   // ==========================================================================
+
+  /**
+   * Dedicated OpenRouter tool loop — uses native OpenAI chat/completions format
+   * with streaming. No Anthropic-specific features (cache_control, TextBlockParam arrays).
+   * Modeled on runOllamaToolLoop but uses OpenRouter cloud models (DeepSeek, etc.).
+   */
+  private async *runOpenRouterToolLoop(
+    userMessage: string,
+    sessionId: string,
+    provider: OpenRouterProvider,
+    options?: ChannelChatOptions,
+    seedMessages?: MessageParam[],
+  ): AsyncGenerator<OrchestratorEvent> {
+    const traceId = crypto.randomUUID();
+
+    // Classify intent
+    const previousIntent = this.lastIntentBySession.get(sessionId);
+    const classified = classifyIntent(userMessage, previousIntent);
+    this.lastIntentBySession.set(sessionId, classified);
+    yield { type: 'status', message: classified.statusLabel };
+
+    // Auto-activate browser when intent is 'browser'
+    const browserPreActivated = classified.sections.has('browser') && classified.intent === 'browser';
+    if (this.browserService && !this.browserService.isActive()) {
+      logger.debug('[browser] Browser process no longer active — nullifying (openrouter)');
+      this.browserService = null;
+      this.browserActivated = false;
+      this.syncOrganToBody();
+    }
+    if (browserPreActivated && !this.browserActivated) {
+      logger.debug(`[browser] Pre-activating browser (openrouter) — headless: ${this.browserHeadless}`);
+      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+      this.browserActivated = true;
+      this.syncOrganToBody();
+    }
+
+    // Auto-activate desktop when intent is 'desktop'
+    const desktopPreActivated = classified.sections.has('desktop') && classified.intent === 'desktop';
+    if (desktopPreActivated && !this.desktopActivated) {
+      logger.debug('[desktop] Pre-activating desktop control (openrouter)');
+      this.desktopService = new LocalDesktopService();
+      this.desktopActivated = true;
+      this.syncOrganToBody();
+    }
+
+    // Build system prompt as plain string (no TextBlockParam arrays, no cache_control)
+    const displayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
+    const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
+    const { staticPart, dynamicPart } = await buildTargetedPrompt(
+      this.promptDeps, userMessage, classified.sections,
+      browserPreActivated || this.browserActivated, options?.platform,
+      desktopPreActivated || this.desktopActivated, undefined, displayLayout, hasMcpTools,
+    );
+    let systemPrompt = staticPart + '\n\n' + dynamicPart;
+
+    // Essential philosophical layers only (persona + body + warnings)
+    const personaContext = this.soul.buildPromptContext();
+    if (personaContext) {
+      systemPrompt += `\n\n## Human Awareness\n${personaContext}`;
+    }
+
+    const proprioception = this.brain?.getProprioception();
+    if (proprioception && proprioception.organs.length > 0) {
+      const activeOrgans = proprioception.organs.filter(o => o.health !== 'dormant');
+      if (activeOrgans.length > 0) {
+        const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
+        const lines = [`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`];
+        if (degraded.length > 0) lines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
+        systemPrompt += `\n\n## Body Awareness\n${lines.join('\n')}`;
+      }
+    }
+
+    const warnings = this.brain?.workspace.getConscious(3, { types: ['failure', 'warning'], minSalience: 0.5 }) ?? [];
+    if (warnings.length > 0) {
+      systemPrompt += `\n\n## System Warnings\n${warnings.map(w => w.content).join('\n')}`;
+    }
+
+    // Convert tools to OpenAI format
+    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated);
+    let openaiTools = convertToolsToOpenAI(anthropicTools);
+    logger.info({ toolCount: openaiTools.length, sections: [...(classified.sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
+
+    // Load history and apply context budget
+    const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
+    history.push({ role: 'user', content: userMessage });
+
+    const toolTokenCount = estimateToolTokens(openaiTools);
+    // OpenRouter models typically have 128K+ context; use a safe estimate
+    const contextLimit = 128_000;
+    const budget = new ContextBudget(contextLimit, 4096);
+    budget.setSystemPrompt(systemPrompt);
+    budget.setToolTokens(toolTokenCount);
+    const truncatedHistory = budget.summarizeAndTrim(history);
+
+    // Convert history to OpenAI message format
+    const loopMessages: OllamaMessage[] = [];
+    for (const m of truncatedHistory) {
+      if (typeof m.content === 'string') {
+        loopMessages.push({ role: m.role as 'user' | 'assistant', content: m.content });
+      } else if (Array.isArray(m.content)) {
+        const blocks = m.content as ContentBlockParam[];
+        const hasToolUse = blocks.some(b => b.type === 'tool_use');
+        const hasToolResult = blocks.some(b => b.type === 'tool_result');
+        if (hasToolUse && m.role === 'assistant') {
+          const textParts = blocks.filter(b => b.type === 'text').map(b => (b as TextBlockParam).text);
+          const toolCalls = blocks.filter(b => b.type === 'tool_use').map(b => {
+            const tu = b as ContentBlockParam & { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
+            return { id: tu.id, type: 'function' as const, function: { name: tu.name, arguments: JSON.stringify(tu.input) } };
+          });
+          loopMessages.push({ role: 'assistant', content: textParts.join(''), tool_calls: toolCalls });
+        } else if (hasToolResult && m.role === 'user') {
+          for (const b of blocks) {
+            if (b.type === 'tool_result') {
+              const tr = b as ToolResultBlockParam;
+              loopMessages.push({
+                role: 'tool',
+                content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+                tool_call_id: tr.tool_use_id,
+              });
+            }
+          }
+        } else {
+          loopMessages.push({ role: m.role as 'user' | 'assistant', content: JSON.stringify(m.content) });
+        }
+      }
+    }
+
+    const turnStartIndex = loopMessages.length;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let fullContent = '';
+    const executedToolCalls = new Map<string, ToolResult>();
+    const toolCallHashes: string[] = [];
+    const sessionToolNames: string[] = [];
+    const maxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
+
+    this.brain?.resetSession();
+
+    for (let iteration = 0; iteration < maxIter; iteration++) {
+      let response: ModelResponseWithTools;
+      try {
+        const thinkFilter = new ThinkTagFilter();
+        const stream = provider.createMessageWithToolsStreaming({
+          model: this.orchestratorModel || undefined,
+          system: systemPrompt,
+          messages: loopMessages.map(m => ({
+            role: m.role,
+            content: m.content,
+            ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+            ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          })),
+          maxTokens: 4096,
+          temperature: 0.5,
+          tools: openaiTools,
+        });
+        let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponseWithTools>;
+        while (true) {
+          streamResult = await stream.next();
+          if (streamResult.done) {
+            response = streamResult.value;
+            break;
+          }
+          const filtered = thinkFilter.feed(streamResult.value.content);
+          if (filtered) {
+            yield { type: 'text', content: filtered };
+          }
+        }
+        const flushed = thinkFilter.flush();
+        if (flushed) {
+          yield { type: 'text', content: flushed };
+        }
+      } catch (err) {
+        logger.error({ err }, '[orchestrator] OpenRouter tool loop error');
+        yield { type: 'text', content: 'Something went wrong with the AI provider. Try again.' };
+        break;
+      }
+
+      totalInputTokens += response.inputTokens;
+      totalOutputTokens += response.outputTokens;
+
+      const hasToolCalls = response.toolCalls && response.toolCalls.length > 0;
+
+      if (response.content && !hasToolCalls) {
+        const cleaned = stripThinkTags(response.content);
+        if (cleaned) fullContent += cleaned;
+      }
+
+      // No text-based tool extraction for OpenRouter — structured tool_calls only
+      if (!hasToolCalls) break;
+
+      // Append assistant message with tool calls
+      loopMessages.push({
+        role: 'assistant',
+        content: response.content || '',
+        tool_calls: response.toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: tc.function,
+        })),
+      });
+
+      // Parse and execute tool calls
+      const toolResultsSummary: { name: string; content: string }[] = [];
+      const validRequests: { req: ToolCallRequest; toolCall: typeof response.toolCalls[0] }[] = [];
+      const toolLoopAborted = false;
+
+      for (let toolCall of response.toolCalls) {
+        const repairResult = repairToolCall(toolCall, openaiTools);
+        if (repairResult.repairs.length > 0) {
+          logger.info(`[orchestrator] OpenRouter tool call repaired: ${repairResult.repairs.join(', ')}`);
+          toolCall = repairResult.toolCall;
+        }
+        if (repairResult.error) {
+          logger.warn(`[orchestrator] OpenRouter tool call repair failed: ${repairResult.error}`);
+          loopMessages.push({ role: 'tool', content: repairResult.error, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: toolCall.function.name || 'unknown_tool', content: repairResult.error });
+          continue;
+        }
+
+        const toolName = toolCall.function.name;
+        if (!toolName) {
+          const errorMsg = 'Tool call missing function name. Provide a valid tool name.';
+          loopMessages.push({ role: 'tool', content: errorMsg, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: 'unknown_tool', content: errorMsg });
+          continue;
+        }
+
+        const parsed = parseToolArguments(toolCall.function.arguments, toolName);
+        if (parsed.error) {
+          loopMessages.push({ role: 'tool', content: parsed.error, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: toolName, content: parsed.error });
+          continue;
+        }
+
+        let toolInput = parsed.args;
+        if (options?.transformToolInput) {
+          toolInput = options.transformToolInput(toolName, toolInput);
+        }
+
+        validRequests.push({ req: { id: toolCall.id, name: toolName, input: toolInput }, toolCall });
+      }
+
+      if (toolLoopAborted) break;
+
+      // Execute tool calls
+      if (validRequests.length > 0) {
+        const execCtx = this.buildToolExecCtx(executedToolCalls, options);
+        const batchGen = executeToolCallsBatch(validRequests.map(v => v.req), execCtx);
+        let outcomes: import('./tool-executor.js').ToolCallOutcome[];
+        for (;;) {
+          const { value, done } = await batchGen.next();
+          if (done) { outcomes = value; break; }
+          yield value;
+        }
+
+        for (let i = 0; i < outcomes.length; i++) {
+          const outcome = outcomes[i];
+          const { req, toolCall } = validRequests[i];
+
+          // Handle browser activation
+          if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
+            this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+            this.browserActivated = true;
+            const browserOpenAI = convertToolsToOpenAI(BROWSER_TOOL_DEFINITIONS);
+            openaiTools = openaiTools.filter((t) => t.function.name !== 'request_browser');
+            openaiTools = [...openaiTools, ...browserOpenAI];
+          }
+
+          // Handle desktop activation
+          if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
+            this.desktopService = new LocalDesktopService();
+            this.desktopActivated = true;
+            const desktopOpenAI = convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS);
+            openaiTools = openaiTools.filter((t) => t.function.name !== 'request_desktop');
+            openaiTools = [...openaiTools, ...desktopOpenAI];
+          }
+
+          // Handle filesystem activation
+          if (outcome.toolsModified && outcome.toolName === 'request_file_access' && !this.filesystemActivated) {
+            this.filesystemActivated = true;
+            invalidateFileAccessCache();
+            invalidateBashAccessCache();
+            const fsOpenAI = convertToolsToOpenAI([...FILESYSTEM_TOOL_DEFINITIONS, ...BASH_TOOL_DEFINITIONS]);
+            openaiTools = openaiTools.filter((t) => t.function.name !== 'request_file_access');
+            openaiTools = [...openaiTools, ...fsOpenAI];
+          }
+
+          // Brain: record tool execution
+          this.brain?.recordToolExecution(req.name, req.input, outcome.result.success);
+
+          sessionToolNames.push(req.name);
+
+          // Ollama-compatible format: text resultContent
+          loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
+        }
+      }
+
+      // Duplicate tool call detection
+      for (const { req } of validRequests) {
+        const hash = hashToolCall(req.name, req.input);
+        const duplicateCount = toolCallHashes.filter(h => h === hash).length;
+        if (duplicateCount >= 2) {
+          const warning = `\n\nDUPLICATE TOOL CALL: "${req.name}" called ${duplicateCount + 1} times with identical arguments. This approach is not working. Try a completely different strategy or report your current findings to the user.`;
+          if (loopMessages.length > 0 && loopMessages[loopMessages.length - 1].role === 'tool') {
+            loopMessages[loopMessages.length - 1].content += warning;
+          }
+        }
+        toolCallHashes.push(hash);
+      }
+
+      // Build reflection prompt with tool results (helps non-Claude models stay on track)
+      const resultsBlock = toolResultsSummary
+        .map(r => `## ${r.name}\n${r.content}`)
+        .join('\n\n');
+      const reflection = buildReflectionPrompt(userMessage, executedToolCalls, iteration, maxIter);
+      loopMessages.push({ role: 'user', content: `[Tool Results:\n${resultsBlock}\n\n${reflection}]` });
+    }
+
+    // Save turn context
+    const turnMessages = buildOllamaTurnMessages(userMessage, loopMessages, turnStartIndex, fullContent);
+    await saveToSession(this.sessionDeps, sessionId, turnMessages, userMessage.slice(0, 100));
+
+    if (fullContent) {
+      persistExchange(this.sessionDeps, sessionId, userMessage, fullContent, {
+        title: userMessage.slice(0, 100),
+        extractionDeps: { anthropic: this.anthropic, modelRouter: this.modelRouter },
+      }).catch((err) => {
+        logger.warn(`[orchestrator] OpenRouter conversation persistence failed: ${err}`);
+      });
+    }
+
+    this.exchangeCount++;
+    if (this.exchangeCount % 3 === 0 && fullContent) {
+      extractOrchestratorMemory(this.memoryDeps, sessionId, userMessage, fullContent).catch((err) => {
+        logger.error(`[orchestrator] OpenRouter memory extraction failed: ${err}`);
+      });
+    }
+
+    await this.brain?.flush();
+
+    yield {
+      type: 'done',
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      traceId,
+    };
+  }
 
   private async *runOllamaToolLoop(
     userMessage: string,
