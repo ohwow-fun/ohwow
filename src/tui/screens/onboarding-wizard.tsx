@@ -187,6 +187,21 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     const existing = tryLoadConfig(configPath);
     return existing?.anthropicApiKey || '';
   });
+  const openRouterKey = (() => {
+    const configPath = configDir ? `${configDir}/config.json` : undefined;
+    const existing = tryLoadConfig(configPath);
+    return existing?.openRouterApiKey || '';
+  })();
+  const configCloudProvider = (() => {
+    const configPath = configDir ? `${configDir}/config.json` : undefined;
+    const existing = tryLoadConfig(configPath);
+    return existing?.cloudProvider || 'anthropic';
+  })();
+  const configCloudModel = (() => {
+    const configPath = configDir ? `${configDir}/config.json` : undefined;
+    const existing = tryLoadConfig(configPath);
+    return existing?.cloudModel || existing?.openRouterModel || 'claude-haiku-4-5-20251001';
+  })();
   const [cloudAuthValidating, setCloudAuthValidating] = useState(false);
   const [cloudAuthError, setCloudAuthError] = useState('');
 
@@ -1245,8 +1260,9 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           readinessSelectedIdx={readinessIdx}
           readinessLoading={readinessLoading}
           modelSource={modelSource}
-          cloudAuthStatus={anthropicKey ? 'authenticated' : 'none'}
-          cloudModel="claude-haiku-4-5-20251001"
+          cloudAuthStatus={(anthropicKey || openRouterKey) ? 'authenticated' : 'none'}
+          cloudModel={configCloudModel}
+          cloudProvider={configCloudProvider}
         />
       )}
 

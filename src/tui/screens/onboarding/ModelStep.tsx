@@ -46,6 +46,8 @@ interface ModelStepProps {
   cloudAuthStatus?: CloudAuthStatus;
   /** Cloud model ID */
   cloudModel?: string;
+  /** Cloud provider (anthropic or openrouter) */
+  cloudProvider?: string;
 }
 
 /** Check if a model tag matches a running model (full tag match, bare tag matches any variant). */
@@ -77,7 +79,9 @@ export function ModelStep({
   modelSource = 'local',
   cloudAuthStatus = 'none',
   cloudModel = 'claude-haiku-4-5-20251001',
+  cloudProvider = 'anthropic',
 }: ModelStepProps) {
+  const providerLabel = getCloudProviderLabel(cloudModel, cloudProvider);
   // Download view takes priority over all other modes
   if (downloading) {
     return (
@@ -127,7 +131,7 @@ export function ModelStep({
           <Box flexDirection="column" marginTop={1}>
             <Box borderStyle="round" borderColor="magenta" paddingX={2} paddingY={1} flexDirection="column">
               <Text bold color="white">{formatCloudModelName(cloudModel)}</Text>
-              <Text color="gray">Anthropic Claude cloud model</Text>
+              <Text color="gray">{providerLabel} cloud model</Text>
               <Text color={cloudAuthStatus === 'authenticated' ? 'green' : 'yellow'}>
                 {cloudAuthStatus === 'authenticated' ? '● Connected' : '○ Not connected'}
               </Text>
@@ -253,7 +257,7 @@ export function ModelStep({
               <Text color="yellow"> ○ Not connected</Text>
             )}
           </Box>
-          <Text color="gray">Anthropic Claude cloud model. No local download needed.</Text>
+          <Text color="gray">{providerLabel} cloud model. No local download needed.</Text>
         </Box>
 
         {error && (
@@ -443,8 +447,20 @@ function renderProgressBar(percent: number): string {
 const CLOUD_MODEL_LABELS: Record<string, string> = {
   'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
   'claude-sonnet-4-20250514': 'Claude Sonnet 4',
+  'anthropic/claude-sonnet-4': 'Claude Sonnet 4',
+  'anthropic/claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
+  'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
+  'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+  'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
+  'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite',
+  'qwen/qwen3.5-9b': 'Qwen 3.5 9B',
 };
 
 function formatCloudModelName(modelId: string): string {
-  return CLOUD_MODEL_LABELS[modelId] || modelId;
+  return CLOUD_MODEL_LABELS[modelId] || modelId.split('/').pop() || modelId;
+}
+
+function getCloudProviderLabel(cloudModel: string, cloudProvider?: string): string {
+  if (cloudProvider === 'openrouter' || cloudModel.includes('/')) return 'OpenRouter';
+  return 'Anthropic';
 }
