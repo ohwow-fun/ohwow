@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.2] — 2026-04-09
+
+### Fixed
+- Bump basic-ftp to 5.2.1 via override (CVE-2026-39983, CRLF command injection)
+
 ## [0.6.1] — 2026-04-09
 
 ### Added
