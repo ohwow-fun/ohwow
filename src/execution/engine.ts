@@ -1266,6 +1266,7 @@ export class RuntimeEngine {
             desktopOptions,
             difficulty,
             gitEnabled: bashEnabled,
+            agentModel: agentConfig.model as string | undefined,
           });
           fullContent = ollamaResult.fullContent;
           totalInputTokens = ollamaResult.totalInputTokens;
@@ -2416,6 +2417,7 @@ export class RuntimeEngine {
     desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
     gitEnabled?: boolean;
+    agentModel?: string;
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number }> {
     // Query routing stats for adaptive model selection
     let routingHistory: import('./model-router.js').RoutingHistory | undefined;
@@ -2496,6 +2498,7 @@ export class RuntimeEngine {
               })),
               maxTokens: opts.maxTokens,
               temperature: opts.temperature,
+              model: opts.agentModel,
             });
             return {
               fullContent: textResponse.content,
@@ -2514,6 +2517,7 @@ export class RuntimeEngine {
             maxTokens: opts.maxTokens,
             temperature: opts.temperature,
             tools: activeTools,
+            model: opts.agentModel,
           });
         } catch (err) {
           // Credit exhaustion: fall back to local Ollama and emit event
