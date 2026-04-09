@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.7] — 2026-04-09
+
+### Added
+- Git-aware env scrubbing for bash tool (SSH_AUTH_SOCK preserved for git push)
+- Auto-inject GitHub MCP server for devops-enabled agents
+- DevOps system prompt for release management guidance
+- DevOps agent preset with bash, files, and MCP capabilities
+- Release workflow template for DevOps agent
+- Per-agent config field on presets, passed through during onboarding
+
+### Fixed
+- Pass per-agent model ID to OpenRouter provider in Ollama path
+- Prevent fetch to null port, guard greeting on daemon connection
+
 ## [0.6.6] — 2026-04-09
 
 ### Fixed
