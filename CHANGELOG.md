@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.3] — 2026-04-09
+
+### Fixed
+- Skip cloud auth when OpenRouter key is already configured
+
 ## [0.6.2] — 2026-04-09
 
 ### Fixed
