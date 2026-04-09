@@ -78,6 +78,7 @@ import {
   BASH_TOOL_DEFINITIONS,
   BASH_SYSTEM_PROMPT,
 } from './bash/index.js';
+import { DEVOPS_SYSTEM_PROMPT } from './devops/devops-prompts.js';
 import {
   DocMountManager,
   DOC_MOUNT_TOOL_DEFINITIONS,
@@ -961,6 +962,7 @@ export class RuntimeEngine {
         scraplingEnabled,
         localFilesEnabled: localFilesEnabled && fileAccessGuard !== null,
         bashEnabled: bashEnabled && fileAccessGuard !== null,
+        devopsEnabled,
         approvalRequired,
         goalContext,
       });
@@ -2884,6 +2886,7 @@ export class RuntimeEngine {
     scraplingEnabled?: boolean;
     localFilesEnabled?: boolean;
     bashEnabled?: boolean;
+    devopsEnabled?: boolean;
     approvalRequired?: boolean;
     goalContext?: string;
   }): string {
@@ -2907,6 +2910,7 @@ You have web search capability. Use it whenever you need current or factual info
     const docMountSection = opts.scraplingEnabled ? DOC_MOUNT_SYSTEM_PROMPT : '';
     const filesystemSection = opts.localFilesEnabled ? FILESYSTEM_SYSTEM_PROMPT : '';
     const bashSection = opts.bashEnabled ? BASH_SYSTEM_PROMPT : '';
+    const devopsSection = opts.devopsEnabled ? DEVOPS_SYSTEM_PROMPT : '';
 
     const wrappedBusinessDesc = biz.businessDescription
       ? wrapUserData(biz.businessDescription)
@@ -2916,7 +2920,7 @@ You have web search capability. Use it whenever you need current or factual info
 
 ## Business Context
 ${wrappedBusinessDesc}
-${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}
+${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
 ## Guidelines
 - Always maintain a professional and helpful tone
 - Focus on quality and accuracy in your work
