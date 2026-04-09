@@ -628,10 +628,9 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         } else if (modelSource === 'cloud') {
           // Cloud readiness: Enter to continue (skip model list navigation)
           if (key.return) {
-            if (anthropicKey) {
+            if (anthropicKey || openRouterKey) {
               completeReturningUser();
             } else {
-
               setCloudAuthMode('choose');
               setStep('cloud_auth');
             }
@@ -686,11 +685,10 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         } else if (modelSource === 'cloud') {
           // Cloud mode: Enter → show auth if not authenticated, else proceed
           if (key.return) {
-            if (anthropicKey) {
+            if (anthropicKey || openRouterKey) {
               const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
               setStep(nextAfterModel);
             } else {
-
               setCloudAuthMode('choose');
               setStep('cloud_auth');
             }
