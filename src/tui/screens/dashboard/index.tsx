@@ -170,10 +170,17 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     if (!justOnboarded || config.firstChatCompleted || welcomeFiredRef.current) return;
     if (orchestrator.isStreaming || orchestrator.messages.length > 0) return;
 
+    // Skip welcome message for returning users who already have agents set up.
+    // The welcome flow is only for truly new users with zero agents.
+    const agentCount = agents.list.length;
+    if (agentCount > 3) {
+      updateConfigFile({ firstChatCompleted: true });
+      return;
+    }
+
     welcomeFiredRef.current = true;
     setWelcomeLoading(true);
 
-    const agentCount = agents.list.length;
     const agentNames = agents.list.slice(0, 3).map(a => a.name).join(', ');
     const prompt = agentCount > 0
       ? `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`
@@ -185,13 +192,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       updateConfigFile({ firstChatCompleted: true });
     }, 1500);
 
-    // Safety timeout: if welcome still loading after 10s, force clear it
-    const safetyTimer = setTimeout(() => {
-      setWelcomeLoading(false);
-      updateConfigFile({ firstChatCompleted: true });
-    }, 10_000);
-
-    return () => { clearTimeout(timer); clearTimeout(safetyTimer); };
+    return () => clearTimeout(timer);
   }, [justOnboarded, config.firstChatCompleted, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive agent info for contextual empty state
