@@ -18,6 +18,7 @@ import type {
   StepResult,
   Observation,
   EpisodeSummary,
+  RewardFunction,
 } from './types.js';
 import type {
   ToolExecutionContext,
@@ -45,6 +46,10 @@ export class LocalArena {
   private startedAt: number = 0;
   private lastObservation: Observation | null = null;
   private isDone: boolean = false;
+  private episodeSuccess: boolean = false;
+  private episodeTruncated: boolean = false;
+  /** Active reward function for current episode (resolved from factory on reset). */
+  private activeRewardFn: RewardFunction | null = null;
 
   constructor(options: {
     config: ArenaConfig;
@@ -53,6 +58,9 @@ export class LocalArena {
     /** Function to get current body state. Pass digitalBody.getProprioception. */
     getProprioception?: () => Proprioception;
   }) {
+    if (options.config.maxSteps < 1) {
+      throw new Error('ArenaConfig.maxSteps must be >= 1');
+    }
     this.config = options.config;
     this.toolCtx = options.toolCtx;
     this.experienceStream = options.experienceStream ?? null;
@@ -78,6 +86,12 @@ export class LocalArena {
     this.cumulativeReward = 0;
     this.startedAt = Date.now();
     this.isDone = false;
+    this.episodeSuccess = false;
+    this.episodeTruncated = false;
+
+    // Resolve reward function: if it's a factory (0-arg function that returns a function),
+    // call it to get a fresh reward function for this episode.
+    this.activeRewardFn = this.resolveRewardFn();
 
     // Run initial state setup if provided
     if (this.config.initialState) {
@@ -112,13 +126,13 @@ export class LocalArena {
       throw new Error('Arena: episode is done. Call reset() to start a new one.');
     }
 
-    // Validate action against allowed tools
+    const stepStart = Date.now();
+    this.stepCount++;
+
+    // Validate action against allowed tools (after incrementing stepCount)
     if (this.config.allowedTools && !this.config.allowedTools.includes(action.toolName)) {
       return this.buildErrorStep(action, `Tool "${action.toolName}" not in allowed tools for this arena`);
     }
-
-    const stepStart = Date.now();
-    this.stepCount++;
 
     // Execute the tool through the existing pipeline
     let outcome: ToolCallOutcome;
@@ -142,15 +156,17 @@ export class LocalArena {
     this.lastObservation = observation;
 
     // Compute reward
-    const reward = this.config.rewardFn(observation, action, outcome, this.stepCount);
+    const reward = this.getRewardFn()(observation, action, outcome, this.stepCount);
     this.cumulativeReward += reward;
 
     // Check termination conditions
     const done = this.config.successCriteria
       ? this.config.successCriteria(observation)
       : false;
-    const truncated = this.stepCount >= this.config.maxSteps;
+    const truncated = !done && this.stepCount >= this.config.maxSteps;
     this.isDone = done || truncated;
+    this.episodeSuccess = done;
+    this.episodeTruncated = truncated;
 
     // Record step in experience stream
     this.experienceStream?.append(
@@ -223,8 +239,8 @@ export class LocalArena {
       arenaId: this.config.id,
       totalReward: this.cumulativeReward,
       steps: this.stepCount,
-      success: this.isDone && this.stepCount < this.config.maxSteps,
-      truncated: this.stepCount >= this.config.maxSteps,
+      success: this.episodeSuccess,
+      truncated: this.episodeTruncated,
       durationMs: Date.now() - this.startedAt,
       startedAt: this.startedAt,
     };
@@ -243,6 +259,26 @@ export class LocalArena {
   // --------------------------------------------------------------------------
   // INTERNALS
   // --------------------------------------------------------------------------
+
+  /** Get the active reward function (resolved from factory on reset, or raw). */
+  private getRewardFn(): RewardFunction {
+    return this.activeRewardFn ?? this.resolveRewardFn();
+  }
+
+  /** Resolve rewardFn: if it's a factory (returns a function), call it. */
+  private resolveRewardFn(): RewardFunction {
+    const fn = this.config.rewardFn;
+    // A RewardFactory is a 0-arg function returning a RewardFunction.
+    // A RewardFunction takes 4 args. We distinguish by calling with 0 args
+    // and checking if the result is a function.
+    if (fn.length === 0) {
+      const result = (fn as () => unknown)();
+      if (typeof result === 'function') {
+        return result as RewardFunction;
+      }
+    }
+    return fn as RewardFunction;
+  }
 
   /**
    * Execute a tool call through the existing executor pipeline.
@@ -311,14 +347,22 @@ export class LocalArena {
     const observation = this.buildObservation(outcome);
     this.lastObservation = observation;
 
-    const reward = this.config.rewardFn(observation, action, outcome, this.stepCount);
+    const reward = this.getRewardFn()(observation, action, outcome, this.stepCount);
     this.cumulativeReward += reward;
+
+    // Check truncation even on error steps
+    const truncated = this.stepCount >= this.config.maxSteps;
+    if (truncated) {
+      this.isDone = true;
+      this.episodeTruncated = true;
+      this.finalizeEpisode(false, true);
+    }
 
     return {
       observation,
       reward,
       done: false,
-      truncated: false,
+      truncated,
       info: {
         toolOutcome: outcome,
         durationMs: 0,

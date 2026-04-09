@@ -14,7 +14,6 @@
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ModelRouter } from '../model-router.js';
-import type { Trajectory } from './trajectory.js';
 import { mineToolPatterns } from '../../lib/self-improvement/pattern-miner.js';
 import { synthesizeSkills } from '../../lib/self-improvement/skill-synthesizer.js';
 import { logger } from '../../lib/logger.js';
@@ -71,14 +70,13 @@ export async function transferSkills(
   config: TransferConfig,
   db: DatabaseAdapter,
   modelRouter: ModelRouter,
-  sourceTrajectories?: Trajectory[],
 ): Promise<TransferResult> {
   const { workspaceId, agentId, sourceArenaId, targetArenaId, targetAllowedTools } = config;
 
   logger.info({
     sourceArenaId,
     targetArenaId,
-    trajectoryCount: sourceTrajectories?.length,
+    agentId,
   }, '[Transfer] Starting cross-arena skill transfer');
 
   // Step 1: Mine patterns from agent's task history

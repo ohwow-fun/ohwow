@@ -33,5 +33,4 @@ export {
   informationGainReward,
   affordanceAlignmentReward,
   errorRecoveryReward,
-  speedReward,
 } from './shaped.js';

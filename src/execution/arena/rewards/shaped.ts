@@ -115,14 +115,3 @@ export function errorRecoveryReward(bonus: number = 0.3): RewardFunction {
   };
 }
 
-/**
- * Speed reward: reward inversely proportional to step latency.
- * Encourages efficient tool usage. Capped at maxMs threshold.
- */
-export function speedReward(maxMs: number = 5000, bonus: number = 0.05): RewardFunction {
-  return (obs: Observation) => {
-    // Use observation timestamp delta as a proxy for step duration
-    // (actual duration is in StepInfo, but reward functions only see obs)
-    return bonus; // Flat bonus; actual speed gating happens via stepTimeoutMs in ArenaConfig
-  };
-}

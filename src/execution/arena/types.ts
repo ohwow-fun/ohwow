@@ -28,7 +28,7 @@ import type { ToolCallOutcome } from '../../orchestrator/tool-executor.js';
  * and embodied state (affordances, umwelt) into a single structure.
  */
 export interface Observation {
-  /** Screenshot from browser or desktop (base64). */
+  /** Screenshot from browser or desktop (file path locally, URL or base64 in cloud). */
   screenshot?: string;
   /** DOM snapshot from browser (Stagehand observe). */
   dom?: string;
@@ -112,6 +112,11 @@ export interface StepInfo {
  * action taken, and tool outcome. Returns a scalar value.
  *
  * Reward functions are composable via compositeReward().
+ *
+ * IMPORTANT: Reward functions that use internal state (milestones reached,
+ * tools seen, repeat counters) will NOT reset between episodes automatically.
+ * For multi-episode training, use a RewardFactory instead — arena.reset()
+ * will call the factory to create a fresh reward function per episode.
  */
 export type RewardFunction = (
   observation: Observation,
@@ -119,6 +124,13 @@ export type RewardFunction = (
   outcome: ToolCallOutcome,
   stepNumber: number,
 ) => number;
+
+/**
+ * A factory that creates a fresh RewardFunction per episode.
+ * Use this when reward functions have internal state (milestones,
+ * tool usage sets, repeat counters) that must reset between episodes.
+ */
+export type RewardFactory = () => RewardFunction;
 
 // ============================================================================
 // ARENA CONFIGURATION
@@ -142,8 +154,8 @@ export interface ArenaConfig {
   domain: ArenaDomain;
   /** Maximum steps per episode before truncation. */
   maxSteps: number;
-  /** How each step is scored. */
-  rewardFn: RewardFunction;
+  /** How each step is scored. Use RewardFactory for stateful rewards in multi-episode training. */
+  rewardFn: RewardFunction | RewardFactory;
   /** Optional setup function called on reset() to initialize the environment. */
   initialState?: () => Promise<void>;
   /** Optional function to check if the goal is reached (triggers done=true). */

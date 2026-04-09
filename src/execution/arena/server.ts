@@ -45,7 +45,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
       res.status(404).json({ error: `Arena "${req.params.arenaId}" not found` });
       return;
     }
-    (req as unknown as Record<string, unknown>)._arena = arena;
+    res.locals.arena = arena;
     next();
   });
 
@@ -53,8 +53,8 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
    * POST /arena/:arenaId/reset
    * Start a new episode. Returns the initial observation.
    */
-  router.post('/arena/:arenaId/reset', async (req, res) => {
-    const arena = (req as unknown as Record<string, unknown>)._arena as LocalArena;
+  router.post('/arena/:arenaId/reset', async (_req, res) => {
+    const arena = res.locals.arena as LocalArena;
     try {
       const observation = await arena.reset();
       res.json({
@@ -64,7 +64,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ err: message, arenaId: req.params.arenaId }, 'Arena reset failed');
+      logger.warn({ err: message, arenaId: _req.params.arenaId }, 'Arena reset failed');
       res.status(500).json({ error: message });
     }
   });
@@ -75,7 +75,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
    * Returns StepResult in Gym-Anything-compatible format.
    */
   router.post('/arena/:arenaId/step', async (req, res) => {
-    const arena = (req as unknown as Record<string, unknown>)._arena as LocalArena;
+    const arena = res.locals.arena as LocalArena;
     const body = req.body as { tool_name?: string; input?: Record<string, unknown> };
 
     if (!body?.tool_name) {
@@ -115,7 +115,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
    * Get current observation without taking an action.
    */
   router.get('/arena/:arenaId/observe', (_req, res) => {
-    const arena = (_req as unknown as Record<string, unknown>)._arena as LocalArena;
+    const arena = res.locals.arena as LocalArena;
     res.json({ observation: arena.observe() });
   });
 
@@ -124,7 +124,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
    * Get the current action space (available tool names).
    */
   router.get('/arena/:arenaId/actions', (_req, res) => {
-    const arena = (_req as unknown as Record<string, unknown>)._arena as LocalArena;
+    const arena = res.locals.arena as LocalArena;
     res.json({ action_space: arena.getActionSpace() });
   });
 
@@ -133,7 +133,7 @@ export function createArenaRouter(arenas: ArenaRegistry): Router {
    * Get current episode summary.
    */
   router.get('/arena/:arenaId/episode', (_req, res) => {
-    const arena = (_req as unknown as Record<string, unknown>)._arena as LocalArena;
+    const arena = res.locals.arena as LocalArena;
     const summary = arena.getEpisodeSummary();
     if (!summary) {
       res.status(404).json({ error: 'No active episode. Call POST /reset first.' });

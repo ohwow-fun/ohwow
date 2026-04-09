@@ -26,6 +26,7 @@ export type {
   StepInfo,
   EpisodeSummary,
   RewardFunction,
+  RewardFactory,
 } from './types.js';
 export {
   taskCompletionReward,
