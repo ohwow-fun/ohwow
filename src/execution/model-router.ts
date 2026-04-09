@@ -1157,6 +1157,172 @@ export class OpenRouterProvider implements ModelProvider {
     };
   }
 
+  /**
+   * Streaming tool-calling via OpenRouter (OpenAI chat/completions SSE format).
+   * Yields text tokens as they arrive, accumulates tool_call deltas,
+   * and returns the final ModelResponseWithTools.
+   */
+  async *createMessageWithToolsStreaming(params: CreateMessageParams & {
+    tools: OpenAITool[];
+  }): AsyncGenerator<{ type: 'token'; content: string }, ModelResponseWithTools> {
+    const model = params.model || this.defaultModel;
+
+    type ORMsg = {
+      role: string;
+      content: string | MessageContentPart[];
+      tool_call_id?: string;
+      tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
+    };
+    const messages: ORMsg[] = [];
+    if (params.system) {
+      messages.push({ role: 'system', content: params.system });
+    }
+    for (const m of params.messages) {
+      const msg: ORMsg = { role: m.role, content: m.content };
+      if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) msg.tool_calls = m.tool_calls;
+      messages.push(msg);
+    }
+
+    const startTime = Date.now();
+    let response: Response;
+    try {
+      response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        signal: AbortSignal.timeout(120_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: params.maxTokens || 4096,
+          temperature: params.temperature ?? 0.5,
+          stream: true,
+          tools: params.tools,
+          tool_choice: 'auto',
+        }),
+      });
+    } catch (err) {
+      this._available = null;
+      this._availableCheckedAt = 0;
+      throw err;
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`OpenRouter streaming request failed (${response.status}): ${text.slice(0, 200)}`);
+    }
+
+    if (!response.body) {
+      throw new Error('OpenRouter streaming response has no body');
+    }
+
+    let fullContent = '';
+    let usage = { prompt_tokens: 0, completion_tokens: 0 };
+    const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
+    let hasToolCalls = false;
+
+    // Parse SSE stream (identical format to OpenAI chat/completions)
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6).trim();
+          if (data === '[DONE]') continue;
+
+          try {
+            const chunk = JSON.parse(data) as {
+              choices?: Array<{
+                delta?: {
+                  content?: string;
+                  tool_calls?: Array<{
+                    index: number;
+                    id?: string;
+                    function?: { name?: string; arguments?: string };
+                  }>;
+                };
+              }>;
+              usage?: { prompt_tokens: number; completion_tokens: number };
+            };
+
+            const delta = chunk.choices?.[0]?.delta;
+
+            if (delta?.content && !hasToolCalls) {
+              fullContent += delta.content;
+              yield { type: 'token', content: delta.content };
+            } else if (delta?.content) {
+              fullContent += delta.content;
+            }
+
+            if (delta?.tool_calls) {
+              hasToolCalls = true;
+              for (const tc of delta.tool_calls) {
+                const existing = toolCallAccum.get(tc.index);
+                if (existing) {
+                  if (tc.function?.name) existing.name += tc.function.name;
+                  if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+                } else {
+                  toolCallAccum.set(tc.index, {
+                    id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    name: tc.function?.name || '',
+                    arguments: tc.function?.arguments || '',
+                  });
+                }
+              }
+            }
+
+            if (chunk.usage) {
+              usage = chunk.usage;
+            }
+          } catch {
+            // Skip malformed SSE chunks
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const _durationMs = Date.now() - startTime;
+
+    // Extract actual cost from OpenRouter response header
+    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
+    const costCents = openrouterCostHeader
+      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+      : undefined;
+
+    const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
+      .filter(tc => tc.name)
+      .map(tc => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.name,
+          arguments: tc.arguments || '{}',
+        },
+      }));
+
+    return {
+      content: fullContent,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+      model,
+      provider: 'openrouter',
+      costCents,
+      toolCalls,
+    };
+  }
+
   async isAvailable(): Promise<boolean> {
     if (this._available !== null) {
       const ttl = this._available ? AVAILABILITY_TTL_OK_MS : AVAILABILITY_TTL_FAIL_MS;
