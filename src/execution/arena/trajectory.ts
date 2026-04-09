@@ -83,6 +83,7 @@ export class TrajectoryRecorder {
   private experienceStream: ExperienceStream;
   private db: DatabaseAdapter | null;
   private workspaceId: string;
+  private maxCompleted: number;
 
   /** Active episode buffers: episodeId → { steps, arenaId, arenaName, startedAt } */
   private activeEpisodes = new Map<string, {
@@ -102,10 +103,13 @@ export class TrajectoryRecorder {
     experienceStream: ExperienceStream;
     db?: DatabaseAdapter;
     workspaceId?: string;
+    /** Max trajectories kept in memory (default 500). Oldest dropped when exceeded. */
+    maxCompleted?: number;
   }) {
     this.experienceStream = options.experienceStream;
     this.db = options.db ?? null;
     this.workspaceId = options.workspaceId ?? 'default';
+    this.maxCompleted = options.maxCompleted ?? 500;
   }
 
   /** Start listening for arena events. */
@@ -220,6 +224,10 @@ export class TrajectoryRecorder {
     };
 
     this.completed.push(trajectory);
+    // Cap in-memory buffer — drop oldest when exceeded
+    while (this.completed.length > this.maxCompleted) {
+      this.completed.shift();
+    }
     this.activeEpisodes.delete(data.episodeId);
 
     // Persist to DB (fire-and-forget)
@@ -238,7 +246,6 @@ export class TrajectoryRecorder {
     await this.db.from('arena_trajectories').insert({
       id: trajectory.id,
       arena_id: trajectory.arenaId,
-      episode_id: trajectory.id,
       agent_id: trajectory.agentId ?? 'unknown',
       workspace_id: this.workspaceId,
       steps: JSON.stringify(trajectory.steps),

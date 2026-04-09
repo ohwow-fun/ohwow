@@ -63,59 +63,6 @@ export function stepPenaltyReward(penalty: number = -0.01): RewardFunction {
   return () => penalty;
 }
 
-/**
- * Reward for hitting milestones in order.
- * Each milestone is a predicate on the observation.
- * Fires +1 for each new milestone reached (doesn't re-fire).
- */
-export function progressReward(
-  milestones: Array<(obs: Observation) => boolean>,
-): RewardFunction {
-  const reached = new Set<number>();
-  return (obs: Observation) => {
-    let reward = 0;
-    for (let i = 0; i < milestones.length; i++) {
-      if (!reached.has(i) && milestones[i](obs)) {
-        reached.add(i);
-        reward += 1.0;
-      }
-    }
-    return reward;
-  };
-}
-
-/**
- * Reward for using different tools (encourages exploration).
- * +0.1 for each unique tool used for the first time.
- */
-export function explorationReward(): RewardFunction {
-  const usedTools = new Set<string>();
-  return (_obs: Observation, action: ArenaAction) => {
-    if (usedTools.has(action.toolName)) return 0;
-    usedTools.add(action.toolName);
-    return 0.1;
-  };
-}
-
-/**
- * Penalty for using the same tool consecutively (discourages stagnation).
- * Mirrors the existing stagnation detection in the experience stream.
- */
-export function antiStagnationReward(penalty: number = -0.2): RewardFunction {
-  let lastTool: string | null = null;
-  let repeatCount = 0;
-  return (_obs: Observation, action: ArenaAction) => {
-    if (action.toolName === lastTool) {
-      repeatCount++;
-      // Increasing penalty for consecutive repeats
-      return penalty * repeatCount;
-    }
-    lastTool = action.toolName;
-    repeatCount = 0;
-    return 0;
-  };
-}
-
 // ============================================================================
 // COMPOSITION — Combine multiple reward signals
 // ============================================================================

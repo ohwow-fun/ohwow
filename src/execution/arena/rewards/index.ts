@@ -10,9 +10,6 @@ export {
   timedCompletionReward,
   toolSuccessReward,
   stepPenaltyReward,
-  progressReward,
-  explorationReward,
-  antiStagnationReward,
   compositeReward,
   clampedReward,
 } from '../reward.js';
