@@ -163,36 +163,50 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     return () => clearTimeout(timer);
   }, [waMessageEvent]);
 
-  // Welcome flow: auto-send a greeting after first onboarding
+  // Proactive greeting: auto-send a contextual briefing when the TUI opens with a fresh session
   const [welcomeLoading, setWelcomeLoading] = useState(false);
   const welcomeFiredRef = useRef(false);
   useEffect(() => {
-    if (!justOnboarded || config.firstChatCompleted || welcomeFiredRef.current) return;
+    if (welcomeFiredRef.current) return;
     if (orchestrator.isStreaming || orchestrator.messages.length > 0) return;
-
-    // Skip welcome message for returning users who already have agents set up.
-    // The welcome flow is only for truly new users with zero agents.
-    const agentCount = agents.list.length;
-    if (agentCount > 3) {
-      updateConfigFile({ firstChatCompleted: true });
-      return;
-    }
 
     welcomeFiredRef.current = true;
     setWelcomeLoading(true);
 
+    const agentCount = agents.list.length;
     const agentNames = agents.list.slice(0, 3).map(a => a.name).join(', ');
-    const prompt = agentCount > 0
-      ? `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`
-      : 'Hi! I just set up ohwow. Help me figure out what operations my business needs.';
 
-    const timer = setTimeout(() => {
+    // Contextual greeting based on workspace maturity
+    const prompt = agentCount > 3
+      ? `Give me a quick briefing. What's the current state of my workspace? Any tasks needing approval, active agents, or things that need my attention? Be concise.`
+      : agentCount > 0
+        ? `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`
+        : 'Hi! I just set up ohwow. Help me figure out what operations my business needs.';
+
+    // Wait for daemon to be ready before sending
+    const sendWhenReady = async () => {
+      // Poll health up to 15s waiting for the daemon
+      for (let i = 0; i < 30; i++) {
+        try {
+          const res = await fetch('http://localhost:7700/health');
+          if (res.ok) break;
+        } catch { /* daemon not ready yet */ }
+        await new Promise(r => setTimeout(r, 500));
+      }
       setWelcomeLoading(false);
       orchestrator.sendWelcome(prompt);
       updateConfigFile({ firstChatCompleted: true });
-    }, 1500);
+    };
 
-    return () => clearTimeout(timer);
+    sendWhenReady();
+
+    // Safety: if nothing happens in 20s, clear loading and let user type
+    const safety = setTimeout(() => {
+      setWelcomeLoading(false);
+      updateConfigFile({ firstChatCompleted: true });
+    }, 20_000);
+
+    return () => clearTimeout(safety);
   }, [justOnboarded, config.firstChatCompleted, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive agent info for contextual empty state
