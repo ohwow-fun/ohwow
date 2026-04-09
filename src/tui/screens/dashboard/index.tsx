@@ -185,7 +185,13 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       updateConfigFile({ firstChatCompleted: true });
     }, 1500);
 
-    return () => clearTimeout(timer);
+    // Safety timeout: if welcome still loading after 10s, force clear it
+    const safetyTimer = setTimeout(() => {
+      setWelcomeLoading(false);
+      updateConfigFile({ firstChatCompleted: true });
+    }, 10_000);
+
+    return () => { clearTimeout(timer); clearTimeout(safetyTimer); };
   }, [justOnboarded, config.firstChatCompleted, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive agent info for contextual empty state
