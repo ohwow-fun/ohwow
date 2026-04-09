@@ -1519,7 +1519,7 @@ export class RuntimeEngine {
               // Collect ReAct step
               const reactStep: LocalReActStep = {
                 iteration: iterations,
-                thought: truncate(textContent, REACT_SUMMARY_MAX_LENGTH),
+                thought: textContent.trim() ? truncate(textContent, REACT_SUMMARY_MAX_LENGTH) : '',
                 actions: toolUseBlocks.map(b => ({
                   tool: b.name,
                   inputSummary: truncate(JSON.stringify(b.input), REACT_SUMMARY_MAX_LENGTH),
