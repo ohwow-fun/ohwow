@@ -38,3 +38,5 @@ export {
   compositeReward,
   clampedReward,
 } from './reward.js';
+export { TrajectoryRecorder } from './trajectory.js';
+export type { Trajectory, TrajectoryStep } from './trajectory.js';
