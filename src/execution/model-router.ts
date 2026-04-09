@@ -1526,18 +1526,12 @@ export class ModelRouter {
     // Cloud mode: use the selected cloud provider (Anthropic or OpenRouter)
     if (this.modelSource === 'cloud') {
       if (this.cloudProvider === 'openrouter') {
-        // OpenRouter cloud provider
-        if (this.openrouter) {
-          const available = await this.openrouter.isAvailable();
-          if (available) return this.openrouter;
-        }
-        // Fall back to Anthropic → Ollama
-        if (this.anthropic) return this.anthropic;
-        if (this.ollama) {
-          const available = await this.ollama.isAvailable();
-          if (available) return this.ollama;
-        }
-        throw new Error('Cloud mode with OpenRouter selected but OpenRouter is not available. Check your API key or switch provider.');
+        // OpenRouter cloud provider — user explicitly chose this, return it
+        // directly without availability check to avoid timeout-induced fallback
+        // to Ollama (which would use wrong context limits and model size).
+        if (this.openrouter) return this.openrouter;
+        // No OpenRouter configured at all — throw, don't silently fall back
+        throw new Error('Cloud mode with OpenRouter selected but no API key configured. Add openRouterApiKey to your config.');
       }
 
       // Anthropic cloud provider (default)
