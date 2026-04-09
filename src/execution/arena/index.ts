@@ -40,3 +40,32 @@ export {
 } from './reward.js';
 export { TrajectoryRecorder } from './trajectory.js';
 export type { Trajectory, TrajectoryStep } from './trajectory.js';
+
+// Phase 3: Extended reward library
+export {
+  goalReward,
+  deadlineReward,
+  failurePenalty,
+  brevityReward,
+} from './rewards/sparse.js';
+export {
+  milestoneReward,
+  diversityReward,
+  antiRepetitionReward,
+  informationGainReward,
+  affordanceAlignmentReward,
+  errorRecoveryReward,
+} from './rewards/shaped.js';
+
+// Phase 3: Difficulty scaling
+export {
+  scaleDifficulty,
+  progressiveDifficulty,
+  autoSelectDifficulty,
+  DIFFICULTY_PRESETS,
+  EASY,
+  MEDIUM,
+  HARD,
+  EXPERT,
+} from './difficulty.js';
+export type { DifficultyLevel, DifficultyTier } from './difficulty.js';
