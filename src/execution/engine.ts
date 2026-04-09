@@ -838,11 +838,26 @@ export class RuntimeEngine {
       const localFilesEnabled = agentConfig.local_files_enabled === true;
       const bashEnabled = agentConfig.bash_enabled === true;
       const mcpEnabled = agentConfig.mcp_enabled === true;
+      const devopsEnabled = agentConfig.devops_enabled === true;
       const desktopEnabled = agentConfig.desktop_enabled === true;
       const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
       const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
       const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];
       const agentMcpServers: McpServerConfig[] = agentConfig.mcp_servers ?? [];
+
+      // Auto-inject GitHub MCP server for devops-enabled agents
+      if (devopsEnabled && mcpEnabled) {
+        const hasGitHub = agentMcpServers.some(s => s.name === 'github');
+        if (!hasGitHub && process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
+          agentMcpServers.push({
+            name: 'github',
+            transport: 'stdio' as const,
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-github'],
+            env: { GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN },
+          });
+        }
+      }
 
       // Desktop service options (passed via buildToolContext → request-desktop-executor)
       const desktopOptions: Partial<DesktopServiceOptions> = {
