@@ -2059,7 +2059,11 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
 };
 
 /** Always-included tools regardless of intent. */
-const ALWAYS_INCLUDED_TOOLS = new Set(['update_plan', 'delegate_subtask']);
+const ALWAYS_INCLUDED_TOOLS = new Set([
+  'update_plan', 'delegate_subtask',
+  'cloud_list_contacts', 'cloud_list_schedules', 'cloud_list_agents',
+  'cloud_list_tasks', 'cloud_get_analytics', 'cloud_list_members',
+]);
 
 /**
  * Tool priority tiers for progressive revelation.
