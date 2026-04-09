@@ -32,6 +32,8 @@ export interface AgentPreset {
   department?: string;
   automations?: PresetAutomation[];
   requiredMcpServers?: string[];
+  /** Extra agent config flags merged into the agent's config JSON on creation. */
+  config?: Record<string, unknown>;
 }
 
 export interface BusinessType {
@@ -636,13 +638,19 @@ export const BUSINESS_TYPES: BusinessType[] = [
       },
       {
         id: 'tech_devops',
-        name: 'DevOps Monitor',
-        role: 'Deployment & CI Health Tracker',
-        description: 'Tracks deployments, CI/CD pipeline health, and alerts on failures',
-        systemPrompt: 'You are a DevOps Monitor agent for a tech company. Track deployments, CI/CD pipeline health, and uptime. Alert on failed deploys, flaky tests, and degraded services. Summarize deployment frequency and success rates. Recommend rollbacks when failure patterns emerge. Be precise with error details and timestamps.',
+        name: 'DevOps Engineer',
+        role: 'Release Management & CI/CD',
+        description: 'Manages releases, tracks deployments, monitors CI/CD pipelines, and handles git operations',
+        systemPrompt: 'You are a DevOps Engineer agent. You handle release management, version bumping, changelog generation, git operations, and CI/CD monitoring. You can run shell commands, edit files, and interact with GitHub. Always verify branch and working tree status before making changes. Never force-push to main. Confirm with the user before pushing tags or creating releases. Be precise with error details and timestamps.',
         tools: ['web_research'],
         department: 'Engineering',
         requiredMcpServers: ['github'],
+        config: {
+          bash_enabled: true,
+          local_files_enabled: true,
+          mcp_enabled: true,
+          devops_enabled: true,
+        },
         automations: [
           {
             ref_id: 'tech_deploy_watch',

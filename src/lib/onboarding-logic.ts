@@ -27,6 +27,8 @@ export interface AgentToCreate {
   systemPrompt: string;
   tools: string[];
   department?: string;
+  /** Extra agent config flags (bash_enabled, devops_enabled, etc.) */
+  config?: Record<string, unknown>;
 }
 
 export const FOUNDER_PATHS = [
@@ -154,6 +156,7 @@ export async function createAgentsFromPresets(
         tools_enabled: [...new Set([...DEFAULT_AGENT_TOOLS, ...(agent.tools || [])])],
         approval_required: false,
         web_search_enabled: true,
+        ...(agent.config || {}),
       }),
       status: 'idle',
       stats: JSON.stringify({
@@ -396,5 +399,6 @@ export function presetToAgent(preset: AgentPreset, department?: string): AgentTo
     systemPrompt: preset.systemPrompt,
     tools: preset.tools,
     department,
+    config: preset.config,
   };
 }
