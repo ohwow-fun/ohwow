@@ -231,6 +231,13 @@ You can generate music, voice audio, and short videos directly from chat:
 - Always confirm before music/video generation as these use cloud credits (~30 credits per music track, ~50 credits per video). Voice is free when Kokoro is running.`,
   },
   {
+    keys: ['agents'],
+    text: `## YouTube & Internet Content
+When a user shares a YouTube URL (youtube.com or youtu.be link), automatically call \`youtube_transcript\` to extract the transcript, then analyze, summarize, or answer questions about the content. Don't ask the user what to do with the video; transcribe first, then present key insights.
+- Use \`read_rss_feed\` when a user shares an RSS/Atom feed URL or asks to follow a blog/newsletter
+- Use \`github_search\` to find repos, issues, PRs, or code on GitHub`,
+  },
+  {
     keys: ['rag', 'browser'],
     text: `## Deep Research
 Use \`deep_research\` for market research, competitive analysis, industry trends, or any question needing multiple web sources synthesized. Depth: "quick" for fast answers, "thorough" (default), "comprehensive" for exhaustive analysis.`,
@@ -341,6 +348,11 @@ For "when X do Y" requests: \`discover_capabilities\` → ask clarifying questio
     keys: ['agents'],
     text: `## Media
 When media MCP servers are connected, generate images/video/audio directly. Confirm before video generation. Local generation costs 0 credits. Use \`generate_music\` for music/sound, \`generate_voice\` for TTS (local Kokoro or cloud), and \`generate_video\` for short clips. All save to media library.`,
+  },
+  {
+    keys: ['agents'],
+    text: `## YouTube & Internet
+When a user shares a YouTube URL, auto-call \`youtube_transcript\` and analyze the content. Use \`read_rss_feed\` for RSS URLs. Use \`github_search\` to find repos/issues/code.`,
   },
   {
     keys: ['rag', 'browser'],
