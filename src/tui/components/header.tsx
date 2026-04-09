@@ -16,9 +16,10 @@ interface HeaderProps {
   daemonUptime?: number;
   daemonPort?: number;
   daemonConnectedAt?: number | null;
+  initializing?: boolean;
 }
 
-export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt }: HeaderProps) {
+export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt, initializing }: HeaderProps) {
   const [clock, setClock] = useState(() => ({ time: formatTime(), now: Date.now() }));
 
   useEffect(() => {
@@ -51,8 +52,8 @@ export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPi
       </Box>
       <Box>
         {isConnected ? (
-          <Text color={cloudConnected ? 'green' : 'red'}>
-            {cloudConnected ? '●' : '○'} {cloudConnected ? 'Cloud' : 'Offline'}
+          <Text color={initializing ? 'yellow' : cloudConnected ? 'green' : 'red'}>
+            {initializing ? '◌' : cloudConnected ? '●' : '○'} {initializing ? 'Starting...' : cloudConnected ? 'Cloud' : 'Offline'}
           </Text>
         ) : (
           <Text color="green">● Local</Text>

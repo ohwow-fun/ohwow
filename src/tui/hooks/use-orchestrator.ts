@@ -104,7 +104,7 @@ export interface OrchestratorState {
 }
 
 export function useOrchestrator(
-  daemonPort: number,
+  daemonPort: number | null,
   sessionToken: string,
   orchestratorModel?: string,
 ): OrchestratorState {
@@ -434,7 +434,10 @@ export function useOrchestrator(
         }
         return;
       }
-      const msg = err instanceof Error ? err.message : "Couldn't reach the daemon. Try restarting.";
+      const rawMsg = err instanceof Error ? err.message : "Couldn't reach the daemon. Try restarting.";
+      const msg = rawMsg === 'fetch failed' || rawMsg.includes('ECONNREFUSED')
+        ? "Couldn't reach the daemon. It may still be starting. Try again in a moment."
+        : rawMsg;
       setError(msg);
       setMessages((prev) => [
         ...prev,

@@ -33,6 +33,7 @@ interface ChatPanelProps {
   agents?: { name: string; role: string }[];
   businessName?: string;
   welcomeLoading?: boolean;
+  daemonInitializing?: boolean;
 }
 
 export function ChatPanel({
@@ -53,6 +54,7 @@ export function ChatPanel({
   agents,
   businessName,
   welcomeLoading,
+  daemonInitializing,
 }: ChatPanelProps) {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
@@ -72,6 +74,13 @@ export function ChatPanel({
         modelPickerNode
       ) : (
         <>
+          {/* Connecting state */}
+          {daemonInitializing && orchestrator.messages.length === 0 && (
+            <Box marginBottom={1}>
+              <Text color="yellow">◌ Starting daemon...</Text>
+            </Box>
+          )}
+
           {/* Messages */}
           <ChatMessages
             orchestrator={orchestrator}
@@ -100,7 +109,7 @@ export function ChatPanel({
               value={inputValue}
               onChange={onInputChange}
               onSubmit={onInputSubmit}
-              isDisabled={orchestrator.isStreaming}
+              isDisabled={orchestrator.isStreaming || !!daemonInitializing}
               isFocused={focusZone === 'chat' && !modelPickerNode}
             />
           )}

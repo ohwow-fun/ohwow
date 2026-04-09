@@ -98,7 +98,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     ? (config.cloudModel || 'claude-haiku-4-5-20251001')
     : (runtime.orchestratorModel || (config.anthropicApiKey ? 'claude-haiku-4-5' : (runtime.ollamaModel || 'ollama')));
   const orchestrator = useOrchestrator(
-    config.port,
+    runtime.initializing ? null : config.port,
     runtime.sessionToken,
     activeModel,
   );
@@ -1201,6 +1201,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonUptime={runtime.daemonUptime}
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
+          initializing={runtime.initializing}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1242,6 +1243,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonUptime={runtime.daemonUptime}
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
+          initializing={runtime.initializing}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1281,6 +1283,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonUptime={runtime.daemonUptime}
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
+          initializing={runtime.initializing}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1407,6 +1410,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           slashIdx={slashIdx}
           agents={chatAgents}
           welcomeLoading={welcomeLoading}
+          daemonInitializing={runtime.initializing}
           modelPickerNode={showModelPicker ? (
             <ModelPicker
               port={config.port}
