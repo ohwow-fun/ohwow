@@ -20,7 +20,9 @@ export const bashExecutor: ToolExecutor = {
     }
 
     try {
-      const result = await executeBashTool(ctx.fileAccessGuard, toolName, input);
+      const result = await executeBashTool(ctx.fileAccessGuard, toolName, input, {
+        gitEnabled: ctx.gitEnabled,
+      });
       return {
         content: result.content,
         is_error: result.is_error,

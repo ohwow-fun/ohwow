@@ -50,7 +50,7 @@ export async function localRunBash(
   }
 
   try {
-    const result = await executeBashTool(guard, 'run_bash', input);
+    const result = await executeBashTool(guard, 'run_bash', input, { gitEnabled: true });
     if (result.is_error) {
       if (result.content.includes('outside allowed paths')) {
         const requestedPath = input.working_directory as string | undefined;

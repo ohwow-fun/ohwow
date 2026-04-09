@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { FileAccessGuard } from '../filesystem/filesystem-guard.js';
-import { scrubEnvironment } from '../../lib/env-scrub.js';
+import { scrubEnvironment, scrubEnvironmentForGit } from '../../lib/env-scrub.js';
 
 // ============================================================================
 // TYPES
@@ -97,10 +97,17 @@ function truncateOutput(output: string, label: string): string {
 // EXECUTOR
 // ============================================================================
 
+/** Check if a command is a git CLI invocation. */
+function isGitCommand(command: string): boolean {
+  const trimmed = command.trimStart();
+  return trimmed.startsWith('git ') || trimmed === 'git' || trimmed.startsWith('git\t');
+}
+
 function executeCommand(
   command: string,
   cwd: string,
   timeoutMs: number,
+  gitMode?: boolean,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
@@ -108,9 +115,10 @@ function executeCommand(
     const shellArgs = isWin
       ? ['-NoProfile', '-NonInteractive', '-Command', command]
       : ['-c', command];
+    const env = gitMode ? scrubEnvironmentForGit() : scrubEnvironment();
     const child = spawn(shell, shellArgs, {
       cwd,
-      env: scrubEnvironment(),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 0, // We handle timeout ourselves for SIGKILL
     });
@@ -163,6 +171,7 @@ export async function executeBashTool(
   guard: FileAccessGuard,
   _toolName: string,
   input: Record<string, unknown>,
+  options?: { gitEnabled?: boolean },
 ): Promise<BashToolResult> {
   const command = input.command as string | undefined;
   const workingDirectory = input.working_directory as string | undefined;
@@ -197,8 +206,9 @@ export async function executeBashTool(
     cwd = allowedPaths[0];
   }
 
-  // Execute the command
-  const result = await executeCommand(command, cwd, timeoutMs);
+  // Execute the command (auto-detect git commands for relaxed env scrubbing)
+  const gitMode = options?.gitEnabled === true && isGitCommand(command);
+  const result = await executeCommand(command, cwd, timeoutMs, gitMode);
 
   // Format output
   const stdout = truncateOutput(result.stdout, 'stdout');

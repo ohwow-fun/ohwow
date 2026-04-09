@@ -38,6 +38,8 @@ export interface ToolExecutionContext {
   desktopOptions?: Partial<DesktopServiceOptions>;
   /** Doc mount manager for documentation filesystem mounts */
   docMountManager: DocMountManager | null;
+  /** Whether git-aware env scrubbing is enabled (preserves SSH_AUTH_SOCK for git push) */
+  gitEnabled?: boolean;
 }
 
 /** Result from a tool execution */

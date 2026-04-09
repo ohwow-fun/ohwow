@@ -263,6 +263,7 @@ export class RuntimeEngine {
     desktopOptions?: Partial<DesktopServiceOptions>;
     fileAccessGuard: FileAccessGuard | null;
     mcpClients: McpClientManager | null;
+    gitEnabled?: boolean;
   }): ToolExecutionContext {
     return {
       taskId: opts.taskId,
@@ -282,6 +283,7 @@ export class RuntimeEngine {
       desktopActivated: opts.desktopActivated,
       desktopOptions: opts.desktopOptions,
       docMountManager: this.docMountManager,
+      gitEnabled: opts.gitEnabled,
     };
   }
 
@@ -1246,6 +1248,7 @@ export class RuntimeEngine {
             mcpClients,
             desktopOptions,
             difficulty,
+            gitEnabled: bashEnabled,
           });
           fullContent = ollamaResult.fullContent;
           totalInputTokens = ollamaResult.totalInputTokens;
@@ -1413,6 +1416,7 @@ export class RuntimeEngine {
               desktopOptions,
               fileAccessGuard,
               mcpClients,
+              gitEnabled: bashEnabled,
             });
 
             for (const block of toolUseBlocks) {
@@ -2394,6 +2398,7 @@ export class RuntimeEngine {
     mcpClients?: McpClientManager | null;
     desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
+    gitEnabled?: boolean;
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number }> {
     // Query routing stats for adaptive model selection
     let routingHistory: import('./model-router.js').RoutingHistory | undefined;
@@ -2612,6 +2617,7 @@ export class RuntimeEngine {
             desktopOptions: opts.desktopOptions,
             fileAccessGuard: opts.fileAccessGuard,
             mcpClients: opts.mcpClients ?? null,
+            gitEnabled: opts.gitEnabled,
           });
           const toolResult = await this.dispatchTool(toolName, toolInput, ollamaToolCtx);
 
