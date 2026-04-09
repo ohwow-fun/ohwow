@@ -258,7 +258,7 @@ export class LocalOrchestrator {
       this.anthropicApiKey = orKey; // allow getActiveModel() to return non-ollama
       this.anthropic = new Anthropic({
         apiKey: orKey,
-        baseURL: 'https://openrouter.ai/api/v1',
+        baseURL: 'https://openrouter.ai/api',
         timeout: 120_000,
       });
     } else {
