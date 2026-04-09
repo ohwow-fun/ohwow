@@ -114,13 +114,21 @@ export class McpClientManager {
       );
     }
 
+    const connectWithTimeout = (promise: Promise<void>, label: string): Promise<void> =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`MCP connection to "${label}" timed out after 30s`)), 30_000),
+        ),
+      ]);
+
     if (server.transport === 'stdio') {
       const transport = new StdioClientTransport({
         command: server.command,
         args: server.args,
         env: server.env ? { ...process.env, ...server.env } as Record<string, string> : undefined,
       });
-      await client.connect(transport);
+      await connectWithTimeout(client.connect(transport), server.name);
     } else if (server.transport === 'http') {
       const headers: Record<string, string> = { ...server.headers };
 
@@ -134,7 +142,7 @@ export class McpClientManager {
       const transport = new StreamableHTTPClientTransport(new URL(server.url), {
         requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
       });
-      await client.connect(transport);
+      await connectWithTimeout(client.connect(transport), server.name);
     } else {
       throw new Error(`Unknown MCP transport: ${(server as McpServerConfig).transport}`);
     }
