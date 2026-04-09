@@ -678,6 +678,19 @@ export const BUSINESS_TYPES: BusinessType[] = [
             ],
             cooldown_seconds: 0,
           },
+          {
+            ref_id: 'tech_release',
+            name: 'Cut Release',
+            description: 'Run pre-flight checks, bump version, update changelog, tag, push, and create a GitHub release.',
+            trigger_type: 'manual',
+            trigger_config: {},
+            steps: [
+              { id: 'step_preflight', step_type: 'agent_prompt', label: 'Pre-flight Checks', agent_ref: 'tech_devops', prompt: 'Run release pre-flight checks. Verify we are on the main branch, working tree is clean, and we are up to date with remote. Check the current version in package.json. List commits since the last git tag grouped by type (feat, fix, etc.). Report the results and ask the user which version bump to apply (patch, minor, or major).' },
+              { id: 'step_bump', step_type: 'agent_prompt', label: 'Bump & Changelog', agent_ref: 'tech_devops', prompt: 'Based on the user\'s chosen version bump: 1) Update CHANGELOG.md with the new version entry (prepend below the title). 2) Run npm version {level} --no-git-tag-version. 3) Commit the changes with message "release: vX.Y.Z" and create an annotated git tag. Show the user what was done and ask for confirmation before pushing.' },
+              { id: 'step_publish', step_type: 'agent_prompt', label: 'Push & Release', agent_ref: 'tech_devops', prompt: 'Push the release commit and tags to origin. Then create a GitHub release using the MCP github tools with the changelog entry as the release body. Report the release URL when done.' },
+            ],
+            cooldown_seconds: 0,
+          },
         ],
       },
       {
