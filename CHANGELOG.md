@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] — 2026-04-09
+
+### Added
+- feat: support OpenRouter in TUI model picker
+- feat: include task output and react trace in cloud reports
+
+### Fixed
+- fix: skip whitespace-only thoughts in react trace
+
 ## [0.6.0] — 2026-04-09
 
 ### Added
