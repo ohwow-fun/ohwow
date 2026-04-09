@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.8] — 2026-04-09
+
+### Fixed
+- Log and cleanup failed task executions instead of silently swallowing errors
+- Pre-flight check now recognizes OpenRouter as a valid provider and marks task as failed on error
+- Add 30s timeout to MCP server connections to prevent indefinite hangs
+- Set execution_backend to native on DevOps preset to bypass Claude Code CLI autodetect
+
+### Changed
+- Rename useOllama to useModelRouter for clarity across the execution engine
+
 ## [0.6.7] — 2026-04-09
 
 ### Added
