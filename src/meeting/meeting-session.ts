@@ -18,8 +18,8 @@ import type {
   LocalMeetingSession,
   LocalTranscriptEntry,
   MeetingNotes,
-  MeetingSessionSyncPayload,
 } from './types.js';
+import type { MeetingSessionSyncPayload } from '../control-plane/types.js';
 
 const EMPTY_NOTES: MeetingNotes = {
   summary: '',
@@ -514,13 +514,9 @@ Be thorough. Capture every decision and action item. Identify speakers where pos
 
   private async syncToCloud(): Promise<void> {
     if (!this.controlPlane) return;
-    const payload = this.buildSyncPayload();
-    if (!payload) return;
 
     try {
-      await (this.controlPlane as unknown as { syncMeetingSession(p: MeetingSessionSyncPayload): Promise<void> })
-        .syncMeetingSession(payload);
-      this.markSynced();
+      await this.controlPlane.syncMeetingSession();
     } catch (err) {
       logger.debug({ err }, '[Meeting] Cloud sync failed');
     }

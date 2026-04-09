@@ -201,8 +201,9 @@ Task {
                 }
                 exit(1)
             }
-            // Capture just this app's audio
-            filter = SCContentFilter(desktopIndependentWindow: app.windows.first ?? content.windows[0])
+            // Capture this app's audio by excluding all other apps
+            let otherApps = content.applications.filter { $0.bundleIdentifier != bundleId }
+            filter = SCContentFilter(display: content.displays[0], excludingApplications: otherApps, exceptingWindows: [])
             fputs("Capturing audio from: \(app.applicationName) (\(bundleId))\n", stderr)
         } else {
             // Capture all system audio (exclude self)

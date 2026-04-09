@@ -84,31 +84,4 @@ export interface LocalMeetingSession {
   cloudSessionId?: string;
 }
 
-// ============================================================================
-// SYNC PAYLOAD (sent to cloud via control plane)
-// ============================================================================
-
-export interface MeetingSessionSyncPayload {
-  sessionId: string;
-  status: MeetingSessionStatus;
-  app: string;
-  startedAt: string;
-  endedAt?: string;
-  /** Only new entries since last sync (incremental) */
-  transcriptDelta: LocalTranscriptEntry[];
-  notes: MeetingNotes;
-  wordCount: number;
-  chunkCount: number;
-  /** Final meeting data — only populated when status is 'completed' */
-  completedMeeting?: {
-    title: string;
-    fullTranscript: string;
-    durationSeconds: number;
-    attendees: MeetingAttendee[];
-    topics: MeetingTopic[];
-    decisions: MeetingDecision[];
-    actionItems: MeetingActionItem[];
-    openQuestions: MeetingOpenQuestion[];
-    keyQuotes: MeetingKeyQuote[];
-  };
-}
+// Sync payload type lives in control-plane/types.ts (MeetingSessionSyncPayload)
