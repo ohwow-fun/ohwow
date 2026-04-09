@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.0] — 2026-04-09
+
+### Added
+- feat: wire meeting listener tools into orchestrator
+- feat: add meeting session sync to control plane client
+- feat: add MeetingSession service for live audio transcription + notes
+- feat: add meeting_sessions table for local audio capture
+- feat: add Swift ScreenCaptureKit audio capture helper + Node service
+- feat: add cloud data query tools for orchestrator
+- feat: support OpenRouter in orchestrator chat
+- feat: auto-transcribe YouTube videos when URL shared in chat
+- feat: add arena HTTP server and external client
+- feat: add arena training loop and cross-arena skill transfer
+- feat: add arena generator and body introspection
+- feat: add arena reward library and difficulty scaling
+- feat: add arena trajectory recording and persistence
+- feat: add Arena training environment protocol
+
+### Fixed
+- fix: force-include cloud data tools in ALWAYS_INCLUDED set
+- fix: make cloud data tools always available (no intent filtering)
+- fix: correct OpenRouter baseURL for Anthropic SDK
+- fix: arena low-priority cleanup (local)
+- fix: address QA review findings for arena system
+
 ## [0.5.3] — 2026-04-09
 
 ### Added
