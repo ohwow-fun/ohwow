@@ -1194,19 +1194,19 @@ export class RuntimeEngine {
       const llmCache = new LocalLLMCache(this.db, workspaceId);
       const systemPromptHash = crypto.createHash('sha256').update(systemPrompt).digest('hex');
 
-      // Decide execution path: Ollama vs Anthropic
-      // Use Ollama when: no API key, OR the agent is explicitly configured with a local model
+      // Decide execution path: model router (OpenRouter/Ollama/etc) vs direct Anthropic SDK
+      // Use model router when: no Anthropic API key, OR agent has a non-Claude model
       const agentModelIsLocal = agentConfig.model
         && !(agentConfig.model as string).startsWith('claude-');
-      const useOllama = agentModelIsLocal
+      const useModelRouter = agentModelIsLocal
         ? !!this.modelRouter
         : !this.config.anthropicApiKey && !!this.modelRouter;
-      if (!useOllama && !this.anthropic) {
+      if (!useModelRouter && !this.anthropic) {
         throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentConfig.model || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
       }
 
       // Budget guard: pre-flight check for external providers
-      const agentBudget = isExternalProvider(!!useOllama)
+      const agentBudget = isExternalProvider(!!useModelRouter)
         ? parseBudget(agent.autonomy_budget as string | null)
         : null;
 
@@ -1253,9 +1253,9 @@ export class RuntimeEngine {
       });
 
       try {
-        if (useOllama) {
-          // ── Ollama execution path ──
-          const ollamaResult = await this.executeWithOllama({
+        if (useModelRouter) {
+          // ── Model router execution path (OpenRouter, Ollama, etc.) ──
+          const routerResult = await this.executeWithModelRouter({
             systemPrompt,
             messages,
             tools,
@@ -1274,11 +1274,11 @@ export class RuntimeEngine {
             gitEnabled: bashEnabled,
             agentModel: agentConfig.model as string | undefined,
           });
-          fullContent = ollamaResult.fullContent;
-          totalInputTokens = ollamaResult.totalInputTokens;
-          totalOutputTokens = ollamaResult.totalOutputTokens;
-          reactTrace = ollamaResult.reactTrace;
-          providerReportedCostCents = ollamaResult.providerCostCents;
+          fullContent = routerResult.fullContent;
+          totalInputTokens = routerResult.totalInputTokens;
+          totalOutputTokens = routerResult.totalOutputTokens;
+          reactTrace = routerResult.reactTrace;
+          providerReportedCostCents = routerResult.providerCostCents;
         } else if (tools.length > 0) {
           // ── Anthropic tool loop ──
           let currentMessages = [...messages];
@@ -1692,7 +1692,7 @@ export class RuntimeEngine {
       // Use provider-reported cost (OpenRouter) when available, otherwise estimate
       const costCents = providerReportedCostCents
         ? providerReportedCostCents
-        : useOllama
+        : useModelRouter
         ? 0
         : calculateCostCents(
             (agentConfig.model as ClaudeModel) || 'claude-sonnet-4-5',
@@ -2406,7 +2406,7 @@ export class RuntimeEngine {
   // OLLAMA EXECUTION PATH
   // ==========================================================================
 
-  private async executeWithOllama(opts: {
+  private async executeWithModelRouter(opts: {
     systemPrompt: string;
     messages: MessageParam[];
     tools: Array<WebSearchTool20250305 | Tool>;
@@ -2481,11 +2481,11 @@ export class RuntimeEngine {
     let iteration = 0;
     let consecutiveParseErrors = 0;
     let toolLoopAborted = false;
-    const ollamaToolCallHashes: string[] = [];
-    const ollamaToolsUsed: string[] = [];
+    const toolCallHashes: string[] = [];
+    const routerToolsUsed: string[] = [];
     try {
       for (; iteration < MAX_TOOL_LOOP_ITERATIONS; iteration++) {
-        const ollamaIterationStart = Date.now();
+        const iterationStart = Date.now();
         // Build active tool list (may include browser tools after activation)
         const activeTools = browserActivated
           ? [...openaiTools.filter(t => t.function.name !== 'request_browser'), ...convertToolsToOpenAI(BROWSER_TOOL_DEFINITIONS)]
@@ -2632,7 +2632,7 @@ export class RuntimeEngine {
           const toolInput = parsed.args;
 
           // Dispatch tool via registry
-          const ollamaToolCtx = this.buildToolContext({
+          const routerToolCtx = this.buildToolContext({
             taskId: opts.taskId,
             agentId: opts.agentId,
             workspaceId: opts.workspaceId,
@@ -2646,11 +2646,11 @@ export class RuntimeEngine {
             mcpClients: opts.mcpClients ?? null,
             gitEnabled: opts.gitEnabled,
           });
-          const toolResult = await this.dispatchTool(toolName, toolInput, ollamaToolCtx);
+          const toolResult = await this.dispatchTool(toolName, toolInput, routerToolCtx);
 
           // Sync browser state back from context
           if (toolResult.browserActivated && !browserActivated) {
-            browserService = ollamaToolCtx.browserService;
+            browserService = routerToolCtx.browserService;
             browserActivated = true;
           }
 
@@ -2670,12 +2670,12 @@ export class RuntimeEngine {
           }
 
           // Track tool name for reversibility check
-          ollamaToolsUsed.push(toolName);
+          routerToolsUsed.push(toolName);
 
           // Brain: record tool execution
-          const ollamaSuccess = !resultContent.startsWith('Error:');
-          this.brain.recordToolExecution(toolName, toolInput, ollamaSuccess);
-          ollamaToolCallHashes.push(hashToolCall(toolName, toolInput));
+          const toolSuccess = !resultContent.startsWith('Error:');
+          this.brain.recordToolExecution(toolName, toolInput, toolSuccess);
+          toolCallHashes.push(hashToolCall(toolName, toolInput));
 
           loopMessages.push({
             role: 'tool',
@@ -2686,7 +2686,7 @@ export class RuntimeEngine {
 
         // Collect ReAct step for Ollama iteration
         if (response.toolCalls && response.toolCalls.length > 0) {
-          const ollamaReactStep: LocalReActStep = {
+          const reactStep: LocalReActStep = {
             iteration: iteration + 1,
             thought: truncate(response.content || '', REACT_SUMMARY_MAX_LENGTH),
             actions: response.toolCalls.map(tc => ({
@@ -2703,11 +2703,11 @@ export class RuntimeEngine {
                 success: !toolMsg?.content.startsWith('Error:'),
               };
             }),
-            durationMs: Date.now() - ollamaIterationStart,
+            durationMs: Date.now() - iterationStart,
             timestamp: new Date().toISOString(),
           };
-          reactTrace.push(ollamaReactStep);
-          this.emit('task:react_step', { taskId: opts.taskId, step: ollamaReactStep });
+          reactTrace.push(reactStep);
+          this.emit('task:react_step', { taskId: opts.taskId, step: reactStep });
         }
 
         if (toolLoopAborted) break;
@@ -2745,14 +2745,14 @@ export class RuntimeEngine {
     }
 
     // Check for irreversible tools used in Ollama path
-    const irreversibleOllamaTools = ollamaToolsUsed.filter(
+    const irreversibleTools = routerToolsUsed.filter(
       name => getToolReversibility(name) === 'irreversible'
     );
-    if (irreversibleOllamaTools.length > 0) {
+    if (irreversibleTools.length > 0) {
       this.emit('task:warning', {
         taskId: opts.taskId,
         warning: 'irreversible_tools_used',
-        tools: irreversibleOllamaTools,
+        tools: irreversibleTools,
       });
     }
 
