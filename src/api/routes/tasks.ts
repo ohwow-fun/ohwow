@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { RuntimeEngine } from '../../execution/engine.js';
+import { logger } from '../../lib/logger.js';
 
 export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | null): Router {
   const router = Router();
@@ -103,7 +104,20 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
 
       // Execute async if engine is available
       if (engine) {
-        engine.executeTask(agentId, taskId).catch(() => {});
+        engine.executeTask(agentId, taskId).catch(async (err) => {
+          logger.error({ err, taskId, agentId }, '[TaskRoute] Task execution failed');
+          try {
+            await db.from('agent_workforce_tasks').update({
+              status: 'failed',
+              error_message: err instanceof Error ? err.message : 'Task execution failed unexpectedly',
+              updated_at: new Date().toISOString(),
+            }).eq('id', taskId);
+            await db.from('agent_workforce_agents').update({
+              status: 'idle',
+              updated_at: new Date().toISOString(),
+            }).eq('id', agentId);
+          } catch { /* best effort cleanup */ }
+        });
       }
 
       res.status(201).json({ data: { id: taskId, status: 'pending' } });
@@ -136,7 +150,20 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       const agentId = row.agent_id as string;
 
       // Fire-and-forget execution
-      engine.executeTask(agentId, req.params.id).catch(() => {});
+      engine.executeTask(agentId, req.params.id).catch(async (err) => {
+        logger.error({ err, taskId: req.params.id, agentId }, '[TaskRoute] Task execution failed');
+        try {
+          await db.from('agent_workforce_tasks').update({
+            status: 'failed',
+            error_message: err instanceof Error ? err.message : 'Task execution failed unexpectedly',
+            updated_at: new Date().toISOString(),
+          }).eq('id', req.params.id);
+          await db.from('agent_workforce_agents').update({
+            status: 'idle',
+            updated_at: new Date().toISOString(),
+          }).eq('id', agentId);
+        } catch { /* best effort cleanup */ }
+      });
       res.status(202).json({ data: { id: req.params.id, status: 'executing' } });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
