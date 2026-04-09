@@ -38,7 +38,7 @@ export default defineConfig({
   // Bundle React + ink so there's exactly one instance
   noExternal: ['react', 'ink', 'ink-text-input', 'ink-select-input', 'ink-spinner', 'react-reconciler'],
   // Don't bundle native modules
-  external: ['better-sqlite3', 'playwright-core', '@jimp/custom', '@jimp/plugin-resize', '@jimp/plugin-scale', '@jimp/plugins'],
+  external: ['better-sqlite3', 'playwright-core', '@jimp/custom', '@jimp/plugin-resize', '@jimp/plugin-scale', '@jimp/plugins', '@nut-tree-fork/nut-js'],
   banner: { js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
   esbuildPlugins: [stubDevtools],
   esbuildOptions(options) {
