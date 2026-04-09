@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.5] — 2026-04-09
+
+### Fixed
+- Don't fallback from OpenRouter to Ollama on availability timeout
+
 ## [0.6.4] — 2026-04-09
 
 ### Added
