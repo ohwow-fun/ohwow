@@ -7,7 +7,7 @@ import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 export async function listAgents(ctx: LocalToolContext): Promise<ToolResult> {
   const { data: agents, error } = await ctx.db
     .from('agent_workforce_agents')
-    .select('id, name, role, status')
+    .select('id, name, role, paused, status')
     .eq('workspace_id', ctx.workspaceId)
     .order('name');
 
@@ -32,11 +32,12 @@ export async function listAgents(ctx: LocalToolContext): Promise<ToolResult> {
     }
   }
 
-  const result = ((agents || []) as Array<{ id: string; name: string; role: string; status: string }>).map((a) => ({
+  const result = ((agents || []) as Array<{ id: string; name: string; role: string; paused: number | boolean; status: string }>).map((a) => ({
     id: a.id,
     name: a.name,
     role: a.role,
-    status: a.status,
+    paused: !!a.paused,
+    status: a.paused ? 'paused' : a.status,
     schedules: scheduleMap[a.id] || [],
   }));
 
@@ -48,30 +49,34 @@ export async function updateAgentStatus(
   input: Record<string, unknown>,
 ): Promise<ToolResult> {
   const agentId = input.agent_id as string;
-  const status = input.status as string;
+  const action = input.action as string | undefined;
+  // Support both new { action: 'pause'|'resume' } and legacy { status: 'paused'|'idle' }
+  const legacyStatus = input.status as string | undefined;
+  const shouldPause = action === 'pause' || legacyStatus === 'paused';
+  const shouldResume = action === 'resume' || legacyStatus === 'idle';
 
-  if (!agentId || !status) return { success: false, error: 'agent_id and status are required' };
-  if (status !== 'idle' && status !== 'paused') {
-    return { success: false, error: 'Status must be "idle" (to resume) or "paused" (to pause)' };
+  if (!agentId) return { success: false, error: 'agent_id is required' };
+  if (!shouldPause && !shouldResume) {
+    return { success: false, error: 'action must be "pause" or "resume"' };
   }
 
   const { data: agent } = await ctx.db
     .from('agent_workforce_agents')
-    .select('id, name, status, workspace_id')
+    .select('id, name, paused, status, workspace_id')
     .eq('id', agentId)
     .single();
 
   if (!agent) return { success: false, error: 'Agent not found' };
-  const a = agent as { id: string; name: string; status: string; workspace_id: string };
+  const a = agent as { id: string; name: string; paused: number | boolean; status: string; workspace_id: string };
   if (a.workspace_id !== ctx.workspaceId) return { success: false, error: 'Agent not in your workspace' };
-  if (a.status === 'working') {
+  if (shouldPause && a.status === 'working') {
     return { success: false, error: `Agent "${a.name}" is currently working. Wait for it to finish.` };
   }
 
-  await ctx.db.from('agent_workforce_agents').update({ status }).eq('id', agentId);
+  await ctx.db.from('agent_workforce_agents').update({ paused: shouldPause ? 1 : 0 }).eq('id', agentId);
 
-  const action = status === 'paused' ? 'paused' : 'resumed';
-  return { success: true, data: { message: `Agent "${a.name}" has been ${action}.` } };
+  const actionLabel = shouldPause ? 'paused' : 'resumed';
+  return { success: true, data: { message: `Agent "${a.name}" has been ${actionLabel}.` } };
 }
 
 export async function runAgent(

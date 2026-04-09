@@ -61,7 +61,7 @@ export async function discoverCapabilities(
       .from('agent_workforce_agents')
       .select('id, name, role')
       .eq('workspace_id', ctx.workspaceId)
-      .neq('status', 'paused');
+      .eq('paused', 0);
 
     if (agentsErr) return { success: false, error: agentsErr.message };
 

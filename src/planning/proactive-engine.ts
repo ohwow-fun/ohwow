@@ -281,6 +281,7 @@ export class ProactiveEngine {
       .from('agent_workforce_agents')
       .select('id, name')
       .eq('workspace_id', this.workspaceId)
+      .eq('paused', 0)
       .eq('status', 'idle');
 
     if (!agents) return;

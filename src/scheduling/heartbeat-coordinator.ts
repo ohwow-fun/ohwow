@@ -28,6 +28,7 @@ interface HeartbeatAgent {
   workspace_id: string;
   name: string;
   config: Record<string, unknown>;
+  paused: number | boolean;
   status: string;
 }
 
@@ -93,7 +94,7 @@ export class HeartbeatCoordinator {
     // Find agents with heartbeat enabled
     const { data: agents } = await this.db
       .from<HeartbeatAgent>('agent_workforce_agents')
-      .select('id, workspace_id, name, config, status')
+      .select('id, workspace_id, name, config, paused, status')
       .eq('workspace_id', this.workspaceId);
 
     if (!agents) return;
@@ -104,6 +105,7 @@ export class HeartbeatCoordinator {
         : (row.config || {});
 
       if (!config.heartbeat_enabled) continue;
+      if (row.paused) continue; // Don't wake paused agents
       if (row.status === 'working') continue; // Don't wake busy agents
       if (this.activeTasks.has(row.id)) continue; // Already has a running heartbeat
 

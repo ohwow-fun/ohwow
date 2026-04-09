@@ -40,12 +40,12 @@ export async function buildTargetedPrompt(
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const need = (s: IntentSection) => sections.has(s);
 
-  type AgentRow = { id: string; name: string; role: string; status: string; stats?: unknown };
+  type AgentRow = { id: string; name: string; role: string; paused: number | boolean; status: string; stats?: unknown };
   type ProjectRow = { id: string; name: string; status: string };
 
   const agentsPromise = need('agents')
-    ? deps.db.from('agent_workforce_agents').select('id, name, role, status, stats')
-        .eq('workspace_id', deps.workspaceId).order('name')
+    ? deps.db.from('agent_workforce_agents').select('id, name, role, paused, status, stats')
+        .eq('workspace_id', deps.workspaceId).eq('paused', 0).order('name')
     : Promise.resolve({ data: null });
 
   const projectsPromise = need('projects')

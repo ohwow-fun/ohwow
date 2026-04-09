@@ -225,9 +225,9 @@ export async function generateWorkflow(
   // Load available agents for context
   const { data: agents } = await ctx.db
     .from('agent_workforce_agents')
-    .select('id, name, role, status')
+    .select('id, name, role')
     .eq('workspace_id', ctx.workspaceId)
-    .neq('status', 'paused');
+    .eq('paused', 0);
 
   const agentList = (agents || []).map((a: Record<string, unknown>) =>
     `- ${a.name} (${a.role}) [id: ${a.id}]`

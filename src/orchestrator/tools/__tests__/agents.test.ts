@@ -16,8 +16,8 @@ describe('listAgents', () => {
 
   it('returns formatted agent list with schedules', async () => {
     const agents = [
-      { id: 'a1', name: 'Writer', role: 'content', status: 'idle' },
-      { id: 'a2', name: 'Researcher', role: 'research', status: 'idle' },
+      { id: 'a1', name: 'Writer', role: 'content', status: 'idle', paused: 0 },
+      { id: 'a2', name: 'Researcher', role: 'research', status: 'idle', paused: 0 },
     ];
     const schedules = [
       { agent_id: 'a1', cron: '0 9 * * *', last_run_at: '2026-03-14T09:00:00Z', enabled: 1 },
@@ -210,10 +210,25 @@ describe('runAgent', () => {
 describe('updateAgentStatus', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('pauses an agent successfully', async () => {
+  it('pauses an agent successfully (action format)', async () => {
     const ctx = makeCtx({
       agent_workforce_agents: {
-        data: { id: 'a1', name: 'Writer', status: 'idle', workspace_id: 'ws-1' },
+        data: { id: 'a1', name: 'Writer', paused: 0, status: 'idle', workspace_id: 'ws-1' },
+      },
+    });
+
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1', action: 'pause' });
+
+    expect(result.success).toBe(true);
+    const data = result.data as { message: string };
+    expect(data.message).toContain('paused');
+    expect(data.message).toContain('Writer');
+  });
+
+  it('pauses an agent successfully (legacy status format)', async () => {
+    const ctx = makeCtx({
+      agent_workforce_agents: {
+        data: { id: 'a1', name: 'Writer', paused: 0, status: 'idle', workspace_id: 'ws-1' },
       },
     });
 
@@ -225,14 +240,14 @@ describe('updateAgentStatus', () => {
     expect(data.message).toContain('Writer');
   });
 
-  it('resumes an agent (sets to idle) successfully', async () => {
+  it('resumes an agent successfully', async () => {
     const ctx = makeCtx({
       agent_workforce_agents: {
-        data: { id: 'a1', name: 'Writer', status: 'paused', workspace_id: 'ws-1' },
+        data: { id: 'a1', name: 'Writer', paused: 1, status: 'idle', workspace_id: 'ws-1' },
       },
     });
 
-    const result = await updateAgentStatus(ctx, { agent_id: 'a1', status: 'idle' });
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1', action: 'resume' });
 
     expect(result.success).toBe(true);
     const data = result.data as { message: string };
@@ -240,34 +255,38 @@ describe('updateAgentStatus', () => {
     expect(data.message).toContain('Writer');
   });
 
-  it('returns error with invalid status', async () => {
+  it('returns error with invalid action', async () => {
     const ctx = makeCtx();
-    const result = await updateAgentStatus(ctx, { agent_id: 'a1', status: 'active' });
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1', action: 'active' });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('Status must be');
+    expect(result.error).toContain('action must be');
   });
 
-  it('returns error when agent_id or status is missing', async () => {
+  it('returns error when agent_id is missing', async () => {
     const ctx = makeCtx();
 
-    const result1 = await updateAgentStatus(ctx, { status: 'idle' });
-    expect(result1.success).toBe(false);
-    expect(result1.error).toContain('agent_id and status are required');
+    const result = await updateAgentStatus(ctx, { action: 'pause' });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('agent_id is required');
+  });
 
-    const result2 = await updateAgentStatus(ctx, { agent_id: 'a1' });
-    expect(result2.success).toBe(false);
-    expect(result2.error).toContain('agent_id and status are required');
+  it('returns error when no action or status provided', async () => {
+    const ctx = makeCtx();
+
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1' });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('action must be');
   });
 
   it('returns error when agent is currently working', async () => {
     const ctx = makeCtx({
       agent_workforce_agents: {
-        data: { id: 'a1', name: 'Writer', status: 'working', workspace_id: 'ws-1' },
+        data: { id: 'a1', name: 'Writer', paused: 0, status: 'working', workspace_id: 'ws-1' },
       },
     });
 
-    const result = await updateAgentStatus(ctx, { agent_id: 'a1', status: 'paused' });
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1', action: 'pause' });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('currently working');
@@ -279,7 +298,7 @@ describe('updateAgentStatus', () => {
       agent_workforce_agents: { data: null },
     });
 
-    const result = await updateAgentStatus(ctx, { agent_id: 'nonexistent', status: 'paused' });
+    const result = await updateAgentStatus(ctx, { agent_id: 'nonexistent', action: 'pause' });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Agent not found');
@@ -288,11 +307,11 @@ describe('updateAgentStatus', () => {
   it('returns error when agent belongs to different workspace', async () => {
     const ctx = makeCtx({
       agent_workforce_agents: {
-        data: { id: 'a1', name: 'Writer', status: 'idle', workspace_id: 'ws-other' },
+        data: { id: 'a1', name: 'Writer', paused: 0, status: 'idle', workspace_id: 'ws-other' },
       },
     });
 
-    const result = await updateAgentStatus(ctx, { agent_id: 'a1', status: 'paused' });
+    const result = await updateAgentStatus(ctx, { agent_id: 'a1', action: 'pause' });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('Agent not in your workspace');

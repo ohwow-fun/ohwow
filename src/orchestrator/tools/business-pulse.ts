@@ -57,7 +57,7 @@ export async function getBusinessPulse(ctx: LocalToolContext): Promise<ToolResul
     ctx.db.from('agent_workforce_contacts').select('id', { count: 'exact', head: true })
       .eq('workspace_id', ctx.workspaceId).gte('created_at', weekAgo.toISOString()),
     // Agents
-    ctx.db.from('agent_workforce_agents').select('id, status')
+    ctx.db.from('agent_workforce_agents').select('id, status, paused')
       .eq('workspace_id', ctx.workspaceId),
     // Schedules that fired today
     ctx.db.from('agent_workforce_tasks').select('id', { count: 'exact', head: true })
@@ -85,11 +85,11 @@ export async function getBusinessPulse(ctx: LocalToolContext): Promise<ToolResul
     .reduce((sum, r) => sum + (r.amount_cents || 0), 0);
 
   // Agent status breakdown
-  const agents = (agentData || []) as Array<{ id: string; status: string }>;
+  const agents = (agentData || []) as Array<{ id: string; status: string; paused: number | boolean }>;
   const agentsByStatus = {
     active: agents.filter((a) => a.status === 'working').length,
-    idle: agents.filter((a) => a.status === 'idle').length,
-    paused: agents.filter((a) => a.status === 'paused').length,
+    idle: agents.filter((a) => !a.paused && a.status === 'idle').length,
+    paused: agents.filter((a) => !!a.paused).length,
     total: agents.length,
   };
 
