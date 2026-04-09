@@ -249,7 +249,21 @@ export class LocalOrchestrator {
     this.engine = engine;
     this.workspaceId = workspaceId;
     this.anthropicApiKey = anthropicApiKey;
-    this.anthropic = new Anthropic({ apiKey: anthropicApiKey, timeout: 120_000 });
+    // Support OpenRouter: when no Anthropic key but OpenRouter is configured,
+    // use the Anthropic SDK with OpenRouter's base URL (API-compatible)
+    const orKey = modelRouter?.getOpenRouterApiKey?.();
+    if (anthropicApiKey) {
+      this.anthropic = new Anthropic({ apiKey: anthropicApiKey, timeout: 120_000 });
+    } else if (orKey) {
+      this.anthropicApiKey = orKey; // allow getActiveModel() to return non-ollama
+      this.anthropic = new Anthropic({
+        apiKey: orKey,
+        baseURL: 'https://openrouter.ai/api/v1',
+        timeout: 120_000,
+      });
+    } else {
+      this.anthropic = new Anthropic({ apiKey: '', timeout: 120_000 });
+    }
     this.channels = channels;
     this.controlPlane = controlPlane ?? null;
     this.modelRouter = modelRouter ?? null;
