@@ -672,6 +672,20 @@ export async function startDaemon(): Promise<DaemonHandle> {
       orchestrator.setInferenceCapabilities(inferenceCapabilities);
       bus.emit('inference:capabilities-changed', inferenceCapabilities);
     }
+
+    // Initialize meeting session (macOS only)
+    if (process.platform === 'darwin') {
+      const { MeetingSession } = await import('../meeting/meeting-session.js');
+      const openaiKey = (engine as unknown as { config?: { openaiApiKey?: string } })?.config?.openaiApiKey;
+      const meetingSession = new MeetingSession(
+        db, modelRouter, controlPlane, workspaceId,
+        config.ollamaUrl, openaiKey,
+      );
+      orchestrator.setMeetingSession(meetingSession);
+      if (controlPlane) {
+        controlPlane.setMeetingSession(meetingSession);
+      }
+    }
   }
 
   // 10b. Bootstrap digital body (Merleau-Ponty: embodiment)

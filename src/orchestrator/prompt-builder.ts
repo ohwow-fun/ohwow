@@ -272,6 +272,7 @@ export async function buildTargetedPrompt(
       } catch { return undefined; }
     })(),
     hasLspTools: need('filesystem') || need('dev'),
+    hasMeetingTools: process.platform === 'darwin',
     projectStack: (() => {
       if (!need('dev') || !deps.workingDirectory) return undefined;
       try { return detectProjectStack(deps.workingDirectory) ?? undefined; }

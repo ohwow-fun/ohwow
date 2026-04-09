@@ -139,6 +139,7 @@ export class LocalOrchestrator {
   private mcpClients: McpClientManager | null = null;
   private mcpServers: McpServerConfig[];
   private _lspManager?: import('../lsp/lsp-manager.js').LspManager;
+  private _meetingSession?: import('../meeting/meeting-session.js').MeetingSession;
   /** Unified Brain: philosophical cognitive coordinator. */
   private brain: Brain | null = null;
   /** Soul: deep human persona awareness (Aristotle's Psyche). */
@@ -196,6 +197,7 @@ export class LocalOrchestrator {
       meshRagEnabled: this._meshRagEnabled,
       connectorRegistry: this._connectorRegistry || undefined,
       lspManager: this._lspManager,
+      meetingSession: this._meetingSession,
     };
   }
 
@@ -419,6 +421,11 @@ export class LocalOrchestrator {
   /** Set LSP manager for code intelligence tools. */
   setLspManager(manager: import('../lsp/lsp-manager.js').LspManager): void {
     this._lspManager = manager;
+  }
+
+  /** Set the active meeting session for live audio capture. */
+  setMeetingSession(session: import('../meeting/meeting-session.js').MeetingSession): void {
+    this._meetingSession = session;
   }
 
   /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */
@@ -976,6 +983,8 @@ export class LocalOrchestrator {
     // Build tool list (conditionally includes filesystem tools, filtered by intent for Anthropic)
     // Apply tool embodiment: compress descriptions for mastered tools (Merleau-Ponty)
     const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated);
+    const cloudToolCount = rawTools.filter(t => t.name.startsWith('cloud_')).length;
+    logger.info({ toolCount: rawTools.length, cloudToolCount, sections: [...(sections ?? [])] }, '[orchestrator] Anthropic path tool list');
     const tools = this.brain ? this.brain.applyEmbodiment(rawTools) : rawTools;
 
     // DELIBERATE: Dialectic check for complex plans (Hegel)

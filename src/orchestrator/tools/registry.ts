@@ -39,6 +39,7 @@ import { getAgentState, setAgentState, listAgentState, deleteAgentState } from '
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
+import { startMeetingListener, stopMeetingListener, getMeetingNotes } from './meeting.js';
 import { saveDeliverable } from './deliverables.js';
 import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
@@ -222,6 +223,11 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Audio transcription
   ['transcribe_audio', (ctx, input) => transcribeAudio(ctx, input)],
+
+  // Meeting listener
+  ['start_meeting_listener', (ctx, input) => startMeetingListener(ctx, input)],
+  ['stop_meeting_listener', (ctx, input) => stopMeetingListener(ctx, input)],
+  ['get_meeting_notes', (ctx, input) => getMeetingNotes(ctx, input)],
 
   // Deliverables
   ['save_deliverable', (ctx, input) => saveDeliverable(ctx, input)],

@@ -72,6 +72,8 @@ export interface BuildLocalSystemPromptArgs {
   };
   /** Whether LSP code intelligence tools are available */
   hasLspTools?: boolean;
+  /** Whether meeting listener tools are available (macOS only) */
+  hasMeetingTools?: boolean;
   /** Detected project stack info for code mode */
   projectStack?: {
     type: string;          // 'node' | 'rust' | 'python' | 'go' | 'unknown'
@@ -745,7 +747,14 @@ Language server tools are available for real-time code analysis:
 - lsp_hover: Get type info at a position.
 - lsp_go_to_definition: Jump to where a symbol is defined.
 - lsp_references: Find all usages of a symbol.
-Line and character numbers are 1-based. Servers start automatically on first use.` : ''}
+Line and character numbers are 1-based. Servers start automatically on first use.` : ''}${args.hasMeetingTools ? `
+
+## Meeting Listener
+You can listen to meetings and take notes in real-time using the device's system audio capture.
+- \`start_meeting_listener\` — begin capturing audio (zoom, teams, meet, or all system audio)
+- \`get_meeting_notes\` — check running notes during the meeting
+- \`stop_meeting_listener\` — end capture and generate comprehensive analysis with decisions, action items, and key quotes
+macOS screen recording permission is required on first use. Notes sync to the cloud dashboard in real-time.` : ''}
 ## Current Context
 - Date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
 - Time: ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}

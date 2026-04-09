@@ -11,6 +11,7 @@ import type { ScraplingService } from '../execution/scrapling/index.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import type { LspManager } from '../lsp/lsp-manager.js';
+import type { MeetingSession } from '../meeting/meeting-session.js';
 
 export interface LocalToolContext {
   db: DatabaseAdapter;
@@ -39,6 +40,8 @@ export interface LocalToolContext {
   connectorRegistry?: ConnectorRegistry;
   /** LSP manager for code intelligence tools */
   lspManager?: LspManager;
+  /** Active meeting session for live audio capture + transcription */
+  meetingSession?: MeetingSession;
 }
 
 export interface ToolResult {

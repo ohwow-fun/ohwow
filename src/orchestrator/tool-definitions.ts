@@ -1091,6 +1091,43 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['audio_base64'],
     },
   },
+  // Meeting listener tools
+  {
+    name: 'start_meeting_listener',
+    description:
+      'Start listening to a meeting via system audio capture. Captures audio from Zoom, Teams, or all system audio, transcribes in real-time, and builds structured meeting notes (summary, decisions, action items). Notes sync to the cloud dashboard. macOS only, requires screen recording permission on first use.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        app: {
+          type: 'string',
+          enum: ['zoom', 'teams', 'meet', 'all'],
+          description: 'Which app to capture audio from. "all" captures all system audio. Default: "all".',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'stop_meeting_listener',
+    description:
+      'Stop the active meeting listener. Triggers a final comprehensive analysis pass that produces a complete meeting summary with decisions, action items, open questions, and key quotes. Returns the full structured notes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_meeting_notes',
+    description:
+      'Get the current running notes from an active or recently completed meeting session. Returns the latest summary, key points, decisions, action items, and open questions accumulated so far.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
   // Internet tools (zero-cost, zero-config)
   {
     name: 'youtube_transcript',
@@ -1730,6 +1767,38 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['pdf_base64', 'fields'],
     },
   },
+
+  // Cloud data query tools (proxy to cloud DB via control plane)
+  {
+    name: 'cloud_list_contacts',
+    description: 'List contacts from the CLOUD CRM database (not local). Use this when you need the full customer/lead list from the web dashboard.',
+    input_schema: { type: 'object' as const, properties: { contact_type: { type: 'string', description: 'Filter: lead, customer, partner' }, search: { type: 'string', description: 'Search by name or email' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
+  },
+  {
+    name: 'cloud_list_schedules',
+    description: 'List agent schedules from the CLOUD database with cron expressions and last/next run times.',
+    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, enabled: { type: 'boolean', description: 'Filter by enabled status' } }, required: [] },
+  },
+  {
+    name: 'cloud_list_agents',
+    description: 'List all agents from the CLOUD database with full config, stats, and departments.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_tasks',
+    description: 'List tasks from the CLOUD database with output, truth scores, and metadata.',
+    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, status: { type: 'string', description: 'Filter: pending, completed, failed, needs_approval' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
+  },
+  {
+    name: 'cloud_get_analytics',
+    description: 'Get workspace analytics from the CLOUD: total tasks, agents, contacts, credits, weekly stats.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_members',
+    description: 'List workspace members from the CLOUD with roles and profile info.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
 ];
 
 // =========================================================================
@@ -1822,60 +1891,6 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
-  // Cloud data query tools
-  {
-    name: 'cloud_list_contacts',
-    description: 'List contacts from the CLOUD CRM database (not local). Use this when you need the full customer/lead list from the web dashboard.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        contact_type: { type: 'string', description: 'Filter by type: lead, customer, partner' },
-        search: { type: 'string', description: 'Search by name or email' },
-        limit: { type: 'number', description: 'Max results (default 50)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'cloud_list_schedules',
-    description: 'List agent schedules from the CLOUD database. Shows which agents have cron schedules, whether enabled, and last/next run times.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        agent_id: { type: 'string', description: 'Filter by agent ID' },
-        enabled: { type: 'boolean', description: 'Filter by enabled status' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'cloud_list_agents',
-    description: 'List all agents from the CLOUD database. Includes full config, stats, and department info. Use this when local agent list might be out of sync.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'cloud_list_tasks',
-    description: 'List tasks from the CLOUD database. Shows full output, truth scores, and metadata. Use this for tasks that ran on the cloud or to see the complete task history.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        agent_id: { type: 'string', description: 'Filter by agent ID' },
-        status: { type: 'string', description: 'Filter by status: pending, completed, failed, needs_approval' },
-        limit: { type: 'number', description: 'Max results (default 50)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'cloud_get_analytics',
-    description: 'Get workspace analytics from the CLOUD: total tasks, agents, contacts, credits, and weekly stats.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
-  {
-    name: 'cloud_list_members',
-    description: 'List workspace members from the CLOUD with their roles and profile info.',
-    input_schema: { type: 'object', properties: {}, required: [] },
-  },
 ];
 
 // =========================================================================
@@ -2001,6 +2016,9 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // Audio transcription → 'rag', 'vision'
   transcribe_audio: ['rag', 'vision'],
 
+  // Meeting listener → always available (user may ask at any time)
+  // start_meeting_listener, stop_meeting_listener, get_meeting_notes: removed from map → always included
+
   // Internet tools — always available (zero-cost fetch-based, no reason to gate)
   // youtube_transcript, read_rss_feed, github_search: removed from map → always included
 
@@ -2100,6 +2118,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   scrape_search: 2, list_knowledge: 2,
   get_agent_suggestions: 2,
   transcribe_audio: 2,
+  start_meeting_listener: 2, stop_meeting_listener: 2, get_meeting_notes: 2,
   youtube_transcript: 2, read_rss_feed: 2, github_search: 2,
 
   // P3: Rare/advanced tools
