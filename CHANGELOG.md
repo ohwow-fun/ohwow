@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6] — 2026-04-09
+
+### Fixed
+- QA fixes for meeting listener
+- Poll daemon status until cloudConnected is true
+- Simplify greeting — wait for agents to load, no health polling
+
 ## [0.6.5] — 2026-04-09
 
 ### Fixed
