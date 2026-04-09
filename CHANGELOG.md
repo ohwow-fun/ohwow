@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.4] — 2026-04-09
+
+### Added
+- Proactive contextual greeting on every TUI session
+
+### Fixed
+- Skip welcome message for returning users with existing agents
+- Add safety timeout for welcome loading state
+
 ## [0.6.3] — 2026-04-09
 
 ### Fixed
