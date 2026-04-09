@@ -169,7 +169,8 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   useEffect(() => {
     if (welcomeFiredRef.current) return;
     if (orchestrator.isStreaming || orchestrator.messages.length > 0) return;
-    // Wait until agents have loaded before deciding on greeting content
+    // Wait until daemon is connected and agents have loaded
+    if (!runtime.daemonConnectedAt) return;
     if (agents.list.length === 0) return;
 
     welcomeFiredRef.current = true;
@@ -183,7 +184,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       : `I just finished setting up my workspace with ${agentCount} agent${agentCount !== 1 ? 's' : ''} (${agentNames}). What should I do first?`;
 
     orchestrator.sendWelcome(prompt);
-  }, [justOnboarded, config.firstChatCompleted, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [runtime.daemonConnectedAt, orchestrator.isStreaming, orchestrator.messages.length, agents.list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derive agent info for contextual empty state
   const chatAgents = useMemo(() =>

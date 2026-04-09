@@ -184,6 +184,12 @@ export function useOrchestrator(
     const controller = new AbortController();
     abortRef.current = controller;
 
+    if (!daemonPort) {
+      setError('Still connecting to daemon...');
+      setIsStreaming(false);
+      return;
+    }
+
     try {
       const resp = await fetch(`http://localhost:${daemonPort}/api/chat`, {
         method: 'POST',

@@ -147,7 +147,7 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
 
   const sessionTokenRef = useRef<string>(randomUUID());
   const daemonModeRef = useRef(false);
-  const daemonPortRef = useRef<number | null>(null);
+  const daemonPortRef = useRef<number | null>(config.port);
   const initialized = useRef(false);
 
   useEffect(() => {
