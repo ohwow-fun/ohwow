@@ -2519,6 +2519,10 @@ export class RuntimeEngine {
     // Resolve agent model to a valid provider-specific ID
     // Handles: 'claude-sonnet-4-5' → 'anthropic/claude-sonnet-4.6', 'gemini' → 'google/gemini-...', etc.
     const resolvedAgentModel = this.resolveAgentModelForProvider(opts.agentModel, provider);
+    // Only pin to the resolved model if the agent config was ALREADY an OpenRouter ID (user explicitly chose it).
+    // Aliased models (claude-sonnet-4-5 → anthropic/claude-sonnet-4.6) should use dynamic per-iteration selection.
+    const isExplicitOpenRouterModel = opts.agentModel?.includes('/') ?? false;
+    const pinnedModel = isExplicitOpenRouterModel ? resolvedAgentModel : undefined;
     const needsVision = false; // TODO: detect from task/tools when vision tasks are supported
     let actualModelUsed: string | undefined;
 
@@ -2588,9 +2592,11 @@ export class RuntimeEngine {
           }
 
           // Dynamic per-iteration model selection (mirrors orchestrator's selectModelForIteration)
+          // pinnedModel only set when agent config has explicit OpenRouter ID (e.g., 'x-ai/grok-4.20')
+          // Aliased models (claude-sonnet-4-5) get dynamic selection across tiers
           const iterModel = this.selectAgentModelForIteration(
             iteration, opts.difficulty, consecutiveParseErrors > 0, !!opts.skillsDocument,
-            needsVision, resolvedAgentModel, provider,
+            needsVision, pinnedModel, provider,
           );
           if (!actualModelUsed && iterModel) actualModelUsed = iterModel;
           logger.debug({ model: iterModel, iteration, provider: provider.name, difficulty: opts.difficulty }, '[engine] agent iteration model');
