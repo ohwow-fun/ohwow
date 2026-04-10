@@ -124,12 +124,40 @@ export async function runAgent(
 
   const agentConfig = typeof a.config === 'string' ? JSON.parse(a.config) : a.config;
 
+  // Enrich prompt with matched SOP if available
+  let enrichedPrompt = prompt;
+  try {
+    const { extractKeywords, matchesTriggers } = await import('../../lib/token-similarity.js');
+    const { data: procedureSkills } = await ctx.db.from('agent_workforce_skills')
+      .select('name, definition, triggers')
+      .eq('workspace_id', ctx.workspaceId)
+      .eq('is_active', 1)
+      .eq('skill_type', 'procedure')
+      .limit(10);
+
+    if (procedureSkills) {
+      const keywords = extractKeywords(prompt);
+      for (const skill of procedureSkills as Array<Record<string, unknown>>) {
+        const triggers: string[] = (() => { try { return JSON.parse((skill.triggers as string) || '[]'); } catch { return []; } })();
+        if (keywords.length > 0 && matchesTriggers(triggers, keywords)) {
+          const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition as string) : skill.definition;
+          if (def?.tool_sequence) {
+            const steps = (def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) =>
+              `${i + 1}. ${typeof s === 'string' ? s : s.tool}`).join(', ');
+            enrichedPrompt += `\n\nPROCEDURE: "${skill.name}" — Steps: ${steps}`;
+          }
+          break;
+        }
+      }
+    }
+  } catch { /* non-critical: SOP enrichment failed */ }
+
   // Create task
   const insertPayload: Record<string, unknown> = {
     workspace_id: ctx.workspaceId,
     agent_id: agentId,
-    title: prompt.slice(0, 100),
-    input: prompt,
+    title: enrichedPrompt.slice(0, 100),
+    input: enrichedPrompt,
     status: 'pending',
     requires_approval: agentConfig.approval_required ? 1 : 0,
   };

@@ -829,10 +829,11 @@ export class RuntimeEngine {
         }
       }
 
-      // 3. Compile memory + knowledge documents
-      const [memoryDoc, knowledgeDoc] = await Promise.all([
+      // 3. Compile memory + knowledge + skills documents
+      const [memoryDoc, knowledgeDoc, skillsDoc] = await Promise.all([
         this.compileMemory(agentId, workspaceId, task.title),
         this.compileKnowledge(agentId, workspaceId, task.title, task.description),
+        this.compileSkills(agentId, workspaceId, task.title),
       ]);
 
       // 4. Build system prompt
@@ -963,6 +964,7 @@ export class RuntimeEngine {
         taskDescription: task.description || undefined,
         memoryDocument: memoryDoc || undefined,
         knowledgeDocument: knowledgeDoc || undefined,
+        skillsDocument: skillsDoc || undefined,
         webSearchEnabled,
         browserEnabled: false, // Browser instructions injected on-demand, not upfront
         scraplingEnabled,
@@ -2893,6 +2895,72 @@ export class RuntimeEngine {
 
   // extractMemories() extracted to ./memory-sync.js
 
+  /**
+   * Compile relevant skills/SOPs for an agent's task.
+   * Returns a formatted document for injection into the agent's system prompt.
+   */
+  private async compileSkills(agentId: string, workspaceId: string, taskTitle: string): Promise<string> {
+    try {
+      const { data: skills } = await this.db.from('agent_workforce_skills')
+        .select('id, name, description, skill_type, definition, triggers, success_rate, times_used, agent_ids')
+        .eq('workspace_id', workspaceId)
+        .eq('is_active', 1)
+        .order('pattern_support', { ascending: false })
+        .limit(20);
+
+      if (!skills || skills.length === 0) return '';
+
+      // Filter: skills linked to this agent or workspace-wide (empty agent_ids)
+      const agentSkills = (skills as Array<Record<string, unknown>>).filter(s => {
+        try {
+          const ids: string[] = JSON.parse((s.agent_ids as string) || '[]');
+          return ids.length === 0 || ids.includes(agentId);
+        } catch { return true; }
+      });
+
+      if (agentSkills.length === 0) return '';
+
+      // Further filter by task relevance (keyword match against triggers)
+      const { extractKeywords, matchesTriggers } = await import('../lib/token-similarity.js');
+      const keywords = extractKeywords(taskTitle);
+      const matched = keywords.length > 0
+        ? agentSkills.filter(s => {
+            try {
+              const triggers: string[] = JSON.parse((s.triggers as string) || '[]');
+              return triggers.length === 0 || matchesTriggers(triggers, keywords);
+            } catch { return false; }
+          })
+        : agentSkills;
+
+      const top = matched.slice(0, 5);
+      if (top.length === 0) return '';
+
+      // Format as procedure instructions
+      return top.map(s => {
+        const successLabel = s.success_rate != null ? ` (${Math.round(s.success_rate as number * 100)}% success)` : '';
+        const header = `### ${s.name}${successLabel}\n${s.description || ''}`;
+
+        if (s.skill_type === 'procedure' && s.definition) {
+          try {
+            const def = typeof s.definition === 'string' ? JSON.parse(s.definition as string) : s.definition;
+            if (def.tool_sequence && Array.isArray(def.tool_sequence)) {
+              const steps = def.tool_sequence.slice(0, 8).map((step: string | { tool: string; args?: Record<string, unknown> }, i: number) => {
+                if (typeof step === 'string') return `${i + 1}. ${step}`;
+                const argsStr = step.args ? `(${Object.entries(step.args).map(([, v]) => JSON.stringify(v)).join(', ')})` : '';
+                return `${i + 1}. ${step.tool}${argsStr}`;
+              }).join('\n');
+              return `${header}\n**Steps:**\n${steps}`;
+            }
+          } catch { /* malformed definition */ }
+        }
+        return header;
+      }).join('\n\n');
+    } catch (err) {
+      logger.debug({ err: err instanceof Error ? err.message : err }, '[engine] compileSkills failed');
+      return '';
+    }
+  }
+
   // ==========================================================================
   // PROMPT BUILDING (simplified, self-contained)
   // ==========================================================================
@@ -2905,6 +2973,7 @@ export class RuntimeEngine {
     taskDescription?: string;
     memoryDocument?: string;
     knowledgeDocument?: string;
+    skillsDocument?: string;
     webSearchEnabled?: boolean;
     browserEnabled?: boolean;
     scraplingEnabled?: boolean;
@@ -2917,6 +2986,7 @@ export class RuntimeEngine {
     const biz = this.businessContext;
     const memorySection = opts.memoryDocument ? `\n${opts.memoryDocument}\n` : '';
     const knowledgeSection = opts.knowledgeDocument ? `\n${opts.knowledgeDocument}\n` : '';
+    const skillsSection = opts.skillsDocument ? `\n## Standard Procedures\nWhen your task matches a procedure below, follow its steps using the specified tools.\n${opts.skillsDocument}\n` : '';
     const classificationSection = `\n## Response Classification
 Before your response content, include exactly one hidden metadata tag on the very first line:
 - <!--response_meta:{"type":"deliverable"}--> when your response contains a concrete work product (a draft, email, article, proposal, report, plan, code, creative content, data analysis, or any actionable output)
@@ -2944,7 +3014,7 @@ You have web search capability. Use it whenever you need current or factual info
 
 ## Business Context
 ${wrappedBusinessDesc}
-${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
+${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${skillsSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
 ## Guidelines
 - Always maintain a professional and helpful tone
 - Focus on quality and accuracy in your work
