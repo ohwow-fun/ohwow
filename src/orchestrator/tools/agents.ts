@@ -3,8 +3,91 @@
  */
 
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import type { SequenceDefinition, SequenceStep } from '../sequential/types.js';
+import { executeSequence } from '../sequential/sequential-executor.js';
 import { extractKeywords, matchesTriggers } from '../../lib/token-similarity.js';
 import { logger } from '../../lib/logger.js';
+
+// ============================================================================
+// SOP → SEQUENCE DECOMPOSITION
+// ============================================================================
+
+/**
+ * Convert an SOP tool_sequence into a SequenceDefinition.
+ * Each tool becomes a micro-step that an agent can execute with a single tool call.
+ * This is the fractal decomposition: instead of one agent doing 10 iterations,
+ * the sequence executor coordinates 10 trivially-simple tasks.
+ */
+function sopToSequence(
+  sopName: string,
+  toolSequence: Array<string | { tool: string; args?: Record<string, unknown> }>,
+  agentId: string,
+  userPrompt: string,
+): SequenceDefinition {
+  const usesDesktop = toolSequence.some(s => {
+    const name = typeof s === 'string' ? s : s.tool;
+    return name.startsWith('desktop_') || name === 'request_desktop';
+  });
+  const usesBrowser = toolSequence.some(s => {
+    const name = typeof s === 'string' ? s : s.tool;
+    return name.startsWith('browser_') || name === 'request_browser';
+  });
+
+  // Build activation step (request_desktop or request_browser)
+  const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
+  const avoidTool = usesDesktop
+    ? 'Do NOT use request_browser.'
+    : 'Do NOT use request_desktop.';
+
+  const steps: SequenceStep[] = [];
+
+  // Step 0: Activate desktop/browser
+  steps.push({
+    id: 'step-activate',
+    agentId,
+    prompt: `Call ${activationTool} with reason: "${sopName}". ${avoidTool} This is your ONLY task — just call the tool and return.`,
+    dependsOn: [],
+  });
+
+  // Steps 1-N: Each tool in the sequence
+  for (let i = 0; i < toolSequence.length; i++) {
+    const toolEntry = toolSequence[i];
+    const toolName = typeof toolEntry === 'string' ? toolEntry : toolEntry.tool;
+    const toolArgs = typeof toolEntry === 'object' && toolEntry.args ? toolEntry.args : {};
+
+    // Skip activation tools (already handled)
+    if (toolName === 'request_desktop' || toolName === 'request_browser') continue;
+
+    const argsStr = Object.keys(toolArgs).length > 0
+      ? ` with arguments: ${JSON.stringify(toolArgs)}`
+      : '';
+
+    const stepId = `step-${i + 1}`;
+    const prevStepId = steps[steps.length - 1].id;
+
+    steps.push({
+      id: stepId,
+      agentId,
+      prompt: `Call ${toolName}${argsStr}. This is your ONLY task — call this one tool and return the result. ${avoidTool}`,
+      dependsOn: [prevStepId],
+    });
+  }
+
+  // Final step: summarize results
+  steps.push({
+    id: 'step-summarize',
+    agentId,
+    prompt: `Summarize the results of the "${sopName}" procedure for: ${userPrompt}\n\nReview all previous step outputs and provide a clear report. Include any screenshots, messages found, classifications, and recommended next actions.`,
+    dependsOn: [steps[steps.length - 1].id],
+  });
+
+  return {
+    name: `SOP: ${sopName}`,
+    description: `Automated execution of "${sopName}" procedure`,
+    steps,
+    sourcePrompt: userPrompt,
+  };
+}
 
 export async function listAgents(ctx: LocalToolContext): Promise<ToolResult> {
   const { data: agents, error } = await ctx.db
@@ -135,56 +218,70 @@ export async function runAgent(
 
   const agentConfig = typeof a.config === 'string' ? JSON.parse(a.config) : a.config;
 
-  // Enrich prompt with matched SOP if available
-  let enrichedPrompt = prompt;
+  // Check for matching SOP — if found, execute as a granular sequence instead of one monolithic task
   try {
-    logger.info({ workspaceId: ctx.workspaceId, promptLen: prompt.length }, '[run_agent] Starting SOP enrichment');
-    const { data: procedureSkills, error: skillsErr } = await ctx.db.from('agent_workforce_skills')
+    const { data: procedureSkills } = await ctx.db.from('agent_workforce_skills')
       .select('name, definition, triggers')
       .eq('workspace_id', ctx.workspaceId)
       .eq('is_active', 1)
       .eq('skill_type', 'procedure')
       .limit(10);
 
-    logger.info({ skillCount: procedureSkills?.length ?? 0, error: skillsErr?.message }, '[run_agent] Skills query result');
-
     if (procedureSkills) {
       const keywords = extractKeywords(prompt);
-      const skillNames = (procedureSkills as Array<Record<string, unknown>>).map(s => ({
-        name: s.name, triggers: s.triggers,
-      }));
-      logger.info({ keywords, skills: skillNames }, '[run_agent] Matching keywords against skills');
       for (const skill of procedureSkills as Array<Record<string, unknown>>) {
         const triggers: string[] = Array.isArray(skill.triggers) ? skill.triggers as string[] : (() => { try { return JSON.parse((skill.triggers as string) || '[]'); } catch { return []; } })();
         if (keywords.length > 0 && matchesTriggers(triggers, keywords)) {
           const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition as string) : skill.definition;
           if (def?.tool_sequence) {
-            const steps = (def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) =>
-              `${i + 1}. ${typeof s === 'string' ? s : s.tool}`).join(', ');
-            // Detect whether the SOP uses desktop or browser tools
-            const seq = def.tool_sequence as Array<string | { tool: string }>;
-            const firstToolName = typeof seq[0] === 'string' ? seq[0] : seq[0]?.tool || '';
-            const usesDesktop = seq.some((s: string | { tool: string }) => { const n = typeof s === 'string' ? s : s.tool; return n.startsWith('desktop_') || n === 'request_desktop'; });
-            const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
-            const activationLabel = usesDesktop ? 'desktop control' : 'browser';
-            logger.info({ skill: skill.name, activationTool }, '[run_agent] SOP matched, enriching prompt');
-            const avoidTool = usesDesktop ? 'Do NOT use request_browser. This task requires desktop automation to access the real Chrome browser with saved logins.' : 'Do NOT use request_desktop for this task.';
-            enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call to ${activationTool}, not text. ${avoidTool}\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n1. Call ${activationTool}(reason: "${skill.name}")\n${seq.map((s: string | { tool: string }, i: number) => `${i + 2}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
+            // Convert SOP to a granular sequence — each tool call becomes its own micro-task
+            const sequence = sopToSequence(
+              skill.name as string,
+              def.tool_sequence as Array<string | { tool: string; args?: Record<string, unknown> }>,
+              agentId,
+              prompt,
+            );
+            logger.info({ sop: skill.name, stepCount: sequence.steps.length }, '[run_agent] SOP matched — executing as sequence');
+
+            const seqResult = await executeSequence({
+              db: ctx.db,
+              engine: ctx.engine,
+              workspaceId: ctx.workspaceId,
+              definition: sequence,
+              enableAbstention: false, // SOPs are prescriptive, no abstention
+              stepTimeoutMs: 60_000,   // 60s per micro-step (should be fast)
+            });
+
+            return {
+              success: seqResult.success,
+              data: {
+                message: `${a.name} executed "${skill.name}" procedure (${seqResult.stepResults.length} steps).`,
+                sopName: skill.name,
+                status: seqResult.success ? 'completed' : 'failed',
+                output: seqResult.finalOutput?.slice(0, 2000) || 'Procedure completed.',
+                steps: seqResult.stepResults.map(s => ({
+                  stepId: s.stepId,
+                  status: s.status,
+                  durationMs: s.durationMs,
+                })),
+                totalDurationMs: seqResult.totalDurationMs,
+              },
+            };
           }
           break;
         }
       }
     }
   } catch (sopErr) {
-    logger.warn({ err: sopErr instanceof Error ? sopErr.message : sopErr }, '[run_agent] SOP enrichment failed');
+    logger.warn({ err: sopErr instanceof Error ? sopErr.message : sopErr }, '[run_agent] SOP sequence execution failed, falling back to standard');
   }
 
-  // Create task
+  // No SOP matched — standard single-agent execution
   const insertPayload: Record<string, unknown> = {
     workspace_id: ctx.workspaceId,
     agent_id: agentId,
-    title: enrichedPrompt.slice(0, 100),
-    input: enrichedPrompt,
+    title: prompt.slice(0, 100),
+    input: prompt,
     status: 'pending',
     requires_approval: agentConfig.approval_required ? 1 : 0,
   };
