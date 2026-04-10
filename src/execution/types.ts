@@ -20,6 +20,10 @@ export interface EngineConfig {
   maxToolLoopIterations: number;
   /** Run browser in headless mode (default: true) */
   browserHeadless: boolean;
+  /** Browser target: 'chromium' (isolated) or 'chrome' (real Chrome via CDP) */
+  browserTarget?: 'chromium' | 'chrome';
+  /** CDP port for Chrome remote debugging */
+  chromeCdpPort?: number;
   /** Data directory for storing screenshots and other artifacts */
   dataDir?: string;
   /** Global MCP server defaults available to all agents */

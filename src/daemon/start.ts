@@ -610,6 +610,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
     defaultModel: 'claude-sonnet-4-5',
     maxToolLoopIterations: 25,
     browserHeadless: config.browserHeadless,
+    browserTarget: config.browserTarget,
+    chromeCdpPort: config.chromeCdpPort,
     dataDir,
     mcpServers: config.mcpServers,
     claudeCodeCliPath: config.claudeCodeCliPath || undefined,

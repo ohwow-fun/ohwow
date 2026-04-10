@@ -1406,7 +1406,17 @@ export class RuntimeEngine {
             // Activate browser on-demand if request_browser is called
             const hasRequestBrowser = toolUseBlocks.some(b => b.name === 'request_browser');
             if (hasRequestBrowser && !browserActivated) {
-              browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
+              // Connect to real Chrome via CDP when browserTarget is 'chrome'
+              if (this.config.browserTarget === 'chrome') {
+                try {
+                  const cdpUrl = await LocalBrowserService.connectToChrome(this.config.chromeCdpPort || 9222);
+                  browserService = new LocalBrowserService({ headless: false, cdpUrl });
+                } catch {
+                  browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
+                }
+              } else {
+                browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
+              }
               browserActivated = true;
 
               // Remove request_browser from tools and add full browser toolkit
