@@ -1516,8 +1516,9 @@ export class LocalOrchestrator {
 
   /**
    * Select the best model for a given tool-loop iteration.
-   * Default: cheapest model (Grok 4.1 Fast). Escalates to stronger model
-   * when the iteration context demands it (complex reasoning, errors, planning).
+   * Iteration 0: Grok 4.20 (2M context, strong reasoning — the orchestrator brain)
+   * Follow-ups: Grok 4.1 Fast (cheap tool routing and summaries)
+   * Escalates back to 4.20 for errors, heavy tool results, or complex processing.
    */
   private selectModelForIteration(
     iteration: number,
@@ -1534,17 +1535,13 @@ export class LocalOrchestrator {
       return configured;
     }
 
+    // Iteration 0: always use the strong model (2M context brain)
+    // The orchestrator needs deep context for initial reasoning, tool planning,
+    // and sub-orchestrator coordination
+    if (iteration === 0) return STRONG;
+
     // Escalate on errors or retries
     if (hasErrors) return STRONG;
-
-    // First iteration with complex input: escalate
-    if (iteration === 0) {
-      const lastUserMsg = messages.filter(m => m.role === 'user').pop();
-      const userText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
-      const wordCount = userText.split(/\s+/).length;
-      const hasComplexKeywords = /\b(analyze|compare|design|plan|research|evaluate|implement|refactor|architect|strategy|investigate)\b/i.test(userText);
-      if (wordCount > 150 || hasComplexKeywords) return STRONG;
-    }
 
     // Heavy tool iteration (lots of tool results to process): escalate
     if (previousToolCallCount >= 4) return STRONG;
@@ -1556,7 +1553,7 @@ export class LocalOrchestrator {
     );
     if (hasLongToolResults) return STRONG;
 
-    // Default: cheap model
+    // Follow-up iterations: cheap model for tool routing and summaries
     return CHEAP;
   }
 
@@ -1796,8 +1793,9 @@ export class LocalOrchestrator {
     history.push({ role: 'user', content: userMessage });
 
     const toolTokenCount = estimateToolTokens(openaiTools);
-    // OpenRouter models typically have 128K+ context; use a safe estimate
-    const contextLimit = 128_000;
+    // Grok models have 2M context; other OpenRouter models typically 128K+
+    const modelId = this.orchestratorModel || 'x-ai/grok-4.20';
+    const contextLimit = modelId.includes('grok') ? 2_000_000 : 128_000;
     const budget = new ContextBudget(contextLimit, 4096);
     budget.setSystemPrompt(systemPrompt);
     budget.setToolTokens(toolTokenCount);
