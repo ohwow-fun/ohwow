@@ -1280,6 +1280,7 @@ export class RuntimeEngine {
             difficulty,
             gitEnabled: bashEnabled,
             agentModel: agentConfig.model as string | undefined,
+            skillsDocument: skillsDoc || undefined,
           });
           fullContent = routerResult.fullContent;
           totalInputTokens = routerResult.totalInputTokens;
@@ -2441,6 +2442,8 @@ export class RuntimeEngine {
     difficulty?: 'simple' | 'moderate' | 'complex';
     gitEnabled?: boolean;
     agentModel?: string;
+    /** When present, forces tool_choice: 'required' on first iteration */
+    skillsDocument?: string;
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number }> {
     // Query routing stats for adaptive model selection
     let routingHistory: import('./model-router.js').RoutingHistory | undefined;
@@ -2531,6 +2534,9 @@ export class RuntimeEngine {
             };
           }
 
+          // Force first tool call when SOP procedures are in the prompt
+          // (iteration 0 + skillsDocument present = model MUST call a tool)
+          const forceToolCall = iteration === 0 && opts.skillsDocument;
           response = await providerWithTools.createMessageWithTools({
             system: opts.systemPrompt,
             messages: loopMessages.map(m => ({
@@ -2538,10 +2544,11 @@ export class RuntimeEngine {
               content: m.content,
             })),
             maxTokens: opts.maxTokens,
-            temperature: opts.temperature,
+            temperature: forceToolCall ? 0.3 : opts.temperature, // Lower temp for forced tool calls
             tools: activeTools,
             model: opts.agentModel,
-          });
+            toolChoice: forceToolCall ? 'required' : 'auto',
+          } as Parameters<typeof providerWithTools.createMessageWithTools>[0]);
         } catch (err) {
           // Credit exhaustion: fall back to local Ollama and emit event
           const errMsg = err instanceof Error ? err.message : String(err);

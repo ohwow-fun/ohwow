@@ -1115,7 +1115,7 @@ export class OpenRouterProvider implements ModelProvider {
           temperature: params.temperature ?? 0.5,
           stream: false,
           tools: params.tools,
-          tool_choice: 'auto',
+          tool_choice: (params as unknown as Record<string, unknown>).toolChoice || 'auto',
         }),
       });
     } catch (err) {
