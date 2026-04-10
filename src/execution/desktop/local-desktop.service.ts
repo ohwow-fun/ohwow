@@ -194,34 +194,15 @@ export class LocalDesktopService {
   async ensureReady(): Promise<void> {
     if (this.ready) return;
 
-    // Check macOS permissions — guide the user if missing
+    // Check Screen Recording permission (needed for screencapture)
+    // Accessibility is checked lazily by nut-js at runtime — pre-checking
+    // via osascript was unreliable and caused false negatives.
     const perms = checkDesktopPermissions();
-    if (!perms.accessibility || !perms.screenRecording) {
-      const missing = [];
-      if (!perms.accessibility) missing.push('Accessibility');
-      if (!perms.screenRecording) missing.push('Screen Recording');
-
-      // Open System Settings to the right page
+    if (!perms.screenRecording) {
       openAccessibilitySettings();
-
-      // Show a native macOS dialog with clear instructions
-      const nodePath = process.execPath;
-      try {
-        const { execSync } = await import('child_process');
-        execSync(`osascript -e 'display dialog "OHWOW needs ${missing.join(" and ")} permission to control your desktop.\\n\\nSystem Settings is open. Click + and add:\\n${nodePath}\\n\\nThen toggle it ON." with title "OHWOW Desktop" buttons {"OK"} default button "OK"'`, { timeout: 30000 });
-      } catch { /* user dismissed or timeout */ }
-
-      // Copy the path to clipboard for convenience
-      try {
-        const { execSync } = await import('child_process');
-        execSync(`echo -n "${nodePath}" | pbcopy`, { timeout: 2000 });
-        logger.info(`[desktop] Node path copied to clipboard: ${nodePath}`);
-      } catch { /* non-fatal */ }
-
       throw new Error(
-        `Desktop control needs ${missing.join(' and ')} permission. ` +
-        `Add this to System Settings > Privacy & Security > ${missing[0]}: ${nodePath} (copied to clipboard). ` +
-        `Press Cmd+Shift+G in the file dialog to paste the path.`,
+        'Desktop control needs Screen Recording permission. ' +
+        `Add ${process.execPath} to System Settings > Privacy & Security > Screen Recording.`,
       );
     }
 

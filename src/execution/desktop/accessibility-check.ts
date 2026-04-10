@@ -125,21 +125,20 @@ export function openAccessibilitySettings(): void {
 }
 
 /**
- * Check Accessibility permission by attempting to query UI elements via AppleScript.
- * If the process lacks Accessibility permission, this will fail.
+ * Check Accessibility permission.
+ *
+ * We skip the pre-check entirely and let nut-js fail naturally if permission
+ * is missing. The previous osascript approach spawned a child process that
+ * needed its own Accessibility permission, causing false negatives and
+ * repeatedly opening System Settings even when node was already granted.
+ *
+ * If nut-js throws an Accessibility error at runtime, the desktop service
+ * catches it and returns a clear error to the user.
  */
 function checkAccessibilityPermission(): boolean {
-  try {
-    // This AppleScript query requires Accessibility permission
-    execSync(
-      'osascript -e \'tell application "System Events" to get name of first process whose frontmost is true\' 2>/dev/null',
-      { timeout: 5000, encoding: 'utf-8' },
-    );
-    return true;
-  } catch {
-    logger.debug('[desktop] Accessibility permission check failed');
-    return false;
-  }
+  // Always return true — let nut-js handle the actual permission check
+  // at runtime when it tries to move the mouse or press keys.
+  return true;
 }
 
 /**
