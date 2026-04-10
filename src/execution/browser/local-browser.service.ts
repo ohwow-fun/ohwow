@@ -217,44 +217,43 @@ export class LocalBrowserService {
         }
       }
     } catch {
-      // Not running with CDP — need to (re)launch
+      // Not running with CDP — need to launch
     }
 
-    // Chrome can't enable CDP retroactively — if it's running without the flag,
-    // we need to restart it. Use graceful quit (AppleScript on macOS) so Chrome
-    // saves the session and restores tabs on relaunch.
-    const { exec, spawn } = await import('child_process');
+    // Chrome requires a non-default --user-data-dir for CDP to work.
+    // We create a separate data dir at ~/.ohwow/chrome-cdp and symlink the
+    // desired profile into it so Chrome launches with CDP enabled while
+    // using the real profile's cookies, sessions, and extensions.
+    const { spawn } = await import('child_process');
+    const { mkdirSync, symlinkSync, unlinkSync, existsSync, copyFileSync, lstatSync } = await import('fs');
+    const { join } = await import('path');
     const platform = process.platform;
 
-    const isRunning = await new Promise<boolean>((resolve) => {
-      exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
-    });
+    const chromeDataDir = LocalBrowserService.CHROME_DATA_DIR;
+    const cdpDataDir = join(process.env.HOME || '', '.ohwow', 'chrome-cdp');
+    const effectiveProfile = profileDir || 'Default';
+    const sourceProfile = join(chromeDataDir, effectiveProfile);
+    const targetProfile = join(cdpDataDir, 'Default');
 
-    if (isRunning) {
-      logger.info('[browser] Chrome is running without CDP. Restarting gracefully (tabs will be restored)...');
-      if (platform === 'darwin') {
-        // AppleScript graceful quit — Chrome saves session and restores tabs on relaunch
-        await new Promise<void>((resolve) => {
-          exec('osascript -e \'tell application "Google Chrome" to quit\'', () => resolve());
-        });
-      } else {
-        await new Promise<void>((resolve) => {
-          exec('pkill -x chrome', () => resolve());
-        });
+    // Set up the CDP data directory with a symlink to the real profile
+    mkdirSync(cdpDataDir, { recursive: true });
+    try {
+      if (existsSync(targetProfile)) {
+        const stat = lstatSync(targetProfile);
+        if (stat.isSymbolicLink() || stat.isFile()) unlinkSync(targetProfile);
       }
-      // Wait for Chrome to fully close
-      for (let i = 0; i < 10; i++) {
-        await new Promise(r => setTimeout(r, 500));
-        const stillRunning = await new Promise<boolean>((resolve) => {
-          exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
-        });
-        if (!stillRunning) break;
-      }
+      symlinkSync(sourceProfile, targetProfile);
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Couldn\'t symlink Chrome profile');
     }
 
-    // Always specify a profile directory to prevent Chrome's profile picker
-    // from blocking startup (and thus preventing CDP from initializing).
-    const effectiveProfile = profileDir || 'Default';
+    // Copy Local State (Chrome needs it to recognize profiles)
+    const localStateSrc = join(chromeDataDir, 'Local State');
+    const localStateDst = join(cdpDataDir, 'Local State');
+    try {
+      if (existsSync(localStateSrc)) copyFileSync(localStateSrc, localStateDst);
+    } catch { /* non-fatal */ }
+
     let chromeBin: string;
     if (platform === 'darwin') {
       chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -264,9 +263,9 @@ export class LocalBrowserService {
       chromeBin = 'google-chrome';
     }
 
-    const args = [`--remote-debugging-port=${port}`, `--profile-directory=${effectiveProfile}`];
+    const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${cdpDataDir}`];
 
-    logger.info(`[browser] Launching Chrome: ${chromeBin} ${args.join(' ')}`);
+    logger.info(`[browser] Launching Chrome CDP: profile=${effectiveProfile}, port=${port}`);
     const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
     child.unref();
 
@@ -278,14 +277,14 @@ export class LocalBrowserService {
         if (res.ok) {
           const data = await res.json() as { webSocketDebuggerUrl?: string };
           if (data.webSocketDebuggerUrl) {
-            logger.info(`[browser] Chrome launched with CDP on port ${port}${profileDir ? ` (profile: ${profileDir})` : ''}`);
+            logger.info(`[browser] Chrome CDP ready on port ${port} (profile: ${effectiveProfile})`);
             return data.webSocketDebuggerUrl;
           }
         }
       } catch { /* retry */ }
     }
 
-    throw new Error(`Chrome didn't start with remote debugging on port ${port}. Try launching Chrome manually with: "${chromeBin}" --remote-debugging-port=${port}`);
+    throw new Error(`Chrome didn't start with CDP on port ${port}. Ensure Chrome is installed at ${chromeBin}`);
   }
 
   // ==========================================================================
