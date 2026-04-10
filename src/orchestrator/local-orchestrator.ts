@@ -1466,9 +1466,17 @@ export class LocalOrchestrator {
   // ==========================================================================
 
   /**
-   * Dedicated OpenRouter tool loop — uses native OpenAI chat/completions format
-   * with streaming. No Anthropic-specific features (cache_control, TextBlockParam arrays).
-   * Modeled on runOllamaToolLoop but uses OpenRouter cloud models (DeepSeek, etc.).
+   * Dedicated OpenRouter tool loop — full Anthropic-path intelligence with
+   * native OpenAI chat/completions format + streaming. OpenRouter cloud models
+   * have 128K-1M context, so they get the same capabilities as direct Claude:
+   * brain perception, philosophical layers, tool embodiment, deliberation,
+   * affect/endocrine/habit tracking, mid-loop summarization.
+   *
+   * Only format differences from the Anthropic path:
+   * - System prompt as string (no TextBlockParam[], no cache_control)
+   * - Tools in OpenAI format (not Anthropic input_schema)
+   * - Streaming via createMessageWithToolsStreaming
+   * - History in OpenAI message format
    */
   private async *runOpenRouterToolLoop(
     userMessage: string,
@@ -1479,14 +1487,43 @@ export class LocalOrchestrator {
   ): AsyncGenerator<OrchestratorEvent> {
     const traceId = crypto.randomUUID();
 
-    // Classify intent
+    // Classify intent, inheriting previous intent for confirmations
     const previousIntent = this.lastIntentBySession.get(sessionId);
     const classified = classifyIntent(userMessage, previousIntent);
-    this.lastIntentBySession.set(sessionId, classified);
-    yield { type: 'status', message: classified.statusLabel };
+
+    // PERCEIVE: Full cognitive cycle (Husserl's intentionality)
+    let perception: Perception | null = null;
+    if (this.brain) {
+      const isVoice = options?.platform === 'voice';
+      const stimulus: Stimulus = {
+        type: isVoice ? 'auditory_input' : 'user_message',
+        content: userMessage,
+        source: isVoice ? 'voice' : 'orchestrator',
+        timestamp: Date.now(),
+        voiceContext: options?.voiceContext ? {
+          sttConfidence: options.voiceContext.sttConfidence,
+          sttProvider: options.voiceContext.sttProvider,
+          language: options.voiceContext.language,
+          durationMs: options.voiceContext.audioDurationMs,
+        } : undefined,
+      };
+      const selfModelDeps: SelfModelDeps = {
+        activeModel: this.getActiveModel(),
+        modelCapabilities: ['tool_calling'],
+        tokenBudgetRemaining: 4096,
+        limitations: [],
+        currentLoad: 0,
+        bodyProprioception: this.brain?.getProprioception(),
+      };
+      perception = this.brain.perceive(stimulus, classified, selfModelDeps);
+    }
+    const enriched = perception?.intent ?? enrichIntent(classified, userMessage);
+    const { sections, statusLabel } = enriched;
+    yield { type: 'status', message: statusLabel };
+    this.lastIntentBySession.set(sessionId, enriched);
 
     // Auto-activate browser when intent is 'browser'
-    const browserPreActivated = classified.sections.has('browser') && classified.intent === 'browser';
+    const browserPreActivated = sections.has('browser') && classified.intent === 'browser';
     if (this.browserService && !this.browserService.isActive()) {
       logger.debug('[browser] Browser process no longer active — nullifying (openrouter)');
       this.browserService = null;
@@ -1501,7 +1538,7 @@ export class LocalOrchestrator {
     }
 
     // Auto-activate desktop when intent is 'desktop'
-    const desktopPreActivated = classified.sections.has('desktop') && classified.intent === 'desktop';
+    const desktopPreActivated = sections.has('desktop') && classified.intent === 'desktop';
     if (desktopPreActivated && !this.desktopActivated) {
       logger.debug('[desktop] Pre-activating desktop control (openrouter)');
       this.desktopService = new LocalDesktopService();
@@ -1513,38 +1550,138 @@ export class LocalOrchestrator {
     const displayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
     const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
     const { staticPart, dynamicPart } = await buildTargetedPrompt(
-      this.promptDeps, userMessage, classified.sections,
+      this.promptDeps, userMessage, sections,
       browserPreActivated || this.browserActivated, options?.platform,
       desktopPreActivated || this.desktopActivated, undefined, displayLayout, hasMcpTools,
     );
     let systemPrompt = staticPart + '\n\n' + dynamicPart;
 
-    // Essential philosophical layers only (persona + body + warnings)
+    // Full philosophical layers — OpenRouter cloud models have 128K+ context
+
+    // Persona (Aristotle's Psyche)
     const personaContext = this.soul.buildPromptContext();
     if (personaContext) {
       systemPrompt += `\n\n## Human Awareness\n${personaContext}`;
     }
+    this.soul.observer.observe({ type: 'message_sent', timestamp: Date.now(), metadata: { wordCount: userMessage.split(/\s+/).length, sessionId } });
 
+    // True Soul (Plato's Tripartite + Jung's Shadow)
+    try {
+      const { TrueSoul } = await import('../soul/soul.js');
+      const trueSoul = new TrueSoul();
+      const soulContext = trueSoul.buildPromptContext();
+      if (soulContext) {
+        systemPrompt += `\n\n## Soul Awareness\n${soulContext}`;
+      }
+      if (soulContext && this.exchangeCount > 0 && this.exchangeCount % 50 === 0 && this.db) {
+        this.db.from('soul_snapshots').insert({
+          workspace_id: this.workspaceId, agent_id: this.workspaceId,
+          soul: JSON.stringify({ promptContext: soulContext }), confidence: 0.5,
+          emerging_identity: soulContext.slice(0, 200),
+        }).then(() => {}, () => {});
+      }
+    } catch { /* non-fatal */ }
+
+    // Body Awareness (Merleau-Ponty)
     const proprioception = this.brain?.getProprioception();
+    const bodyLines: string[] = [];
     if (proprioception && proprioception.organs.length > 0) {
       const activeOrgans = proprioception.organs.filter(o => o.health !== 'dormant');
-      if (activeOrgans.length > 0) {
-        const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
-        const lines = [`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`];
-        if (degraded.length > 0) lines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
-        systemPrompt += `\n\n## Body Awareness\n${lines.join('\n')}`;
+      const degraded = activeOrgans.filter(o => o.health === 'degraded' || o.health === 'failed');
+      const affordances = proprioception.affordances.filter(a => a.readiness > 0.5);
+      if (activeOrgans.length > 0) bodyLines.push(`Active capabilities: ${activeOrgans.map(o => `${o.name} (${o.health})`).join(', ')}`);
+      if (degraded.length > 0) bodyLines.push(`Degraded: ${degraded.map(o => `${o.name} is ${o.health}`).join(', ')}`);
+      if (affordances.length > 0) bodyLines.push(`Available actions: ${affordances.map(a => a.action).join(', ')}`);
+    }
+    try {
+      if (!this.bodyStateService) {
+        this.bodyStateService = new BodyStateService(this.db, this.workspaceId, this.digitalBody ?? undefined);
+      }
+      const bsSummary = await this.bodyStateService.getProprioceptiveSummary();
+      if (bsSummary) bodyLines.push(bsSummary);
+    } catch { /* non-fatal */ }
+    if (bodyLines.length > 0) {
+      systemPrompt += `\n\n## Body Awareness\n${bodyLines.join('\n')}`;
+    }
+
+    // System Warnings
+    const healthWarnings = this.brain?.workspace.getConscious(3, { types: ['failure', 'warning'], minSalience: 0.5 }) ?? [];
+    if (healthWarnings.length > 0) {
+      systemPrompt += `\n\n## System Warnings\n${healthWarnings.map(w => w.content).join('\n')}`;
+    }
+
+    // Emotional Context (Damasio's somatic markers)
+    const orAffectCtx = this.affectEngine?.buildPromptContext();
+    if (orAffectCtx) systemPrompt += `\n\n## Emotional Context\n${orAffectCtx}`;
+
+    // Internal State (Spinoza's endocrine)
+    const orEndoCtx = this.endocrineSystem?.buildPromptContext();
+    if (orEndoCtx) systemPrompt += `\n\n## Internal State\n${orEndoCtx}`;
+
+    // Self-Regulation (Cannon's homeostasis)
+    const orHomeoCtx = this.homeostasisController?.buildPromptContext();
+    if (orHomeoCtx) systemPrompt += `\n\n## Self-Regulation\n${orHomeoCtx}`;
+
+    // Security Alert (immune system)
+    const orImmuneCtx = this.immuneSystem?.buildPromptContext();
+    if (orImmuneCtx) systemPrompt += `\n\n## Security Alert\n${orImmuneCtx}`;
+
+    // Your Story (Ricoeur's narrative)
+    const orNarrCtx = this.narrativeEngine?.buildPromptContext();
+    if (orNarrCtx) systemPrompt += `\n\n## Your Story\n${orNarrCtx}`;
+
+    // Ethical Awareness (Aristotle + Kant)
+    const orEthicsCtx = this.ethicsEngine?.buildPromptContext(null);
+    if (orEthicsCtx) systemPrompt += `\n\n## Ethical Awareness\n${orEthicsCtx}`;
+
+    // Available Shortcuts (habit engine)
+    if (this.habitEngine) {
+      const habitMatches = this.habitEngine.checkCues(userMessage, []);
+      if (habitMatches.length > 0) {
+        systemPrompt += `\n\n## Available Shortcuts\n${habitMatches.slice(0, 3).map(m => m.suggestedShortcut).join('\n')}`;
       }
     }
 
-    const warnings = this.brain?.workspace.getConscious(3, { types: ['failure', 'warning'], minSalience: 0.5 }) ?? [];
-    if (warnings.length > 0) {
-      systemPrompt += `\n\n## System Warnings\n${warnings.map(w => w.content).join('\n')}`;
+    // Subconscious Insights (dream engine)
+    if (this.sleepCycle && !this.sleepCycle.isAsleep()) {
+      const dreamInsights = this.brain?.workspace.getConscious(2, { types: ['dream' as WorkspaceItem['type']], minSalience: 0.5 }) ?? [];
+      if (dreamInsights.length > 0) {
+        systemPrompt += `\n\n## Subconscious Insights\n${dreamInsights.map(d => d.content).join('\n')}`;
+      }
     }
 
-    // Convert tools to OpenAI format
-    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated);
-    let openaiTools = convertToolsToOpenAI(anthropicTools);
-    logger.info({ toolCount: openaiTools.length, sections: [...(classified.sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
+    // Tools: full set with embodiment (same as Anthropic path)
+    const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated);
+    const embeddedTools = this.brain ? this.brain.applyEmbodiment(rawTools) : rawTools;
+    let openaiTools = convertToolsToOpenAI(embeddedTools);
+    logger.info({ toolCount: openaiTools.length, sections: [...(sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
+
+    // DELIBERATE: Dialectic check for complex plans (Hegel)
+    if (perception && enriched.planFirst && this.brain) {
+      try {
+        const plan = await this.brain.deliberate(perception);
+        if (plan.counterArgument) {
+          const warning = this.brain.formatDialecticWarning(plan.counterArgument);
+          systemPrompt += `\n\n${warning}`;
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // Immune system: scan user input
+    if (this.immuneSystem) {
+      try {
+        const userScan = this.immuneSystem.scan(userMessage, 'user_input');
+        if (userScan.detected) {
+          this.immuneSystem.respond(userScan);
+          if (userScan.recommendation === 'block' || userScan.recommendation === 'quarantine') {
+            logger.warn({ pathogen: userScan.pathogenType, confidence: userScan.confidence }, 'immune: blocked user input (openrouter)');
+            yield { type: 'text', content: 'This input was flagged by the immune system and cannot be processed.' };
+            yield { type: 'done', inputTokens: 0, outputTokens: 0 };
+            return;
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
 
     // Load history and apply context budget
     const history = seedMessages ? [...seedMessages] : await loadHistory(this.sessionDeps, sessionId);
@@ -1599,6 +1736,7 @@ export class LocalOrchestrator {
     const toolCallHashes: string[] = [];
     const sessionToolNames: string[] = [];
     const maxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
+    let iterationsSinceSummarize = 2;
 
     this.brain?.resetSession();
 
@@ -1766,9 +1904,30 @@ export class LocalOrchestrator {
           // Brain: record tool execution
           this.brain?.recordToolExecution(req.name, req.input, outcome.result.success);
 
-          sessionToolNames.push(req.name);
+          // Affect: emotional response (Damasio)
+          if (outcome.result && this.affectEngine) {
+            const isNovel = this.brain?.predictiveEngine?.isNovel(req.name) ?? false;
+            this.affectEngine.processToolResult(req.name, userMessage, outcome.result.success, isNovel).catch(() => {});
+          }
 
-          // Ollama-compatible format: text resultContent
+          // Endocrine: hormone responses (Spinoza)
+          if (outcome.result && this.endocrineSystem) {
+            if (outcome.result.success) {
+              this.endocrineSystem.stimulate({ hormone: 'dopamine', delta: 0.05, source: 'tool_execution', reason: `${req.name} succeeded` });
+            } else {
+              this.endocrineSystem.stimulate({ hormone: 'cortisol', delta: 0.1, source: 'tool_execution', reason: `${req.name} failed` });
+            }
+          }
+
+          // Habit: record execution (Aristotle's hexis)
+          if (outcome.result && this.habitEngine) {
+            const matchingHabits = this.habitEngine.checkCues(req.name, sessionToolNames);
+            for (const match of matchingHabits) {
+              this.habitEngine.recordExecution(match.habit.id, outcome.result.success).catch(() => {});
+            }
+          }
+
+          sessionToolNames.push(req.name);
           loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
           toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
         }
@@ -1787,12 +1946,52 @@ export class LocalOrchestrator {
         toolCallHashes.push(hash);
       }
 
-      // Build reflection prompt with tool results (helps non-Claude models stay on track)
+      // Brain: stagnation warning
+      let stagnationWarning = '';
+      if (this.brain?.isStagnating()) {
+        stagnationWarning = `\n\n${this.brain.buildStagnationWarning()}`;
+      }
+
+      // Brain: temporal-aware reflection (Heidegger's temporality)
+      const recentToolNames = validRequests.map(v => v.req.name);
+      const reflectionText = this.brain
+        ? this.brain.buildReflection(userMessage, recentToolNames, iteration, maxIter)
+        : buildReflectionPrompt(userMessage, executedToolCalls, iteration, maxIter);
+
       const resultsBlock = toolResultsSummary
         .map(r => `## ${r.name}\n${r.content}`)
         .join('\n\n');
-      const reflection = buildReflectionPrompt(userMessage, executedToolCalls, iteration, maxIter);
-      loopMessages.push({ role: 'user', content: `[Tool Results:\n${resultsBlock}\n\n${reflection}]` });
+      loopMessages.push({ role: 'user', content: `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${reflectionText}]` });
+
+      // Homeostasis: dispatch corrective actions mid-loop
+      if (this.homeostasisController) {
+        try {
+          const hoState = this.homeostasisController.check();
+          for (const action of hoState.correctiveActions) {
+            if (action.type === 'compress_memory' && action.urgency > 0.5) {
+              logger.debug({ urgency: action.urgency }, 'homeostasis: compress_memory action active (openrouter)');
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Mid-loop context budget check
+      iterationsSinceSummarize++;
+      const utilizationPct = totalInputTokens / contextLimit;
+      if (utilizationPct >= 0.7) {
+        logger.warn(`[orchestrator] OpenRouter context at ${Math.round(utilizationPct * 100)}% for session ${sessionId}`);
+      }
+      if (utilizationPct >= 0.6 && iterationsSinceSummarize >= 2 && loopMessages.length > 6) {
+        const midBudget = new ContextBudget(contextLimit, 4096);
+        midBudget.setSystemPrompt(systemPrompt);
+        const summarized = midBudget.summarizeAndTrim(loopMessages as Array<{ role: string; content: string | unknown[] }>);
+        if (summarized.length < loopMessages.length) {
+          logger.info(`[orchestrator] OpenRouter mid-loop summarization: ${loopMessages.length} → ${summarized.length} messages`);
+          loopMessages.length = 0;
+          loopMessages.push(...(summarized as OllamaMessage[]));
+          iterationsSinceSummarize = 0;
+        }
+      }
     }
 
     // Save turn context
