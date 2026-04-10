@@ -1950,6 +1950,56 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // --- Person Model (Deep Person Ingestion) ---
+  {
+    name: 'get_person_model',
+    description: 'Get the Person Model for a team member or workspace owner. Returns skills, domain expertise, communication style, energy patterns, motivations, growth arc, and more.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID. If omitted, returns the first model in the workspace.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_person_models',
+    description: 'List all Person Models in the workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'start_person_ingestion',
+    description: 'Start Person Ingestion for a new or existing team member. Creates a Person Model and returns an interview guide for conversational profiling. Use variant "founder" for workspace owner, "team_member" for team.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Person name' },
+        email: { type: 'string', description: 'Email (optional)' },
+        role_title: { type: 'string', description: 'Role/title (optional)' },
+        variant: { type: 'string', description: '"founder" or "team_member" (default)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_person_model',
+    description: 'Update Person Model dimensions after learning something new. Call silently whenever you learn about a person.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+        updates: { type: 'object', description: 'Dimension key-value pairs to update (skills_map, communication_style, friction_points, etc.)' },
+        observation: { type: 'string', description: 'Natural language description of what was observed' },
+        observation_type: { type: 'string', description: 'Type: task_outcome, communication, feedback, self_report, behavioral, correction' },
+      },
+      required: ['person_id', 'updates'],
+    },
+  },
+
 ];
 
 // =========================================================================

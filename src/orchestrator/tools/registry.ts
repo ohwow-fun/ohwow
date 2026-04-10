@@ -44,6 +44,7 @@ import { saveDeliverable } from './deliverables.js';
 import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
+import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -253,4 +254,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['get_pillar_detail', (ctx, input) => getPillarDetail(ctx, input)],
   ['build_pillar', (ctx, input) => buildPillar(ctx, input)],
   ['update_pillar_status', (ctx, input) => updatePillarStatus(ctx, input)],
+
+  // Person model tools
+  ['get_person_model', (ctx, input) => getPersonModel(ctx, input)],
+  ['list_person_models', (ctx) => listPersonModels(ctx)],
+  ['start_person_ingestion', (ctx, input) => startPersonIngestion(ctx, input)],
+  ['update_person_model', (ctx, input) => updatePersonModel(ctx, input)],
 ]);
