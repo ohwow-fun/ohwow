@@ -38,8 +38,13 @@ export function buildReflectionPrompt(
     ? [...toolSummaryLines.slice(0, 9), `- ... and ${toolSummaryLines.length - 9} more tools`].join('\n')
     : toolSummaryLines.join('\n');
 
-  const iterationWarning = iteration >= maxIterations - 2
+  const nearLimit = Math.floor(maxIterations * 0.8);
+  const iterationWarning = iteration >= nearLimit
     ? ` You are near the iteration limit (${iteration + 1}/${maxIterations}). Prioritize synthesizing your answer now.`
+    : '';
+
+  const persistenceNote = iteration >= 2 && iteration < Math.floor(maxIterations * 0.5)
+    ? ' You have plenty of iterations remaining. Be thorough: try multiple approaches, explore different strategies, and do not give up after a few failures.'
     : '';
 
   if (toolCount === 0) {
@@ -51,5 +56,5 @@ ${toolSummary}
 
 Original task: "${displayMessage}"
 
-Decision: If you have enough information, write your final answer now. If you need MORE data, call another tool, or retry a previous one if conditions changed. Do NOT describe tool results — synthesize them into a useful answer.${iterationWarning}]`;
+Decision: If you have enough information, write your final answer now. If you need MORE data, call another tool, or retry a previous one if conditions changed. Do NOT describe tool results — synthesize them into a useful answer.${persistenceNote}${iterationWarning}]`;
 }

@@ -50,11 +50,12 @@ export interface ClassifiedIntent {
   mode: OrchestratorMode;
 }
 
-/** Per-mode iteration limits. */
+/** Per-mode iteration limits. High limits let the orchestrator be as thorough
+ *  as Claude Code (50-100+ tool calls per complex task) instead of giving up early. */
 export const MODE_MAX_ITERATIONS: Record<OrchestratorMode, number> = {
-  explore: 5,
-  execute: 10,
-  conversational: 5,
+  explore: 25,
+  execute: 50,
+  conversational: 25,
 };
 
 // ============================================================================
