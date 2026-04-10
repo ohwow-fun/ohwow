@@ -873,10 +873,12 @@ export class RuntimeEngine {
       }
 
       // 3. Compile memory + knowledge + skills documents
+      // Skip SOP injection for sequence sub-steps (they already have a focused micro-prompt)
+      const isSequenceStep = (task.title as string)?.startsWith('[Sequence]');
       const [memoryDoc, knowledgeDoc, skillsDoc] = await Promise.all([
         this.compileMemory(agentId, workspaceId, task.title),
         this.compileKnowledge(agentId, workspaceId, task.title, task.description),
-        this.compileSkills(agentId, workspaceId, task.title),
+        isSequenceStep ? Promise.resolve('') : this.compileSkills(agentId, workspaceId, task.title),
       ]);
 
       // 4. Build system prompt
