@@ -17,7 +17,11 @@ import { isJunkMemory, checkDedup, type ExistingMemory } from '../lib/memory-uti
 import type { ModelRouter } from '../execution/model-router.js';
 import { MAX_ACTIVE_MEMORIES, MEMORY_EXTRACTION_PROMPT } from './orchestrator-types.js';
 import { scheduleIdleExtraction } from '../execution/conversation-memory-sync.js';
+import { ContextBudget } from './context-budget.js';
 import { logger } from '../lib/logger.js';
+
+/** Grok 4.20 context limit; used for session trimming instead of hard message cap */
+const SESSION_CONTEXT_LIMIT = 2_000_000;
 
 // ============================================================================
 // CONVERSATION PERSISTENCE (append-only message history)
@@ -202,7 +206,12 @@ export async function saveToSession(
   const existing = await loadHistory(deps, sessionId);
   existing.push(...newMessages);
 
-  const trimmed = existing.length > 40 ? existing.slice(-40) : existing;
+  // Token-budget-aware trimming: leverage 2M Grok context instead of hard 40-message cap.
+  // Uses observation masking to compress tool results and old messages when budget is tight.
+  const budget = new ContextBudget(SESSION_CONTEXT_LIMIT, 4096);
+  const trimmed = existing.length > 200
+    ? budget.summarizeAndTrim(existing as Array<{ role: string; content: string | unknown[] }>)
+    : existing;
   logger.debug(`[orchestrator] saveToSession: ${sessionId.slice(0, 8)} new: ${newMessages.length} total: ${trimmed.length}`);
 
   const { data: existingSession } = await deps.db
