@@ -217,32 +217,43 @@ export class LocalBrowserService {
         }
       }
     } catch {
-      // Not running — launch it
+      // Not running with CDP — need to (re)launch
     }
 
-    // Launch Chrome with remote debugging (and optional profile)
-    const { exec } = await import('child_process');
+    // On macOS, `open -a` ignores --args when Chrome is already running.
+    // Use the Chrome binary directly so flags always apply.
+    // If Chrome is already running without CDP, we need to quit it first.
+    const { exec, spawn } = await import('child_process');
     const platform = process.platform;
-    const profileFlag = profileDir ? ` --profile-directory="${profileDir}"` : '';
-    let cmd: string;
+
+    // Kill existing Chrome if it's running without CDP (it won't accept CDP retroactively)
     if (platform === 'darwin') {
-      cmd = `open -a "Google Chrome" --args --remote-debugging-port=${port}${profileFlag}`;
-    } else if (platform === 'win32') {
-      cmd = `start chrome --remote-debugging-port=${port}${profileFlag}`;
-    } else {
-      cmd = `google-chrome --remote-debugging-port=${port}${profileFlag} &`;
+      await new Promise<void>((resolve) => {
+        exec('pkill -x "Google Chrome"', () => resolve());
+      });
+      // Brief pause for process cleanup
+      await new Promise(r => setTimeout(r, 1000));
     }
 
-    logger.info(`[browser] Launching Chrome: ${cmd}`);
-    await new Promise<void>((resolve, reject) => {
-      exec(cmd, (err) => {
-        if (err) reject(new Error(`Couldn't launch Chrome: ${err.message}`));
-        else resolve();
-      });
-    });
+    const profileFlag = profileDir ? `--profile-directory=${profileDir}` : '';
+    let chromeBin: string;
+    if (platform === 'darwin') {
+      chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    } else if (platform === 'win32') {
+      chromeBin = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    } else {
+      chromeBin = 'google-chrome';
+    }
 
-    // Wait for CDP port to be ready (up to 10s)
-    for (let i = 0; i < 20; i++) {
+    const args = [`--remote-debugging-port=${port}`];
+    if (profileFlag) args.push(profileFlag);
+
+    logger.info(`[browser] Launching Chrome: ${chromeBin} ${args.join(' ')}`);
+    const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+
+    // Wait for CDP port to be ready (up to 15s)
+    for (let i = 0; i < 30; i++) {
       await new Promise(r => setTimeout(r, 500));
       try {
         const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
@@ -256,7 +267,7 @@ export class LocalBrowserService {
       } catch { /* retry */ }
     }
 
-    throw new Error(`Chrome didn't start with remote debugging on port ${port}. Try launching Chrome manually with: chrome --remote-debugging-port=${port}`);
+    throw new Error(`Chrome didn't start with remote debugging on port ${port}. Try launching Chrome manually with: "${chromeBin}" --remote-debugging-port=${port}`);
   }
 
   // ==========================================================================
