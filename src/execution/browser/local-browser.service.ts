@@ -252,7 +252,9 @@ export class LocalBrowserService {
       }
     }
 
-    const profileFlag = profileDir ? `--profile-directory=${profileDir}` : '';
+    // Always specify a profile directory to prevent Chrome's profile picker
+    // from blocking startup (and thus preventing CDP from initializing).
+    const effectiveProfile = profileDir || 'Default';
     let chromeBin: string;
     if (platform === 'darwin') {
       chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -262,8 +264,7 @@ export class LocalBrowserService {
       chromeBin = 'google-chrome';
     }
 
-    const args = [`--remote-debugging-port=${port}`];
-    if (profileFlag) args.push(profileFlag);
+    const args = [`--remote-debugging-port=${port}`, `--profile-directory=${effectiveProfile}`];
 
     logger.info(`[browser] Launching Chrome: ${chromeBin} ${args.join(' ')}`);
     const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
