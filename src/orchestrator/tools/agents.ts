@@ -144,7 +144,7 @@ export async function runAgent(
           if (def?.tool_sequence) {
             const steps = (def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) =>
               `${i + 1}. ${typeof s === 'string' ? s : s.tool}`).join(', ');
-            enrichedPrompt += `\n\nPROCEDURE: "${skill.name}" — Steps: ${steps}`;
+            enrichedPrompt += `\n\nIMPORTANT: Follow this procedure by calling the tools below. Do NOT just describe what you would do — actually call each tool in order.\n\nPROCEDURE: "${skill.name}"\nExecute these tool calls in sequence:\n${(def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) => `${i + 1}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
           }
           break;
         }
