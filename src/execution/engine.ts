@@ -2566,6 +2566,7 @@ export class RuntimeEngine {
     // Browser and desktop state for on-demand activation
     let browserService: LocalBrowserService | null = null;
     let browserActivated = false;
+    let desktopService: import('./desktop/local-desktop.service.js').LocalDesktopService | null = null;
     let desktopActivated = false;
     let iteration = 0;
     let consecutiveParseErrors = 0;
@@ -2752,8 +2753,8 @@ export class RuntimeEngine {
             goalId: opts.goalId,
             browserService,
             browserActivated,
-            desktopService: null,
-            desktopActivated: false,
+            desktopService: desktopService,
+            desktopActivated,
             desktopOptions: opts.desktopOptions,
             fileAccessGuard: opts.fileAccessGuard,
             mcpClients: opts.mcpClients ?? null,
@@ -2769,11 +2770,13 @@ export class RuntimeEngine {
 
           // Sync desktop state back from context (request_desktop activates desktop tools)
           if (routerToolCtx.desktopActivated && !desktopActivated) {
+            desktopService = routerToolCtx.desktopService;
             desktopActivated = true;
             // Remove request_desktop from tool list and add full desktop tools
             const reqIdx = openaiTools.findIndex(t => t.function.name === 'request_desktop');
             if (reqIdx >= 0) openaiTools.splice(reqIdx, 1);
             openaiTools.push(...convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS));
+            logger.info('[engine] Desktop activated in model router path — desktop tools injected');
           }
 
           // Expand FileAccessGuard when doc mounts add new paths
