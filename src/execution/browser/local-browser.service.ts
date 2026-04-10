@@ -220,19 +220,36 @@ export class LocalBrowserService {
       // Not running with CDP — need to (re)launch
     }
 
-    // On macOS, `open -a` ignores --args when Chrome is already running.
-    // Use the Chrome binary directly so flags always apply.
-    // If Chrome is already running without CDP, we need to quit it first.
+    // Chrome can't enable CDP retroactively — if it's running without the flag,
+    // we need to restart it. Use graceful quit (AppleScript on macOS) so Chrome
+    // saves the session and restores tabs on relaunch.
     const { exec, spawn } = await import('child_process');
     const platform = process.platform;
 
-    // Kill existing Chrome if it's running without CDP (it won't accept CDP retroactively)
-    if (platform === 'darwin') {
-      await new Promise<void>((resolve) => {
-        exec('pkill -x "Google Chrome"', () => resolve());
-      });
-      // Brief pause for process cleanup
-      await new Promise(r => setTimeout(r, 1000));
+    const isRunning = await new Promise<boolean>((resolve) => {
+      exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
+    });
+
+    if (isRunning) {
+      logger.info('[browser] Chrome is running without CDP. Restarting gracefully (tabs will be restored)...');
+      if (platform === 'darwin') {
+        // AppleScript graceful quit — Chrome saves session and restores tabs on relaunch
+        await new Promise<void>((resolve) => {
+          exec('osascript -e \'tell application "Google Chrome" to quit\'', () => resolve());
+        });
+      } else {
+        await new Promise<void>((resolve) => {
+          exec('pkill -x chrome', () => resolve());
+        });
+      }
+      // Wait for Chrome to fully close
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        const stillRunning = await new Promise<boolean>((resolve) => {
+          exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
+        });
+        if (!stillRunning) break;
+      }
     }
 
     const profileFlag = profileDir ? `--profile-directory=${profileDir}` : '';
