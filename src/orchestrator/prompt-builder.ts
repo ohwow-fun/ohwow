@@ -230,6 +230,34 @@ export async function buildTargetedPrompt(
 
   const activeAgents = agents.filter((a) => a.status === 'working').length;
 
+  // --- Intent-aware skill matching: trigger-matched first, then top generic ---
+  const allSkills = (skillsResult.data || []) as SkillRow[];
+  const messageKeywords = userMessage ? extractKeywords(userMessage) : [];
+  const triggerMatched = messageKeywords.length > 0
+    ? allSkills.filter(s => {
+        const triggers: string[] = (() => { try { return JSON.parse(s.triggers || '[]'); } catch { return []; } })();
+        return matchesTriggers(triggers, messageKeywords);
+      }).sort((a, b) => (b.success_rate ?? 0) - (a.success_rate ?? 0))
+    : [];
+  const triggerIds = new Set(triggerMatched.map(s => s.id));
+  const topGeneric = allSkills.filter(s => !triggerIds.has(s.id)).slice(0, 5);
+  const mergedSkills = [...triggerMatched, ...topGeneric].slice(0, 5);
+
+  // If a matched procedure skill uses desktop tools, activate the desktop section
+  // so the model gets desktop tools + the SOP steps in the same prompt
+  for (const skill of triggerMatched) {
+    try {
+      const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition || '{}') : (skill.definition || {});
+      const seq = def.tool_sequence as string[] | undefined;
+      if (seq && seq.some((t: string) => t.startsWith('desktop_'))) {
+        sections.add('desktop');
+      }
+      if (seq && seq.some((t: string) => t.startsWith('browser_'))) {
+        sections.add('browser');
+      }
+    } catch { /* malformed definition */ }
+  }
+
   const args: BuildLocalSystemPromptArgs = {
     agents: need('agents') ? agents : [],
     business: need('business') ? business : null,
@@ -262,20 +290,7 @@ export async function buildTargetedPrompt(
     hasMcpTools,
     platform,
     learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
-    learnedSkills: (() => {
-      // Intent-aware skill matching: trigger-matched skills first, then top generic
-      const allSkills = (skillsResult.data || []) as SkillRow[];
-      const keywords = userMessage ? extractKeywords(userMessage) : [];
-      const triggerMatched = keywords.length > 0
-        ? allSkills.filter(s => {
-            const triggers: string[] = (() => { try { return JSON.parse(s.triggers || '[]'); } catch { return []; } })();
-            return matchesTriggers(triggers, keywords);
-          }).sort((a, b) => (b.success_rate ?? 0) - (a.success_rate ?? 0))
-        : [];
-      const triggerIds = new Set(triggerMatched.map(s => s.id));
-      const topGeneric = allSkills.filter(s => !triggerIds.has(s.id)).slice(0, 5);
-      return [...triggerMatched, ...topGeneric].slice(0, 5);
-    })(),
+    learnedSkills: mergedSkills,
     knownWorkflows: (processesResult.data || []) as ProcessRow[],
     gitContext: (() => {
       if (!need('filesystem') || !deps.workingDirectory) return undefined;
