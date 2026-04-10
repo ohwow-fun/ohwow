@@ -1515,6 +1515,52 @@ export class LocalOrchestrator {
   // ==========================================================================
 
   /**
+   * Select the best model for a given tool-loop iteration.
+   * Default: cheapest model (Grok 4.1 Fast). Escalates to stronger model
+   * when the iteration context demands it (complex reasoning, errors, planning).
+   */
+  private selectModelForIteration(
+    iteration: number,
+    messages: OllamaMessage[],
+    previousToolCallCount: number,
+    hasErrors: boolean,
+  ): string {
+    const CHEAP = 'x-ai/grok-4.1-fast';
+    const STRONG = 'x-ai/grok-4.20';
+    const configured = this.orchestratorModel;
+
+    // If user explicitly configured a non-grok model, respect it
+    if (configured && !configured.startsWith('x-ai/grok-')) {
+      return configured;
+    }
+
+    // Escalate on errors or retries
+    if (hasErrors) return STRONG;
+
+    // First iteration with complex input: escalate
+    if (iteration === 0) {
+      const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+      const userText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
+      const wordCount = userText.split(/\s+/).length;
+      const hasComplexKeywords = /\b(analyze|compare|design|plan|research|evaluate|implement|refactor|architect|strategy|investigate)\b/i.test(userText);
+      if (wordCount > 150 || hasComplexKeywords) return STRONG;
+    }
+
+    // Heavy tool iteration (lots of tool results to process): escalate
+    if (previousToolCallCount >= 4) return STRONG;
+
+    // Long tool results in recent messages: escalate
+    const recentMessages = messages.slice(-3);
+    const hasLongToolResults = recentMessages.some(
+      m => m.role === 'tool' && typeof m.content === 'string' && m.content.length > 5000
+    );
+    if (hasLongToolResults) return STRONG;
+
+    // Default: cheap model
+    return CHEAP;
+  }
+
+  /**
    * Dedicated OpenRouter tool loop — full Anthropic-path intelligence with
    * native OpenAI chat/completions format + streaming. OpenRouter cloud models
    * have 128K-1M context, so they get the same capabilities as direct Claude:
@@ -1799,15 +1845,24 @@ export class LocalOrchestrator {
     const sessionToolNames: string[] = [];
     const maxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
     let iterationsSinceSummarize = 2;
+    let prevIterToolCount = 0;
+    let iterHadErrors = false;
 
     this.brain?.resetSession();
 
     for (let iteration = 0; iteration < maxIter; iteration++) {
+      // Per-iteration model selection: cheapest model that can handle this step
+      const iterModel = this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
+      if (iteration === 0 || iterModel !== (this.orchestratorModel || 'x-ai/grok-4.1-fast')) {
+        logger.debug({ iteration, model: iterModel }, '[orchestrator] iteration model selected');
+      }
+      iterHadErrors = false;
+
       let response: ModelResponseWithTools;
       try {
         const thinkFilter = new ThinkTagFilter();
         const stream = provider.createMessageWithToolsStreaming({
-          model: this.orchestratorModel || undefined,
+          model: iterModel,
           system: systemPrompt,
           messages: loopMessages.map(m => ({
             role: m.role,
@@ -2053,6 +2108,10 @@ export class LocalOrchestrator {
           }
         } catch { /* non-fatal */ }
       }
+
+      // Track iteration state for per-iteration model selection
+      prevIterToolCount = response.toolCalls?.length ?? 0;
+      iterHadErrors = toolResultsSummary.some(r => r.content.startsWith('Error') || r.content.includes('failed'));
 
       // Mid-loop context budget check
       iterationsSinceSummarize++;
