@@ -216,7 +216,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task activity feed
   router.get('/api/tasks/:id/activity', async (req, res) => {
     try {
-      const { data } = await db.from('agent_workforce_activity_feed')
+      const { data } = await db.from('agent_workforce_activity')
         .select('*')
         .eq('task_id', req.params.id)
         .order('created_at', { ascending: true });
@@ -238,7 +238,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
       const agentId = (task as Record<string, unknown>).agent_id as string;
-      const { data } = await db.from('agent_workforce_state')
+      const { data } = await db.from('agent_workforce_task_state')
         .select('*')
         .eq('agent_id', agentId)
         .order('updated_at', { ascending: false });
