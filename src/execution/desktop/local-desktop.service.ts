@@ -48,7 +48,7 @@ const PID_FILE = join(OHWOW_DIR, 'desktop-control.pid');
 
 /** Actions that mutate the desktop (vs read-only screenshot/wait/mouse_move) */
 function isMutationAction(type: DesktopActionType): boolean {
-  return type !== 'screenshot' && type !== 'wait' && type !== 'mouse_move';
+  return type !== 'screenshot' && type !== 'wait' && type !== 'mouse_move' && type !== 'list_windows';
 }
 
 /** Human-readable description of a desktop action for approval prompts */
@@ -65,6 +65,7 @@ function describeAction(action: DesktopAction, appName: string | null): string {
     case 'left_click_drag': return `Drag from (${action.startX}, ${action.startY}) to (${action.endX}, ${action.endY})${inApp}`;
     case 'move_window': return `Move window to display ${action.display}`;
     case 'focus_app': return `Focus ${action.appName}`;
+    case 'list_windows': return 'List open windows';
     default: return `${action.type}${inApp}`;
   }
 }
@@ -370,7 +371,13 @@ export class LocalDesktopService {
         }
 
         case 'type_text': {
-          await keyboard.type(action.text);
+          // Always use character-by-character typing — bulk type() drops characters
+          // after keyboard shortcuts (e.g. Cmd+L selects address bar, then "x" in
+          // "x.com" gets eaten by autocomplete or interpreted as a shortcut).
+          for (const char of action.text) {
+            await keyboard.type(char);
+            await new Promise(resolve => setTimeout(resolve, 30));
+          }
           result = await this.mutationResult('type_text');
           break;
         }
@@ -395,6 +402,11 @@ export class LocalDesktopService {
           } catch {
             // If releaseKey fails, force-release all modifiers to prevent stuck keys
             await this.releaseAllModifiers();
+          }
+          // Extra delay after modifier combos (Cmd+L, Cmd+A, etc.) to let the
+          // target app process the shortcut before any subsequent typing
+          if (keys.length > 1) {
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
           result = await this.mutationResult('key');
           break;
@@ -471,6 +483,51 @@ end tell`;
             } catch (err) {
               result = { success: false, type: 'move_window', error: `Couldn't move window: ${err instanceof Error ? err.message : err}` };
             }
+          }
+          break;
+        }
+
+        case 'list_windows': {
+          try {
+            const { execSync } = await import('child_process');
+            // AppleScript to list all visible windows with position and size
+            const script = `
+tell application "System Events"
+  set windowList to ""
+  repeat with proc in (every process whose visible is true)
+    set appName to name of proc
+    try
+      repeat with w in (every window of proc)
+        set winName to name of w
+        set winPos to position of w
+        set winSize to size of w
+        set windowList to windowList & appName & " | " & winName & " | pos:" & (item 1 of winPos as text) & "," & (item 2 of winPos as text) & " | size:" & (item 1 of winSize as text) & "x" & (item 2 of winSize as text) & "\\n"
+      end repeat
+    end try
+  end repeat
+  return windowList
+end tell`;
+            const windowInfo = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout: 10000, encoding: 'utf-8' }).trim();
+
+            // Annotate which display each window is on
+            const lines = windowInfo.split('\n').filter(l => l.trim());
+            const annotated = lines.map(line => {
+              const posMatch = line.match(/pos:(-?\d+),(-?\d+)/);
+              if (posMatch && this.screenInfo.displays.length > 1) {
+                const wx = parseInt(posMatch[1], 10);
+                const wy = parseInt(posMatch[2], 10);
+                const display = this.screenInfo.displays.find(d =>
+                  wx >= d.originX && wx < d.originX + d.logicalWidth &&
+                  wy >= d.originY && wy < d.originY + d.logicalHeight
+                );
+                return line + (display ? ` [Display ${display.displayNumber}]` : ' [off-screen]');
+              }
+              return line;
+            });
+
+            result = { success: true, type: 'list_windows', content: annotated.join('\n') || 'No visible windows' };
+          } catch (err) {
+            result = { success: false, type: 'list_windows', error: `Couldn't list windows: ${err instanceof Error ? err.message : err}` };
           }
           break;
         }

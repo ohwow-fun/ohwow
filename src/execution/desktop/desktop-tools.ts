@@ -243,6 +243,15 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
       required: ['app'],
     },
   },
+  {
+    name: 'desktop_list_windows',
+    description:
+      'List all open windows with their app name, title, position, and size. Use this to find which app is on which display before taking screenshots or moving windows.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 // ============================================================================
@@ -259,6 +268,7 @@ const DESKTOP_TOOL_NAMES = new Set([
   'desktop_wait',
   'desktop_move_window',
   'desktop_focus_app',
+  'desktop_list_windows',
 ]);
 
 /** Check if a tool name is a desktop tool */
@@ -345,6 +355,9 @@ function mapToolToAction(
     case 'desktop_focus_app':
       return { type: 'focus_app', appName: input.app as string };
 
+    case 'desktop_list_windows':
+      return { type: 'list_windows' };
+
     default:
       return null;
   }
@@ -384,9 +397,15 @@ export function formatDesktopToolResult(
     left_click_drag: 'Drag performed.',
     move_window: 'Window moved to target display.',
     focus_app: 'Application focused.',
+    list_windows: 'Window list retrieved.',
   };
 
   blocks.push({ type: 'text', text: descriptions[result.type] ?? `Action ${result.type} completed.` });
+
+  // Include text content (e.g. window list)
+  if (result.content) {
+    blocks.push({ type: 'text', text: result.content });
+  }
 
   // Include screenshot as base64 image block
   if (result.screenshot) {

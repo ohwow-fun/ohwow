@@ -22,7 +22,8 @@ export type DesktopActionType =
   | 'wait'
   | 'left_click_drag'
   | 'move_window'
-  | 'focus_app';
+  | 'focus_app'
+  | 'list_windows';
 
 // ============================================================================
 // DESKTOP ACTIONS (tool inputs for the LLM)
@@ -42,6 +43,7 @@ export interface DesktopWaitAction { type: 'wait'; duration: number }
 export interface DesktopLeftClickDragAction { type: 'left_click_drag'; startX: number; startY: number; endX: number; endY: number }
 export interface DesktopMoveWindowAction { type: 'move_window'; display: number }
 export interface DesktopFocusAppAction { type: 'focus_app'; appName: string }
+export interface DesktopListWindowsAction { type: 'list_windows' }
 
 export type DesktopAction =
   | DesktopScreenshotAction
@@ -57,7 +59,8 @@ export type DesktopAction =
   | DesktopWaitAction
   | DesktopLeftClickDragAction
   | DesktopMoveWindowAction
-  | DesktopFocusAppAction;
+  | DesktopFocusAppAction
+  | DesktopListWindowsAction;
 
 // ============================================================================
 // ACTION RESULTS
@@ -72,6 +75,8 @@ export interface DesktopActionResult {
   scaledWidth?: number;
   scaledHeight?: number;
   error?: string;
+  /** Text content for non-visual results (e.g. window list) */
+  content?: string;
   /** Name of the frontmost macOS application when the action was executed */
   frontmostApp?: string;
   /** Human-readable display layout description for multi-monitor setups */
