@@ -80,6 +80,7 @@ export type ExperienceType =
   | 'stagnation_detected'
   | 'plan_generated'
   | 'dialectic_applied'
+  | 'wisdom_sought'
   | 'memory_extracted'
   | 'pattern_discovered'
   | 'insight_broadcast'

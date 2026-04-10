@@ -1012,6 +1012,19 @@ export class LocalOrchestrator {
       } catch { /* dialectic is non-fatal enhancement */ }
     }
 
+    // WISDOM: Pre-flight strategic consultation (Luria's prefrontal cortex)
+    if (this.brain && enriched.planFirst) {
+      try {
+        const result = await this.brain.seekWisdom({
+          userMessage, toolHistory: '', currentContent: '',
+          systemContext: staticPart.slice(0, 500),
+        }, 'planning');
+        if (result.guidance) {
+          systemBlocks.push({ type: 'text' as const, text: `\n\n## Strategic Guidance\n${result.guidance}` });
+        }
+      } catch { /* non-fatal */ }
+    }
+
     // Intent-aware tool_choice: force tool use for file intent to prevent fabrication
     // Only force on first iteration; subsequent iterations use 'auto'
     let currentToolChoice: { type: 'any' } | { type: 'auto' } = classified.intent === 'file'
@@ -1287,11 +1300,29 @@ export class LocalOrchestrator {
         }
       }
 
-      // Brain: inject enriched stagnation warning
+      // Brain: inject enriched stagnation warning + seek wisdom when stuck
       if (this.brain?.isStagnating() && toolResults.length > 0) {
         const lastResult = toolResults[toolResults.length - 1];
         const existingContent = typeof lastResult.content === 'string' ? lastResult.content : '';
-        const warning = this.brain.buildStagnationWarning();
+        let warning = this.brain.buildStagnationWarning();
+
+        // Seek wisdom when stuck
+        try {
+          const toolSummary = [...executedToolCalls.entries()]
+            .slice(-10)
+            .map(([k, v]) => `${k}: ${v.success ? 'OK' : 'FAILED'}`)
+            .join('\n');
+          const wisdomResult = await this.brain.seekWisdom({
+            userMessage,
+            toolHistory: toolSummary,
+            currentContent: fullContent.slice(0, 1000),
+            systemContext: '',
+          }, 'stuck');
+          if (wisdomResult.guidance) {
+            warning += `\n\n## Wisdom (course correction)\n${wisdomResult.guidance}`;
+          }
+        } catch { /* non-fatal */ }
+
         toolResults[toolResults.length - 1] = {
           ...lastResult,
           content: `${existingContent}\n\n${warning}`,
@@ -1341,6 +1372,24 @@ export class LocalOrchestrator {
           iterationsSinceSummarize = 0;
         }
       }
+    }
+
+    // WISDOM: Completion validation — seek wisdom before finalizing complex tasks
+    if (this.brain && enriched.planFirst && fullContent.length > 200) {
+      try {
+        const toolSummary = [...executedToolCalls.entries()]
+          .map(([k, v]) => `${k}: ${v.success ? 'OK' : 'FAILED'}`)
+          .join('\n');
+        const wisdomResult = await this.brain.seekWisdom({
+          userMessage,
+          toolHistory: toolSummary,
+          currentContent: fullContent.slice(0, 2000),
+          systemContext: '',
+        }, 'validation');
+        if (wisdomResult.guidance && !wisdomResult.guidance.toUpperCase().startsWith('PROCEED')) {
+          yield { type: 'text', content: `\n\n*Strategic review: ${wisdomResult.guidance}*` };
+        }
+      } catch { /* non-fatal */ }
     }
 
     // Save to session (full turn with tool context)
@@ -1667,6 +1716,19 @@ export class LocalOrchestrator {
       } catch { /* non-fatal */ }
     }
 
+    // WISDOM: Pre-flight strategic consultation (Luria's prefrontal cortex)
+    if (this.brain && enriched.planFirst) {
+      try {
+        const result = await this.brain.seekWisdom({
+          userMessage, toolHistory: '', currentContent: '',
+          systemContext: staticPart.slice(0, 500),
+        }, 'planning');
+        if (result.guidance) {
+          systemPrompt += `\n\n## Strategic Guidance\n${result.guidance}`;
+        }
+      } catch { /* non-fatal */ }
+    }
+
     // Immune system: scan user input
     if (this.immuneSystem) {
       try {
@@ -1946,10 +2008,27 @@ export class LocalOrchestrator {
         toolCallHashes.push(hash);
       }
 
-      // Brain: stagnation warning
+      // Brain: stagnation warning + WISDOM consultation when stuck
       let stagnationWarning = '';
       if (this.brain?.isStagnating()) {
         stagnationWarning = `\n\n${this.brain.buildStagnationWarning()}`;
+
+        // Seek wisdom when stuck — consult stronger model for course correction
+        try {
+          const toolSummary = [...executedToolCalls.entries()]
+            .slice(-10)
+            .map(([k, v]) => `${k}: ${v.success ? 'OK' : 'FAILED'}`)
+            .join('\n');
+          const wisdomResult = await this.brain.seekWisdom({
+            userMessage,
+            toolHistory: toolSummary,
+            currentContent: fullContent.slice(0, 1000),
+            systemContext: '',
+          }, 'stuck');
+          if (wisdomResult.guidance) {
+            stagnationWarning += `\n\n## Wisdom (course correction)\n${wisdomResult.guidance}`;
+          }
+        } catch { /* non-fatal */ }
       }
 
       // Brain: temporal-aware reflection (Heidegger's temporality)
@@ -1992,6 +2071,24 @@ export class LocalOrchestrator {
           iterationsSinceSummarize = 0;
         }
       }
+    }
+
+    // WISDOM: Completion validation — seek wisdom before finalizing complex tasks
+    if (this.brain && enriched.planFirst && fullContent.length > 200) {
+      try {
+        const toolSummary = [...executedToolCalls.entries()]
+          .map(([k, v]) => `${k}: ${v.success ? 'OK' : 'FAILED'}`)
+          .join('\n');
+        const wisdomResult = await this.brain.seekWisdom({
+          userMessage,
+          toolHistory: toolSummary,
+          currentContent: fullContent.slice(0, 2000),
+          systemContext: '',
+        }, 'validation');
+        if (wisdomResult.guidance && !wisdomResult.guidance.toUpperCase().startsWith('PROCEED')) {
+          yield { type: 'text', content: `\n\n*Strategic review: ${wisdomResult.guidance}*` };
+        }
+      } catch { /* non-fatal */ }
     }
 
     // Save turn context

@@ -51,6 +51,7 @@ import { enrichIntent } from './intentionality.js';
 import { TemporalFrameBuilder, buildTemporalReflection } from './temporal-frame.js';
 import { applyToolEmbodiment } from './tool-embodiment.js';
 import { dialecticCheck, formatDialecticWarning } from './dialectic.js';
+import { WisdomEngine, type WisdomContext, type WisdomResult, type WisdomTrigger } from './wisdom-engine.js';
 import { GlobalWorkspace } from './global-workspace.js';
 import type { ConsciousnessBridge } from './consciousness-bridge.js';
 import type { ClassifiedIntent } from '../orchestrator/orchestrator-types.js';
@@ -89,6 +90,7 @@ export class Brain {
   private nervousSystem: NervousSystem | null;
   private consciousnessBridge: ConsciousnessBridge | null = null;
   private digitalBody: import('../body/digital-body.js').DigitalBody | null = null;
+  private wisdomEngine: WisdomEngine;
 
   constructor(deps: BrainDependencies) {
     this.modelRouter = deps.modelRouter;
@@ -106,6 +108,7 @@ export class Brain {
       this.predictiveEngine,
     );
     this.workspace = new GlobalWorkspace();
+    this.wisdomEngine = new WisdomEngine();
   }
 
   // --------------------------------------------------------------------------
@@ -322,6 +325,47 @@ export class Brain {
   }
 
   // --------------------------------------------------------------------------
+  // WISDOM — Prefrontal Cortex consultation (Luria's Executive Function)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Seek wisdom from the strongest available model for strategic guidance.
+   * Unlike dialecticCheck (quick gut reaction, cheapest model), wisdom
+   * is a deep consultation using the strongest model (Grok 4.20, Claude Opus).
+   */
+  async seekWisdom(
+    context: WisdomContext,
+    reason: WisdomTrigger,
+  ): Promise<WisdomResult> {
+    if (!this.modelRouter) {
+      return { consulted: false, guidance: null, reason, model: '', tokensUsed: 0 };
+    }
+
+    const result = await this.wisdomEngine.seek(context, reason, this.modelRouter);
+
+    if (result.consulted && result.guidance) {
+      // Record to experience stream
+      this.experienceStream.append('wisdom_sought', {
+        reason,
+        model: result.model,
+        guidance: result.guidance.slice(0, 200),
+        tokensUsed: result.tokensUsed,
+      }, 'orchestrator');
+
+      // Broadcast to global workspace
+      this.workspace.broadcast({
+        source: 'brain',
+        type: 'discovery',
+        content: `Wisdom (${reason}): ${result.guidance.slice(0, 100)}`,
+        salience: 0.8,
+        timestamp: Date.now(),
+      });
+    }
+
+    return result;
+  }
+
+  // --------------------------------------------------------------------------
   // ACT HELPERS — Used during execution
   // --------------------------------------------------------------------------
 
@@ -414,6 +458,7 @@ export class Brain {
    */
   resetSession(): void {
     this.predictiveEngine.resetSession();
+    this.wisdomEngine.resetSession();
   }
 
   /**
