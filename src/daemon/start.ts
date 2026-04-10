@@ -1477,7 +1477,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       ollamaAutoStartFailed,
       ollamaModel: config.ollamaModel,
       orchestratorModel,
-      modelReady: ollamaStatus,
+      modelReady: ollamaStatus || config.modelSource === 'cloud' || !!config.anthropicApiKey || !!config.openRouterApiKey,
       tunnelUrl: tunnel?.url || null,
       cloudWebhookBaseUrl: controlPlane?.connectedWorkspaceId
         ? `${config.cloudUrl}/hooks/${controlPlane.connectedWorkspaceId}`
