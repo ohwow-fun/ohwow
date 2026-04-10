@@ -98,6 +98,12 @@ export class LocalBrowserService {
       await this.stagehand.init();
       this.ctx = this.stagehand.context;
       this.page = this.ctx.activePage();
+      // CDP connections may not have an active page — create one or use the first available
+      if (!this.page && this.cdpUrl) {
+        const pages = this.ctx.pages?.() || [];
+        this.page = pages[0] || await this.ctx.newPage();
+        logger.debug(`[browser] CDP: no active page, using ${pages.length > 0 ? 'first existing' : 'new'} page`);
+      }
       logger.info(`[browser] Stagehand v3 initialized${this.cdpUrl ? ' (CDP → Chrome)' : ''}`);
       return this.page;
     } catch (err) {
