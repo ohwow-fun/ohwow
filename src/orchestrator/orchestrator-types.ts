@@ -19,7 +19,7 @@ export type OrchestratorEvent =
   | { type: 'permission_request'; requestId: string; path: string; toolName: string }
   | { type: 'mcp_elicitation'; requestId: string; serverName: string; message: string; schema: Record<string, unknown> }
   | { type: 'plan_update'; tasks: Array<{ id: string; title: string; status: 'pending' | 'in_progress' | 'done' }> }
-  | { type: 'screenshot'; path: string }
+  | { type: 'screenshot'; path: string; base64?: string }
   | { type: 'media_generated'; path: string }
   | { type: 'cost_confirmation'; requestId: string; toolName: string; estimatedCredits: number; description: string }
   | { type: 'sequence_start'; name: string; totalSteps: number; waves: number }

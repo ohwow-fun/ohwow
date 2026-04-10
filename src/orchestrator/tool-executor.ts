@@ -416,7 +416,7 @@ export async function* executeToolCall(
     ctx.executedToolCalls.set(toolKey, toolResult);
     yield { type: 'tool_done', name: request.name, result: toolResult };
     if (screenshotPath) {
-      yield { type: 'screenshot', path: screenshotPath };
+      yield { type: 'screenshot', path: screenshotPath, base64: browserResult.screenshot };
     }
 
     // Build Ollama-compatible text content (for models that can't process images)
@@ -464,7 +464,7 @@ export async function* executeToolCall(
     ctx.executedToolCalls.set(toolKey, toolResult);
     yield { type: 'tool_done', name: request.name, result: toolResult };
     if (screenshotPath) {
-      yield { type: 'screenshot', path: screenshotPath };
+      yield { type: 'screenshot', path: screenshotPath, base64: desktopResult.screenshot };
     }
 
     const ollamaContent = formatted
