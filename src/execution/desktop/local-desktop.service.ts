@@ -64,6 +64,7 @@ function describeAction(action: DesktopAction, appName: string | null): string {
     case 'scroll': return `Scroll ${action.direction} at (${action.x}, ${action.y})${inApp}`;
     case 'left_click_drag': return `Drag from (${action.startX}, ${action.startY}) to (${action.endX}, ${action.endY})${inApp}`;
     case 'move_window': return `Move window to display ${action.display}`;
+    case 'focus_app': return `Focus ${action.appName}`;
     default: return `${action.type}${inApp}`;
   }
 }
@@ -470,6 +471,18 @@ end tell`;
             } catch (err) {
               result = { success: false, type: 'move_window', error: `Couldn't move window: ${err instanceof Error ? err.message : err}` };
             }
+          }
+          break;
+        }
+
+        case 'focus_app': {
+          try {
+            const { execSync } = await import('child_process');
+            execSync(`osascript -e 'tell application "${action.appName.replace(/"/g, '\\"')}" to activate'`, { timeout: 5000 });
+            await new Promise(r => setTimeout(r, 500)); // Brief pause for app to come to front
+            result = await this.mutationResult('focus_app');
+          } catch (err) {
+            result = { success: false, type: 'focus_app', error: `Couldn't focus ${action.appName}: ${err instanceof Error ? err.message : err}` };
           }
           break;
         }

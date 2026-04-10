@@ -36,9 +36,10 @@ export const DESKTOP_ACTIVATION_MESSAGE = `Desktop control activated. You now ha
 - desktop_scroll: Scroll at position
 - desktop_drag: Click-drag between two points
 - desktop_move_window: Move frontmost window to a different display
+- desktop_focus_app: Bring a specific app to the foreground (ALWAYS use this before typing in an app)
 - desktop_wait: Pause for a duration
 
-Workflow: screenshot first to see the screen, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
+Workflow: focus the app first (desktop_focus_app), screenshot to see it, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
 
 /**
  * Build the desktop system prompt, optionally including multi-monitor layout info.
@@ -227,6 +228,21 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
       required: ['display'],
     },
   },
+  {
+    name: 'desktop_focus_app',
+    description:
+      'Bring a specific application to the foreground. ALWAYS call this before typing or clicking in an app to make sure it is focused. More reliable than Cmd+Tab or Spotlight.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: {
+          type: 'string',
+          description: 'Application name exactly as macOS knows it (e.g. "Google Chrome", "Visual Studio Code", "Terminal", "Discord", "Finder")',
+        },
+      },
+      required: ['app'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -242,6 +258,7 @@ const DESKTOP_TOOL_NAMES = new Set([
   'desktop_drag',
   'desktop_wait',
   'desktop_move_window',
+  'desktop_focus_app',
 ]);
 
 /** Check if a tool name is a desktop tool */
@@ -325,6 +342,9 @@ function mapToolToAction(
     case 'desktop_move_window':
       return { type: 'move_window', display: input.display as number };
 
+    case 'desktop_focus_app':
+      return { type: 'focus_app', appName: input.app as string };
+
     default:
       return null;
   }
@@ -363,6 +383,7 @@ export function formatDesktopToolResult(
     wait: 'Wait completed.',
     left_click_drag: 'Drag performed.',
     move_window: 'Window moved to target display.',
+    focus_app: 'Application focused.',
   };
 
   blocks.push({ type: 'text', text: descriptions[result.type] ?? `Action ${result.type} completed.` });

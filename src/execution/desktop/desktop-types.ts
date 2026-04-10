@@ -21,7 +21,8 @@ export type DesktopActionType =
   | 'mouse_move'
   | 'wait'
   | 'left_click_drag'
-  | 'move_window';
+  | 'move_window'
+  | 'focus_app';
 
 // ============================================================================
 // DESKTOP ACTIONS (tool inputs for the LLM)
@@ -40,6 +41,7 @@ export interface DesktopMouseMoveAction { type: 'mouse_move'; x: number; y: numb
 export interface DesktopWaitAction { type: 'wait'; duration: number }
 export interface DesktopLeftClickDragAction { type: 'left_click_drag'; startX: number; startY: number; endX: number; endY: number }
 export interface DesktopMoveWindowAction { type: 'move_window'; display: number }
+export interface DesktopFocusAppAction { type: 'focus_app'; appName: string }
 
 export type DesktopAction =
   | DesktopScreenshotAction
@@ -54,7 +56,8 @@ export type DesktopAction =
   | DesktopMouseMoveAction
   | DesktopWaitAction
   | DesktopLeftClickDragAction
-  | DesktopMoveWindowAction;
+  | DesktopMoveWindowAction
+  | DesktopFocusAppAction;
 
 // ============================================================================
 // ACTION RESULTS
