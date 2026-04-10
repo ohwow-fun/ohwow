@@ -38,6 +38,7 @@ import type { McpServerConfig } from '../mcp/types.js';
 import { McpClientManager, type ElicitationHandler } from '../mcp/client.js';
 import {
   REQUEST_BROWSER_TOOL,
+  LIST_CHROME_PROFILES_TOOL,
   BROWSER_TOOL_DEFINITIONS,
 } from '../execution/browser/browser-tools.js';
 import { LocalBrowserService } from '../execution/browser/local-browser.service.js';
@@ -114,9 +115,12 @@ export class LocalOrchestrator {
   private orchestratorModel: string;
   private workingDirectory: string;
   private browserHeadless: boolean;
+  private browserTarget: 'chromium' | 'chrome';
+  private chromeCdpPort: number;
   private dataDir: string;
   private browserService: LocalBrowserService | null = null;
   private browserActivated = false;
+  private browserRequestedProfile: string | undefined;
   private desktopService: LocalDesktopService | null = null;
   private desktopActivated = false;
   private filesystemActivated = false;
@@ -176,14 +180,51 @@ export class LocalOrchestrator {
       activated: this.browserActivated,
       headless: this.browserHeadless,
       dataDir: this.dataDir,
+      requestedProfile: this.browserRequestedProfile,
+      setRequestedProfile: (profile: string) => { this.browserRequestedProfile = profile; },
       activate: async () => {
         if (!this.browserService) {
-          this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          this.browserActivated = true;
-          this.syncOrganToBody();
+          await this.activateBrowser(this.browserRequestedProfile);
         }
       },
     };
+  }
+
+  /** Called by tool executor to set the requested Chrome profile */
+  setBrowserRequestedProfile(profile: string | undefined): void {
+    this.browserRequestedProfile = profile;
+  }
+
+  /** Activate browser — connects to real Chrome via CDP or launches Chromium */
+  private async activateBrowser(requestedProfile?: string): Promise<void> {
+    // "isolated" profile means use Playwright Chromium with no state
+    if (requestedProfile === 'isolated') {
+      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+      logger.info('[orchestrator] Browser activated (isolated Chromium)');
+      this.browserActivated = true;
+      this.syncOrganToBody();
+      return;
+    }
+
+    if (this.browserTarget === 'chrome') {
+      try {
+        // Resolve profile directory from email if needed
+        let profileDir = requestedProfile;
+        if (profileDir && profileDir.includes('@')) {
+          profileDir = await LocalBrowserService.findProfileForEmail(profileDir) || undefined;
+        }
+        const cdpUrl = await LocalBrowserService.connectToChrome(this.chromeCdpPort, profileDir);
+        this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
+        logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
+      } catch (err) {
+        logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome CDP failed, falling back to Chromium');
+        this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+      }
+    } else {
+      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+    }
+    this.browserActivated = true;
+    this.syncOrganToBody();
   }
 
   private get desktopState(): DesktopState {
@@ -259,6 +300,8 @@ export class LocalOrchestrator {
     browserHeadless?: boolean,
     dataDir?: string,
     mcpServers?: McpServerConfig[],
+    browserTarget?: 'chromium' | 'chrome',
+    chromeCdpPort?: number,
   ) {
     this.db = db;
     this.engine = engine;
@@ -286,6 +329,8 @@ export class LocalOrchestrator {
     this.orchestratorModel = orchestratorModel || '';
     this.workingDirectory = workingDirectory || '';
     this.browserHeadless = browserHeadless ?? false;
+    this.browserTarget = browserTarget || 'chrome';
+    this.chromeCdpPort = chromeCdpPort || 9222;
     this.dataDir = dataDir || '';
     this.mcpServers = mcpServers || [];
 
@@ -829,11 +874,8 @@ export class LocalOrchestrator {
       this.syncOrganToBody();
     }
     if (browserPreActivated && !this.browserActivated) {
-      yield { type: 'status', message: `[debug] Browser launching (pre-activation) — headless: ${this.browserHeadless}` };
-      logger.debug(`[browser] Pre-activating browser — headless: ${this.browserHeadless}`);
-      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-      this.browserActivated = true;
-      this.syncOrganToBody();
+      logger.debug(`[browser] Pre-activating browser — target: ${this.browserTarget}`);
+      await this.activateBrowser();
     }
 
     // Auto-activate desktop when intent is 'desktop'
@@ -1229,8 +1271,7 @@ export class LocalOrchestrator {
         // Because batch-executor runs request_browser first (before parallel tools),
         // the browserState getter will return the updated state for subsequent tools.
         if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
-          this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          this.browserActivated = true;
+          await this.activateBrowser(this.browserRequestedProfile);
           const idx = tools.indexOf(REQUEST_BROWSER_TOOL);
           if (idx !== -1) tools.splice(idx, 1, ...BROWSER_TOOL_DEFINITIONS);
         }
@@ -1487,9 +1528,9 @@ export class LocalOrchestrator {
     // Add browser tools: if pre-activated or already activated from a previous turn,
     // skip the gateway and inject full browser tools directly
     if (browserPreActivated || this.browserActivated) {
-      tools = [...BROWSER_TOOL_DEFINITIONS, ...tools];
+      tools = [...BROWSER_TOOL_DEFINITIONS, LIST_CHROME_PROFILES_TOOL, ...tools];
     } else {
-      tools = [REQUEST_BROWSER_TOOL, ...tools];
+      tools = [REQUEST_BROWSER_TOOL, LIST_CHROME_PROFILES_TOOL, ...tools];
     }
 
     // Add desktop tools: same two-step pattern as browser
@@ -1636,10 +1677,8 @@ export class LocalOrchestrator {
       this.syncOrganToBody();
     }
     if (browserPreActivated && !this.browserActivated) {
-      logger.debug(`[browser] Pre-activating browser (openrouter) — headless: ${this.browserHeadless}`);
-      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-      this.browserActivated = true;
-      this.syncOrganToBody();
+      logger.debug(`[browser] Pre-activating browser (openrouter) — target: ${this.browserTarget}`);
+      await this.activateBrowser();
     }
 
     // Auto-activate desktop when intent is 'desktop'
@@ -2032,8 +2071,7 @@ export class LocalOrchestrator {
 
           // Handle browser activation
           if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
-            this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-            this.browserActivated = true;
+            await this.activateBrowser();
             const browserOpenAI = convertToolsToOpenAI(BROWSER_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_browser');
             openaiTools = [...openaiTools, ...browserOpenAI];
@@ -2283,11 +2321,8 @@ export class LocalOrchestrator {
       this.syncOrganToBody();
     }
     if (browserPreActivated && !this.browserActivated) {
-      yield { type: 'status', message: `[debug] Browser launching (pre-activation) — headless: ${this.browserHeadless}` };
-      logger.debug(`[browser] Pre-activating browser (ollama) — headless: ${this.browserHeadless}`);
-      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-      this.browserActivated = true;
-      this.syncOrganToBody();
+      logger.debug(`[browser] Pre-activating browser (ollama) — target: ${this.browserTarget}`);
+      await this.activateBrowser();
     }
 
     // Auto-activate desktop when intent is 'desktop' (skip two-step gateway for small models)
@@ -2658,8 +2693,7 @@ export class LocalOrchestrator {
 
           // Handle browser activation: create service and swap OpenAI tools
           if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
-            this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-            this.browserActivated = true;
+            await this.activateBrowser();
             const browserOpenAI = convertToolsToOpenAI(BROWSER_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_browser');
             openaiTools = [...openaiTools, ...browserOpenAI];

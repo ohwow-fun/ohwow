@@ -17,7 +17,7 @@ import {
   formatBrowserToolResult,
   isBrowserTool,
 } from '../execution/browser/browser-tools.js';
-import type { LocalBrowserService } from '../execution/browser/local-browser.service.js';
+import { LocalBrowserService } from '../execution/browser/local-browser.service.js';
 import { saveScreenshotLocally } from '../execution/browser/screenshot-storage.js';
 import {
   DESKTOP_ACTIVATION_MESSAGE,
@@ -75,6 +75,10 @@ export interface BrowserState {
   dataDir: string;
   /** Lazy-activation callback: creates browser service on demand when a browser tool is called without prior request_browser */
   activate?: () => Promise<void>;
+  /** Profile requested by the model via request_browser tool */
+  requestedProfile?: string;
+  /** Callback to set the requested profile on the orchestrator */
+  setRequestedProfile?: (profile: string) => void;
 }
 
 export interface DesktopState {
@@ -201,10 +205,26 @@ export async function* executeToolCall(
     };
   }
 
+  // --- Chrome profile discovery ---
+  if (request.name === 'list_chrome_profiles') {
+    const profiles = await LocalBrowserService.discoverChromeProfiles();
+    const formatted = profiles.length > 0
+      ? profiles.map((p, i) => `${i + 1}. ${p.name} (${p.email || 'no account'}) — directory: "${p.directory}"${p.hostedDomain ? ` [${p.hostedDomain}]` : ''}`).join('\n')
+      : 'No Chrome profiles found on this device.';
+    const result: ToolResult = { success: true, data: formatted };
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+    return { toolName: request.name, result, resultContent: formatted, isError: false };
+  }
+
   // --- Browser activation ---
   if (request.name === 'request_browser' && !ctx.browserState.activated) {
-    yield { type: 'status', message: `[debug] Browser launching (request_browser) — headless: ${ctx.browserState.headless}` };
-    logger.debug(`[browser] request_browser activation — headless: ${ctx.browserState.headless}`);
+    // Capture profile preference for the orchestrator to use when activating
+    const profileInput = toolInput.profile as string | undefined;
+    if (profileInput && ctx.browserState.setRequestedProfile) {
+      ctx.browserState.setRequestedProfile(profileInput);
+    }
+    logger.debug(`[browser] request_browser activation — profile: ${profileInput || 'default'}`);
     // NOTE: The caller must handle creating the LocalBrowserService and updating browserState
     // because the service instance lives on the class. We signal via toolsModified.
     const activationResult: ToolResult = { success: true, data: BROWSER_ACTIVATION_MESSAGE };

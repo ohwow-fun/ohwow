@@ -647,6 +647,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     db, engine, workspaceId, config.anthropicApiKey,
     channelRegistry, controlPlane!, modelRouter, scraplingService, config.orchestratorModel, process.cwd(),
     config.browserHeadless, dataDir, config.mcpServers,
+    config.browserTarget, config.chromeCdpPort,
   );
 
   if (orchestrator) {

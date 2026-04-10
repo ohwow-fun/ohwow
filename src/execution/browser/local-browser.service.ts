@@ -44,6 +44,8 @@ export interface LocalBrowserServiceOptions {
   modelName?: string;
   /** API key for the model provider. */
   modelApiKey?: string;
+  /** CDP WebSocket URL to connect to an existing browser (e.g. real Chrome). When set, Stagehand connects via CDP instead of launching Chromium. */
+  cdpUrl?: string;
 }
 
 // ============================================================================
@@ -57,11 +59,13 @@ export class LocalBrowserService {
   private headless: boolean;
   private modelName: string;
   private modelApiKey: string;
+  private cdpUrl: string | undefined;
 
   constructor(opts?: LocalBrowserServiceOptions) {
     this.headless = opts?.headless !== false; // default headless
     this.modelName = opts?.modelName || this.resolveDefaultModel();
     this.modelApiKey = opts?.modelApiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    this.cdpUrl = opts?.cdpUrl;
   }
 
   private resolveDefaultModel(): string {
@@ -79,12 +83,13 @@ export class LocalBrowserService {
 
     try {
       const { Stagehand } = await loadStagehand();
-      logger.debug(`[browser] Stagehand.init — headless: ${this.headless}, model: ${this.modelName}`);
+      const launchOpts: Record<string, unknown> = this.cdpUrl
+        ? { cdpUrl: this.cdpUrl }
+        : { headless: this.headless };
+      logger.debug(`[browser] Stagehand.init — ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}`);
       this.stagehand = new Stagehand({
         env: 'LOCAL',
-        localBrowserLaunchOptions: {
-          headless: this.headless,
-        },
+        localBrowserLaunchOptions: launchOpts,
         model: this.modelName,
         verbose: 0,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,7 +98,7 @@ export class LocalBrowserService {
       await this.stagehand.init();
       this.ctx = this.stagehand.context;
       this.page = this.ctx.activePage();
-      logger.info('[browser] Stagehand v3 initialized');
+      logger.info(`[browser] Stagehand v3 initialized${this.cdpUrl ? ' (CDP → Chrome)' : ''}`);
       return this.page;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -120,6 +125,138 @@ export class LocalBrowserService {
       this.page = null;
       this.ctx = null;
     }
+  }
+
+  // ==========================================================================
+  // CHROME CDP CONNECTION
+  // ==========================================================================
+
+  /** Chrome profile info discovered from the filesystem */
+  static readonly CHROME_DATA_DIR = process.platform === 'darwin'
+    ? `${process.env.HOME}/Library/Application Support/Google/Chrome`
+    : process.platform === 'win32'
+      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\User Data`
+      : `${process.env.HOME}/.config/google-chrome`;
+
+  /**
+   * Discover all Chrome profiles on this machine.
+   * Returns profile directory names, display names, and associated email accounts.
+   */
+  static async discoverChromeProfiles(): Promise<Array<{
+    directory: string;
+    name: string;
+    email: string;
+    hostedDomain: string;
+  }>> {
+    const { readFileSync, existsSync, readdirSync } = await import('fs');
+    const { join } = await import('path');
+    const chromeDir = LocalBrowserService.CHROME_DATA_DIR;
+
+    if (!existsSync(chromeDir)) return [];
+
+    const profiles: Array<{ directory: string; name: string; email: string; hostedDomain: string }> = [];
+    const dirs = readdirSync(chromeDir, { withFileTypes: true })
+      .filter(d => d.isDirectory() && (d.name === 'Default' || d.name.startsWith('Profile ')))
+      .map(d => d.name);
+
+    for (const dir of dirs) {
+      const prefsPath = join(chromeDir, dir, 'Preferences');
+      if (!existsSync(prefsPath)) continue;
+      try {
+        const prefs = JSON.parse(readFileSync(prefsPath, 'utf-8'));
+        const name = prefs.profile?.name || dir;
+        const accounts = prefs.account_info || [];
+        const primary = accounts[0] || {};
+        profiles.push({
+          directory: dir,
+          name,
+          email: primary.email || '',
+          hostedDomain: primary.hosted_domain || '',
+        });
+      } catch { /* skip corrupt profiles */ }
+    }
+
+    return profiles;
+  }
+
+  /**
+   * Find the Chrome profile directory that matches a given email or domain.
+   * Returns the profile directory name (e.g. "Profile 1") or null.
+   */
+  static async findProfileForEmail(email: string): Promise<string | null> {
+    const profiles = await LocalBrowserService.discoverChromeProfiles();
+    const domain = email.split('@')[1];
+
+    // Exact email match first
+    const exact = profiles.find(p => p.email === email);
+    if (exact) return exact.directory;
+
+    // Domain match
+    const domainMatch = profiles.find(p => p.hostedDomain === domain || p.email.endsWith(`@${domain}`));
+    if (domainMatch) return domainMatch.directory;
+
+    return null;
+  }
+
+  /**
+   * Connect to the user's real Chrome browser via Chrome DevTools Protocol.
+   * Optionally launches Chrome with a specific profile directory.
+   * Returns the CDP WebSocket URL for Stagehand to connect to.
+   */
+  static async connectToChrome(port = 9222, profileDir?: string): Promise<string> {
+    const cdpHttpUrl = `http://localhost:${port}`;
+
+    // Check if Chrome is already running with remote debugging
+    try {
+      const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
+      if (res.ok) {
+        const data = await res.json() as { webSocketDebuggerUrl?: string };
+        if (data.webSocketDebuggerUrl) {
+          logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
+          return data.webSocketDebuggerUrl;
+        }
+      }
+    } catch {
+      // Not running — launch it
+    }
+
+    // Launch Chrome with remote debugging (and optional profile)
+    const { exec } = await import('child_process');
+    const platform = process.platform;
+    const profileFlag = profileDir ? ` --profile-directory="${profileDir}"` : '';
+    let cmd: string;
+    if (platform === 'darwin') {
+      cmd = `open -a "Google Chrome" --args --remote-debugging-port=${port}${profileFlag}`;
+    } else if (platform === 'win32') {
+      cmd = `start chrome --remote-debugging-port=${port}${profileFlag}`;
+    } else {
+      cmd = `google-chrome --remote-debugging-port=${port}${profileFlag} &`;
+    }
+
+    logger.info(`[browser] Launching Chrome: ${cmd}`);
+    await new Promise<void>((resolve, reject) => {
+      exec(cmd, (err) => {
+        if (err) reject(new Error(`Couldn't launch Chrome: ${err.message}`));
+        else resolve();
+      });
+    });
+
+    // Wait for CDP port to be ready (up to 10s)
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
+        if (res.ok) {
+          const data = await res.json() as { webSocketDebuggerUrl?: string };
+          if (data.webSocketDebuggerUrl) {
+            logger.info(`[browser] Chrome launched with CDP on port ${port}${profileDir ? ` (profile: ${profileDir})` : ''}`);
+            return data.webSocketDebuggerUrl;
+          }
+        }
+      } catch { /* retry */ }
+    }
+
+    throw new Error(`Chrome didn't start with remote debugging on port ${port}. Try launching Chrome manually with: chrome --remote-debugging-port=${port}`);
   }
 
   // ==========================================================================

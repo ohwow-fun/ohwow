@@ -47,6 +47,10 @@ export interface RuntimeConfig {
   localUrl: string;
   /** Run browser in headless mode (default: true). Set OHWOW_BROWSER_HEADLESS=false to show window. */
   browserHeadless: boolean;
+  /** Browser target: 'chromium' (Playwright default) or 'chrome' (connect to real Chrome via CDP). Default: 'chrome'. */
+  browserTarget: 'chromium' | 'chrome';
+  /** CDP port for Chrome remote debugging (default: 9222). Only used when browserTarget is 'chrome'. */
+  chromeCdpPort: number;
   /** Ollama URL for local model inference (default: http://localhost:11434) */
   ollamaUrl: string;
   /** Ollama model name (default: llama3.1) */
@@ -160,6 +164,8 @@ interface ConfigFile {
   jwtSecret?: string;
   localUrl?: string;
   browserHeadless?: boolean;
+  browserTarget?: 'chromium' | 'chrome';
+  chromeCdpPort?: number;
   ollamaUrl?: string;
   ollamaModel?: string;
   preferLocalModel?: boolean;
@@ -267,6 +273,8 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     jwtSecret: process.env.ENTERPRISE_JWT_SECRET || fileConfig.jwtSecret || '',
     localUrl: process.env.OHWOW_LOCAL_URL || fileConfig.localUrl || `http://localhost:${fileConfig.port || DEFAULT_PORT}`,
     browserHeadless: process.env.OHWOW_BROWSER_HEADLESS === 'true' ? true : (fileConfig.browserHeadless === true),
+    browserTarget: (process.env.OHWOW_BROWSER_TARGET as 'chromium' | 'chrome') || fileConfig.browserTarget || 'chrome',
+    chromeCdpPort: parseInt(process.env.OHWOW_CHROME_CDP_PORT || '', 10) || fileConfig.chromeCdpPort || 9222,
     ollamaUrl: process.env.OHWOW_OLLAMA_URL || fileConfig.ollamaUrl || 'http://localhost:11434',
     ollamaModel: process.env.OHWOW_OLLAMA_MODEL || fileConfig.ollamaModel || 'qwen3:4b',
     preferLocalModel: process.env.OHWOW_PREFER_LOCAL === 'true' || fileConfig.preferLocalModel === true,

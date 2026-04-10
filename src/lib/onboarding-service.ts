@@ -178,6 +178,8 @@ export class OnboardingService {
       jwtSecret: '',
       localUrl: `http://localhost:${DEFAULT_PORT}`,
       browserHeadless: false,
+      browserTarget: 'chrome',
+      chromeCdpPort: 9222,
       ollamaUrl: 'http://localhost:11434',
       ollamaModel: modelTag,
       preferLocalModel: true,

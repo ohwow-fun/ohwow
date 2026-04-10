@@ -19,7 +19,7 @@ import type { BrowserAction, BrowserActionResult } from './browser-types.js';
 export const REQUEST_BROWSER_TOOL: Tool = {
   name: 'request_browser',
   description:
-    'Request a local browser to visit websites, interact with pages, or extract web content. Call this if the task requires browsing. A Chromium browser will be launched and browser tools will become available.',
+    'Request a local browser to visit websites, interact with pages, or extract web content. Call this if the task requires browsing. By default, connects to the user\'s real Chrome browser (with all their logged-in sessions and cookies). Use the profile parameter to choose a Chrome profile, or set profile to "isolated" for a fresh Chromium without any sessions.',
   input_schema: {
     type: 'object',
     properties: {
@@ -27,8 +27,22 @@ export const REQUEST_BROWSER_TOOL: Tool = {
         type: 'string',
         description: 'Brief reason why browser access is needed',
       },
+      profile: {
+        type: 'string',
+        description: 'Chrome profile to use. Options: a profile directory name from list_chrome_profiles (e.g. "Profile 1"), an email to auto-match (e.g. "ogsus@ohwow.fun"), or "isolated" for a fresh browser with no sessions. Omit to use the default Chrome profile.',
+      },
     },
     required: ['reason'],
+  },
+};
+
+/** Tool to discover Chrome profiles before choosing one */
+export const LIST_CHROME_PROFILES_TOOL: Tool = {
+  name: 'list_chrome_profiles',
+  description: 'List all Chrome profiles on this device with their names and email accounts. Use this to find the right profile before opening the browser (e.g. to find which profile is logged into a specific service).',
+  input_schema: {
+    type: 'object',
+    properties: {},
   },
 };
 
