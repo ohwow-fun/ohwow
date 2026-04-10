@@ -127,7 +127,8 @@ export async function runAgent(
   // Enrich prompt with matched SOP if available
   let enrichedPrompt = prompt;
   try {
-    const { extractKeywords, matchesTriggers } = await import('../../lib/token-similarity.js');
+    const tokenSim = await import('../../lib/token-similarity.js');
+    const { extractKeywords, matchesTriggers } = tokenSim;
     const { data: procedureSkills } = await ctx.db.from('agent_workforce_skills')
       .select('name, definition, triggers')
       .eq('workspace_id', ctx.workspaceId)
@@ -150,13 +151,19 @@ export async function runAgent(
             const usesDesktop = seq.some((s: string | { tool: string }) => { const n = typeof s === 'string' ? s : s.tool; return n.startsWith('desktop_') || n === 'request_desktop'; });
             const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
             const activationLabel = usesDesktop ? 'desktop control' : 'browser';
+            const { logger: sopLogger } = await import('../../lib/logger.js');
+            sopLogger.info({ skill: skill.name, activationTool }, '[run_agent] SOP matched, enriching prompt');
             enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call, not text. Start with ${activationTool} to activate ${activationLabel}, then follow each step. If you respond with only text and no tool calls, the task will be marked as failed.\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n${seq.map((s: string | { tool: string }, i: number) => `${i + 1}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
           }
           break;
         }
       }
     }
-  } catch { /* non-critical: SOP enrichment failed */ }
+  } catch (sopErr) {
+    // Log so we can diagnose enrichment failures
+    const { logger } = await import('../../lib/logger.js');
+    logger.warn({ err: sopErr instanceof Error ? sopErr.message : sopErr }, '[run_agent] SOP enrichment failed');
+  }
 
   // Create task
   const insertPayload: Record<string, unknown> = {
