@@ -971,6 +971,7 @@ export class RuntimeEngine {
         localFilesEnabled: localFilesEnabled && fileAccessGuard !== null,
         bashEnabled: bashEnabled && fileAccessGuard !== null,
         devopsEnabled,
+        desktopEnabled,
         approvalRequired,
         goalContext,
       });
@@ -2980,6 +2981,7 @@ export class RuntimeEngine {
     localFilesEnabled?: boolean;
     bashEnabled?: boolean;
     devopsEnabled?: boolean;
+    desktopEnabled?: boolean;
     approvalRequired?: boolean;
     goalContext?: string;
   }): string {
@@ -3006,6 +3008,24 @@ You have web search capability. Use it whenever you need current or factual info
     const bashSection = opts.bashEnabled ? BASH_SYSTEM_PROMPT : '';
     const devopsSection = opts.devopsEnabled ? DEVOPS_SYSTEM_PROMPT : '';
 
+    // Guide the agent on when to use browser vs desktop
+    const toolChoiceGuide = opts.browserEnabled && opts.desktopEnabled ? `
+## Browser vs Desktop: When to Use Which
+
+**Use request_desktop when the task involves:**
+- Social media accounts (X/Twitter, Instagram, LinkedIn) — the user's Chrome has saved logins
+- Email, banking, or any service requiring stored credentials
+- Native macOS apps (Finder, Mail, Calendar, VS Code)
+- Tasks where you need to see and interact with the actual screen
+
+**Use request_browser (with profile="isolated") when the task involves:**
+- Public web search, research, scraping
+- Reading public pages that don't need login
+- Tasks where speed matters more than credentials
+
+**Rule of thumb:** If the task mentions a specific account, service login, or "my" (my email, my messages, my account), use request_desktop. If it's public information gathering, use request_browser.
+` : '';
+
     const wrappedBusinessDesc = biz.businessDescription
       ? wrapUserData(biz.businessDescription)
       : `A ${biz.businessType.replace(/_/g, ' ')} business.`;
@@ -3014,7 +3034,7 @@ You have web search capability. Use it whenever you need current or factual info
 
 ## Business Context
 ${wrappedBusinessDesc}
-${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${skillsSection}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
+${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${skillsSection}${toolChoiceGuide}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
 ## Guidelines
 - Always maintain a professional and helpful tone
 - Focus on quality and accuracy in your work

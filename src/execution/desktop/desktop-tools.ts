@@ -15,7 +15,7 @@ import type { DesktopAction, DesktopActionResult, DisplayInfo } from './desktop-
 export const REQUEST_DESKTOP_TOOL: Tool = {
   name: 'request_desktop',
   description:
-    'Request desktop control to interact with macOS apps. Call this when the task requires clicking, typing, or taking screenshots of the desktop. Desktop tools will become available after activation.',
+    'Request desktop control to interact with the user\'s real macOS screen. Use this for: (1) controlling native apps (Finder, Mail, Calendar, VS Code), (2) interacting with the user\'s real Chrome browser that has saved logins and cookies (social media, email, banking), (3) multi-app coordination, (4) tasks needing visual verification via screenshots. Desktop control sees the actual screen — all logged-in sessions, all open apps. Only one task can control the desktop at a time.',
   input_schema: {
     type: 'object',
     properties: {

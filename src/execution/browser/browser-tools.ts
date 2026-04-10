@@ -19,7 +19,7 @@ import type { BrowserAction, BrowserActionResult } from './browser-types.js';
 export const REQUEST_BROWSER_TOOL: Tool = {
   name: 'request_browser',
   description:
-    'Request a local browser to visit websites, interact with pages, or extract web content. Call this if the task requires browsing. By default, connects to the user\'s real Chrome browser (with all their logged-in sessions and cookies). Use the profile parameter to choose a Chrome profile, or set profile to "isolated" for a fresh Chromium without any sessions.',
+    'Request a browser for web tasks. Use this for: (1) public websites, search, research — use profile="isolated" for speed and privacy, (2) web apps where the user is already logged in (X, Gmail, etc.) — omit profile to use their real Chrome with saved sessions. Do NOT use this for native macOS apps (use request_desktop instead). For tasks needing saved credentials on websites (X, Gmail, etc.), use the real Chrome profile, NOT "isolated".',
   input_schema: {
     type: 'object',
     properties: {

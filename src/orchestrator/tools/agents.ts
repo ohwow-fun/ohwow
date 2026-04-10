@@ -144,7 +144,13 @@ export async function runAgent(
           if (def?.tool_sequence) {
             const steps = (def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) =>
               `${i + 1}. ${typeof s === 'string' ? s : s.tool}`).join(', ');
-            enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call, not text. Start with request_desktop to activate desktop control, then follow each step. If you respond with only text and no tool calls, the task will be marked as failed.\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n${(def.tool_sequence as Array<string | { tool: string }>).map((s: string | { tool: string }, i: number) => `${i + 1}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
+            // Detect whether the SOP uses desktop or browser tools
+            const seq = def.tool_sequence as Array<string | { tool: string }>;
+            const firstToolName = typeof seq[0] === 'string' ? seq[0] : seq[0]?.tool || '';
+            const usesDesktop = seq.some((s: string | { tool: string }) => { const n = typeof s === 'string' ? s : s.tool; return n.startsWith('desktop_') || n === 'request_desktop'; });
+            const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
+            const activationLabel = usesDesktop ? 'desktop control' : 'browser';
+            enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call, not text. Start with ${activationTool} to activate ${activationLabel}, then follow each step. If you respond with only text and no tool calls, the task will be marked as failed.\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n${seq.map((s: string | { tool: string }, i: number) => `${i + 1}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
           }
           break;
         }
