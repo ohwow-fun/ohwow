@@ -171,7 +171,19 @@ export class LocalOrchestrator {
   }
 
   private get browserState(): BrowserState {
-    return { service: this.browserService, activated: this.browserActivated, headless: this.browserHeadless, dataDir: this.dataDir };
+    return {
+      service: this.browserService,
+      activated: this.browserActivated,
+      headless: this.browserHeadless,
+      dataDir: this.dataDir,
+      activate: async () => {
+        if (!this.browserService) {
+          this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+          this.browserActivated = true;
+          this.syncOrganToBody();
+        }
+      },
+    };
   }
 
   private get desktopState(): DesktopState {
@@ -1856,6 +1868,28 @@ export class LocalOrchestrator {
     this.brain?.resetSession();
 
     for (let iteration = 0; iteration < maxIter; iteration++) {
+      // Evict old screenshots: keep only the most recent image to avoid
+      // blowing the context window on multi-step desktop workflows.
+      // Each base64 screenshot is ~40-50K tokens.
+      if (iteration > 0) {
+        let lastImageIdx = -1;
+        for (let i = loopMessages.length - 1; i >= 0; i--) {
+          const c = loopMessages[i].content;
+          if (Array.isArray(c) && c.some(p => p.type === 'image_url')) {
+            if (lastImageIdx === -1) {
+              lastImageIdx = i;
+            } else {
+              const filtered = c.filter(p => p.type !== 'image_url');
+              if (filtered.length === 1 && filtered[0].type === 'text') {
+                loopMessages[i].content = filtered[0].text || '';
+              } else {
+                loopMessages[i].content = filtered;
+              }
+            }
+          }
+        }
+      }
+
       // Per-iteration model selection: cheapest model that can handle this step
       const iterModel = this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
       if (iteration === 0 || iterModel !== (this.orchestratorModel || 'x-ai/grok-4.1-fast')) {
@@ -1927,6 +1961,7 @@ export class LocalOrchestrator {
 
       // Parse and execute tool calls
       const toolResultsSummary: { name: string; content: string }[] = [];
+      const screenshotImages: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
       const validRequests: { req: ToolCallRequest; toolCall: typeof response.toolCalls[0] }[] = [];
       const toolLoopAborted = false;
 
@@ -2052,6 +2087,18 @@ export class LocalOrchestrator {
           sessionToolNames.push(req.name);
           loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
           toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
+
+          // Collect base64 images from formattedBlocks for vision-capable models (OpenRouter path)
+          if (outcome.formattedBlocks) {
+            for (const block of outcome.formattedBlocks) {
+              if (block.type === 'image' && 'source' in block) {
+                const src = (block as { type: 'image'; source: { type: string; media_type: string; data: string } }).source;
+                if (src.type === 'base64' && src.data) {
+                  screenshotImages.push({ type: 'image_url', image_url: { url: `data:${src.media_type};base64,${src.data}` } });
+                }
+              }
+            }
+          }
         }
       }
 
@@ -2100,7 +2147,24 @@ export class LocalOrchestrator {
       const resultsBlock = toolResultsSummary
         .map(r => `## ${r.name}\n${r.content}`)
         .join('\n\n');
-      loopMessages.push({ role: 'user', content: `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${reflectionText}]` });
+      const reflectionContent = `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${reflectionText}]`;
+
+      // Include screenshot images in the reflection message for vision-capable models (OpenRouter path)
+      // Evict old screenshots first: keep only the most recent to avoid blowing context
+      if (screenshotImages.length > 1) {
+        screenshotImages.splice(0, screenshotImages.length - 1);
+      }
+      if (screenshotImages.length > 0) {
+        loopMessages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: reflectionContent },
+            ...screenshotImages,
+          ],
+        });
+      } else {
+        loopMessages.push({ role: 'user', content: reflectionContent });
+      }
 
       // Homeostasis: dispatch corrective actions mid-loop
       if (this.homeostasisController) {

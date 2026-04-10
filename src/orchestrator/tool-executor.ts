@@ -73,6 +73,8 @@ export interface BrowserState {
   activated: boolean;
   headless: boolean;
   dataDir: string;
+  /** Lazy-activation callback: creates browser service on demand when a browser tool is called without prior request_browser */
+  activate?: () => Promise<void>;
 }
 
 export interface DesktopState {
@@ -128,31 +130,37 @@ export async function* executeToolCall(
     toolInput = ctx.options.transformToolInput(request.name, toolInput);
   }
 
+  // Observation tools must always re-execute — screen/page state changes between actions
+  const isObservationTool = /^(desktop_screenshot|browser_snapshot|browser_screenshot|browser_take_screenshot)$/.test(request.name)
+    || /^mcp__.*__(browser_snapshot|browser_take_screenshot)$/.test(request.name);
+
   // Deduplicate: return cached result for identical tool+input (per-turn)
   const toolKey = `${request.name}:${stableKey(toolInput)}`;
-  const cachedResult = ctx.executedToolCalls.get(toolKey);
-  if (cachedResult) {
-    yield { type: 'tool_done', name: request.name, result: cachedResult };
-    return {
-      toolName: request.name,
-      result: cachedResult,
-      resultContent: `You already called ${request.name} with these same arguments and received the result above. Do not repeat this call — use the existing result to answer the user now.`,
-      isError: false,
-    };
-  }
-
-  // Cross-turn cache check
-  if (ctx.toolCache) {
-    const crossTurnCached = ctx.toolCache.get(request.name, toolInput);
-    if (crossTurnCached) {
-      ctx.executedToolCalls.set(toolKey, crossTurnCached);
-      yield { type: 'tool_done', name: request.name, result: crossTurnCached };
+  if (!isObservationTool) {
+    const cachedResult = ctx.executedToolCalls.get(toolKey);
+    if (cachedResult) {
+      yield { type: 'tool_done', name: request.name, result: cachedResult };
       return {
         toolName: request.name,
-        result: crossTurnCached,
-        resultContent: summarizeToolResult(request.name, JSON.stringify(crossTurnCached.data), !crossTurnCached.success),
-        isError: !crossTurnCached.success,
+        result: cachedResult,
+        resultContent: `You already called ${request.name} with these same arguments and received the result above. Do not repeat this call — use the existing result to answer the user now.`,
+        isError: false,
       };
+    }
+
+    // Cross-turn cache check
+    if (ctx.toolCache) {
+      const crossTurnCached = ctx.toolCache.get(request.name, toolInput);
+      if (crossTurnCached) {
+        ctx.executedToolCalls.set(toolKey, crossTurnCached);
+        yield { type: 'tool_done', name: request.name, result: crossTurnCached };
+        return {
+          toolName: request.name,
+          result: crossTurnCached,
+          resultContent: summarizeToolResult(request.name, JSON.stringify(crossTurnCached.data), !crossTurnCached.success),
+          isError: !crossTurnCached.success,
+        };
+      }
     }
   }
 
@@ -359,6 +367,14 @@ export async function* executeToolCall(
   }
 
   // --- Browser tool execution ---
+  // Auto-activate browser service if a browser tool is called without prior request_browser
+  if (isBrowserTool(request.name) && !ctx.browserState.service && ctx.browserState.activate) {
+    try {
+      await ctx.browserState.activate();
+    } catch {
+      // Non-fatal: fall through to MCP or error path
+    }
+  }
   if (isBrowserTool(request.name) && ctx.browserState.service) {
     const browserResult = await executeBrowserTool(ctx.browserState.service, request.name, toolInput);
     let screenshotPath: string | undefined;
