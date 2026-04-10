@@ -178,11 +178,12 @@ function resolveOpenRouterAlias(model: string): string | undefined {
 }
 
 // Model tiers for per-iteration selection (from CURATED_OPENROUTER_MODELS)
+// Prioritize cost-effective models with reliable tool calling
 const AGENT_MODEL_TIERS = {
   FREE: 'xiaomi/mimo-v2-flash',             // FREE, 262K ctx, tools
-  FAST: 'x-ai/grok-4.1-fast',              // $0.20/$0.50 per M, 2M ctx, tools
+  FAST: 'qwen/qwen3.5-9b',                 // $0.05/$0.15 per M, 262K ctx, tools+vision, very cheap
   BALANCED: 'deepseek/deepseek-v3.2',       // $0.26/$0.38 per M, 163K ctx, tools
-  STRONG: 'anthropic/claude-sonnet-4.6',    // $3/$15 per M, 1M ctx, tools+vision, best tool calling
+  STRONG: 'google/gemini-3.1-pro-preview',  // $2/$12 per M, 1M ctx, tools+vision, reliable tool calling
   VISION: 'google/gemini-3.1-flash-lite-preview', // 1M ctx, vision+tools, cheap
 } as const;
 
