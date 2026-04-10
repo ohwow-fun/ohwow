@@ -70,6 +70,7 @@ import {
   type SessionDeps,
   type MemoryExtractionDeps,
 } from './session-store.js';
+import { extractGoalCheckpoints, loadActiveGoals, formatGoalsForPrompt, type GoalCheckpointDeps } from './goal-checkpoints.js';
 import {
   buildTargetedPrompt,
   buildFullPrompt,
@@ -1648,6 +1649,12 @@ export class LocalOrchestrator {
     );
     let systemPrompt = staticPart + '\n\n' + dynamicPart;
 
+    // Active goal checkpoints (cross-session continuity)
+    const goalDeps: GoalCheckpointDeps = { db: this.db, workspaceId: this.workspaceId, modelRouter: this.modelRouter };
+    const activeGoals = await loadActiveGoals(goalDeps);
+    const goalsSection = formatGoalsForPrompt(activeGoals);
+    if (goalsSection) systemPrompt += `\n\n${goalsSection}`;
+
     // Full philosophical layers — OpenRouter cloud models have 128K+ context
 
     // Persona (Aristotle's Psyche)
@@ -2166,6 +2173,13 @@ export class LocalOrchestrator {
       extractOrchestratorMemory(this.memoryDeps, sessionId, userMessage, fullContent).catch((err) => {
         logger.error(`[orchestrator] OpenRouter memory extraction failed: ${err}`);
       });
+    }
+
+    // Goal checkpoint extraction (fire-and-forget, every exchange)
+    if (fullContent) {
+      const goalDeps: GoalCheckpointDeps = { db: this.db, workspaceId: this.workspaceId, modelRouter: this.modelRouter };
+      const conversationId = sessionId; // session = conversation for local
+      extractGoalCheckpoints(goalDeps, conversationId, userMessage, fullContent, this.exchangeCount).catch(() => {});
     }
 
     await this.brain?.flush();
