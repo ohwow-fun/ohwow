@@ -63,6 +63,7 @@ function describeAction(action: DesktopAction, appName: string | null): string {
     case 'key': return `Press ${action.key}${inApp}`;
     case 'scroll': return `Scroll ${action.direction} at (${action.x}, ${action.y})${inApp}`;
     case 'left_click_drag': return `Drag from (${action.startX}, ${action.startY}) to (${action.endX}, ${action.endY})${inApp}`;
+    case 'move_window': return `Move window to display ${action.display}`;
     default: return `${action.type}${inApp}`;
   }
 }
@@ -464,6 +465,31 @@ export class LocalDesktopService {
             await mouse.releaseButton(Button.LEFT);
           }
           result = await this.mutationResult('left_click_drag');
+          break;
+        }
+
+        case 'move_window': {
+          const targetDisplay = this.screenInfo.displays.find(d => d.displayNumber === action.display);
+          if (!targetDisplay) {
+            const available = this.screenInfo.displays.map(d => d.displayNumber).join(', ');
+            result = { success: false, type: 'move_window', error: `Display ${action.display} not found. Available: ${available}` };
+          } else {
+            try {
+              const { execSync } = await import('child_process');
+              // AppleScript: move frontmost window to target display (logical coordinates)
+              const script = `tell application "System Events"
+  set frontApp to first application process whose frontmost is true
+  tell frontApp
+    set position of window 1 to {${targetDisplay.originX}, ${targetDisplay.originY}}
+    set size of window 1 to {${targetDisplay.logicalWidth}, ${targetDisplay.logicalHeight}}
+  end tell
+end tell`;
+              execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout: 5000 });
+              result = await this.mutationResult('move_window');
+            } catch (err) {
+              result = { success: false, type: 'move_window', error: `Couldn't move window: ${err instanceof Error ? err.message : err}` };
+            }
+          }
           break;
         }
 

@@ -29,12 +29,13 @@ export const REQUEST_DESKTOP_TOOL: Tool = {
 };
 
 export const DESKTOP_ACTIVATION_MESSAGE = `Desktop control activated. You now have these tools:
-- desktop_screenshot: Capture the screen (always do this first)
+- desktop_screenshot: Capture the screen (use display:N for a specific monitor)
 - desktop_click: Click at coordinates (x, y)
 - desktop_type: Type text at cursor position
 - desktop_key: Press keyboard shortcuts (e.g. "cmd+c", "enter")
 - desktop_scroll: Scroll at position
 - desktop_drag: Click-drag between two points
+- desktop_move_window: Move frontmost window to a different display
 - desktop_wait: Pause for a duration
 
 Workflow: screenshot first to see the screen, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
@@ -60,7 +61,13 @@ Coordinate system: Screenshots are scaled to fit within 1280x800. Use coordinate
 Multi-monitor setup:
 ${displayDescs.join('\n')}
 
-You can capture a specific display for better resolution: desktop_screenshot with display parameter (e.g. display: 1 for the primary). Omit to capture all displays as a composite. Use composite to see the full layout, then switch to single-display for precise interactions.`;
+Multi-monitor workflow:
+- To work on a specific display, capture it: desktop_screenshot(display: N) for full-resolution view
+- After capturing a display, all click/type/key actions target that display's coordinate space
+- Use desktop_move_window(display: N) to move the frontmost window between displays
+- Default screenshot (no display param) captures the primary display only
+- Display 1 is the primary (usually laptop). Higher numbers are external monitors.
+- When switching displays, always take a fresh screenshot of the target first`;
   }
 
   prompt += `
@@ -205,6 +212,21 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
       required: ['duration'],
     },
   },
+  {
+    name: 'desktop_move_window',
+    description:
+      'Move the frontmost window to a specific display. The window fills the target display. Use this to arrange apps across monitors (e.g. move Chrome to the external display).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        display: {
+          type: 'number',
+          description: 'Target display number (1 = primary/laptop, 2 = external monitor, etc.)',
+        },
+      },
+      required: ['display'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -219,6 +241,7 @@ const DESKTOP_TOOL_NAMES = new Set([
   'desktop_scroll',
   'desktop_drag',
   'desktop_wait',
+  'desktop_move_window',
 ]);
 
 /** Check if a tool name is a desktop tool */
@@ -299,6 +322,9 @@ function mapToolToAction(
     case 'desktop_wait':
       return { type: 'wait', duration: input.duration as number };
 
+    case 'desktop_move_window':
+      return { type: 'move_window', display: input.display as number };
+
     default:
       return null;
   }
@@ -336,6 +362,7 @@ export function formatDesktopToolResult(
     mouse_move: 'Mouse moved.',
     wait: 'Wait completed.',
     left_click_drag: 'Drag performed.',
+    move_window: 'Window moved to target display.',
   };
 
   blocks.push({ type: 'text', text: descriptions[result.type] ?? `Action ${result.type} completed.` });

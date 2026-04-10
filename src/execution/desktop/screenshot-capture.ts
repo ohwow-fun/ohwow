@@ -341,10 +341,21 @@ export async function captureAndScaleScreenshot(
   const tmpPath = join(tmpdir(), `ohwow-desktop-${Date.now()}.jpg`);
 
   try {
-    // Capture: specific display or all screens
+    // Validate display number if provided
+    if (displayNumber !== undefined && screenInfo.displays.length > 0) {
+      const validNums = screenInfo.displays.map(d => d.displayNumber);
+      if (!validNums.includes(displayNumber)) {
+        throw new Error(`Invalid display number: ${displayNumber}. Available: ${validNums.join(', ')}`);
+      }
+    }
+
+    // On multi-monitor, default to primary display for better resolution
+    const effectiveDisplay = displayNumber ?? (screenInfo.displays.length > 1 ? 1 : undefined);
+
+    // Capture: specific display or primary
     const captureArgs = ['-x', '-t', 'jpg'];
-    if (displayNumber) {
-      captureArgs.push('-D', String(displayNumber));
+    if (effectiveDisplay) {
+      captureArgs.push('-D', String(effectiveDisplay));
     }
     captureArgs.push(tmpPath);
     execFileSync('screencapture', captureArgs, { timeout: 10000 });

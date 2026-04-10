@@ -20,7 +20,8 @@ export type DesktopActionType =
   | 'scroll'
   | 'mouse_move'
   | 'wait'
-  | 'left_click_drag';
+  | 'left_click_drag'
+  | 'move_window';
 
 // ============================================================================
 // DESKTOP ACTIONS (tool inputs for the LLM)
@@ -38,6 +39,7 @@ export interface DesktopScrollAction { type: 'scroll'; x: number; y: number; dir
 export interface DesktopMouseMoveAction { type: 'mouse_move'; x: number; y: number }
 export interface DesktopWaitAction { type: 'wait'; duration: number }
 export interface DesktopLeftClickDragAction { type: 'left_click_drag'; startX: number; startY: number; endX: number; endY: number }
+export interface DesktopMoveWindowAction { type: 'move_window'; display: number }
 
 export type DesktopAction =
   | DesktopScreenshotAction
@@ -51,7 +53,8 @@ export type DesktopAction =
   | DesktopScrollAction
   | DesktopMouseMoveAction
   | DesktopWaitAction
-  | DesktopLeftClickDragAction;
+  | DesktopLeftClickDragAction
+  | DesktopMoveWindowAction;
 
 // ============================================================================
 // ACTION RESULTS
