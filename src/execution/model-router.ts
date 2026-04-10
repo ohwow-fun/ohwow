@@ -871,7 +871,25 @@ export const CURATED_OPENROUTER_MODELS: OpenRouterModelInfo[] = [
     supportsVision: true,
     isFree: false,
   },
+  {
+    id: 'x-ai/grok-4.1-fast',
+    name: 'Grok 4.1 Fast',
+    contextLength: 2_000_000,
+    pricing: { prompt: 0.0000002, completion: 0.0000005 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
   // ── Tier 2: Premium models ──────────────────────────────────────────
+  {
+    id: 'x-ai/grok-4.20',
+    name: 'Grok 4.20',
+    contextLength: 2_000_000,
+    pricing: { prompt: 0.000002, completion: 0.000006 },
+    supportsTools: true,
+    supportsVision: false,
+    isFree: false,
+  },
   {
     id: 'anthropic/claude-sonnet-4.6',
     name: 'Claude Sonnet 4.6',
