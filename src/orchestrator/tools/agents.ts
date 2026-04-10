@@ -168,7 +168,8 @@ export async function runAgent(
             const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
             const activationLabel = usesDesktop ? 'desktop control' : 'browser';
             logger.info({ skill: skill.name, activationTool }, '[run_agent] SOP matched, enriching prompt');
-            enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call, not text. Start with ${activationTool} to activate ${activationLabel}, then follow each step. If you respond with only text and no tool calls, the task will be marked as failed.\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n${seq.map((s: string | { tool: string }, i: number) => `${i + 1}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
+            const avoidTool = usesDesktop ? 'Do NOT use request_browser. This task requires desktop automation to access the real Chrome browser with saved logins.' : 'Do NOT use request_desktop for this task.';
+            enrichedPrompt += `\n\nCRITICAL INSTRUCTION: You MUST call the tools listed below. Your FIRST action must be a tool call to ${activationTool}, not text. ${avoidTool}\n\nPROCEDURE: "${skill.name}"\nTool calls to execute in order:\n1. Call ${activationTool}(reason: "${skill.name}")\n${seq.map((s: string | { tool: string }, i: number) => `${i + 2}. Call ${typeof s === 'string' ? s : s.tool}`).join('\n')}`;
           }
           break;
         }

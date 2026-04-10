@@ -182,7 +182,7 @@ const AGENT_MODEL_TIERS = {
   FREE: 'xiaomi/mimo-v2-flash',             // FREE, 262K ctx, tools
   FAST: 'x-ai/grok-4.1-fast',              // $0.20/$0.50 per M, 2M ctx, tools
   BALANCED: 'deepseek/deepseek-v3.2',       // $0.26/$0.38 per M, 163K ctx, tools
-  STRONG: 'x-ai/grok-4.20',                // $2/$6 per M, 2M ctx, tools
+  STRONG: 'anthropic/claude-sonnet-4.6',    // $3/$15 per M, 1M ctx, tools+vision, best tool calling
   VISION: 'google/gemini-3.1-flash-lite-preview', // 1M ctx, vision+tools, cheap
 } as const;
 
@@ -889,7 +889,10 @@ export class RuntimeEngine {
       const bashEnabled = agentConfig.bash_enabled === true;
       const mcpEnabled = agentConfig.mcp_enabled === true;
       const devopsEnabled = agentConfig.devops_enabled === true;
-      const desktopEnabled = agentConfig.desktop_enabled === true;
+      // Desktop/browser can be enabled via agent config OR via SOP in the task input
+      const sopTaskInputForCaps = String(task.input || '');
+      const sopNeedsDesktop = sopTaskInputForCaps.includes('request_desktop') || sopTaskInputForCaps.includes('desktop_focus_app');
+      const desktopEnabled = agentConfig.desktop_enabled === true || agentConfig.desktop_enabled === 1 || sopNeedsDesktop;
       const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
       const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
       const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];
@@ -1201,8 +1204,16 @@ export class RuntimeEngine {
       // State tools always available — agents need cross-task persistence
       tools.push(...STATE_TOOL_DEFINITIONS);
       if (webSearchEnabled) tools.push(WEB_SEARCH_TOOL);
-      if (browserEnabled) tools.push(REQUEST_BROWSER_TOOL);
+
+      // When SOP explicitly says "Do NOT use request_browser", exclude it from tools
+      // so the model can't even call it. Same for desktop exclusion.
+      const sopTaskInput = String(task.input || '');
+      const sopExcludesBrowser = sopTaskInput.includes('Do NOT use request_browser');
+      const sopExcludesDesktop = sopTaskInput.includes('Do NOT use request_desktop');
+
+      if (browserEnabled && !sopExcludesBrowser) tools.push(REQUEST_BROWSER_TOOL);
       if (desktopEnabled) tools.push(REQUEST_DESKTOP_TOOL);
+      // If SOP excludes desktop, still include it — desktop is rarely excluded
       // When real Chrome is available via CDP, skip Scrapling — Chrome handles
       // both public and authenticated pages. Scrapling is only useful as a
       // lightweight fallback when no browser is available.
@@ -2676,6 +2687,15 @@ export class RuntimeEngine {
           fullContent = response.content;
         }
 
+        // Log tool call status for debugging
+        logger.debug({
+          iteration,
+          toolCallCount: response.toolCalls?.length ?? 0,
+          hasContent: !!response.content,
+          contentPreview: response.content?.slice(0, 100),
+          model: response.model,
+        }, '[engine] agent iteration response');
+
         // No tool calls = done
         if (!response.toolCalls || response.toolCalls.length === 0) {
           break;
@@ -3097,9 +3117,17 @@ export class RuntimeEngine {
     // Vision-required: use a vision-capable model
     if (needsVision) return AGENT_MODEL_TIERS.VISION;
 
+    // SOP-driven tasks: stay on STRONG for the entire procedure
+    // The SOP has multi-step tool sequences (request_desktop → focus → type → screenshot)
+    // and the model needs to continue calling tools, not just summarize
+    if (hasSOP) {
+      if (iteration <= 6) return AGENT_MODEL_TIERS.STRONG;
+      return AGENT_MODEL_TIERS.FAST; // tail iterations for cleanup
+    }
+
     // Iteration 0: quality matters most for initial reasoning + tool planning
     if (iteration === 0) {
-      if (hasSOP || difficulty === 'complex') return AGENT_MODEL_TIERS.STRONG;
+      if (difficulty === 'complex') return AGENT_MODEL_TIERS.STRONG;
       if (difficulty === 'moderate') return AGENT_MODEL_TIERS.BALANCED;
       return AGENT_MODEL_TIERS.FAST;
     }
