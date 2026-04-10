@@ -564,7 +564,7 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     : '';
 
   const skillsSection = args.learnedSkills && args.learnedSkills.length > 0
-    ? `\n## Learned Procedures\nReusable procedures from successful task patterns. Follow the steps when the user's request matches:\n${args.learnedSkills.map(s => {
+    ? `\n## Learned Procedures\n**CRITICAL: When a procedure below matches the user's request, execute its tool_sequence steps directly. Do NOT delegate to agents via run_agent. Do NOT use browser tools (Chromium) when the procedure uses desktop tools (real Chrome).**\n\n${args.learnedSkills.map(s => {
         const successLabel = s.success_rate != null ? `, ${Math.round(s.success_rate * 100)}% success` : '';
         const usedLabel = s.times_used ? `, used ${s.times_used}x` : '';
         const header = `- **${s.name}** (${s.skill_type || 'general'}${successLabel}${usedLabel}): ${s.description || ''}`;
