@@ -189,5 +189,123 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
     }
   });
 
+  // Get task trace (ReAct steps from metadata)
+  router.get('/api/tasks/:id/trace', async (req, res) => {
+    try {
+      const { data: task } = await db.from('agent_workforce_tasks')
+        .select('id, metadata')
+        .eq('id', req.params.id)
+        .single();
+
+      if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
+
+      const meta = typeof (task as Record<string, unknown>).metadata === 'string'
+        ? JSON.parse((task as Record<string, unknown>).metadata as string)
+        : ((task as Record<string, unknown>).metadata || {});
+
+      res.json({
+        reactTrace: meta.react_trace || [],
+        toolCalls: meta.tool_calls || [],
+        sipocTrace: meta.sipoc_trace || null,
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Get task activity feed
+  router.get('/api/tasks/:id/activity', async (req, res) => {
+    try {
+      const { data } = await db.from('agent_workforce_activity_feed')
+        .select('*')
+        .eq('task_id', req.params.id)
+        .order('created_at', { ascending: true });
+
+      res.json({ data: data || [] });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Get agent state for this task's agent
+  router.get('/api/tasks/:id/state', async (req, res) => {
+    try {
+      const { data: task } = await db.from('agent_workforce_tasks')
+        .select('agent_id')
+        .eq('id', req.params.id)
+        .single();
+
+      if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
+
+      const agentId = (task as Record<string, unknown>).agent_id as string;
+      const { data } = await db.from('agent_workforce_state')
+        .select('*')
+        .eq('agent_id', agentId)
+        .order('updated_at', { ascending: false });
+
+      res.json({ data: data || [] });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Get task deliverables
+  router.get('/api/tasks/:id/deliverables', async (req, res) => {
+    try {
+      const { data } = await db.from('agent_workforce_deliverables')
+        .select('*')
+        .eq('task_id', req.params.id)
+        .order('created_at', { ascending: true });
+
+      res.json({ data: data || [] });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Get task replay (merged timeline)
+  router.get('/api/tasks/:id/replay', async (req, res) => {
+    try {
+      const { data: task } = await db.from('agent_workforce_tasks')
+        .select('id, title, status, output, metadata, duration_seconds, tokens_used, completed_at')
+        .eq('id', req.params.id)
+        .single();
+
+      if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
+
+      const meta = typeof (task as Record<string, unknown>).metadata === 'string'
+        ? JSON.parse((task as Record<string, unknown>).metadata as string)
+        : ((task as Record<string, unknown>).metadata || {});
+
+      // Build a basic timeline from available data
+      const timeline = [];
+      const reactTrace = meta.react_trace || [];
+      for (const step of reactTrace) {
+        if (step.action) {
+          timeline.push({
+            id: `step-${step.step || timeline.length}`,
+            type: 'tool_call',
+            timestamp: step.timestamp || (task as Record<string, unknown>).completed_at,
+            toolName: step.action,
+            toolInput: step.input,
+            toolOutput: step.observation,
+            toolSuccess: !step.error,
+          });
+        }
+      }
+
+      res.json({
+        timeline,
+        summary: {
+          totalSteps: reactTrace.length,
+          duration: (task as Record<string, unknown>).duration_seconds,
+          tokensUsed: (task as Record<string, unknown>).tokens_used,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
   return router;
 }
