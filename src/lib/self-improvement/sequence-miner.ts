@@ -112,10 +112,49 @@ function mineWorkflowCandidates(sessions: JournalAction[][], minFrequency: numbe
 /**
  * Mine cross-agent workflow patterns from the action journal.
  */
+/**
+ * Load desktop automation journal entries from local JSONL files.
+ * These are separate from the DB action journal and contain desktop_click,
+ * desktop_type, desktop_screenshot, etc. actions.
+ */
+function loadDesktopJournalActions(dataDir: string, lookbackDays: number): JournalAction[] {
+  try {
+    const { readdirSync, readFileSync } = require('fs') as typeof import('fs');
+    const { join } = require('path') as typeof import('path');
+    const journalDir = join(dataDir, 'desktop-journal');
+    const cutoff = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+    const actions: JournalAction[] = [];
+
+    const files = readdirSync(journalDir).filter((f: string) => f.endsWith('.jsonl'));
+    for (const file of files) {
+      const lines = readFileSync(join(journalDir, file), 'utf-8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line) as { timestamp: string; sessionId: string; actionType: string; success: boolean; durationMs: number };
+          const ts = new Date(entry.timestamp);
+          if (ts.getTime() < cutoff) continue;
+          actions.push({
+            toolName: `desktop_${entry.actionType}`,
+            agentId: '__orchestrator__',
+            taskId: entry.sessionId,
+            createdAt: ts,
+            durationMs: entry.durationMs || 0,
+          });
+        } catch { /* skip malformed lines */ }
+      }
+    }
+    return actions;
+  } catch {
+    // Journal dir doesn't exist or not readable
+    return [];
+  }
+}
+
 export async function mineWorkflowPatterns(
   db: DatabaseAdapter,
   workspaceId: string,
-  lookbackDays = 30
+  lookbackDays = 30,
+  dataDir?: string,
 ): Promise<WorkflowCandidate[]> {
   const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
 
@@ -127,15 +166,7 @@ export async function mineWorkflowPatterns(
     .order('created_at', { ascending: true })
     .limit(MAX_ENTRIES);
 
-  if (!entries || entries.length < MIN_SEQUENCE_LENGTH * MIN_FREQUENCY) {
-    logger.debug(
-      { workspaceId, entryCount: entries?.length ?? 0 },
-      '[SequenceMiner] Not enough journal entries for mining',
-    );
-    return [];
-  }
-
-  const actions: JournalAction[] = entries.map((e) => {
+  const actions: JournalAction[] = (entries || []).map((e) => {
     const row = e as Record<string, unknown>;
     return {
       toolName: row.tool_name as string,
@@ -145,6 +176,22 @@ export async function mineWorkflowPatterns(
       durationMs: 0,
     };
   });
+
+  // Merge desktop journal actions if data dir is available
+  if (dataDir) {
+    const desktopActions = loadDesktopJournalActions(dataDir, lookbackDays);
+    actions.push(...desktopActions);
+    actions.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    logger.debug({ desktopActions: desktopActions.length }, '[SequenceMiner] Merged desktop journal actions');
+  }
+
+  if (actions.length < MIN_SEQUENCE_LENGTH * MIN_FREQUENCY) {
+    logger.debug(
+      { workspaceId, entryCount: actions.length },
+      '[SequenceMiner] Not enough journal entries for mining',
+    );
+    return [];
+  }
 
   const sessions = groupIntoSessions(actions);
 
@@ -156,7 +203,7 @@ export async function mineWorkflowPatterns(
   const candidates = mineWorkflowCandidates(sessions, MIN_FREQUENCY);
 
   logger.info(
-    { workspaceId, entriesAnalyzed: entries.length, sessionsFormed: sessions.length, candidatesFound: candidates.length },
+    { workspaceId, entriesAnalyzed: actions.length, sessionsFormed: sessions.length, candidatesFound: candidates.length },
     '[SequenceMiner] Workflow mining completed',
   );
 
