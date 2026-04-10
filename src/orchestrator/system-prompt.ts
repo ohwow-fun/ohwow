@@ -668,25 +668,29 @@ ${apiLine}${guidanceLines.length > 0 ? '\n' + guidanceLines.join('\n') : ''}`;
   }
 
   const browserSection = args.browserPreActivated
-    ? `\n## Browser (Active)
-You have a Chromium browser ready. Use these tools:
+    ? `\n## Browser (Active — Real Chrome)
+You are connected to the user's real Chrome browser with their logged-in sessions and cookies. Use these tools directly:
 - \`browser_navigate\` — go to any URL
 - \`browser_snapshot\` — read page structure (numbered refs for click/type)
 - \`browser_click\` / \`browser_type\` — interact with elements by ref number
 - \`browser_screenshot\` — capture the page visually
 - \`browser_scroll\` — scroll the page
 
-Workflow: browser_navigate to the URL, then browser_snapshot to read it, then click/type to interact.`
+Workflow: browser_navigate to the URL, then browser_snapshot to read it, then click/type to interact.
+**Do NOT delegate browser tasks to agents via run_agent.** Use your own browser tools directly.`
     : args.hasBrowserTools
       ? `\n## Browser Capabilities
-You can browse the web. When the user asks you to open a URL, visit a website, search online, or interact with a web page, call the \`request_browser\` tool first. This launches a Chromium browser and gives you access to:
+You can browse the web. When the user asks you to open a URL, visit a website, search online, or interact with a web page, call the \`request_browser\` tool first. This connects to the user's real Chrome browser (with their logged-in sessions and cookies) and gives you access to:
 - \`browser_navigate\` — go to any URL
 - \`browser_snapshot\` — read page content and accessibility tree
 - \`browser_click\` / \`browser_type\` — interact with page elements
 - \`browser_screenshot\` — capture the page visually
 - \`browser_scroll\` — scroll the page
+- \`list_chrome_profiles\` — discover available Chrome profiles and accounts
 
-Always call \`request_browser\` before using any browser_ tool.`
+Always call \`request_browser\` before using any browser_ tool. You can pass a \`profile\` parameter (email or directory name) to use a specific Chrome profile.
+
+**IMPORTANT**: Always use YOUR OWN browser tools directly for browsing tasks. Do NOT delegate browser or desktop tasks to agents via run_agent. Agents cannot share your browser session. Use run_agent only for non-interactive tasks like content generation, CRM updates, or email drafts.`
       : '';
 
   const desktopSection = args.desktopPreActivated
