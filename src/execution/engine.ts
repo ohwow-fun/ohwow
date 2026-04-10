@@ -2563,9 +2563,10 @@ export class RuntimeEngine {
     let fullContent = '';
     const reactTrace: LocalReActStep[] = [];
 
-    // Browser state for on-demand activation
+    // Browser and desktop state for on-demand activation
     let browserService: LocalBrowserService | null = null;
     let browserActivated = false;
+    let desktopActivated = false;
     let iteration = 0;
     let consecutiveParseErrors = 0;
     let toolLoopAborted = false;
@@ -2764,6 +2765,15 @@ export class RuntimeEngine {
           if (toolResult.browserActivated && !browserActivated) {
             browserService = routerToolCtx.browserService;
             browserActivated = true;
+          }
+
+          // Sync desktop state back from context (request_desktop activates desktop tools)
+          if (routerToolCtx.desktopActivated && !desktopActivated) {
+            desktopActivated = true;
+            // Remove request_desktop from tool list and add full desktop tools
+            const reqIdx = openaiTools.findIndex(t => t.function.name === 'request_desktop');
+            if (reqIdx >= 0) openaiTools.splice(reqIdx, 1);
+            openaiTools.push(...convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS));
           }
 
           // Expand FileAccessGuard when doc mounts add new paths
