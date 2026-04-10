@@ -2986,7 +2986,7 @@ export class RuntimeEngine {
     const biz = this.businessContext;
     const memorySection = opts.memoryDocument ? `\n${opts.memoryDocument}\n` : '';
     const knowledgeSection = opts.knowledgeDocument ? `\n${opts.knowledgeDocument}\n` : '';
-    const skillsSection = opts.skillsDocument ? `\n## Standard Procedures\nWhen your task matches a procedure below, follow its steps using the specified tools.\n${opts.skillsDocument}\n` : '';
+    const skillsSection = opts.skillsDocument ? `\n## Standard Procedures\n**You MUST execute the tool calls listed below. Do NOT just describe what you would do — actually call each tool in sequence. Start by calling request_desktop or request_browser as the first step. If you skip the tool calls and only write text, the task will fail.**\n\n${opts.skillsDocument}\n` : '';
     const classificationSection = `\n## Response Classification
 Before your response content, include exactly one hidden metadata tag on the very first line:
 - <!--response_meta:{"type":"deliverable"}--> when your response contains a concrete work product (a draft, email, article, proposal, report, plan, code, creative content, data analysis, or any actionable output)
