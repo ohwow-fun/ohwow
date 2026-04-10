@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.6.9] — 2026-04-09
+
+### Added
+- feat(orchestrator): wire goal checkpoints into OpenRouter chat path
+- feat(orchestrator): conversation digests and goal checkpoints
+- feat(orchestrator): replace 40-message cap with token-budget-aware trimming
+- feat(orchestrator): use Grok 4.20 (2M context) as orchestrator brain
+- feat(orchestrator): per-iteration model selection in OpenRouter tool loop
+- feat(brain): add WisdomEngine for strategic guidance from strongest model
+- feat(orchestrator): 5x iteration limits, persistence-aware reflection
+- feat(models): add Grok 4.20 and Grok 4.1 Fast to curated catalog
+- feat(orchestrator): upgrade OpenRouter loop to full Anthropic-path intelligence
+- feat(orchestrator): add circuit breaker and duplicate tool call detection
+- feat(orchestrator): add dedicated OpenRouter tool loop with streaming
+- feat(model-router): add streaming tool-calling to OpenRouterProvider
+- feat(browser): respect browserHeadless config in HTTP API sessions
+
+### Fixed
+- fix(orchestrator): bump conversational iteration limit, add parallel tool retry
+- fix(orchestrator): gate philosophical layers by context size, smart history truncation
+- fix(desktop): externalize nut-js to fix __dirname crash in ESM bundle
+- fix(tui): add connecting state and prevent fetch errors during daemon startup
+
 ## [0.6.8] — 2026-04-09
 
 ### Fixed
