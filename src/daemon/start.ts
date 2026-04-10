@@ -1489,6 +1489,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
     });
   });
 
+  // Pre-create OHWOW.app bundle for macOS Accessibility permission
+  if (process.platform === 'darwin') {
+    try {
+      const { ensureAccessibilitySetup } = await import('../execution/desktop/accessibility-check.js');
+      ensureAccessibilitySetup();
+    } catch { /* non-fatal */ }
+  }
+
   logger.info('[daemon] Ready');
 
   // 14. Shutdown handler (defined before route so it can be referenced)

@@ -1414,7 +1414,7 @@ export class RuntimeEngine {
               if (this.config.browserTarget === 'chrome') {
                 try {
                   const cdpUrl = await LocalBrowserService.connectToChrome(this.config.chromeCdpPort || 9222);
-                  browserService = new LocalBrowserService({ headless: false, cdpUrl });
+                  browserService = new LocalBrowserService({ headless: false, cdpUrl: cdpUrl || undefined });
                 } catch {
                   browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
                 }

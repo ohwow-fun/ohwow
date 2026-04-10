@@ -214,10 +214,17 @@ export class LocalOrchestrator {
           profileDir = await LocalBrowserService.findProfileForEmail(profileDir) || undefined;
         }
         const cdpUrl = await LocalBrowserService.connectToChrome(this.chromeCdpPort, profileDir);
-        this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
-        logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
+        if (cdpUrl) {
+          this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
+          logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
+        } else {
+          // Chrome is open with real profile but no CDP — use isolated Chromium for Playwright,
+          // desktop automation handles the real Chrome interaction
+          this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+          logger.info('[orchestrator] Chrome launched with real profile (desktop automation mode)');
+        }
       } catch (err) {
-        logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome CDP failed, falling back to Chromium');
+        logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome activation failed, falling back to Chromium');
         this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
       }
     } else {

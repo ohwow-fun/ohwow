@@ -13,7 +13,7 @@ import { existsSync, unlinkSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { logger } from '../../lib/logger.js';
-import { checkDesktopPermissions } from './accessibility-check.js';
+import { checkDesktopPermissions, ensureAccessibilitySetup, openAccessibilitySettings } from './accessibility-check.js';
 import {
   detectScreenInfo,
   captureAndScaleScreenshot,
@@ -193,11 +193,23 @@ export class LocalDesktopService {
   async ensureReady(): Promise<void> {
     if (this.ready) return;
 
-    // Check macOS permissions
+    // Check macOS permissions — auto-setup if missing
     const perms = checkDesktopPermissions();
     if (!perms.accessibility || !perms.screenRecording) {
+      // Create OHWOW.app bundle so it shows as "OHWOW" in System Settings
+      const { appPath } = ensureAccessibilitySetup();
+
+      // Open System Settings to the Accessibility page
+      openAccessibilitySettings();
+
+      const missing = [];
+      if (!perms.accessibility) missing.push('Accessibility');
+      if (!perms.screenRecording) missing.push('Screen Recording');
+
       throw new Error(
-        perms.message ?? 'Desktop control requires Accessibility and Screen Recording permissions.',
+        `Desktop control needs ${missing.join(' and ')} permission. ` +
+        `System Settings opened — toggle ON "OHWOW" (or the node/terminal entry) in the ${missing[0]} list. ` +
+        (appPath ? `App bundle: ${appPath}` : `Node binary: ${process.execPath}`),
       );
     }
 

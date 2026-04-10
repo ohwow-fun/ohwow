@@ -60,6 +60,7 @@ export class LocalBrowserService {
   private modelName: string;
   private modelApiKey: string;
   private cdpUrl: string | undefined;
+  private initPromise: Promise<StagehandPage> | null = null;
 
   constructor(opts?: LocalBrowserServiceOptions) {
     this.headless = opts?.headless !== false; // default headless
@@ -80,6 +81,17 @@ export class LocalBrowserService {
 
   async ensureBrowser(): Promise<StagehandPage> {
     if (this.page) return this.page;
+    // Prevent concurrent initialization — second caller waits for the first
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._initBrowser();
+    try {
+      return await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async _initBrowser(): Promise<StagehandPage> {
 
     try {
       const { Stagehand } = await loadStagehand();
@@ -209,7 +221,12 @@ export class LocalBrowserService {
    * Optionally launches Chrome with a specific profile directory.
    * Returns the CDP WebSocket URL for Stagehand to connect to.
    */
-  static async connectToChrome(port = 9222, profileDir?: string): Promise<string> {
+  /**
+   * Connect to Chrome via CDP if available, or launch Chrome with the right profile
+   * for desktop automation. Returns the CDP WebSocket URL if CDP is available,
+   * or null if Chrome was launched without CDP (use desktop automation instead).
+   */
+  static async connectToChrome(port = 9222, profileDir?: string): Promise<string | null> {
     const cdpHttpUrl = `http://localhost:${port}`;
 
     // Check if Chrome is already running with remote debugging
@@ -223,43 +240,26 @@ export class LocalBrowserService {
         }
       }
     } catch {
-      // Not running with CDP — need to launch
+      // Not running with CDP
     }
 
-    // Chrome requires a non-default --user-data-dir for CDP to work.
-    // We create a separate data dir at ~/.ohwow/chrome-cdp and symlink the
-    // desired profile into it so Chrome launches with CDP enabled while
-    // using the real profile's cookies, sessions, and extensions.
-    const { spawn } = await import('child_process');
-    const { mkdirSync, symlinkSync, unlinkSync, existsSync, copyFileSync, lstatSync } = await import('fs');
-    const { join } = await import('path');
+    // Check if Chrome is already running (without CDP)
+    const { exec, spawn } = await import('child_process');
     const platform = process.platform;
+    const isRunning = await new Promise<boolean>((resolve) => {
+      exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
+    });
 
-    const chromeDataDir = LocalBrowserService.CHROME_DATA_DIR;
-    const cdpDataDir = join(process.env.HOME || '', '.ohwow', 'chrome-cdp');
-    const effectiveProfile = profileDir || 'Default';
-    const sourceProfile = join(chromeDataDir, effectiveProfile);
-    const targetProfile = join(cdpDataDir, 'Default');
-
-    // Set up the CDP data directory with a symlink to the real profile
-    mkdirSync(cdpDataDir, { recursive: true });
-    try {
-      if (existsSync(targetProfile)) {
-        const stat = lstatSync(targetProfile);
-        if (stat.isSymbolicLink() || stat.isFile()) unlinkSync(targetProfile);
-      }
-      symlinkSync(sourceProfile, targetProfile);
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Couldn\'t symlink Chrome profile');
+    if (isRunning) {
+      // Chrome is running without CDP — can't add CDP retroactively.
+      // Use desktop automation to control it.
+      logger.info('[browser] Chrome is running without CDP. Will use desktop automation.');
+      return null;
     }
 
-    // Copy Local State (Chrome needs it to recognize profiles)
-    const localStateSrc = join(chromeDataDir, 'Local State');
-    const localStateDst = join(cdpDataDir, 'Local State');
-    try {
-      if (existsSync(localStateSrc)) copyFileSync(localStateSrc, localStateDst);
-    } catch { /* non-fatal */ }
-
+    // Chrome is not running. Launch it with the right profile.
+    // Note: Chrome refuses CDP with its default data dir, so we launch without CDP
+    // and rely on desktop automation. The user gets their real sessions/cookies.
     let chromeBin: string;
     if (platform === 'darwin') {
       chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -269,28 +269,27 @@ export class LocalBrowserService {
       chromeBin = 'google-chrome';
     }
 
-    const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${cdpDataDir}`];
+    const effectiveProfile = profileDir || 'Default';
+    const args = [`--profile-directory=${effectiveProfile}`];
 
-    logger.info(`[browser] Launching Chrome CDP: profile=${effectiveProfile}, port=${port}`);
+    logger.info(`[browser] Launching Chrome with profile: ${effectiveProfile}`);
     const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
     child.unref();
 
-    // Wait for CDP port to be ready (up to 15s)
-    for (let i = 0; i < 30; i++) {
+    // Wait for Chrome to start
+    for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 500));
-      try {
-        const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
-        if (res.ok) {
-          const data = await res.json() as { webSocketDebuggerUrl?: string };
-          if (data.webSocketDebuggerUrl) {
-            logger.info(`[browser] Chrome CDP ready on port ${port} (profile: ${effectiveProfile})`);
-            return data.webSocketDebuggerUrl;
-          }
-        }
-      } catch { /* retry */ }
+      const running = await new Promise<boolean>((resolve) => {
+        exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
+      });
+      if (running) {
+        logger.info(`[browser] Chrome launched with profile ${effectiveProfile} (desktop automation mode)`);
+        return null;
+      }
     }
 
-    throw new Error(`Chrome didn't start with CDP on port ${port}. Ensure Chrome is installed at ${chromeBin}`);
+    logger.warn('[browser] Chrome launch timed out');
+    return null;
   }
 
   // ==========================================================================
