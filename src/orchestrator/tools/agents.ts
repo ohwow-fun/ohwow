@@ -129,18 +129,24 @@ export async function runAgent(
   // Enrich prompt with matched SOP if available
   let enrichedPrompt = prompt;
   try {
-    // extractKeywords and matchesTriggers imported statically at top
-    const { data: procedureSkills } = await ctx.db.from('agent_workforce_skills')
+    logger.info({ workspaceId: ctx.workspaceId, promptLen: prompt.length }, '[run_agent] Starting SOP enrichment');
+    const { data: procedureSkills, error: skillsErr } = await ctx.db.from('agent_workforce_skills')
       .select('name, definition, triggers')
       .eq('workspace_id', ctx.workspaceId)
       .eq('is_active', 1)
       .eq('skill_type', 'procedure')
       .limit(10);
 
+    logger.info({ skillCount: procedureSkills?.length ?? 0, error: skillsErr?.message }, '[run_agent] Skills query result');
+
     if (procedureSkills) {
       const keywords = extractKeywords(prompt);
+      const skillNames = (procedureSkills as Array<Record<string, unknown>>).map(s => ({
+        name: s.name, triggers: s.triggers,
+      }));
+      logger.info({ keywords, skills: skillNames }, '[run_agent] Matching keywords against skills');
       for (const skill of procedureSkills as Array<Record<string, unknown>>) {
-        const triggers: string[] = (() => { try { return JSON.parse((skill.triggers as string) || '[]'); } catch { return []; } })();
+        const triggers: string[] = Array.isArray(skill.triggers) ? skill.triggers as string[] : (() => { try { return JSON.parse((skill.triggers as string) || '[]'); } catch { return []; } })();
         if (keywords.length > 0 && matchesTriggers(triggers, keywords)) {
           const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition as string) : skill.definition;
           if (def?.tool_sequence) {

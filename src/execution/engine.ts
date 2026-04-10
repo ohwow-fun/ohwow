@@ -39,6 +39,7 @@ import {
 } from '../lib/memory-utils.js';
 // MemorySyncPayload moved to ./memory-sync.js
 import { logger } from '../lib/logger.js';
+import { extractKeywords, matchesTriggers } from '../lib/token-similarity.js';
 import {
   executeWithClaudeCodeCli,
   isClaudeCodeCliAvailable,
@@ -2921,7 +2922,8 @@ export class RuntimeEngine {
       // Filter: skills linked to this agent or workspace-wide (empty agent_ids)
       const agentSkills = (skills as Array<Record<string, unknown>>).filter(s => {
         try {
-          const ids: string[] = JSON.parse((s.agent_ids as string) || '[]');
+          const raw = s.agent_ids;
+          const ids: string[] = Array.isArray(raw) ? raw : JSON.parse((raw as string) || '[]');
           return ids.length === 0 || ids.includes(agentId);
         } catch { return true; }
       });
@@ -2929,12 +2931,12 @@ export class RuntimeEngine {
       if (agentSkills.length === 0) return '';
 
       // Further filter by task relevance (keyword match against triggers)
-      const { extractKeywords, matchesTriggers } = await import('../lib/token-similarity.js');
       const keywords = extractKeywords(taskTitle);
       const matched = keywords.length > 0
         ? agentSkills.filter(s => {
             try {
-              const triggers: string[] = JSON.parse((s.triggers as string) || '[]');
+              const rawTriggers = s.triggers;
+              const triggers: string[] = Array.isArray(rawTriggers) ? rawTriggers : JSON.parse((rawTriggers as string) || '[]');
               return triggers.length === 0 || matchesTriggers(triggers, keywords);
             } catch { return false; }
           })
