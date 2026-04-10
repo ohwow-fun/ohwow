@@ -16,6 +16,7 @@ import { loadOrchestratorMemory } from './session-store.js';
 import { logger } from '../lib/logger.js';
 import { getGitContext, isStaleBranch } from '../lib/git-utils.js';
 import { detectProjectStack } from '../lib/project-detector.js';
+import { extractKeywords, matchesTriggers } from '../lib/token-similarity.js';
 
 export interface PromptBuilderDeps {
   db: DatabaseAdapter;
@@ -122,19 +123,27 @@ export async function buildTargetedPrompt(
     })();
   }
 
-  // --- Learned principles & skills from self-improvement cycle ---
+  // --- Learned principles, skills, and discovered processes from self-improvement ---
   type PrincipleRow = { id: string; rule: string; category: string };
-  type SkillRow = { id: string; name: string; description: string };
+  type SkillRow = { id: string; name: string; description: string; definition?: string; skill_type?: string; triggers?: string; success_rate?: number | null; times_used?: number };
+  type ProcessRow = { id: string; name: string; description: string | null; steps: string; status: string; frequency: number; trigger_message: string | null };
 
   const principlesPromise = deps.db.from('agent_workforce_principles')
     .select('id, rule, category')
     .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
     .order('utility_score', { ascending: false }).limit(5);
 
+  // Fetch more skills than needed — filter by trigger match in-app (SQLite has no GIN index)
   const skillsPromise = deps.db.from('agent_workforce_skills')
-    .select('id, name, description')
+    .select('id, name, description, definition, skill_type, triggers, success_rate, times_used')
     .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
-    .order('pattern_support', { ascending: false }).limit(5);
+    .order('pattern_support', { ascending: false }).limit(20);
+
+  const processesPromise = deps.db.from('agent_workforce_discovered_processes')
+    .select('id, name, description, steps, status, frequency, trigger_message')
+    .eq('workspace_id', deps.workspaceId)
+    .in('status', ['confirmed', 'automated'])
+    .order('frequency', { ascending: false }).limit(5);
 
   const memoryRagPromise: Promise<{ memory?: string; rag?: string }> = (async () => {
     if (!need('memory') && !need('rag')) return {};
@@ -161,8 +170,8 @@ export async function buildTargetedPrompt(
     return {};
   })();
 
-  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag, principlesResult, skillsResult] =
-    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise, principlesPromise, skillsPromise]);
+  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag, principlesResult, skillsResult, processesResult] =
+    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise, principlesPromise, skillsPromise, processesPromise]);
 
   const agents = ((agentsResult.data || []) as AgentRow[]).map((a) => {
     const raw = typeof a.stats === 'string' ? JSON.parse(a.stats as string) : (a.stats || {}) as Record<string, unknown>;
@@ -253,7 +262,21 @@ export async function buildTargetedPrompt(
     hasMcpTools,
     platform,
     learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
-    learnedSkills: (skillsResult.data || []) as SkillRow[],
+    learnedSkills: (() => {
+      // Intent-aware skill matching: trigger-matched skills first, then top generic
+      const allSkills = (skillsResult.data || []) as SkillRow[];
+      const keywords = userMessage ? extractKeywords(userMessage) : [];
+      const triggerMatched = keywords.length > 0
+        ? allSkills.filter(s => {
+            const triggers: string[] = (() => { try { return JSON.parse(s.triggers || '[]'); } catch { return []; } })();
+            return matchesTriggers(triggers, keywords);
+          }).sort((a, b) => (b.success_rate ?? 0) - (a.success_rate ?? 0))
+        : [];
+      const triggerIds = new Set(triggerMatched.map(s => s.id));
+      const topGeneric = allSkills.filter(s => !triggerIds.has(s.id)).slice(0, 5);
+      return [...triggerMatched, ...topGeneric].slice(0, 5);
+    })(),
+    knownWorkflows: (processesResult.data || []) as ProcessRow[],
     gitContext: (() => {
       if (!need('filesystem') || !deps.workingDirectory) return undefined;
       try {
@@ -296,6 +319,24 @@ export async function buildTargetedPrompt(
         } catch { /* best-effort tracking */ }
       }
     })().catch(err => logger.debug({ err }, 'Failed to increment principle usage'));
+  }
+
+  // Fire-and-forget: increment times_used for skills injected into the prompt
+  const injectedSkillIds = ((args.learnedSkills || []) as SkillRow[]).map(s => s.id);
+  if (injectedSkillIds.length > 0) {
+    (async () => {
+      for (const id of injectedSkillIds) {
+        try {
+          const { data } = await deps.db.from('agent_workforce_skills')
+            .select('times_used').eq('id', id).single();
+          if (data) {
+            const current = (data as Record<string, unknown>).times_used as number || 0;
+            await deps.db.from('agent_workforce_skills')
+              .update({ times_used: current + 1 }).eq('id', id);
+          }
+        } catch { /* best-effort tracking */ }
+      }
+    })().catch(err => logger.debug({ err }, 'Failed to increment skill usage'));
   }
 
   let staticPart: string;

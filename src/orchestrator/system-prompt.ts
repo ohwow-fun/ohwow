@@ -59,7 +59,9 @@ export interface BuildLocalSystemPromptArgs {
   /** Learned principles from self-improvement cycle (top 5 by utility) */
   learnedPrinciples?: { id: string; rule: string; category: string }[];
   /** Learned skills/procedures from self-improvement cycle */
-  learnedSkills?: { id: string; name: string; description: string }[];
+  learnedSkills?: { id: string; name: string; description: string; definition?: string; skill_type?: string; success_rate?: number | null; times_used?: number }[];
+  /** Auto-discovered workflows from process mining */
+  knownWorkflows?: { id: string; name: string; description: string | null; steps: string; frequency: number; status: string }[];
   /** Git context for the working directory */
   gitContext?: {
     branch: string;
@@ -562,7 +564,38 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     : '';
 
   const skillsSection = args.learnedSkills && args.learnedSkills.length > 0
-    ? `\n## Learned Procedures\nReusable procedures synthesized from successful task patterns:\n${args.learnedSkills.map(s => `- **${s.name}**: ${s.description}`).join('\n')}`
+    ? `\n## Learned Procedures\nReusable procedures from successful task patterns. Follow the steps when the user's request matches:\n${args.learnedSkills.map(s => {
+        const successLabel = s.success_rate != null ? `, ${Math.round(s.success_rate * 100)}% success` : '';
+        const usedLabel = s.times_used ? `, used ${s.times_used}x` : '';
+        const header = `- **${s.name}** (${s.skill_type || 'general'}${successLabel}${usedLabel}): ${s.description || ''}`;
+
+        // For procedure-type skills, render the tool sequence as numbered steps
+        if (s.skill_type === 'procedure' && s.definition) {
+          try {
+            const def = typeof s.definition === 'string' ? JSON.parse(s.definition) : s.definition;
+            if (def.tool_sequence && Array.isArray(def.tool_sequence)) {
+              const steps = def.tool_sequence.slice(0, 8).map((step: string | { tool: string; args?: Record<string, unknown> }, i: number) => {
+                if (typeof step === 'string') return `  ${i + 1}. ${step}`;
+                const argsStr = step.args ? `(${Object.entries(step.args).map(([, v]) => JSON.stringify(v)).join(', ')})` : '';
+                return `  ${i + 1}. ${step.tool}${argsStr}`;
+              }).join('\n');
+              return `${header}\n${steps}`;
+            }
+          } catch { /* malformed definition */ }
+        }
+        return header;
+      }).join('\n')}`
+    : '';
+
+  // Auto-discovered workflows from process mining
+  const workflowsSection = args.knownWorkflows && args.knownWorkflows.length > 0
+    ? `\n## Known Workflows\nAuto-discovered task patterns. Follow these when the user's request matches:\n${args.knownWorkflows.map(w => {
+        try {
+          const steps: Array<{ tool_name: string; order: number }> = typeof w.steps === 'string' ? JSON.parse(w.steps) : w.steps;
+          const stepsStr = steps.slice(0, 8).map((s, i) => `  ${i + 1}. ${s.tool_name}`).join('\n');
+          return `- **${w.name}** (seen ${w.frequency}x, ${w.status}): ${w.description || ''}\n${stepsStr}`;
+        } catch { return `- **${w.name}**: ${w.description || ''}`; }
+      }).join('\n')}`
     : '';
 
   // --- Today's Pulse Section (skip when all zeros — fresh workspace) ---
@@ -770,6 +803,7 @@ ${ragSection}
 ${projectInstructionsSection}
 ${principlesSection}
 ${skillsSection}
+${workflowsSection}
 
 ## Available Agents
 ${agentList || 'No agents created yet. The user can create agents from the web UI.'}
