@@ -88,7 +88,16 @@ export async function runAgent(
   const agentId = input.agent_id as string;
   const prompt = input.prompt as string;
   const projectId = input.project_id as string | undefined;
+  const modelTier = input.model_tier as 'fast' | 'balanced' | 'strong' | undefined;
   if (!agentId || !prompt) return { success: false, error: 'agent_id and prompt are required' };
+
+  // Map model_tier hint to difficulty override for engine
+  const TIER_TO_DIFFICULTY: Record<string, 'simple' | 'moderate' | 'complex'> = {
+    fast: 'simple',
+    balanced: 'moderate',
+    strong: 'complex',
+  };
+  const difficultyOverride = modelTier ? TIER_TO_DIFFICULTY[modelTier] : undefined;
 
   // Verify agent exists
   const { data: agent } = await ctx.db
@@ -194,7 +203,7 @@ export async function runAgent(
   let result: Awaited<ReturnType<typeof ctx.engine.executeTask>>;
   try {
     result = await Promise.race([
-      ctx.engine.executeTask(agentId, taskId),
+      ctx.engine.executeTask(agentId, taskId, difficultyOverride ? { difficultyOverride } : undefined),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('timeout')), TASK_TIMEOUT_MS)
       ),
@@ -338,7 +347,7 @@ export async function spawnAgents(
   ctx: LocalToolContext,
   input: Record<string, unknown>,
 ): Promise<ToolResult> {
-  const agents = input.agents as Array<{ agent_id: string; prompt: string; project_id?: string }>;
+  const agents = input.agents as Array<{ agent_id: string; prompt: string; project_id?: string; model_tier?: string }>;
   if (!Array.isArray(agents) || agents.length === 0) {
     return { success: false, error: 'agents array is required with at least one entry' };
   }
@@ -399,8 +408,12 @@ export async function spawnAgents(
     }
     const taskId = (task as { id: string }).id;
 
+    // Map model_tier hint for this agent
+    const tierMap: Record<string, 'simple' | 'moderate' | 'complex'> = { fast: 'simple', balanced: 'moderate', strong: 'complex' };
+    const spawnDiffOverride = entry.model_tier ? tierMap[entry.model_tier] : undefined;
+
     // Fire-and-forget: launch execution without awaiting
-    ctx.engine.executeTask(agentId, taskId).catch(() => {
+    ctx.engine.executeTask(agentId, taskId, spawnDiffOverride ? { difficultyOverride: spawnDiffOverride } : undefined).catch(() => {
       // Errors are recorded on the task row by the engine
     });
 

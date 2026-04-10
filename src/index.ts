@@ -83,7 +83,9 @@ if (subcommand === 'logs') {
     await waitForDaemonStop(dataDir, 5000);
   }
   const { fileURLToPath } = await import('url');
-  const entryPath = fileURLToPath(new URL('./index.js', import.meta.url));
+  // When running via tsx (dev), import.meta.url points to .ts — resolve to .ts so lifecycle uses tsx loader
+  const selfPath = fileURLToPath(import.meta.url);
+  const entryPath = selfPath.endsWith('.ts') ? selfPath : fileURLToPath(new URL('./index.js', import.meta.url));
   startDaemonBackground(entryPath, port, dataDir);
   const ready = await waitForDaemon(port, 15000);
   console.log(ready ? 'Daemon restarted.' : 'Daemon restart timed out. Check "ohwow logs" for details.');

@@ -114,6 +114,11 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
         agent_id: { type: 'string', description: 'The agent ID' },
         prompt: { type: 'string', description: 'The task prompt' },
         project_id: { type: 'string', description: 'Optional project ID' },
+        model_tier: {
+          type: 'string',
+          enum: ['fast', 'balanced', 'strong'],
+          description: 'Model selection hint. "fast" for lookups/status checks. "balanced" for standard work. "strong" for complex reasoning, analysis, multi-step procedures, or desktop/browser automation. Omit for auto-detection from task complexity.',
+        },
       },
       required: ['agent_id', 'prompt'],
     },
@@ -134,6 +139,11 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
               agent_id: { type: 'string', description: 'The agent ID' },
               prompt: { type: 'string', description: 'The task prompt for this agent' },
               project_id: { type: 'string', description: 'Optional project ID' },
+              model_tier: {
+                type: 'string',
+                enum: ['fast', 'balanced', 'strong'],
+                description: 'Model tier hint for this agent',
+              },
             },
             required: ['agent_id', 'prompt'],
           },

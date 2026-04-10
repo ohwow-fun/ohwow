@@ -98,7 +98,7 @@ import { classifyRootCause } from '../lib/failure-root-cause.js';
 import { getToolReversibility } from '../lib/tool-reversibility.js';
 import { LocalActionJournalService } from '../lib/action-journal.js';
 import { validateOutputSafety } from '../lib/output-validator.js';
-import { scoreDifficulty } from './difficulty-scorer.js';
+import { scoreDifficulty, type DifficultyLevel } from './difficulty-scorer.js';
 import { verifyAgentOutputLocal } from '../lib/verifier.js';
 import { withSpan } from '../lib/telemetry.js';
 import { runAgentMemoryMaintenance } from '../lib/memory-maintenance.js';
@@ -144,6 +144,47 @@ const MODEL_MAP: Record<ClaudeModel, string> = {
   'claude-sonnet-4-5': 'claude-sonnet-4-5-20250929',
   'claude-haiku-4': 'claude-haiku-4-5-20251001',
 };
+
+/**
+ * Map short model names and legacy aliases to OpenRouter catalog IDs.
+ * Lets agents configured with 'claude-sonnet-4-5' or 'gemini' route correctly.
+ */
+const OPENROUTER_MODEL_ALIASES: Record<string, string> = {
+  // Claude short names → latest OpenRouter IDs
+  'claude-sonnet-4-5': 'anthropic/claude-sonnet-4.6',
+  'claude-sonnet-4-5-20250929': 'anthropic/claude-sonnet-4.6',
+  'claude-haiku-4': 'anthropic/claude-haiku-4.5',
+  'claude-haiku-4-5-20251001': 'anthropic/claude-haiku-4.5',
+  'claude-opus-4': 'anthropic/claude-opus-4.6',
+  // Friendly short names → best catalog match
+  'grok': 'x-ai/grok-4.20',
+  'grok-fast': 'x-ai/grok-4.1-fast',
+  'gemini': 'google/gemini-3.1-flash-lite-preview',
+  'gemini-pro': 'google/gemini-3.1-pro-preview',
+  'gemini-flash': 'google/gemini-3-flash-preview',
+  'deepseek': 'deepseek/deepseek-v3.2',
+  'deepseek-r1': 'deepseek/deepseek-r1',
+  'qwen': 'qwen/qwen3.5-9b',
+  'qwen-flash': 'qwen/qwen3.5-flash-02-23',
+  'mimo': 'xiaomi/mimo-v2-flash',
+  'mimo-pro': 'xiaomi/mimo-v2-pro',
+  'devstral': 'mistralai/devstral-2512',
+  'glm': 'z-ai/glm-5.1',
+};
+
+/** Resolve a model name to a valid OpenRouter ID, or undefined if unknown */
+function resolveOpenRouterAlias(model: string): string | undefined {
+  return OPENROUTER_MODEL_ALIASES[model];
+}
+
+// Model tiers for per-iteration selection (from CURATED_OPENROUTER_MODELS)
+const AGENT_MODEL_TIERS = {
+  FREE: 'xiaomi/mimo-v2-flash',             // FREE, 262K ctx, tools
+  FAST: 'x-ai/grok-4.1-fast',              // $0.20/$0.50 per M, 2M ctx, tools
+  BALANCED: 'deepseek/deepseek-v3.2',       // $0.26/$0.38 per M, 163K ctx, tools
+  STRONG: 'x-ai/grok-4.20',                // $2/$6 per M, 2M ctx, tools
+  VISION: 'google/gemini-3.1-flash-lite-preview', // 1M ctx, vision+tools, cheap
+} as const;
 
 const WEB_SEARCH_TOOL: WebSearchTool20250305 = {
   type: 'web_search_20250305',
@@ -672,7 +713,7 @@ export class RuntimeEngine {
    * 7. Extract memories (Haiku)
    * 8. Report operational data to cloud (no prompts or outputs)
    */
-  async executeTask(agentId: string, taskId: string): Promise<ExecuteAgentResult> {
+  async executeTask(agentId: string, taskId: string, options?: { difficultyOverride?: DifficultyLevel }): Promise<ExecuteAgentResult> {
     return withSpan('agent.execute', { 'agent.id': agentId, 'task.id': taskId }, async () => {
     // Pre-flight: ensure we have at least one model provider
     if (!this.config.anthropicApiKey) {
@@ -1252,8 +1293,8 @@ export class RuntimeEngine {
         }
       }
 
-      // Score task difficulty for model routing
-      const difficulty = scoreDifficulty({
+      // Score task difficulty for model routing (orchestrator can override via model_tier hint)
+      const difficulty = options?.difficultyOverride ?? scoreDifficulty({
         taskDescription: task.description || task.title,
         toolCount: tools.filter(t => 'name' in t).length,
         hasIntegrations: !!mcpClients && mcpClients.getToolDefinitions().length > 0,
@@ -1288,6 +1329,10 @@ export class RuntimeEngine {
           totalOutputTokens = routerResult.totalOutputTokens;
           reactTrace = routerResult.reactTrace;
           providerReportedCostCents = routerResult.providerCostCents;
+          // Track actual model used (resolved from catalog, not raw agent config)
+          if (routerResult.actualModelUsed) {
+            (agentConfig as Record<string, unknown>)._resolvedModel = routerResult.actualModelUsed;
+          }
         } else if (tools.length > 0) {
           // ── Anthropic tool loop ──
           let currentMessages = [...messages];
@@ -1766,7 +1811,7 @@ export class RuntimeEngine {
         status: finalStatus,
         output: cleanContent,
         response_type: responseType || null,
-        model_used: agentConfig.model,
+        model_used: (agentConfig as Record<string, unknown>)._resolvedModel as string || agentConfig.model,
         tokens_used: totalTokens,
         cost_cents: costCents,
         completed_at: new Date().toISOString(),
@@ -2445,7 +2490,7 @@ export class RuntimeEngine {
     agentModel?: string;
     /** When present, forces tool_choice: 'required' on first iteration */
     skillsDocument?: string;
-  }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number }> {
+  }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number; actualModelUsed?: string }> {
     // Query routing stats for adaptive model selection
     let routingHistory: import('./model-router.js').RoutingHistory | undefined;
     try {
@@ -2470,6 +2515,12 @@ export class RuntimeEngine {
       routingHistory,
       difficulty: opts.difficulty,
     });
+
+    // Resolve agent model to a valid provider-specific ID
+    // Handles: 'claude-sonnet-4-5' → 'anthropic/claude-sonnet-4.6', 'gemini' → 'google/gemini-...', etc.
+    const resolvedAgentModel = this.resolveAgentModelForProvider(opts.agentModel, provider);
+    const needsVision = false; // TODO: detect from task/tools when vision tasks are supported
+    let actualModelUsed: string | undefined;
 
     // Filter to client tools only (exclude Anthropic server-side tools like web_search)
     const clientTools = opts.tools.filter(
@@ -2517,6 +2568,7 @@ export class RuntimeEngine {
           const providerWithTools = provider as ModelProvider & { createMessageWithTools?: typeof provider.createMessageWithTools };
           if (!providerWithTools.createMessageWithTools) {
             // Provider doesn't support tools — text-only fallback
+            const fallbackModel = resolvedAgentModel || undefined;
             const textResponse = await provider.createMessage({
               system: opts.systemPrompt,
               messages: loopMessages.map(m => ({
@@ -2525,7 +2577,7 @@ export class RuntimeEngine {
               })),
               maxTokens: opts.maxTokens,
               temperature: opts.temperature,
-              model: opts.agentModel,
+              model: fallbackModel,
             });
             return {
               fullContent: textResponse.content,
@@ -2534,6 +2586,14 @@ export class RuntimeEngine {
               reactTrace: [],
             };
           }
+
+          // Dynamic per-iteration model selection (mirrors orchestrator's selectModelForIteration)
+          const iterModel = this.selectAgentModelForIteration(
+            iteration, opts.difficulty, consecutiveParseErrors > 0, !!opts.skillsDocument,
+            needsVision, resolvedAgentModel, provider,
+          );
+          if (!actualModelUsed && iterModel) actualModelUsed = iterModel;
+          logger.debug({ model: iterModel, iteration, provider: provider.name, difficulty: opts.difficulty }, '[engine] agent iteration model');
 
           // Force first tool call when SOP procedures are in the prompt
           // (iteration 0 + skillsDocument present = model MUST call a tool)
@@ -2547,7 +2607,7 @@ export class RuntimeEngine {
             maxTokens: opts.maxTokens,
             temperature: forceToolCall ? 0.3 : opts.temperature, // Lower temp for forced tool calls
             tools: activeTools,
-            model: opts.agentModel,
+            model: iterModel,
             toolChoice: forceToolCall ? 'required' : 'auto',
           } as Parameters<typeof providerWithTools.createMessageWithTools>[0]);
         } catch (err) {
@@ -2781,7 +2841,7 @@ export class RuntimeEngine {
       });
     }
 
-    return { fullContent, totalInputTokens, totalOutputTokens, reactTrace, providerCostCents: providerCostCents || undefined };
+    return { fullContent, totalInputTokens, totalOutputTokens, reactTrace, providerCostCents: providerCostCents || undefined, actualModelUsed };
   }
 
   // ==========================================================================
@@ -2943,7 +3003,11 @@ export class RuntimeEngine {
         : agentSkills;
 
       const top = matched.slice(0, 5);
-      if (top.length === 0) return '';
+      if (top.length === 0) {
+        logger.debug({ agentId, skillCount: skills.length, agentSkillCount: agentSkills.length, keywords }, '[engine] compileSkills: no trigger match');
+        return '';
+      }
+      logger.info({ agentId, matchedCount: top.length, names: top.map(s => s.name) }, '[engine] compileSkills: matched SOPs');
 
       // Format as procedure instructions
       return top.map(s => {
@@ -2969,6 +3033,77 @@ export class RuntimeEngine {
       logger.debug({ err: err instanceof Error ? err.message : err }, '[engine] compileSkills failed');
       return '';
     }
+  }
+
+  // ==========================================================================
+  // DYNAMIC MODEL SELECTION FOR AGENTS
+  // ==========================================================================
+
+  /**
+   * Resolve an agent's configured model to a valid provider-specific ID.
+   * Handles: OpenRouter IDs (pass-through), short aliases (map), Ollama tags (pass-through),
+   * legacy Claude names (map to OpenRouter).
+   */
+  private resolveAgentModelForProvider(
+    agentModel: string | undefined,
+    provider: ModelProvider,
+  ): string | undefined {
+    if (!agentModel) return undefined;
+
+    // Already a valid OpenRouter ID (provider/model format)
+    if (agentModel.includes('/')) return agentModel;
+
+    // Map known aliases to OpenRouter catalog IDs
+    const resolved = resolveOpenRouterAlias(agentModel);
+    if (resolved && provider.name === 'openrouter') return resolved;
+
+    // For Ollama, model names like 'qwen3:4b' are valid as-is
+    if (provider.name === 'ollama') return agentModel;
+
+    // For Anthropic SDK, the original name works (handled by MODEL_MAP elsewhere)
+    if (provider.name === 'anthropic') return agentModel;
+
+    // Unknown model for this provider — let provider use its default
+    logger.debug({ agentModel, provider: provider.name }, '[engine] unknown agent model, using provider default');
+    return undefined;
+  }
+
+  /**
+   * Per-iteration model selection for agents.
+   * Mirrors the orchestrator's selectModelForIteration() pattern but catalog-aware,
+   * picking from multiple model tiers based on task needs per iteration.
+   */
+  private selectAgentModelForIteration(
+    iteration: number,
+    difficulty: DifficultyLevel | undefined,
+    hasErrors: boolean,
+    hasSOP: boolean,
+    needsVision: boolean,
+    resolvedModel: string | undefined,
+    provider: ModelProvider,
+  ): string | undefined {
+    // If agent has an explicit provider-valid model, respect user choice
+    if (resolvedModel) return resolvedModel;
+
+    // For non-OpenRouter providers, let them use their own default
+    if (provider.name !== 'openrouter') return undefined;
+
+    // Vision-required: use a vision-capable model
+    if (needsVision) return AGENT_MODEL_TIERS.VISION;
+
+    // Iteration 0: quality matters most for initial reasoning + tool planning
+    if (iteration === 0) {
+      if (hasSOP || difficulty === 'complex') return AGENT_MODEL_TIERS.STRONG;
+      if (difficulty === 'moderate') return AGENT_MODEL_TIERS.BALANCED;
+      return AGENT_MODEL_TIERS.FAST;
+    }
+
+    // Error recovery: escalate to balanced
+    if (hasErrors) return AGENT_MODEL_TIERS.BALANCED;
+
+    // Later iterations: cheap tool-result routing
+    if (iteration >= 3) return AGENT_MODEL_TIERS.FREE;
+    return AGENT_MODEL_TIERS.FAST;
   }
 
   // ==========================================================================
