@@ -43,6 +43,7 @@ import { startMeetingListener, stopMeetingListener, getMeetingNotes } from './me
 import { saveDeliverable } from './deliverables.js';
 import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
+import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -246,4 +247,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['cloud_list_tasks', (ctx, input) => cloudListTasks(ctx, input)],
   ['cloud_get_analytics', (ctx) => cloudGetAnalytics(ctx)],
   ['cloud_list_members', (ctx) => cloudListMembers(ctx)],
+
+  // Operational pillars tools
+  ['assess_operations', (ctx, input) => assessOperations(ctx, input)],
+  ['get_pillar_detail', (ctx, input) => getPillarDetail(ctx, input)],
+  ['build_pillar', (ctx, input) => buildPillar(ctx, input)],
+  ['update_pillar_status', (ctx, input) => updatePillarStatus(ctx, input)],
 ]);
