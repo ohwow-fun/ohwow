@@ -1158,8 +1158,12 @@ export class RuntimeEngine {
       if (webSearchEnabled) tools.push(WEB_SEARCH_TOOL);
       if (browserEnabled) tools.push(REQUEST_BROWSER_TOOL);
       if (desktopEnabled) tools.push(REQUEST_DESKTOP_TOOL);
-      if (scraplingEnabled) tools.push(...SCRAPLING_TOOL_DEFINITIONS);
-      if (scraplingEnabled) tools.push(...DOC_MOUNT_TOOL_DEFINITIONS);
+      // When real Chrome is available via CDP, skip Scrapling — Chrome handles
+      // both public and authenticated pages. Scrapling is only useful as a
+      // lightweight fallback when no browser is available.
+      const useScrapling = scraplingEnabled && this.config.browserTarget !== 'chrome';
+      if (useScrapling) tools.push(...SCRAPLING_TOOL_DEFINITIONS);
+      if (useScrapling) tools.push(...DOC_MOUNT_TOOL_DEFINITIONS);
       if (localFilesEnabled && fileAccessGuard) tools.push(...FILESYSTEM_TOOL_DEFINITIONS);
       if (bashEnabled && fileAccessGuard) tools.push(...BASH_TOOL_DEFINITIONS);
       if (approvalRequired) tools.push(...DRAFT_TOOL_DEFINITIONS);
