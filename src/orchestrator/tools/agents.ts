@@ -333,7 +333,7 @@ ${targetDomain ? `- If any real Chrome window title contains "${targetDomain}", 
 - After navigating, take a screenshot to verify you're on the right page AND logged in (not a login wall)
 Do NOT close or disrupt existing windows/tabs. Open a new tab if needed.
 
-PHASE 3 — ACTION: Call desktop_wait(duration: 5000), then desktop_screenshot to capture the result.
+PHASE 3 — ACTION: Call desktop_wait(duration: 5000), then take a screenshot. IMPORTANT: Use the display number where Chrome is located (from the list_windows survey — windows have "[Display N]" annotations). Call desktop_screenshot(display: N) with the correct display number. If you don't know which display, take desktop_screenshot() first, and if it doesn't show Chrome, try desktop_screenshot(display: 2).
 
 PHASE 4 — REPORT: Describe what you see. Include login status, any messages/content found, classifications, and recommended next actions.
 
