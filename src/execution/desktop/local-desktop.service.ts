@@ -535,8 +535,23 @@ end tell`;
         case 'focus_app': {
           try {
             const { execSync } = await import('child_process');
-            execSync(`osascript -e 'tell application "${action.appName.replace(/"/g, '\\"')}" to activate'`, { timeout: 5000 });
-            await new Promise(r => setTimeout(r, 500)); // Brief pause for app to come to front
+            const escapedName = action.appName.replace(/"/g, '\\"');
+            execSync(`osascript -e 'tell application "${escapedName}" to activate'`, { timeout: 5000 });
+            await new Promise(r => setTimeout(r, 500));
+
+            // Auto-detect which display the focused app is on for correct screenshots
+            try {
+              const posScript = `tell application "System Events" to tell process "${escapedName}" to get position of front window`;
+              const posResult = execSync(`osascript -e '${posScript}'`, { timeout: 3000 }).toString().trim();
+              const [wx] = posResult.split(',').map(Number);
+              if (!isNaN(wx) && this.screenInfo.displays.length > 1) {
+                const targetDisplay = this.screenInfo.displays.find(d => wx >= d.originX && wx < d.originX + d.logicalWidth);
+                if (targetDisplay) {
+                  this.lastCaptureDisplayNumber = targetDisplay.displayNumber;
+                }
+              }
+            } catch { /* non-critical */ }
+
             result = await this.mutationResult('focus_app');
           } catch (err) {
             result = { success: false, type: 'focus_app', error: `Couldn't focus ${action.appName}: ${err instanceof Error ? err.message : err}` };
@@ -573,11 +588,26 @@ tell application "${escapedApp}" to activate`
 
             execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, { timeout: 5000 });
             await new Promise(r => setTimeout(r, 500));
+
+            // Auto-detect which display the focused window is on and capture that display
+            try {
+              const posScript = `tell application "System Events" to tell process "${escapedApp}" to get position of front window`;
+              const posResult = execSync(`osascript -e '${posScript}'`, { timeout: 3000 }).toString().trim();
+              const [wx] = posResult.split(',').map(Number);
+              if (!isNaN(wx) && this.screenInfo.displays.length > 1) {
+                const targetDisplay = this.screenInfo.displays.find(d => wx >= d.originX && wx < d.originX + d.logicalWidth);
+                if (targetDisplay) {
+                  this.lastCaptureDisplayNumber = targetDisplay.displayNumber;
+                }
+              }
+            } catch { /* non-critical — just use current display */ }
+
             result = await this.mutationResult('focus_window');
             if (result.success) {
+              const displayNote = this.lastCaptureDisplayNumber ? ` (Display ${this.lastCaptureDisplayNumber})` : '';
               result.content = titleFilter
-                ? `Focused window containing "${action.titleContains}" in ${action.appName}.`
-                : `Focused ${action.appName}.`;
+                ? `Focused window containing "${action.titleContains}" in ${action.appName}${displayNote}.`
+                : `Focused ${action.appName}${displayNote}.`;
             }
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
