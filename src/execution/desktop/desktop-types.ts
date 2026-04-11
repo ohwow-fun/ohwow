@@ -23,6 +23,7 @@ export type DesktopActionType =
   | 'left_click_drag'
   | 'move_window'
   | 'focus_app'
+  | 'focus_window'
   | 'list_windows';
 
 // ============================================================================
@@ -43,6 +44,7 @@ export interface DesktopWaitAction { type: 'wait'; duration: number }
 export interface DesktopLeftClickDragAction { type: 'left_click_drag'; startX: number; startY: number; endX: number; endY: number }
 export interface DesktopMoveWindowAction { type: 'move_window'; display: number }
 export interface DesktopFocusAppAction { type: 'focus_app'; appName: string }
+export interface DesktopFocusWindowAction { type: 'focus_window'; appName: string; titleContains?: string }
 export interface DesktopListWindowsAction { type: 'list_windows' }
 
 export type DesktopAction =
@@ -60,6 +62,7 @@ export type DesktopAction =
   | DesktopLeftClickDragAction
   | DesktopMoveWindowAction
   | DesktopFocusAppAction
+  | DesktopFocusWindowAction
   | DesktopListWindowsAction;
 
 // ============================================================================

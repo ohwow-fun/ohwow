@@ -544,6 +544,54 @@ end tell`;
           break;
         }
 
+        case 'focus_window': {
+          try {
+            const { execSync } = await import('child_process');
+            const escapedApp = action.appName.replace(/"/g, '\\"');
+            const titleFilter = action.titleContains?.replace(/"/g, '\\"') || '';
+
+            // AppleScript: find a window whose title contains the filter, raise it, then activate the app
+            const script = titleFilter
+              ? `tell application "System Events"
+  tell process "${escapedApp}"
+    set found to false
+    repeat with w in every window
+      set winTitle to name of w
+      if winTitle contains "${titleFilter}" then
+        perform action "AXRaise" of w
+        set found to true
+        exit repeat
+      end if
+    end repeat
+    if not found then
+      error "No window found containing \\"${titleFilter}\\""
+    end if
+  end tell
+end tell
+tell application "${escapedApp}" to activate`
+              : `tell application "${escapedApp}" to activate`;
+
+            execSync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`, { timeout: 5000 });
+            await new Promise(r => setTimeout(r, 500));
+            result = await this.mutationResult('focus_window');
+            if (result.success) {
+              result.content = titleFilter
+                ? `Focused window containing "${action.titleContains}" in ${action.appName}.`
+                : `Focused ${action.appName}.`;
+            }
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            result = {
+              success: false,
+              type: 'focus_window',
+              error: errMsg.includes('No window found')
+                ? `No ${action.appName} window found with title containing "${action.titleContains}". Use desktop_list_windows to see available windows.`
+                : `Couldn't focus window: ${errMsg}`,
+            };
+          }
+          break;
+        }
+
         default: {
           const unknownType = (action as { type: string }).type;
           result = { success: false, type: 'screenshot', error: `Unknown desktop action: ${unknownType}` };

@@ -13,10 +13,17 @@ import { logger } from '../../lib/logger.js';
 // ============================================================================
 
 /**
- * Convert an SOP tool_sequence into a SequenceDefinition.
- * Each tool becomes a micro-step that an agent can execute with a single tool call.
- * This is the fractal decomposition: instead of one agent doing 10 iterations,
- * the sequence executor coordinates 10 trivially-simple tasks.
+ * Convert an SOP tool_sequence into a context-aware SequenceDefinition.
+ *
+ * Instead of blindly executing tool calls, the sequence:
+ * 1. Activates desktop/browser
+ * 2. Surveys the screen (list_windows + screenshot) to understand what's open
+ * 3. Navigates intelligently (reuses existing windows, opens new tabs, avoids disrupting work)
+ * 4. Executes the action tools (wait, screenshot, etc.)
+ * 5. Summarizes results
+ *
+ * Each step is trivially simple — even a cheap model can handle one tool call.
+ * The intelligence is in the decomposition and predecessor context flow.
  */
 function sopToSequence(
   sopName: string,
@@ -28,62 +35,94 @@ function sopToSequence(
     const name = typeof s === 'string' ? s : s.tool;
     return name.startsWith('desktop_') || name === 'request_desktop';
   });
-  const usesBrowser = toolSequence.some(s => {
-    const name = typeof s === 'string' ? s : s.tool;
-    return name.startsWith('browser_') || name === 'request_browser';
-  });
 
-  // Build activation step (request_desktop or request_browser)
   const activationTool = usesDesktop ? 'request_desktop' : 'request_browser';
-  const avoidTool = usesDesktop
-    ? 'Do NOT use request_browser.'
-    : 'Do NOT use request_desktop.';
+  const avoidTool = usesDesktop ? 'Do NOT use request_browser.' : 'Do NOT use request_desktop.';
 
   const steps: SequenceStep[] = [];
 
-  // Step 0: Activate desktop/browser
+  // Phase 1: Activate desktop/browser
   steps.push({
     id: 'step-activate',
     agentId,
-    prompt: `Call ${activationTool} with reason: "${sopName}". ${avoidTool} This is your ONLY task — just call the tool and return.`,
+    prompt: `Call ${activationTool} with reason: "${sopName}". ${avoidTool} This is your ONLY task.`,
     dependsOn: [],
   });
 
-  // Steps 1-N: Each tool in the sequence
-  for (let i = 0; i < toolSequence.length; i++) {
-    const toolEntry = toolSequence[i];
-    const toolName = typeof toolEntry === 'string' ? toolEntry : toolEntry.tool;
-    const toolArgs = typeof toolEntry === 'object' && toolEntry.args ? toolEntry.args : {};
+  // Phase 2: Survey — gather context about what's on screen
+  steps.push({
+    id: 'step-survey',
+    agentId,
+    prompt: `Survey the desktop to understand what's currently open. Call desktop_list_windows first, then call desktop_screenshot. Report all Chrome windows you see (titles, positions, displays) and what's visible on screen. This is your ONLY task — just gather info.`,
+    dependsOn: ['step-activate'],
+  });
 
-    // Skip activation tools (already handled)
-    if (toolName === 'request_desktop' || toolName === 'request_browser') continue;
+  // Phase 3: Navigate — use survey context to find/open the right window
+  // Extract the target URL or app from the SOP tool sequence args
+  const typeStep = toolSequence.find(s => {
+    const name = typeof s === 'string' ? s : s.tool;
+    return name === 'desktop_type';
+  });
+  const targetUrl = typeof typeStep === 'object' && typeStep?.args?.text
+    ? String(typeStep.args.text)
+    : '';
 
-    const argsStr = Object.keys(toolArgs).length > 0
-      ? ` with arguments: ${JSON.stringify(toolArgs)}`
-      : '';
+  steps.push({
+    id: 'step-navigate',
+    agentId,
+    prompt: `Navigate to the target page for "${sopName}". Read the survey results from the previous step to see what Chrome windows are open.
 
-    const stepId = `step-${i + 1}`;
-    const prevStepId = steps[steps.length - 1].id;
+Your goal: Get to ${targetUrl || 'the target page'} in Chrome.
+
+Decision tree:
+1. If a Chrome window title already contains the target domain (e.g., "x.com"), use desktop_focus_window(app: "Google Chrome", title_contains: "${targetUrl ? new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname.replace('www.', '') : 'target'}") to focus it
+2. If Chrome is open but no window shows the target, use desktop_focus_window to focus any Chrome window, then desktop_key(key: "cmd+t") to open a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
+3. If Chrome is not open at all, use desktop_focus_app(app: "Google Chrome") to launch it, wait briefly, then navigate
+
+Do NOT close or disrupt existing windows/tabs. Always prefer opening a new tab over replacing an existing one.`,
+    dependsOn: ['step-survey'],
+  });
+
+  // Phase 4: Action — execute remaining SOP tools (wait, screenshot, etc.)
+  // Filter out navigation tools (already handled in step-navigate)
+  const navigationTools = new Set(['desktop_focus_app', 'desktop_focus_window', 'desktop_key', 'desktop_type', 'request_desktop', 'request_browser']);
+  const actionTools = toolSequence.filter(s => {
+    const name = typeof s === 'string' ? s : s.tool;
+    return !navigationTools.has(name);
+  });
+
+  if (actionTools.length > 0) {
+    const actionDescs = actionTools.map(t => {
+      if (typeof t === 'string') return t;
+      const argsStr = t.args ? `(${JSON.stringify(t.args)})` : '';
+      return `${t.tool}${argsStr}`;
+    }).join(', ');
 
     steps.push({
-      id: stepId,
+      id: 'step-action',
       agentId,
-      prompt: `Call ${toolName}${argsStr}. This is your ONLY task — call this one tool and return the result. ${avoidTool}`,
-      dependsOn: [prevStepId],
+      prompt: `Execute these action tools in order: ${actionDescs}. Call each tool and report the results.`,
+      dependsOn: ['step-navigate'],
     });
   }
 
-  // Final step: summarize results
+  // Phase 5: Summarize
   steps.push({
     id: 'step-summarize',
     agentId,
-    prompt: `Summarize the results of the "${sopName}" procedure for: ${userPrompt}\n\nReview all previous step outputs and provide a clear report. Include any screenshots, messages found, classifications, and recommended next actions.`,
+    prompt: `Summarize the results of "${sopName}" for: ${userPrompt}
+
+Review all previous step outputs. Provide a clear report including:
+- What was found on screen (from survey)
+- Navigation result (which window/tab was used)
+- Action results (screenshots, data gathered)
+- Classifications and recommended next actions`,
     dependsOn: [steps[steps.length - 1].id],
   });
 
   return {
     name: `SOP: ${sopName}`,
-    description: `Automated execution of "${sopName}" procedure`,
+    description: `Context-aware execution of "${sopName}" procedure`,
     steps,
     sourcePrompt: userPrompt,
   };

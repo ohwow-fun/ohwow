@@ -244,6 +244,25 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'desktop_focus_window',
+    description:
+      'Focus a specific window by matching its title. Use after desktop_list_windows to target the right window when an app has multiple windows open (e.g., different Chrome profiles or tabs). More precise than desktop_focus_app which just activates the app.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: {
+          type: 'string',
+          description: 'Application name exactly as macOS knows it (e.g. "Google Chrome")',
+        },
+        title_contains: {
+          type: 'string',
+          description: 'Partial match for the window title (e.g. "x.com", "Gmail", "ohwow.fun"). Case-insensitive.',
+        },
+      },
+      required: ['app'],
+    },
+  },
+  {
     name: 'desktop_list_windows',
     description:
       'List all open windows with their app name, title, position, and size. Use this to find which app is on which display before taking screenshots or moving windows.',
@@ -268,6 +287,7 @@ const DESKTOP_TOOL_NAMES = new Set([
   'desktop_wait',
   'desktop_move_window',
   'desktop_focus_app',
+  'desktop_focus_window',
   'desktop_list_windows',
 ]);
 
@@ -355,6 +375,9 @@ function mapToolToAction(
     case 'desktop_focus_app':
       return { type: 'focus_app', appName: input.app as string };
 
+    case 'desktop_focus_window':
+      return { type: 'focus_window', appName: input.app as string, titleContains: input.title_contains as string | undefined };
+
     case 'desktop_list_windows':
       return { type: 'list_windows' };
 
@@ -397,6 +420,7 @@ export function formatDesktopToolResult(
     left_click_drag: 'Drag performed.',
     move_window: 'Window moved to target display.',
     focus_app: 'Application focused.',
+    focus_window: 'Window focused.',
     list_windows: 'Window list retrieved.',
   };
 
