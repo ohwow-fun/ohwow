@@ -327,10 +327,12 @@ CRITICAL: Distinguish between the REAL Google Chrome (with saved logins and prof
 NEVER use a Chromium/Playwright window. Only use the real Google Chrome with the correct profile.
 
 PHASE 2 — NAVIGATE: Based on your survey:
+${profileHint ? `\nIMPORTANT: You need the Chrome profile for ${profileHint.replace(/.*profile/i, '').trim() || 'the correct account'}. Chrome has multiple profiles — each runs as a separate window. Look at the window titles from list_windows to find the right one. If you see the wrong profile (e.g., a different email), you need to switch profiles via the Chrome menu: Profiles > select the right one. Or look for a Chrome window whose title matches content from the target account.` : ''}
 ${targetDomain ? `- If any real Chrome window title contains "${targetDomain}", call desktop_focus_window(app: "Google Chrome", title_contains: "${targetDomain}")` : ''}
-- If real Chrome is open but on a different page, focus it with desktop_focus_window, then desktop_key(key: "cmd+t") for a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
-- If real Chrome is not open, call desktop_focus_app(app: "Google Chrome"), wait, then navigate
-- After navigating, take a screenshot to verify you're on the right page AND logged in (not a login wall)
+- If Chrome is open but showing the wrong profile, use the Profiles menu (click the profile avatar in the top-right corner of Chrome, or use menu Chrome > Profiles) to switch to the correct profile
+- If Chrome is open with the right profile but on a different page, focus it, then desktop_key(key: "cmd+t") for a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
+- If Chrome is not open, call desktop_focus_app(app: "Google Chrome"), wait, then navigate
+- After navigating, take a screenshot to verify you're on the right page AND logged in (not a login wall). If you see a login page, you have the wrong Chrome profile.
 Do NOT close or disrupt existing windows/tabs. Open a new tab if needed.
 
 PHASE 3 — ACTION: Call desktop_wait(duration: 5000), then take a screenshot. IMPORTANT: Use the display number where Chrome is located (from the list_windows survey — windows have "[Display N]" annotations). Call desktop_screenshot(display: N) with the correct display number. If you don't know which display, take desktop_screenshot() first, and if it doesn't show Chrome, try desktop_screenshot(display: 2).
