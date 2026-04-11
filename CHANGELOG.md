@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.7.0] — 2026-04-11
+
+### Added
+- **Center of Operations**: Full 6-phase implementation
+  - Phase 1: Person Model schema (deep person ingestion) + orchestrator tools + refinement
+  - Phase 2: Transition Engine schema + local runtime wiring
+  - Phase 3: Work Router service + tools, wired into daemon + system prompt
+  - Phase 4: Human Growth Engine + Skill Paths, wired with tools + daemon + tests
+  - Phase 5: Observation Engine, wired with tools + daemon + tests
+  - Phase 6: Collective Intelligence Engine, wired with tools + system prompt + tests
+  - Operational pillars added to local runtime
+  - Smoke tests for Center of Operations orchestrator tools
+- **Desktop automation**: Context-aware SOP execution with window targeting, auto-detect display after focus/window, `list_windows` tool, `desktop_focus_app` tool, robust multi-monitor support with `move_window`, native dialog + copy node path for Accessibility setup
+- **Browser**: Connect to real Chrome via CDP with profile selection, agents use real Chrome for browser tasks, base64 screenshot data in SSE events
+- **SOPs**: Inject skills into agent system prompts, enrich `run_agent`, feed desktop journal into workflow mining, track skill `success_rate` via EMA, wire skills + discovered processes into orchestrator chat, decompose SOPs into granular sequences
+- **Engine**: Dynamic catalog-aware model selection for agents, cost-effective models for agent tiers
+- **API**: Task detail endpoints for cloud proxy
+
+### Fixed
+- Desktop: Stop false-negative Accessibility check, fix character-drop typing issue, remove stale OHWOW.app bundle creation
+- Browser: Handle null activePage on CDP connect, use separate user-data-dir with symlinked profile, always pass profile directory to prevent Chrome profile picker, graceful Chrome restart preserves tabs, skip Scrapling tools when Chrome CDP is available, use Chrome binary directly on macOS
+- Engine: Release desktop lock on task completion, persist desktop service across model router iterations, sync desktop activation state, SOP tasks use STRONG model, only pin agent model for explicit OpenRouter IDs, skip SOP injection for sequence sub-steps
+- SOPs: Use static imports for skill compilation, force tool execution, stronger instructions to follow procedure steps, activate desktop section for desktop-tool skills, guide agent to select correct Chrome profile, distinguish real Chrome from Playwright Chromium, screenshot correct display
+- Orchestrator: Enable vision, fix screenshot dedup, auto-activate browser, instruct orchestrator to use browser tools directly
+- Agents: Update test to match 3-arg `executeTask` signature, force `tool_choice` for SOP enrichment
+- API: Correct table names for task activity and state endpoints
+- Daemon: Include cloud providers in `modelReady` status check
+
+### Changed
+- SOPs: Desktop SOPs use single task with smart prompt instead of sequences
+
 ## [0.6.9] — 2026-04-09
 
 ### Added
