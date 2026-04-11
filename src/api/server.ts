@@ -322,6 +322,15 @@ export function createServer(deps: ServerDeps): {
     app.use(createWhatsAppRouter(getWhatsAppClient, channelRegistry));
   }
 
+  // Stub endpoints — cloud dashboard expects these but they're not yet implemented locally.
+  // Return empty data so the dashboard doesn't log 404 errors.
+  app.get('/api/agent-suggestions', (_req, res) => res.json({ data: [] }));
+  app.get('/api/inbox/unread-count', (_req, res) => res.json({ count: 0 }));
+  app.get('/api/agents/briefing', (_req, res) => res.json({ data: null }));
+  app.post('/api/agents/briefing/generate', (_req, res) => res.json({ data: null }));
+  app.get('/api/nudges', (_req, res) => res.json({ data: [] }));
+  app.get('/api/human-tasks/my-tasks', (_req, res) => res.json({ data: [] }));
+
   // Endpoint to get session token info (for the web UI login)
   app.get('/api/session', (_req, res) => {
     res.json({ data: { authenticated: true } });
