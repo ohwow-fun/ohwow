@@ -46,6 +46,7 @@ import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks,
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
+import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -267,4 +268,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['override_transition_stage', (ctx, input) => overrideTransitionStage(ctx, input)],
   ['detect_task_patterns', (ctx) => detectTaskPatterns(ctx)],
   ['get_time_saved', (ctx) => getTimeSaved(ctx)],
+
+  // Work Router tools (Phase 3)
+  ['route_task', (ctx, input) => routeTask(ctx, input)],
+  ['get_routing_recommendations', (ctx, input) => getRoutingRecommendations(ctx, input)],
+  ['get_workload_balance', (ctx) => getWorkloadBalance(ctx)],
+  ['record_routing_outcome', (ctx, input) => recordRoutingOutcome(ctx, input)],
+  ['get_task_augmentation', (ctx, input) => getTaskAugmentation(ctx, input)],
+  ['trigger_pre_work', (ctx, input) => triggerPreWork(ctx, input)],
 ]);
