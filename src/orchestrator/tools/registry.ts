@@ -49,6 +49,7 @@ import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTi
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
 import { getWorkPatterns, getTimeAllocation, detectAutomationOpportunities, getObservationInsights } from './observation.js';
+import { getCrossPollination, scheduleTeamCouncil, getCollectiveBriefing, rebalanceWorkload } from './collective-intelligence.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -292,4 +293,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['get_time_allocation', (ctx, input) => getTimeAllocation(ctx, input)],
   ['detect_automation_opportunities', (ctx) => detectAutomationOpportunities(ctx)],
   ['get_observation_insights', (ctx, input) => getObservationInsights(ctx, input)],
+
+  // Collective Intelligence tools (Phase 6)
+  ['get_cross_pollination', (ctx) => getCrossPollination(ctx)],
+  ['schedule_team_council', (ctx) => scheduleTeamCouncil(ctx)],
+  ['get_collective_briefing', (ctx, input) => getCollectiveBriefing(ctx, input)],
+  ['rebalance_workload', (ctx) => rebalanceWorkload(ctx)],
 ]);

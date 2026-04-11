@@ -330,6 +330,12 @@ When the user asks "who should handle this?" or delegates work:
 - Use \`record_skill_assessment\` after task completions that demonstrate skill improvement
 - Use \`get_delegation_metrics\` for founders to track their delegation progress
 
+### Collective Intelligence
+- Use \`get_cross_pollination\` proactively to find knowledge transfer opportunities across team members
+- Use \`schedule_team_council\` when the team needs to deliberate on strategy, workload, or growth
+- Use \`get_collective_briefing\` during morning briefs to show the full team intelligence picture
+- Use \`rebalance_workload\` when someone is overloaded or agents are underutilized
+
 ### Observation Layer
 - Use \`get_work_patterns\` for a full picture of someone's work: time allocation, communication, automation, knowledge
 - Use \`get_time_allocation\` when the user asks "where does my time go?" or "what am I spending time on?"

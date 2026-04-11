@@ -2216,6 +2216,34 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // Collective Intelligence tools (Phase 6)
+  {
+    name: 'get_cross_pollination',
+    description: 'Find knowledge transfer opportunities across people and agents. Detects when someone excels at a skill another person is trying to develop.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'schedule_team_council',
+    description: 'Suggest data-enriched council topics from current team state: workload imbalances, growth concerns, operational gaps, strategy questions.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_collective_briefing',
+    description: 'Assemble a collective intelligence briefing for a person: team growth trends, cross-pollination suggestions, workload alerts, council insights, team capacity.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'rebalance_workload',
+    description: 'Analyze team workload and suggest rebalancing. Identifies overloaded people with tasks that agents could handle. Shows team capacity and headroom.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+
 ];
 
 // =========================================================================
