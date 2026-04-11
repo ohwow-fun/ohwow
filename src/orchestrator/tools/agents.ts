@@ -308,21 +308,34 @@ export async function runAgent(
             const targetUrl = typeof typeStep === 'object' && typeStep?.args?.text ? String(typeStep.args.text) : '';
             const targetDomain = targetUrl ? (() => { try { return new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname.replace('www.', ''); } catch { return ''; } })() : '';
 
+            // Pull preconditions from SOP (e.g., "Chrome running with ogsus@ohwow.fun profile")
+            const preconditions = (def.preconditions as string[] | undefined) || [];
+            const profileHint = preconditions.find((p: string) => p.toLowerCase().includes('profile'));
+
             enrichedPrompt = `${prompt}
 
 PROCEDURE: "${skill.name}" — Follow this context-aware approach:
+${profileHint ? `\nPRECONDITION: ${profileHint}` : ''}
 
-PHASE 1 — SURVEY: First, call request_desktop, then call desktop_list_windows to see all open windows, then call desktop_screenshot to see the current screen. Identify all Chrome windows and their titles.
+PHASE 1 — SURVEY: Call request_desktop, then desktop_list_windows to see all open windows, then desktop_screenshot to see the current screen.
+
+CRITICAL: Distinguish between the REAL Google Chrome (with saved logins and profiles) and Playwright Chromium (automated browser with NO logins). How to tell them apart:
+- Playwright Chromium shows a yellow warning bar: "You are using an unsupported command-line flag: --no-sandbox"
+- Playwright Chromium has NO profile icon in the top-right corner
+- Real Chrome shows your profile avatar/icon in the top-right and has a "Profiles" menu
+- In desktop_list_windows, Chromium may appear as "Chromium" instead of "Google Chrome"
+NEVER use a Chromium/Playwright window. Only use the real Google Chrome with the correct profile.
 
 PHASE 2 — NAVIGATE: Based on your survey:
-${targetDomain ? `- If any Chrome window title contains "${targetDomain}", call desktop_focus_window(app: "Google Chrome", title_contains: "${targetDomain}") to focus it` : ''}
-- If Chrome is open but doesn't show the target, call desktop_focus_window on any Chrome window, then desktop_key(key: "cmd+t") to open a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
-- If Chrome is not open, call desktop_focus_app(app: "Google Chrome"), wait, then navigate
+${targetDomain ? `- If any real Chrome window title contains "${targetDomain}", call desktop_focus_window(app: "Google Chrome", title_contains: "${targetDomain}")` : ''}
+- If real Chrome is open but on a different page, focus it with desktop_focus_window, then desktop_key(key: "cmd+t") for a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
+- If real Chrome is not open, call desktop_focus_app(app: "Google Chrome"), wait, then navigate
+- After navigating, take a screenshot to verify you're on the right page AND logged in (not a login wall)
 Do NOT close or disrupt existing windows/tabs. Open a new tab if needed.
 
 PHASE 3 — ACTION: Call desktop_wait(duration: 5000), then desktop_screenshot to capture the result.
 
-PHASE 4 — REPORT: Describe what you see. Include screenshot observations, any messages/content found, and recommended next actions.
+PHASE 4 — REPORT: Describe what you see. Include login status, any messages/content found, classifications, and recommended next actions.
 
 Do NOT use request_browser. This task requires desktop automation on the real Chrome with saved logins.`;
           }
