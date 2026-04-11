@@ -47,6 +47,7 @@ import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } fr
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
+import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -276,4 +277,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['record_routing_outcome', (ctx, input) => recordRoutingOutcome(ctx, input)],
   ['get_task_augmentation', (ctx, input) => getTaskAugmentation(ctx, input)],
   ['trigger_pre_work', (ctx, input) => triggerPreWork(ctx, input)],
+
+  // Human Growth Engine tools (Phase 4)
+  ['get_human_growth', (ctx, input) => getHumanGrowth(ctx, input)],
+  ['get_skill_paths', (ctx, input) => getSkillPaths(ctx, input)],
+  ['create_skill_path', (ctx, input) => createSkillPath(ctx, input)],
+  ['get_team_health', (ctx) => getTeamHealth(ctx)],
+  ['get_delegation_metrics', (ctx, input) => getDelegationMetrics(ctx, input)],
+  ['record_skill_assessment', (ctx, input) => recordSkillAssessment(ctx, input)],
 ]);

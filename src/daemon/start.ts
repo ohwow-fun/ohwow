@@ -46,6 +46,7 @@ import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTransitionEngine } from '../hexis/transition-engine.js';
 import { LocalWorkRouter } from '../hexis/work-router.js';
+import { HumanGrowthEngine } from '../hexis/human-growth.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
@@ -1067,6 +1068,30 @@ export async function startDaemon(): Promise<DaemonHandle> {
         });
       }, REFINEMENT_INTERVAL);
       logger.debug('[daemon] Person model refinement scheduled (1h interval)');
+    }
+
+    // Human Growth Engine: compute growth snapshots alongside refinement
+    {
+      const GROWTH_INTERVAL = 60 * 60_000; // 1 hour (same as refinement)
+      setInterval(async () => {
+        try {
+          const growthEngine = new HumanGrowthEngine(db, workspaceId);
+          const { data: people } = await db
+            .from('agent_workforce_person_models')
+            .select('id')
+            .eq('workspace_id', workspaceId)
+            .in('ingestion_status', ['initial_complete', 'mature']);
+
+          for (const person of (people || [])) {
+            await growthEngine.computeAndStoreSnapshot(person.id as string).catch(err => {
+              logger.debug({ err, personId: person.id }, '[daemon] Growth snapshot error');
+            });
+          }
+        } catch (err) {
+          logger.debug({ err }, '[daemon] Human growth engine error');
+        }
+      }, GROWTH_INTERVAL);
+      logger.debug('[daemon] Human growth engine scheduled (1h interval)');
     }
 
     // Heartbeat coordinator: wakes agents on a configurable cadence

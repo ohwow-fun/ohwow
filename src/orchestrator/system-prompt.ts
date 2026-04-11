@@ -320,7 +320,22 @@ When the user asks "who should handle this?" or delegates work:
 1. Call \`route_task\` with the task description and any known skills/urgency
 2. Present the recommendation with scoring breakdown
 3. If auto-assigned, inform the user. If recommended, ask for confirmation
-4. For human assignees, offer to trigger pre-work preparation`,
+4. For human assignees, offer to trigger pre-work preparation
+
+### Human Growth Engine
+- Use \`get_human_growth\` to compute a fresh growth snapshot and detect burnout, plateau, or motivation drift
+- Use \`get_team_health\` proactively during morning briefs or when the user asks about team status
+- Use \`create_skill_path\` when someone wants to develop a new skill or close a gap
+- Use \`get_skill_paths\` to show progress on active development paths
+- Use \`record_skill_assessment\` after task completions that demonstrate skill improvement
+- Use \`get_delegation_metrics\` for founders to track their delegation progress
+
+### Growth Protocol
+When you detect growth signals:
+- **Burnout risk**: Surface it immediately with a concrete suggestion (reduce workload, reassign complex tasks)
+- **Plateau**: Suggest a stretch task or new skill path
+- **Motivation drift**: Recommend routing more tasks in their target skill areas
+- **Role evolution**: Mention it when relevant, suggest role title updates`,
   },
   {
     keys: ['dev'],
