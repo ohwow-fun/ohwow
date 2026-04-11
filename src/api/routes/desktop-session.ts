@@ -46,7 +46,8 @@ export function createDesktopSessionRouter(): Router {
         1280, // maxLongEdge
       );
 
-      const wantsRaw = req.query.format === 'raw' || req.accepts('image/*');
+      const acceptHeader = req.headers.accept || '';
+      const wantsRaw = req.query.format === 'raw' || (acceptHeader.includes('image/') && !acceptHeader.includes('*/*'));
       if (wantsRaw) {
         const buf = Buffer.from(base64, 'base64');
         res.set('Content-Type', 'image/jpeg');
