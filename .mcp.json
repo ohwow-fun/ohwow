@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "ohwow": {
-      "command": "npx",
-      "args": ["-y", "ohwow", "mcp-server"]
+      "command": "node",
+      "args": ["bin/ohwow-mcp.js"]
     }
   }
 }
