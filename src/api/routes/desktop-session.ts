@@ -33,15 +33,29 @@ export function createDesktopSessionRouter(): Router {
   });
 
   // --------------------------------------------------------------------------
-  // Screenshot — capture and return the current screen as base64 JPEG
+  // Screenshot — capture and return the current screen
+  // ?format=raw  → returns raw JPEG bytes (Content-Type: image/jpeg)
+  // Accept: image/* → same as format=raw
+  // Otherwise    → returns JSON { screenshot (base64), width, height }
   // --------------------------------------------------------------------------
-  router.get('/desktop/screenshot', async (_req, res) => {
+  router.get('/desktop/screenshot', async (req, res) => {
     try {
       const screenInfo = await detectScreenInfo();
       const { base64, scaledWidth, scaledHeight } = await captureAndScaleScreenshot(
         screenInfo,
         1280, // maxLongEdge
       );
+
+      const wantsRaw = req.query.format === 'raw' || req.accepts('image/*');
+      if (wantsRaw) {
+        const buf = Buffer.from(base64, 'base64');
+        res.set('Content-Type', 'image/jpeg');
+        res.set('X-Image-Width', String(scaledWidth));
+        res.set('X-Image-Height', String(scaledHeight));
+        res.send(buf);
+        return;
+      }
+
       res.json({
         screenshot: base64,
         width: scaledWidth,
