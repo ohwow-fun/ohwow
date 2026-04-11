@@ -2000,6 +2000,36 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // --- Transition Engine ---
+  {
+    name: 'get_transition_status',
+    description: 'Show all task patterns and their transition stages (Shadow/Suggest/Draft/Autopilot/Autonomous). Shows time saved and automation progress.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'override_transition_stage',
+    description: 'Manually promote or demote a task pattern to a different stage. Requires confirmation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        transition_id: { type: 'string', description: 'Transition ID' },
+        new_stage: { type: 'number', description: '1=Shadow, 2=Suggest, 3=Draft, 4=Autopilot, 5=Autonomous' },
+        reason: { type: 'string', description: 'Why the override' },
+      },
+      required: ['transition_id', 'new_stage', 'reason'],
+    },
+  },
+  {
+    name: 'detect_task_patterns',
+    description: 'Scan recent task history for recurring patterns. Creates task patterns from clusters of 3+ similar tasks.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_time_saved',
+    description: 'Get aggregate time saved by the Transition Engine. Shows hours saved, patterns tracked, automation rate.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+
 ];
 
 // =========================================================================

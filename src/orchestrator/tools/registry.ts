@@ -45,6 +45,7 @@ import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompleti
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
+import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -260,4 +261,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['list_person_models', (ctx) => listPersonModels(ctx)],
   ['start_person_ingestion', (ctx, input) => startPersonIngestion(ctx, input)],
   ['update_person_model', (ctx, input) => updatePersonModel(ctx, input)],
+
+  // Transition engine tools
+  ['get_transition_status', (ctx, input) => getTransitionStatus(ctx, input)],
+  ['override_transition_stage', (ctx, input) => overrideTransitionStage(ctx, input)],
+  ['detect_task_patterns', (ctx) => detectTaskPatterns(ctx)],
+  ['get_time_saved', (ctx) => getTimeSaved(ctx)],
 ]);
