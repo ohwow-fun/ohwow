@@ -45,6 +45,7 @@ import { PresenceEngine } from '../presence/presence-engine.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTransitionEngine } from '../hexis/transition-engine.js';
+import { LocalWorkRouter } from '../hexis/work-router.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
@@ -1018,6 +1019,43 @@ export async function startDaemon(): Promise<DaemonHandle> {
         }
       });
       logger.debug('[daemon] Transition engine listener registered');
+    }
+
+    // Work Router: records routing outcomes when routed tasks complete
+    {
+      const workRouter = new LocalWorkRouter(db, workspaceId);
+      bus.on('task:completed', async (data) => {
+        try {
+          // Check if this task has a routing decision
+          const { data: decision } = await db
+            .from('work_routing_decisions')
+            .select('id, outcome')
+            .eq('task_id', data.taskId)
+            .single();
+
+          if (decision && !decision.outcome) {
+            const { data: task } = await db
+              .from('agent_workforce_tasks')
+              .select('duration_seconds')
+              .eq('id', data.taskId)
+              .single();
+
+            const actualMinutes = task?.duration_seconds
+              ? Math.round((task.duration_seconds as number) / 60)
+              : undefined;
+
+            await workRouter.recordOutcome(
+              decision.id as string,
+              data.status === 'completed' ? 'completed' : 'rejected',
+              undefined,
+              actualMinutes,
+            );
+          }
+        } catch (err) {
+          logger.debug({ err, taskId: data.taskId }, '[daemon] Work Router outcome hook error');
+        }
+      });
+      logger.debug('[daemon] Work Router outcome listener registered');
     }
 
     // Person Model refinement: processes unprocessed observations every hour
