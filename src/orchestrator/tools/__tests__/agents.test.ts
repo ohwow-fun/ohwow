@@ -96,7 +96,7 @@ describe('runAgent', () => {
     expect(data.message).toContain('Writer');
     expect(data.message).toContain('completed');
     expect(data.taskId).toBe('task-new');
-    expect(mockEngine.executeTask).toHaveBeenCalledWith('a1', 'task-new');
+    expect(mockEngine.executeTask).toHaveBeenCalledWith('a1', 'task-new', undefined);
   });
 
   it('returns error when agent_id is missing', async () => {
