@@ -44,6 +44,8 @@ import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { PresenceEngine } from '../presence/presence-engine.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
+import { LocalTransitionEngine } from '../hexis/transition-engine.js';
+import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
 import { ScraplingService } from '../execution/scrapling/index.js';
@@ -979,6 +981,55 @@ export async function startDaemon(): Promise<DaemonHandle> {
     proactiveEngine.start().catch(err => {
       logger.warn(`[daemon] Proactive engine failed: ${err instanceof Error ? err.message : err}`);
     });
+
+    // Transition engine: listens for task completions and evaluates stage progression
+    {
+      const transitionEngine = new LocalTransitionEngine(db, workspaceId);
+      bus.on('task:completed', async (data) => {
+        if (data.status !== 'completed') return;
+        try {
+          const { data: task } = await db
+            .from('agent_workforce_tasks')
+            .select('title, duration_seconds, output')
+            .eq('id', data.taskId)
+            .single();
+          if (!task) return;
+          const durationSeconds = (task.duration_seconds as number) || 0;
+          // Extract tool names from output JSON if available
+          let toolsUsed: string[] = [];
+          if (task.output) {
+            try {
+              const output = typeof task.output === 'string' ? JSON.parse(task.output as string) : task.output;
+              if (Array.isArray(output?.toolsUsed)) toolsUsed = output.toolsUsed;
+              else if (Array.isArray(output?.tools)) toolsUsed = output.tools;
+            } catch { /* empty */ }
+          }
+          await transitionEngine.onTaskCompleted({
+            taskId: data.taskId,
+            taskTitle: (task.title as string) || '',
+            agentId: data.agentId,
+            toolsUsed,
+            status: data.status,
+            truthScore: null,
+            durationSeconds,
+          });
+        } catch (err) {
+          logger.debug({ err, taskId: data.taskId }, '[daemon] Transition engine hook error');
+        }
+      });
+      logger.debug('[daemon] Transition engine listener registered');
+    }
+
+    // Person Model refinement: processes unprocessed observations every hour
+    {
+      const REFINEMENT_INTERVAL = 60 * 60_000; // 1 hour
+      setInterval(() => {
+        runPersonModelRefinement(db, workspaceId).catch(err => {
+          logger.debug({ err }, '[daemon] Person model refinement error');
+        });
+      }, REFINEMENT_INTERVAL);
+      logger.debug('[daemon] Person model refinement scheduled (1h interval)');
+    }
 
     // Heartbeat coordinator: wakes agents on a configurable cadence
     const heartbeatCoordinator = new HeartbeatCoordinator(db, engine, workspaceId);
