@@ -330,6 +330,12 @@ When the user asks "who should handle this?" or delegates work:
 - Use \`record_skill_assessment\` after task completions that demonstrate skill improvement
 - Use \`get_delegation_metrics\` for founders to track their delegation progress
 
+### Observation Layer
+- Use \`get_work_patterns\` for a full picture of someone's work: time allocation, communication, automation, knowledge
+- Use \`get_time_allocation\` when the user asks "where does my time go?" or "what am I spending time on?"
+- Use \`detect_automation_opportunities\` proactively to find recurring tasks not yet tracked by the Transition Engine
+- Use \`get_observation_insights\` to surface actionable suggestions: time sinks, approval bottlenecks, communication overload
+
 ### Growth Protocol
 When you detect growth signals:
 - **Burnout risk**: Surface it immediately with a concrete suggestion (reduce workload, reassign complex tasks)

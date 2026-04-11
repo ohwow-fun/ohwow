@@ -48,6 +48,7 @@ import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonMod
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
+import { getWorkPatterns, getTimeAllocation, detectAutomationOpportunities, getObservationInsights } from './observation.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // Agent tools
@@ -285,4 +286,10 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['get_team_health', (ctx) => getTeamHealth(ctx)],
   ['get_delegation_metrics', (ctx, input) => getDelegationMetrics(ctx, input)],
   ['record_skill_assessment', (ctx, input) => recordSkillAssessment(ctx, input)],
+
+  // Observation Layer tools (Phase 5)
+  ['get_work_patterns', (ctx, input) => getWorkPatterns(ctx, input)],
+  ['get_time_allocation', (ctx, input) => getTimeAllocation(ctx, input)],
+  ['detect_automation_opportunities', (ctx) => detectAutomationOpportunities(ctx)],
+  ['get_observation_insights', (ctx, input) => getObservationInsights(ctx, input)],
 ]);

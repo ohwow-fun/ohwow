@@ -2176,6 +2176,46 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // Observation Layer tools (Phase 5)
+  {
+    name: 'get_work_patterns',
+    description: 'Get the Work Pattern Map for a person: communication patterns, task engagement, time allocation, automation adoption, knowledge consumption, operational health. Computes fresh if stale (>30min). Shows insights and suggestions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'get_time_allocation',
+    description: 'Detailed time allocation breakdown for a person this week: deep work, communication, meetings, approvals, operations. Shows percentage split.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'detect_automation_opportunities',
+    description: 'Find recurring tasks that aren\'t in the Transition Engine yet. Scans completed task titles for clusters of 3+ similar tasks not being tracked.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_observation_insights',
+    description: 'Surface top insights from work pattern analysis: time sinks, automation candidates, communication overload, deep work deficits, approval bottlenecks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+
 ];
 
 // =========================================================================
