@@ -34,16 +34,19 @@ export function createDesktopSessionRouter(): Router {
 
   // --------------------------------------------------------------------------
   // Screenshot — capture and return the current screen
+  // ?display=N   → capture only display N (1-based). Omit for composite of all.
   // ?format=raw  → returns raw JPEG bytes (Content-Type: image/jpeg)
   // Accept: image/* → same as format=raw
-  // Otherwise    → returns JSON { screenshot (base64), width, height }
+  // Otherwise    → returns JSON { screenshot (base64), width, height, displayCount }
   // --------------------------------------------------------------------------
   router.get('/desktop/screenshot', async (req, res) => {
     try {
       const screenInfo = await detectScreenInfo();
+      const displayParam = req.query.display ? Number(req.query.display) : undefined;
       const { base64, scaledWidth, scaledHeight } = await captureAndScaleScreenshot(
         screenInfo,
         1280, // maxLongEdge
+        displayParam,
       );
 
       const acceptHeader = req.headers.accept || '';
@@ -53,6 +56,7 @@ export function createDesktopSessionRouter(): Router {
         res.set('Content-Type', 'image/jpeg');
         res.set('X-Image-Width', String(scaledWidth));
         res.set('X-Image-Height', String(scaledHeight));
+        res.set('X-Display-Count', String(screenInfo.displays.length));
         res.send(buf);
         return;
       }
@@ -61,6 +65,15 @@ export function createDesktopSessionRouter(): Router {
         screenshot: base64,
         width: scaledWidth,
         height: scaledHeight,
+        displayCount: screenInfo.displays.length,
+        displays: screenInfo.displays.map((d) => ({
+          index: d.displayNumber,
+          name: d.name,
+          width: d.physicalWidth,
+          height: d.physicalHeight,
+          scaleFactor: d.scaleFactor,
+          primary: d.isPrimary,
+        })),
       });
     } catch (err) {
       logger.error({ err }, '[desktop-session] Screenshot capture failed');
