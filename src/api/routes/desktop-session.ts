@@ -14,7 +14,19 @@ import {
   captureAndScaleScreenshot,
   desktopLock,
 } from '../../execution/desktop/index.js';
+import type { LocalDesktopService } from '../../execution/desktop/local-desktop.service.js';
 import { logger } from '../../lib/logger.js';
+
+// Persistent remote desktop service instance — preserves display state
+// (lastCaptureDisplayNumber) across sequential cloud orchestrator actions.
+let remoteServiceInstance: LocalDesktopService | null = null;
+async function getRemoteDesktopService(): Promise<LocalDesktopService> {
+  if (!remoteServiceInstance) {
+    const { LocalDesktopService } = await import('../../execution/desktop/local-desktop.service.js');
+    remoteServiceInstance = new LocalDesktopService({ maxLongEdge: 1280 });
+  }
+  return remoteServiceInstance;
+}
 
 export function createDesktopSessionRouter(): Router {
   const router = Router();
@@ -138,7 +150,7 @@ export function createDesktopSessionRouter(): Router {
   // Does NOT require the desktop lock (the human user is controlling remotely).
   // --------------------------------------------------------------------------
   router.post('/desktop/remote-action', async (req, res) => {
-    const { type, x, y, text, key, direction, amount, startX, startY, endX, endY, duration } = req.body;
+    const { type, x, y, text, key, direction, amount, startX, startY, endX, endY, duration, display } = req.body;
     const ALLOWED_TYPES = new Set([
       'screenshot', 'left_click', 'right_click', 'double_click', 'triple_click',
       'type_text', 'typewrite', 'key', 'scroll', 'mouse_move', 'wait', 'left_click_drag',
@@ -149,8 +161,9 @@ export function createDesktopSessionRouter(): Router {
     }
 
     try {
-      const { LocalDesktopService } = await import('../../execution/desktop/local-desktop.service.js');
-      const service = new LocalDesktopService({ maxLongEdge: 1280 });
+      // Persist the service across requests so display state (lastCaptureDisplayNumber)
+      // is preserved between screenshot and subsequent click/type actions.
+      const service = await getRemoteDesktopService();
       const result = await service.executeAction({
         type,
         x, y,
@@ -160,6 +173,7 @@ export function createDesktopSessionRouter(): Router {
         amount,
         startX, startY, endX, endY,
         duration,
+        display,
       });
 
       res.json({
