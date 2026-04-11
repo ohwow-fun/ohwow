@@ -257,7 +257,8 @@ export async function runAgent(
 
   const agentConfig = typeof a.config === 'string' ? JSON.parse(a.config) : a.config;
 
-  // Check for matching SOP — if found, execute as a granular sequence instead of one monolithic task
+  // Check for matching SOP
+  let enrichedPrompt = prompt;
   try {
     const { data: procedureSkills } = await ctx.db.from('agent_workforce_skills')
       .select('name, definition, triggers')
@@ -273,54 +274,72 @@ export async function runAgent(
         if (keywords.length > 0 && matchesTriggers(triggers, keywords)) {
           const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition as string) : skill.definition;
           if (def?.tool_sequence) {
-            // Convert SOP to a granular sequence — each tool call becomes its own micro-task
-            const sequence = sopToSequence(
-              skill.name as string,
-              def.tool_sequence as Array<string | { tool: string; args?: Record<string, unknown> }>,
-              agentId,
-              prompt,
-            );
-            logger.info({ sop: skill.name, stepCount: sequence.steps.length }, '[run_agent] SOP matched — executing as sequence');
-
-            const seqResult = await executeSequence({
-              db: ctx.db,
-              engine: ctx.engine,
-              workspaceId: ctx.workspaceId,
-              definition: sequence,
-              enableAbstention: false, // SOPs are prescriptive, no abstention
-              stepTimeoutMs: 60_000,   // 60s per micro-step (should be fast)
+            const seq = def.tool_sequence as Array<string | { tool: string; args?: Record<string, unknown> }>;
+            const usesDesktop = seq.some((s: string | { tool: string }) => {
+              const n = typeof s === 'string' ? s : s.tool;
+              return n.startsWith('desktop_') || n === 'request_desktop';
             });
 
-            return {
-              success: seqResult.success,
-              data: {
-                message: `${a.name} executed "${skill.name}" procedure (${seqResult.stepResults.length} steps).`,
-                sopName: skill.name,
-                status: seqResult.success ? 'completed' : 'failed',
-                output: seqResult.finalOutput?.slice(0, 2000) || 'Procedure completed.',
-                steps: seqResult.stepResults.map(s => ({
-                  stepId: s.stepId,
-                  status: s.status,
-                  durationMs: s.durationMs,
-                })),
-                totalDurationMs: seqResult.totalDurationMs,
-              },
-            };
+            // Non-desktop SOPs → decompose into granular sequence (each tool = micro-task)
+            if (!usesDesktop) {
+              const sequence = sopToSequence(skill.name as string, seq, agentId, prompt);
+              logger.info({ sop: skill.name, stepCount: sequence.steps.length }, '[run_agent] SOP matched — executing as sequence');
+              const seqResult = await executeSequence({
+                db: ctx.db, engine: ctx.engine, workspaceId: ctx.workspaceId,
+                definition: sequence, enableAbstention: false, stepTimeoutMs: 60_000,
+              });
+              return {
+                success: seqResult.success,
+                data: {
+                  message: `${a.name} executed "${skill.name}" (${seqResult.stepResults.length} steps).`,
+                  sopName: skill.name, status: seqResult.success ? 'completed' : 'failed',
+                  output: seqResult.finalOutput?.slice(0, 2000) || 'Procedure completed.',
+                  steps: seqResult.stepResults.map(s => ({ stepId: s.stepId, status: s.status, durationMs: s.durationMs })),
+                  totalDurationMs: seqResult.totalDurationMs,
+                },
+              };
+            }
+
+            // Desktop SOPs → single task with context-aware prompt (desktop lock requires one session)
+            logger.info({ sop: skill.name }, '[run_agent] Desktop SOP matched — building context-aware prompt');
+
+            // Extract target URL from the tool sequence
+            const typeStep = seq.find(s => typeof s === 'object' && s.tool === 'desktop_type');
+            const targetUrl = typeof typeStep === 'object' && typeStep?.args?.text ? String(typeStep.args.text) : '';
+            const targetDomain = targetUrl ? (() => { try { return new URL(targetUrl.startsWith('http') ? targetUrl : 'https://' + targetUrl).hostname.replace('www.', ''); } catch { return ''; } })() : '';
+
+            enrichedPrompt = `${prompt}
+
+PROCEDURE: "${skill.name}" — Follow this context-aware approach:
+
+PHASE 1 — SURVEY: First, call request_desktop, then call desktop_list_windows to see all open windows, then call desktop_screenshot to see the current screen. Identify all Chrome windows and their titles.
+
+PHASE 2 — NAVIGATE: Based on your survey:
+${targetDomain ? `- If any Chrome window title contains "${targetDomain}", call desktop_focus_window(app: "Google Chrome", title_contains: "${targetDomain}") to focus it` : ''}
+- If Chrome is open but doesn't show the target, call desktop_focus_window on any Chrome window, then desktop_key(key: "cmd+t") to open a new tab, desktop_type(text: "${targetUrl}"), desktop_key(key: "enter")
+- If Chrome is not open, call desktop_focus_app(app: "Google Chrome"), wait, then navigate
+Do NOT close or disrupt existing windows/tabs. Open a new tab if needed.
+
+PHASE 3 — ACTION: Call desktop_wait(duration: 5000), then desktop_screenshot to capture the result.
+
+PHASE 4 — REPORT: Describe what you see. Include screenshot observations, any messages/content found, and recommended next actions.
+
+Do NOT use request_browser. This task requires desktop automation on the real Chrome with saved logins.`;
           }
           break;
         }
       }
     }
   } catch (sopErr) {
-    logger.warn({ err: sopErr instanceof Error ? sopErr.message : sopErr }, '[run_agent] SOP sequence execution failed, falling back to standard');
+    logger.warn({ err: sopErr instanceof Error ? sopErr.message : sopErr }, '[run_agent] SOP enrichment failed');
   }
 
-  // No SOP matched — standard single-agent execution
+  // Standard single-agent execution (with optional SOP enrichment for desktop)
   const insertPayload: Record<string, unknown> = {
     workspace_id: ctx.workspaceId,
     agent_id: agentId,
-    title: prompt.slice(0, 100),
-    input: prompt,
+    title: enrichedPrompt.slice(0, 100),
+    input: enrichedPrompt,
     status: 'pending',
     requires_approval: agentConfig.approval_required ? 1 : 0,
   };
