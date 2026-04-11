@@ -2869,6 +2869,11 @@ export class RuntimeEngine {
           logger.error({ err }, '[RuntimeEngine] Browser cleanup failed');
         });
       }
+      if (desktopService) {
+        await desktopService.close().catch((err: unknown) => {
+          logger.error({ err }, '[RuntimeEngine] Desktop cleanup failed');
+        });
+      }
     }
 
     // Check for irreversible tools used in Ollama path
