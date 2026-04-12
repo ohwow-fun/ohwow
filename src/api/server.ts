@@ -20,6 +20,7 @@ import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { createAuthMiddleware } from './middleware.js';
 import { createHealthRouter, type HealthBppDeps } from './routes/health.js';
 import { createTasksRouter } from './routes/tasks.js';
+import { createLlmRouter } from './routes/llm.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createActivityRouter } from './routes/activity.js';
 import { createApprovalsRouter } from './routes/approvals.js';
@@ -296,6 +297,7 @@ export function createServer(deps: ServerDeps): {
   app.get('/api/human-tasks/my-tasks', (_req, res) => res.json({ data: [] }));
 
   // Register all API routes
+  app.use(createLlmRouter(db, modelRouter ?? null));
   app.use(createTasksRouter(db, engine));
   app.use(createAgentsRouter(db));
   app.use(createActivityRouter(db));
