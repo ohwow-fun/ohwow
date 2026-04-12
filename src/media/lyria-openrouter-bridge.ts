@@ -15,8 +15,10 @@ const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 /** Lyria model IDs on OpenRouter */
 export const LYRIA_MODELS = {
-  /** Google Lyria — music generation */
-  music: 'google/lyria',
+  /** Google Lyria 3 Pro — full music generation */
+  music: 'google/lyria-3-pro-preview',
+  /** Google Lyria 3 Clip — short-form music clips */
+  musicClip: 'google/lyria-3-clip-preview',
   /** Google Veo 2 — video generation */
   video: 'google/veo-2',
 } as const;
