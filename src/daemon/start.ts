@@ -1636,6 +1636,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
     warmupAbort?.abort();
     engine.drainQueue('Daemon shutting down');
     orchestrator?.closeBrowser().catch(() => {});
+    // Also tear down the HTTP route's singleton browser service. The cloud
+    // routes browser sessions through /browser/session/* which uses its own
+    // singleton (separate from the orchestrator's), so without this call any
+    // Stagehand-spawned Chromium would survive daemon restart and accumulate
+    // as orphaned windows the user has to manually close.
+    import('../api/routes/browser-session.js')
+      .then(m => m.closeBrowserSessionService())
+      .catch(() => {});
     orchestrator?.closeDesktop().catch(() => {});
     orchestrator?.closeMcp().catch(() => {});
     llamaCppManager?.stop().catch(() => {});

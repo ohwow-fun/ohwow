@@ -17,6 +17,28 @@ let browserService: LocalBrowserService | null = null;
 let configuredHeadless = false;
 
 /**
+ * Tear down the singleton browser service. Called from the daemon shutdown
+ * handler so any Stagehand-spawned Chromium child process exits cleanly
+ * instead of being orphaned across daemon restarts.
+ *
+ * Stagehand v3 logs a warning at init time about lacking a "shutdown
+ * supervisor" — that supervisor is what would normally clean up child
+ * processes if the daemon dies unexpectedly. We can't install Stagehand's
+ * supervisor as a library consumer, so the best we can do is explicitly
+ * call close() on graceful shutdown.
+ */
+export async function closeBrowserSessionService(): Promise<void> {
+  if (!browserService) return;
+  try {
+    await browserService.close();
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : err }, '[BrowserSession] Singleton close failed');
+  } finally {
+    browserService = null;
+  }
+}
+
+/**
  * Sync getter — returns the existing service, or a bare bundled-Chromium
  * service if none has been created yet. Used by health checks and any route
  * that runs after /session/start has already initialized things.
