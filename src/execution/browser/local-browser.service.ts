@@ -648,6 +648,12 @@ export class LocalBrowserService {
         case 'type_text':
           await page.keyboard.type(action.text);
           return { success: true, type: 'type_text', content: `Typed "${action.text.substring(0, 50)}"` };
+        case 'new_tab':
+          return await this.executeNewTab(action.url);
+        case 'switch_tab':
+          return await this.executeSwitchTab(action.tabIndex);
+        case 'close_tab':
+          return await this.executeCloseTab(action.tabIndex);
         default:
           return { success: false, type: 'navigate', error: `Unknown action type: ${(action as { type: string }).type}` };
       }
@@ -669,6 +675,82 @@ export class LocalBrowserService {
       content: `Navigated to ${page.url()} - "${await page.title()}"`,
       currentUrl: page.url(),
       pageTitle: await page.title(),
+    };
+  }
+
+  // ==========================================================================
+  // TAB MANAGEMENT
+  // ==========================================================================
+
+  private async executeNewTab(url?: string): Promise<BrowserActionResult> {
+    if (!this.ctx) throw new Error('Browser not initialized');
+    const newPage = await this.ctx.newPage();
+    if (url) {
+      await newPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
+    // Make the new tab the active page so subsequent ref-based actions
+    // operate on it (matching the user's intuition that "open in new tab"
+    // also focuses it).
+    this.page = newPage;
+    const pages = this.ctx.pages?.() || [];
+    return {
+      success: true,
+      type: 'new_tab',
+      content: url
+        ? `Opened new tab #${pages.length - 1} at ${newPage.url()} - "${await newPage.title()}"`
+        : `Opened new blank tab #${pages.length - 1}`,
+      currentUrl: newPage.url(),
+      pageTitle: await newPage.title(),
+    };
+  }
+
+  private async executeSwitchTab(tabIndex: number): Promise<BrowserActionResult> {
+    if (!this.ctx) throw new Error('Browser not initialized');
+    const pages = this.ctx.pages?.() || [];
+    if (tabIndex < 0 || tabIndex >= pages.length) {
+      return {
+        success: false,
+        type: 'switch_tab',
+        error: `Tab index ${tabIndex} out of range (0..${pages.length - 1}). Use browser_snapshot or browser_screenshot to see open tabs first.`,
+      };
+    }
+    const target = pages[tabIndex];
+    await target.bringToFront();
+    this.page = target;
+    return {
+      success: true,
+      type: 'switch_tab',
+      content: `Switched to tab #${tabIndex} - ${target.url()}`,
+      currentUrl: target.url(),
+      pageTitle: await target.title(),
+    };
+  }
+
+  private async executeCloseTab(tabIndex?: number): Promise<BrowserActionResult> {
+    if (!this.ctx) throw new Error('Browser not initialized');
+    const pages = this.ctx.pages?.() || [];
+    if (pages.length === 0) {
+      return { success: false, type: 'close_tab', error: 'No tabs open' };
+    }
+    const target = tabIndex === undefined ? this.page : pages[tabIndex];
+    if (!target) {
+      return {
+        success: false,
+        type: 'close_tab',
+        error: `Tab index ${tabIndex} out of range (0..${pages.length - 1})`,
+      };
+    }
+    const closedUrl = target.url();
+    await target.close();
+    // After closing, fall back to the first remaining page so subsequent
+    // actions don't operate on a destroyed page handle.
+    const remaining = this.ctx.pages?.() || [];
+    this.page = remaining[0] || null;
+    return {
+      success: true,
+      type: 'close_tab',
+      content: `Closed tab "${closedUrl}". ${remaining.length} tab${remaining.length === 1 ? '' : 's'} remaining.`,
+      currentUrl: this.page?.url(),
     };
   }
 

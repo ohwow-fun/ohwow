@@ -25,7 +25,10 @@ export type BrowserActionType =
   | 'extract_text'
   | 'agent_task'
   | 'click_at'
-  | 'type_text';
+  | 'type_text'
+  | 'new_tab'
+  | 'switch_tab'
+  | 'close_tab';
 
 // ============================================================================
 // BROWSER ACTIONS (tool inputs/outputs for Claude)
@@ -48,6 +51,9 @@ export interface BrowserExtractTextAction { type: 'extract_text'; selector?: str
 export interface BrowserAgentTaskAction { type: 'agent_task'; instruction: string; maxSteps?: number }
 export interface BrowserClickAtAction { type: 'click_at'; x: number; y: number }
 export interface BrowserTypeTextAction { type: 'type_text'; text: string; x?: number; y?: number }
+export interface BrowserNewTabAction { type: 'new_tab'; url?: string }
+export interface BrowserSwitchTabAction { type: 'switch_tab'; tabIndex: number }
+export interface BrowserCloseTabAction { type: 'close_tab'; tabIndex?: number }
 
 export type BrowserAction =
   | BrowserNavigateAction
@@ -66,7 +72,10 @@ export type BrowserAction =
   | BrowserExtractTextAction
   | BrowserAgentTaskAction
   | BrowserClickAtAction
-  | BrowserTypeTextAction;
+  | BrowserTypeTextAction
+  | BrowserNewTabAction
+  | BrowserSwitchTabAction
+  | BrowserCloseTabAction;
 
 export interface BrowserActionResult {
   success: boolean;
