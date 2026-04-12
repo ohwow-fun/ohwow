@@ -1501,6 +1501,29 @@ export async function startDaemon(): Promise<DaemonHandle> {
         controlPlane.setTunnelUrl(tunnel.url);
         controlPlane.sendHeartbeatNow().catch(() => {});
       }
+
+      // React to every subsequent URL rotation: update runtime_settings,
+      // notify the bus, and push a fresh heartbeat to the control plane so
+      // the cloud never keeps calling a dead cloudflared hostname. Without
+      // this the runtime appears "disconnected" until the regular 15s
+      // heartbeat cycle catches up.
+      tunnel.onUrlChange(async (newUrl) => {
+        logger.info(`[daemon] Tunnel URL rotated -> ${newUrl}`);
+        try {
+          await db.from('runtime_settings')
+            .update({ value: newUrl, updated_at: new Date().toISOString() })
+            .eq('key', 'tunnel_url');
+        } catch (err) {
+          logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] persist rotated tunnel URL failed');
+        }
+        bus.emit('tunnel:url', newUrl);
+        if (controlPlane) {
+          controlPlane.setTunnelUrl(newUrl);
+          controlPlane.sendHeartbeatNow().catch((err) => {
+            logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] immediate heartbeat after tunnel rotation failed');
+          });
+        }
+      });
     } catch (err) {
       logger.warn(`[daemon] Tunnel failed: ${err instanceof Error ? err.message : err}`);
     }
