@@ -220,7 +220,9 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
   // Cookie export
   // --------------------------------------------------------------------------
 
-  router.get('/browser/session/export-cookies', async (_req, res) => {
+  // Support both GET (for ad-hoc inspection) and POST (matches the cloud's
+  // expectation that all mutating session endpoints are POST).
+  const exportCookiesHandler = async (_req: import('express').Request, res: import('express').Response) => {
     try {
       const service = getOrCreateService();
       const cookies = await service.exportCookies();
@@ -230,7 +232,9 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
       logger.error({ err }, '[BrowserSession] /session/export-cookies failed');
       res.status(500).json({ success: false, error: message });
     }
-  });
+  };
+  router.get('/browser/session/export-cookies', exportCookiesHandler);
+  router.post('/browser/session/export-cookies', exportCookiesHandler);
 
   // --------------------------------------------------------------------------
   // Close browser
