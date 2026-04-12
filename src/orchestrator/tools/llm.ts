@@ -25,6 +25,7 @@ export async function llmTool(
     {
       modelRouter: ctx.modelRouter,
       db: ctx.db,
+      workspaceId: ctx.workspaceId,
       currentAgentId: ctx.currentAgentId,
     },
     input,

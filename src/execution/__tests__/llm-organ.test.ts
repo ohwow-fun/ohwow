@@ -71,6 +71,7 @@ function makeDeps(opts: {
       from: vi.fn(() => fromBuilder),
       rpc: vi.fn(),
     } as unknown as LlmCallDeps['db'],
+    workspaceId: 'test-workspace',
     currentAgentId: opts.currentAgentId,
   };
 }
@@ -143,7 +144,8 @@ describe('llm-organ', () => {
       }));
       const deps: LlmCallDeps = {
         modelRouter: { selectForPurpose: stubRouter } as unknown as LlmCallDeps['modelRouter'],
-        db: { from: vi.fn(), rpc: vi.fn() } as unknown as LlmCallDeps['db'],
+        db: { from: vi.fn(() => ({ insert: vi.fn(async () => ({ data: null, error: null })) })), rpc: vi.fn() } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
       };
       const result = await runLlmCall(deps, { prompt: 'hi' });
       expect(result.ok).toBe(true);
@@ -215,13 +217,22 @@ describe('llm-organ', () => {
         policy: { modelSource: 'auto', fallback: 'local' },
         maxCostCents: undefined,
       }));
-      const from = vi.fn();
+      const from = vi.fn(() => ({
+        insert: vi.fn(async () => ({ data: null, error: null })),
+      }));
       const deps: LlmCallDeps = {
         modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
         db: { from, rpc: vi.fn() } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
       };
       await runLlmCall(deps, { prompt: 'hi' });
-      expect(from).not.toHaveBeenCalled();
+      // `from` may be called once for the telemetry row (llm_calls). It
+      // must NOT be called for agent_workforce_agents because we have no
+      // currentAgentId to load a policy for.
+      const agentLookupCall = (from.mock.calls as unknown[][]).find(
+        (c) => c[0] === 'agent_workforce_agents',
+      );
+      expect(agentLookupCall).toBeUndefined();
       expect(selectForPurpose).toHaveBeenCalledWith(
         expect.objectContaining({ agent: undefined }),
       );
@@ -261,6 +272,7 @@ describe('llm-organ', () => {
         modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
         db: {
           from: () => ({
+            // Policy-lookup shape
             select: () => ({
               eq: () => ({
                 maybeSingle: async () => {
@@ -268,9 +280,12 @@ describe('llm-organ', () => {
                 },
               }),
             }),
+            // Telemetry insert shape — never throws
+            insert: async () => ({ data: null, error: null }),
           }),
           rpc: vi.fn(),
         } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
         currentAgentId: 'agent-7',
       };
       const result = await runLlmCall(deps, { prompt: 'hi' });
@@ -362,7 +377,11 @@ describe('llm-organ', () => {
             throw new Error('no provider available');
           },
         } as unknown as LlmCallDeps['modelRouter'],
-        db: { from: vi.fn(), rpc: vi.fn() } as unknown as LlmCallDeps['db'],
+        db: {
+          from: vi.fn(() => ({ insert: vi.fn(async () => ({ data: null, error: null })) })),
+          rpc: vi.fn(),
+        } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
       };
       const result = await runLlmCall(deps, { prompt: 'hi' });
       expect(result.ok).toBe(false);

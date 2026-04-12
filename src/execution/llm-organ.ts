@@ -39,8 +39,57 @@ export const VALID_PURPOSES: readonly Purpose[] = [
 export interface LlmCallDeps {
   modelRouter: ModelRouter;
   db: DatabaseAdapter;
+  /** Workspace this call is attributed to. Used for telemetry rows. */
+  workspaceId: string;
   /** The agent running the call, when invoked inside an agent task. */
   currentAgentId?: string;
+  /** The task this call belongs to, when known. Recorded in telemetry. */
+  currentTaskId?: string;
+}
+
+/**
+ * Persist a row in the llm_calls telemetry table. Best-effort: a
+ * telemetry failure must never cause the underlying llm call to fail, so
+ * errors are swallowed and logged at warn level.
+ */
+async function recordLlmCallTelemetry(
+  deps: LlmCallDeps,
+  row: {
+    purpose: Purpose;
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    costCents: number;
+    latencyMs: number;
+    success: boolean;
+    errorMessage?: string;
+  },
+): Promise<void> {
+  try {
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `llm_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    await deps.db.from('llm_calls').insert({
+      id,
+      workspace_id: deps.workspaceId,
+      agent_id: deps.currentAgentId ?? null,
+      task_id: deps.currentTaskId ?? null,
+      purpose: row.purpose,
+      provider: row.provider,
+      model: row.model,
+      input_tokens: row.inputTokens,
+      output_tokens: row.outputTokens,
+      cost_cents: row.costCents,
+      latency_ms: row.latencyMs,
+      success: row.success ? 1 : 0,
+      error_message: row.errorMessage ?? null,
+      created_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    logger.warn({ err }, 'llm organ: failed to record telemetry row');
+  }
 }
 
 export interface LlmCallInput {
@@ -211,10 +260,20 @@ export async function runLlmCall(
       },
     });
   } catch (err) {
-    return {
-      ok: false,
-      error: `llm organ: no provider available for purpose "${purpose}": ${err instanceof Error ? err.message : 'unknown error'}`,
-    };
+    const errorMessage = `llm organ: no provider available for purpose "${purpose}": ${err instanceof Error ? err.message : 'unknown error'}`;
+    // Record the routing failure so operators can see "no provider" patterns.
+    await recordLlmCallTelemetry(deps, {
+      purpose,
+      provider: 'none',
+      model: 'none',
+      inputTokens: 0,
+      outputTokens: 0,
+      costCents: 0,
+      latencyMs: 0,
+      success: false,
+      errorMessage,
+    });
+    return { ok: false, error: errorMessage };
   }
 
   const startMs = Date.now();
@@ -237,6 +296,19 @@ export async function runLlmCall(
       response.costCents > selection.maxCostCents
         ? `cost ${response.costCents}¢ exceeded cap ${selection.maxCostCents}¢`
         : undefined;
+
+    // Fire-and-forget telemetry — the result is returned to the caller
+    // regardless of whether the row lands.
+    await recordLlmCallTelemetry(deps, {
+      purpose,
+      provider: response.provider,
+      model: response.model,
+      inputTokens: response.inputTokens,
+      outputTokens: response.outputTokens,
+      costCents: response.costCents ?? 0,
+      latencyMs,
+      success: true,
+    });
 
     return {
       ok: true,
@@ -261,13 +333,22 @@ export async function runLlmCall(
     };
   } catch (err) {
     const latencyMs = Date.now() - startMs;
+    const errorMessage = `llm organ: call failed after ${latencyMs}ms via ${selection.provider.name}: ${err instanceof Error ? err.message : 'unknown error'}`;
     logger.error(
       { err, purpose, provider: selection.provider.name, model: selection.model, latencyMs },
       'llm organ: provider call failed',
     );
-    return {
-      ok: false,
-      error: `llm organ: call failed after ${latencyMs}ms via ${selection.provider.name}: ${err instanceof Error ? err.message : 'unknown error'}`,
-    };
+    await recordLlmCallTelemetry(deps, {
+      purpose,
+      provider: selection.provider.name,
+      model: selection.model ?? 'unknown',
+      inputTokens: 0,
+      outputTokens: 0,
+      costCents: 0,
+      latencyMs,
+      success: false,
+      errorMessage,
+    });
+    return { ok: false, error: errorMessage };
   }
 }

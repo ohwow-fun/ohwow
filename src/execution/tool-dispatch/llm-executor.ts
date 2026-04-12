@@ -30,7 +30,9 @@ export const llmExecutor: ToolExecutor = {
       {
         modelRouter: ctx.modelRouter,
         db: ctx.db,
+        workspaceId: ctx.workspaceId,
         currentAgentId: ctx.agentId,
+        currentTaskId: ctx.taskId,
       },
       input,
     );

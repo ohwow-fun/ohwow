@@ -35,10 +35,18 @@ export function createLlmRouter(
     // model_policy. Without it, the call resolves against workspace defaults
     // only (no per-agent overrides).
     const agentId = typeof body.agentId === 'string' ? body.agentId : undefined;
+    const taskId = typeof body.taskId === 'string' ? body.taskId : undefined;
+    const workspaceId = req.workspaceId ?? 'local';
 
     try {
       const result = await runLlmCall(
-        { modelRouter, db, currentAgentId: agentId },
+        {
+          modelRouter,
+          db,
+          workspaceId,
+          currentAgentId: agentId,
+          currentTaskId: taskId,
+        },
         body,
       );
 
