@@ -640,25 +640,114 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // 10. Initialize channel registry + orchestrator
   //
-  // IMPORTANT: there are TWO workspace identities in this process.
+  // Canonical workspace identity: when the control plane is connected the
+  // daemon adopts the cloud Supabase workspace UUID; otherwise it falls back
+  // to the "local" sentinel. ALL internal state (orchestrator context, HTTP
+  // API auth middleware, triggers, messaging, etc.) must use this single id
+  // so that data created via any path lands in the same workspace scope and
+  // is visible to every other path.
   //
-  // `workspaceId` is the cloud-visible identity — when the control plane is
-  // connected, it's the Supabase workspace UUID. Cloud-proxy calls, heartbeats,
-  // and anything that mirrors state up to the cloud uses this id.
-  //
-  // `localWorkspaceId` is always the string "local". All local SQLite tables
-  // (contacts, tasks, activity, agents, knowledge docs, etc.) are keyed off
-  // this sentinel regardless of cloud connectivity. The HTTP API's auth
-  // middleware sets req.workspaceId = "local" for local session tokens, so
-  // any query that joins HTTP-inserted rows must also scope to "local".
-  //
-  // Before this split, the orchestrator was instantiated with the cloud UUID
-  // and its tools queried local tables with workspace_id=<cloud-uuid>,
-  // returning zero rows even when the HTTP API happily returned the same
-  // rows. Caught live on 2026-04-12 while probing local-vs-cloud contacts:
-  // list_contacts returned [] while /api/contacts returned 3.
+  // Earlier code split this into local vs cloud identities and that caused
+  // a silent fragmentation: contacts inserted via /api/contacts with the
+  // "local" scope were invisible to the orchestrator which was querying
+  // with the cloud scope (and vice versa). The fix is unification, not
+  // splitting.
   const workspaceId = controlPlane?.connectedWorkspaceId || 'local';
-  const localWorkspaceId = 'local';
+
+  // Workspace consolidation: unify every local SQLite row to the canonical
+  // workspace id. If the control plane is connected, that's the cloud
+  // Supabase workspace UUID; otherwise it's the "local" sentinel.
+  //
+  // This fixes a real fragmentation that can happen over the daemon's
+  // lifetime: rows can end up scoped to the "local" sentinel (from
+  // disconnected-mode inserts or old hardcoded code paths), to the
+  // currently-connected cloud workspace id, OR to a previous cloud
+  // workspace id if the user ever connected to a different workspace.
+  // Without consolidation, each workspace "shard" is silently invisible
+  // to code scoped at the canonical id, and the orchestrator sees a
+  // subset of the real local state.
+  //
+  // Idempotent: if all rows already share the canonical id, this is a
+  // no-op. Runs once at startup, after the cloud connect handshake.
+  {
+    const consolidationTables = [
+      'agent_workforce_contacts',
+      'agent_workforce_contact_events',
+      'agent_workforce_agents',
+      'agent_workforce_tasks',
+      'agent_workforce_task_state',
+      'agent_workforce_task_messages',
+      'agent_workforce_activity',
+      'agent_workforce_knowledge_documents',
+      'agent_workforce_knowledge_chunks',
+      'agent_workforce_knowledge_agent_config',
+      'agent_workforce_deliverables',
+      'agent_workforce_projects',
+      'agent_workforce_goals',
+      'agent_workforce_revenue_entries',
+      'agent_workforce_schedules',
+      'agent_workforce_sessions',
+      'agent_workforce_agent_memory',
+      'agent_workforce_memory_extraction_log',
+      'agent_workforce_state_changelog',
+      'agent_workforce_action_journal',
+      'agent_workforce_sequence_runs',
+      'agent_workforce_anomaly_alerts',
+      'agent_workforce_skills',
+      'agent_workforce_digital_twin_snapshots',
+      'agent_workforce_nudges',
+      'agent_workforce_briefings',
+      'agent_workforce_person_models',
+      'agent_workforce_person_observations',
+      'agent_workforce_operational_pillars',
+      'agent_workforce_pillar_instances',
+      'agent_workforce_workflows',
+      'agent_workforce_workflow_runs',
+      'agent_workforce_workflow_triggers',
+      'agent_workforce_plans',
+      'agent_workforce_plan_steps',
+      'agent_workforce_principles',
+      'agent_workforce_proactive_runs',
+      'agent_workforce_evolution_attempts',
+      'agent_workforce_evolution_runs',
+      'agent_workforce_lifecycle_events',
+      'agent_workforce_tool_recordings',
+      'agent_workforce_practice_sessions',
+      'agent_workforce_data_store',
+      'agent_workforce_routing_stats',
+      'agent_workforce_attachments',
+      'agent_workforce_shadow_runs',
+    ];
+    let totalMigrated = 0;
+    const perTable: Record<string, number> = {};
+    for (const table of consolidationTables) {
+      try {
+        // Normalize every row whose workspace_id is NOT already the canonical
+        // id. This handles "local" rows, stale cloud-UUID rows from prior
+        // connections, AND any other drift. We do not rewrite rows that are
+        // already correct so the operation stays cheap on warm restarts.
+        const result = rawDb
+          .prepare(`UPDATE ${table} SET workspace_id = ? WHERE workspace_id != ?`)
+          .run(workspaceId, workspaceId);
+        if (result.changes > 0) {
+          perTable[table] = result.changes;
+          totalMigrated += result.changes;
+        }
+      } catch {
+        // Table may not have a workspace_id column, may not exist on this
+        // schema version, or may have unique constraints that conflict. We
+        // iterate a broad list on purpose and skip failures silently so the
+        // daemon still starts.
+      }
+    }
+    if (totalMigrated > 0) {
+      logger.info(
+        { perTable, totalMigrated, canonical: workspaceId },
+        `[daemon] Workspace consolidation: unified ${totalMigrated} row(s) across ${Object.keys(perTable).length} table(s) to canonical workspace id`,
+      );
+    }
+  }
+
   const channelRegistry = new ChannelRegistry();
   const connectorRegistry = new ConnectorRegistry();
   connectorRegistry.registerFactory('github', (cfg) => new GitHubConnector(cfg));
@@ -669,12 +758,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
   triggerEvaluatorRef.current = triggerEvaluator;
 
   // Workers skip orchestrator/messaging (task execution only)
-  // Orchestrator uses localWorkspaceId so its tool queries hit the same
-  // rows the HTTP API inserts. Cloud-proxy calls it makes still use the
-  // cloud workspace id because those go through the control plane client
-  // directly, not the local DB scope.
   const orchestrator = isWorker ? null : new LocalOrchestrator(
-    db, engine, localWorkspaceId, config.anthropicApiKey,
+    db, engine, workspaceId, config.anthropicApiKey,
     channelRegistry, controlPlane!, modelRouter, scraplingService, config.orchestratorModel, process.cwd(),
     config.browserHeadless, dataDir, config.mcpServers,
     config.browserTarget, config.chromeCdpPort,

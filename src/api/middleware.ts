@@ -14,12 +14,21 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
  * When `contentPublicKey` (JWK) is provided, content tokens are verified
  * with ES256 asymmetric verification (local mode with cloud-signed tokens).
  * Otherwise falls back to HS256 symmetric verification using `jwtSecret`.
+ *
+ * `getLocalWorkspaceId` returns the canonical workspace id the daemon is
+ * currently operating under — the cloud Supabase UUID when the control
+ * plane is connected, or "local" otherwise. Local session tokens
+ * (including peer tokens) resolve to this id so HTTP-inserted rows
+ * (contacts, tasks, activity) land in the same workspace scope the
+ * orchestrator tools query, avoiding silent local-vs-cloud fragmentation.
+ * It is a getter because connection state can change mid-process.
  */
 export function createAuthMiddleware(
   jwtSecret: string,
   localSessionToken?: string,
   contentPublicKey?: JsonWebKey,
   db?: DatabaseAdapter,
+  getLocalWorkspaceId: () => string = () => 'local',
 ) {
   const symmetricSecret = new TextEncoder().encode(jwtSecret);
 
@@ -49,7 +58,7 @@ export function createAuthMiddleware(
 
         if (peer) {
           const p = peer as { id: string; status: string };
-          req.workspaceId = 'local';
+          req.workspaceId = getLocalWorkspaceId();
           req.userId = `peer:${p.id}`;
 
           // Update last_seen_at
@@ -76,7 +85,7 @@ export function createAuthMiddleware(
 
     // Check local session token first (fast path for web UI)
     if (localSessionToken && token === localSessionToken) {
-      req.workspaceId = 'local';
+      req.workspaceId = getLocalWorkspaceId();
       req.userId = 'local';
       next();
       return;

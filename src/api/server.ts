@@ -279,8 +279,18 @@ export function createServer(deps: ServerDeps): {
   // /desktop/health is public; /desktop/screenshot and /desktop/action require auth
   app.use(createDesktopSessionRouter());
 
-  // Authenticated routes (content token or local session token required)
-  const auth = createAuthMiddleware(config.jwtSecret, sessionToken, config.contentPublicKey, db);
+  // Authenticated routes (content token or local session token required).
+  // getLocalWorkspaceId returns the daemon's canonical workspace id so that
+  // HTTP-inserted rows share scope with orchestrator tool queries — if the
+  // control plane is connected, that's the cloud workspace UUID; otherwise
+  // "local". Dynamic getter because connection state can change mid-process.
+  const auth = createAuthMiddleware(
+    config.jwtSecret,
+    sessionToken,
+    config.contentPublicKey,
+    db,
+    () => workspaceId || 'local',
+  );
   app.use('/api', auth);
   app.use('/browser/session', auth);
   app.use('/desktop/screenshot', auth);
