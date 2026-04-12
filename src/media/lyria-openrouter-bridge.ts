@@ -105,6 +105,8 @@ export class LyriaOpenRouterBridge {
 
     logger.info(`[lyria-bridge] Generating music: "${fullPrompt.slice(0, 100)}..."`);
 
+    // Lyria 3 on OpenRouter only accepts stream: true for audio output.
+    // A non-streaming request fails with 400 "Audio output requires stream: true".
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
       headers: this.getHeaders(),
@@ -121,6 +123,7 @@ export class LyriaOpenRouterBridge {
         audio: {
           format: 'mp3',
         },
+        stream: true,
       }),
     });
 
@@ -129,48 +132,72 @@ export class LyriaOpenRouterBridge {
       throw new Error(`Lyria music generation failed (${response.status}): ${errText.slice(0, 300)}`);
     }
 
-    const data = await response.json() as {
-      choices?: Array<{
-        message?: {
-          content?: string;
-          audio?: {
-            data?: string;     // base64-encoded audio
-            url?: string;      // or a URL to download
-            format?: string;
+    if (!response.body) {
+      throw new Error('Lyria returned an empty response body.');
+    }
+
+    // Stream the SSE response and collect audio chunks. Lyria emits
+    // { choices: [{ delta: { audio: { data: <base64> } } }] } frames
+    // plus an occasional frame with a full { message: { audio: { url } } }.
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let audioBase64 = '';
+    let audioUrl: string | null = null;
+    let audioFormat: string | undefined;
+    let sseBuffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload || payload === '[DONE]') continue;
+
+        try {
+          const chunk = JSON.parse(payload) as {
+            choices?: Array<{
+              delta?: {
+                audio?: { data?: string; url?: string; format?: string };
+              };
+              message?: {
+                audio?: { data?: string; url?: string; format?: string };
+              };
+            }>;
           };
+          const audioChunk =
+            chunk.choices?.[0]?.delta?.audio ?? chunk.choices?.[0]?.message?.audio;
+          if (audioChunk?.data) audioBase64 += audioChunk.data;
+          if (audioChunk?.url) audioUrl = audioChunk.url;
+          if (audioChunk?.format) audioFormat = audioChunk.format;
+        } catch {
+          // Skip malformed chunks
+        }
+      }
+    }
+
+    const mimeType = audioFormat === 'wav' ? 'audio/wav' : 'audio/mpeg';
+
+    if (audioBase64) {
+      const buffer = Buffer.from(audioBase64, 'base64');
+      if (buffer.length > 0) {
+        logger.info(`[lyria-bridge] Generated ${buffer.length} bytes of audio`);
+        const saved = await saveMediaBuffer(buffer, mimeType, 'music');
+        return {
+          path: saved.path,
+          message: `Music generated and saved to ${saved.path} (${Math.round(buffer.length / 1024)}KB)`,
         };
-      }>;
-    };
-
-    const audioData = data.choices?.[0]?.message?.audio;
-
-    if (audioData?.data) {
-      // Base64-encoded audio returned inline
-      const buffer = Buffer.from(audioData.data, 'base64');
-      const mimeType = audioData.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-      logger.info(`[lyria-bridge] Generated ${buffer.length} bytes of audio`);
-      const saved = await saveMediaBuffer(buffer, mimeType, 'music');
-      return {
-        path: saved.path,
-        message: `Music generated and saved to ${saved.path} (${Math.round(buffer.length / 1024)}KB)`,
-      };
+      }
     }
 
-    if (audioData?.url) {
-      // Audio returned as a URL to download
-      logger.info(`[lyria-bridge] Downloading audio from ${audioData.url}`);
-      const mimeType = audioData.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-      const saved = await saveMediaFromUrl(audioData.url, mimeType, 'music');
-      return {
-        path: saved.path,
-        message: `Music generated and saved to ${saved.path}`,
-      };
-    }
-
-    // Fallback: check if the content itself is a URL or base64
-    const content = data.choices?.[0]?.message?.content;
-    if (content?.startsWith('http')) {
-      const saved = await saveMediaFromUrl(content.trim(), 'audio/mpeg', 'music');
+    if (audioUrl) {
+      logger.info(`[lyria-bridge] Downloading audio from ${audioUrl}`);
+      const saved = await saveMediaFromUrl(audioUrl, mimeType, 'music');
       return {
         path: saved.path,
         message: `Music generated and saved to ${saved.path}`,
