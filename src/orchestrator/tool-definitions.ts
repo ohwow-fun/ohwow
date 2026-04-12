@@ -8,6 +8,58 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 
 export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   {
+    name: 'llm',
+    description:
+      'Invoke an LLM for a specific sub-task. Agents act as sub-orchestrators: call this tool with a `purpose` that matches what the brain step is doing (reasoning, generation, summarization, extraction, critique, translation, classification, planning, etc.). The router picks the right model based on the agent\'s model_policy, workspace defaults, and call-site constraints. Use this instead of assuming any specific model. Returns { text, model_used, provider, tokens, cost_cents, latency_ms }.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        purpose: {
+          type: 'string',
+          enum: [
+            'orchestrator_chat', 'agent_task', 'planning', 'browser_automation',
+            'memory_extraction', 'ocr', 'workflow_step', 'simple_classification',
+            'desktop_control', 'reasoning', 'generation', 'summarization',
+            'extraction', 'critique', 'translation', 'embedding',
+          ],
+          description: 'The semantic purpose of this call. Drives model selection. Default: reasoning.',
+        },
+        prompt: {
+          oneOf: [
+            { type: 'string', description: 'A plain user prompt.' },
+            {
+              type: 'object',
+              properties: {
+                system: { type: 'string', description: 'Optional system prompt.' },
+                messages: {
+                  type: 'array',
+                  description: 'Chat-style messages with role + content.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      role: { type: 'string', enum: ['user', 'assistant', 'system', 'tool'] },
+                      content: { type: 'string' },
+                    },
+                    required: ['role', 'content'],
+                  },
+                },
+              },
+            },
+          ],
+          description: 'Either a plain string or { system?, messages[] }.',
+        },
+        system: { type: 'string', description: 'Optional system prompt when `prompt` is a plain string.' },
+        max_tokens: { type: 'number', description: 'Maximum output tokens.' },
+        temperature: { type: 'number', description: 'Sampling temperature (provider default when omitted).' },
+        local_only: { type: 'boolean', description: 'Force local inference; do not use cloud providers.' },
+        prefer_model: { type: 'string', description: 'Call-site model override. Tightest win over agent and workspace defaults.' },
+        max_cost_cents: { type: 'number', description: 'Advisory cost ceiling in cents. Warnings surface in cap_warning if exceeded.' },
+        difficulty: { type: 'string', enum: ['simple', 'moderate', 'complex'], description: 'Hint for difficulty-aware routing.' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
     name: 'update_plan',
     description:
       'Update your working task plan. Call at the start of a multi-step response with all planned tasks, then call again to mark tasks as in_progress or done as you complete them. This shows a live plan panel in the UI.',

@@ -50,8 +50,12 @@ import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRouting
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
 import { getWorkPatterns, getTimeAllocation, detectAutomationOpportunities, getObservationInsights } from './observation.js';
 import { getCrossPollination, scheduleTeamCouncil, getCollectiveBriefing, rebalanceWorkload } from './collective-intelligence.js';
+import { llmTool } from './llm.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
+  // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
+  ['llm', (ctx, input) => llmTool(ctx, input)],
+
   // Agent tools
   ['list_agents', (ctx) => listAgents(ctx)],
   ['update_agent_status', (ctx, input) => updateAgentStatus(ctx, input)],

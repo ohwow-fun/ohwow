@@ -42,6 +42,12 @@ export interface LocalToolContext {
   lspManager?: LspManager;
   /** Active meeting session for live audio capture + transcription */
   meetingSession?: MeetingSession;
+  /**
+   * The agent currently running this tool, when invoked inside an agent task.
+   * Undefined during orchestrator chat. Used by the `llm` organ to load
+   * per-agent model policy (see AgentModelPolicy in execution-policy.ts).
+   */
+  currentAgentId?: string;
 }
 
 export interface ToolResult {
