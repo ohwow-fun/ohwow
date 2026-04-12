@@ -489,58 +489,113 @@ export class LocalBrowserService {
   }
 
   /**
-   * Create `~/.ohwow/chrome-debug/<profile>` as a symlink to the real Chrome
-   * profile directory. Returns the parent dir to pass as --user-data-dir, or
-   * null on failure.
+   * Create `~/.ohwow/chrome-debug/` as a fresh clonefile copy of the user's
+   * entire Chrome user-data-dir, and return the path for --user-data-dir.
    *
-   * The symlink is idempotent: if it already exists pointing at the right
-   * profile, we leave it alone; if it points somewhere else, we recreate it.
+   * Why a full copy instead of a symlink to just the profile:
+   *
+   * Chrome's per-user-data-dir state is NOT self-contained in Profile N/.
+   * A symlinked profile gives you the subdirectory contents (preferences,
+   * history, cached-ish things) but Chrome at the enclosing user-data-dir:
+   *
+   *   - writes a fresh Local State file containing encrypted master keys,
+   *     so the profile's cookies can't decrypt
+   *   - considers the Google sign-in state invalid because the enclosing
+   *     user-data-dir has no record of past sign-ins
+   *   - forces a "Your organization will..." managed-profile consent flow
+   *     for enterprise profiles, and even after clicking Continue the
+   *     auth cookies remain inaccessible
+   *   - doesn't find the other sibling profiles (user sees "this Chrome
+   *     doesn't have all my profiles")
+   *
+   * The result: user thinks the real Chrome profile opened but actually it's
+   * an empty shell that looks like the right profile directory. The X login
+   * page shows, DMs are inaccessible, etc.
+   *
+   * A full clonefile copy (APFS copy-on-write) of the whole user-data-dir
+   * sidesteps all of this: Local State, all profiles, encrypted cookie keys,
+   * everything comes along. On APFS it's near-instant and near-zero disk.
+   * On non-APFS we fall back to a regular recursive copy.
+   *
+   * We always start from a clean target so the debug Chrome reflects the
+   * CURRENT state of the real Chrome every time the daemon connects (the
+   * user's latest logins, history, etc).
    */
   private static async _ensureDebugProfileDir(profile: string): Promise<string | null> {
-    const { mkdir, symlink, unlink, readlink, lstat, existsSync } = await import('fs').then(m => ({
-      mkdir: m.promises.mkdir,
-      symlink: m.promises.symlink,
-      unlink: m.promises.unlink,
-      readlink: m.promises.readlink,
-      lstat: m.promises.lstat,
-      existsSync: m.existsSync,
-    }));
+    const { existsSync } = await import('fs');
+    const { rm, mkdir } = await import('fs/promises');
     const path = await import('path');
+    const { exec } = await import('child_process');
 
     const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
     const debugDataDir = path.join(homeDir, '.ohwow', 'chrome-debug');
-    const realProfilePath = path.join(LocalBrowserService.CHROME_DATA_DIR, profile);
-    const linkPath = path.join(debugDataDir, profile);
+    const realDataDir = LocalBrowserService.CHROME_DATA_DIR;
+    const realProfilePath = path.join(realDataDir, profile);
 
     if (!existsSync(realProfilePath)) {
-      logger.warn(`[browser] Chrome profile not found: ${realProfilePath}`);
+      logger.warn(`[browser] Chrome profile not found: ${realProfilePath} (available profiles will be listed below)`);
+      // Best-effort list of what IS available so users/callers can course-correct.
+      try {
+        const { readdir } = await import('fs/promises');
+        const entries = await readdir(realDataDir, { withFileTypes: true });
+        const profiles = entries
+          .filter(e => e.isDirectory() && (e.name === 'Default' || e.name.startsWith('Profile ')))
+          .map(e => e.name);
+        logger.warn(`[browser] Available Chrome profiles: ${profiles.join(', ') || '(none)'}`);
+      } catch { /* ignore */ }
       return null;
     }
 
+    // Always wipe and re-copy so the debug Chrome reflects the user's
+    // current real state. Clonefile on APFS makes this cheap.
     try {
-      await mkdir(debugDataDir, { recursive: true });
-      let needsLink = true;
-      try {
-        const stat = await lstat(linkPath);
-        if (stat.isSymbolicLink()) {
-          const target = await readlink(linkPath);
-          if (target === realProfilePath) {
-            needsLink = false;
-          } else {
-            await unlink(linkPath);
-          }
-        } else {
-          // It's a real dir or file we didn't create — refuse to clobber.
-          logger.warn(`[browser] ${linkPath} exists and is not a symlink; refusing to overwrite`);
+      await rm(debugDataDir, { recursive: true, force: true });
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to wipe old debug profile dir');
+    }
+
+    try {
+      // Make sure the parent exists but the target itself does not (cp -c
+      // refuses to overwrite an existing target).
+      await mkdir(path.dirname(debugDataDir), { recursive: true });
+
+      const copyStart = Date.now();
+      const cpResult = await new Promise<{ code: number; err?: string }>((resolve) => {
+        // cp -c = clonefile (APFS copy-on-write, near-instant + zero disk)
+        // cp -R = recursive
+        // Source has a trailing slash-free form; we want to copy the directory
+        // itself to the new name, so pass source WITHOUT trailing slash and
+        // dest WITHOUT existing target.
+        exec(`cp -cR ${JSON.stringify(realDataDir)} ${JSON.stringify(debugDataDir)}`, (err, _stdout, stderr) => {
+          if (err) return resolve({ code: 1, err: stderr || err.message });
+          resolve({ code: 0 });
+        });
+      });
+
+      if (cpResult.code !== 0) {
+        // APFS clonefile may not be available (non-APFS volume, different
+        // filesystems); fall back to a regular recursive copy.
+        logger.info({ err: cpResult.err }, '[browser] cp -c (clonefile) failed, falling back to cp -R');
+        const fallbackResult = await new Promise<{ code: number; err?: string }>((resolve) => {
+          exec(`cp -R ${JSON.stringify(realDataDir)} ${JSON.stringify(debugDataDir)}`, (err, _stdout, stderr) => {
+            if (err) return resolve({ code: 1, err: stderr || err.message });
+            resolve({ code: 0 });
+          });
+        });
+        if (fallbackResult.code !== 0) {
+          logger.warn({ err: fallbackResult.err }, '[browser] cp -R also failed');
           return null;
         }
-      } catch {
-        // Doesn't exist yet.
       }
-      if (needsLink) {
-        await symlink(realProfilePath, linkPath, 'dir');
-        logger.debug(`[browser] Symlinked debug profile: ${linkPath} → ${realProfilePath}`);
+
+      logger.info(`[browser] Cloned real Chrome user-data-dir to ${debugDataDir} in ${Date.now() - copyStart}ms`);
+
+      // Sanity check: the requested profile must exist in the copy.
+      if (!existsSync(path.join(debugDataDir, profile))) {
+        logger.warn(`[browser] Debug copy is missing profile ${profile}; refusing to launch`);
+        return null;
       }
+
       return debugDataDir;
     } catch (err) {
       logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to set up debug profile dir');
