@@ -217,79 +217,209 @@ export class LocalBrowserService {
   }
 
   /**
-   * Connect to the user's real Chrome browser via Chrome DevTools Protocol.
-   * Optionally launches Chrome with a specific profile directory.
-   * Returns the CDP WebSocket URL for Stagehand to connect to.
-   */
-  /**
-   * Connect to Chrome via CDP if available, or launch Chrome with the right profile
-   * for desktop automation. Returns the CDP WebSocket URL if CDP is available,
-   * or null if Chrome was launched without CDP (use desktop automation instead).
+   * Connect to the user's real Chrome via CDP. If Chrome isn't already exposing
+   * CDP, this will quit any running Chrome and relaunch it with debugging enabled,
+   * pointing at the user's real profile (so cookies/logins are preserved).
+   *
+   * Returns the CDP WebSocket URL on success, or null if we couldn't get CDP up
+   * (caller should fall back to bundled Chromium).
+   *
+   * Why this is non-trivial: Chrome 136+ silently disables `--remote-debugging-port`
+   * when launched against the default user-data-dir as a security measure. We work
+   * around this by setting up `~/.ohwow/chrome-debug/` as a non-default user-data-dir
+   * containing a symlink to the real profile directory — Chrome accepts the debugging
+   * port, and the symlink keeps cookies/sessions live.
    */
   static async connectToChrome(port = 9222, profileDir?: string): Promise<string | null> {
     const cdpHttpUrl = `http://localhost:${port}`;
 
-    // Check if Chrome is already running with remote debugging
-    try {
-      const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
-      if (res.ok) {
-        const data = await res.json() as { webSocketDebuggerUrl?: string };
-        if (data.webSocketDebuggerUrl) {
-          logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
-          return data.webSocketDebuggerUrl;
-        }
-      }
-    } catch {
-      // Not running with CDP
+    // 1. Fast path: Chrome is already running with CDP.
+    const existing = await LocalBrowserService._probeCdp(cdpHttpUrl);
+    if (existing) {
+      logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
+      return existing;
     }
 
-    // Check if Chrome is already running (without CDP)
-    const { exec, spawn } = await import('child_process');
     const platform = process.platform;
-    const isRunning = await new Promise<boolean>((resolve) => {
-      exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
-    });
+    const { exec, spawn } = await import('child_process');
 
-    if (isRunning) {
-      // Chrome is running without CDP — can't add CDP retroactively.
-      // Use desktop automation to control it.
-      logger.info('[browser] Chrome is running without CDP. Will use desktop automation.');
-      return null;
-    }
-
-    // Chrome is not running. Launch it with the right profile.
-    // Note: Chrome refuses CDP with its default data dir, so we launch without CDP
-    // and rely on desktop automation. The user gets their real sessions/cookies.
-    let chromeBin: string;
-    if (platform === 'darwin') {
-      chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    } else if (platform === 'win32') {
-      chromeBin = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    } else {
-      chromeBin = 'google-chrome';
-    }
-
-    const effectiveProfile = profileDir || 'Default';
-    const args = [`--profile-directory=${effectiveProfile}`];
-
-    logger.info(`[browser] Launching Chrome with profile: ${effectiveProfile}`);
-    const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
-    child.unref();
-
-    // Wait for Chrome to start
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      const running = await new Promise<boolean>((resolve) => {
-        exec(platform === 'darwin' ? 'pgrep -x "Google Chrome"' : 'pgrep -x chrome', (err) => resolve(!err));
-      });
-      if (running) {
-        logger.info(`[browser] Chrome launched with profile ${effectiveProfile} (desktop automation mode)`);
+    // 2. If Chrome is running (without CDP), quit it. We can't enable debugging
+    //    on a running instance, so we have to relaunch.
+    if (await LocalBrowserService._isChromeRunning(exec, platform)) {
+      logger.info('[browser] Chrome is running without CDP — quitting to relaunch with debugging');
+      await LocalBrowserService._quitChrome(exec, platform);
+      if (await LocalBrowserService._isChromeRunning(exec, platform)) {
+        logger.warn('[browser] Chrome did not respond to graceful quit, sending SIGTERM');
+        await LocalBrowserService._killChrome(exec, platform);
+      }
+      if (await LocalBrowserService._isChromeRunning(exec, platform)) {
+        logger.warn('[browser] Chrome still running after SIGTERM — aborting CDP setup');
         return null;
       }
     }
 
-    logger.warn('[browser] Chrome launch timed out');
+    // 3. Set up a non-default user-data-dir with a symlink to the real profile.
+    //    The symlink lets us keep cookies/sessions live while sidestepping
+    //    Chrome's default-user-data-dir debugging restriction.
+    const effectiveProfile = profileDir || 'Default';
+    const debugDataDir = await LocalBrowserService._ensureDebugProfileDir(effectiveProfile);
+    if (!debugDataDir) return null;
+
+    // 4. Launch Chrome with debugging enabled.
+    const chromeBin = LocalBrowserService._chromeBinaryPath(platform);
+    const args = [
+      `--user-data-dir=${debugDataDir}`,
+      `--profile-directory=${effectiveProfile}`,
+      `--remote-debugging-port=${port}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+    ];
+
+    logger.info(`[browser] Launching Chrome with profile "${effectiveProfile}" on debug port ${port}`);
+    try {
+      const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
+      child.unref();
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to spawn Chrome');
+      return null;
+    }
+
+    // 5. Poll for CDP availability (10s budget). Process running ≠ port bound.
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      const wsUrl = await LocalBrowserService._probeCdp(cdpHttpUrl);
+      if (wsUrl) {
+        logger.info(`[browser] Chrome CDP ready on port ${port} (profile: ${effectiveProfile})`);
+        return wsUrl;
+      }
+    }
+
+    logger.warn('[browser] Chrome launched but CDP did not become ready within 10s');
     return null;
+  }
+
+  // ----- CDP helpers -----
+
+  private static async _probeCdp(cdpHttpUrl: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return null;
+      const data = await res.json() as { webSocketDebuggerUrl?: string };
+      return data.webSocketDebuggerUrl || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private static _isChromeRunning(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<boolean> {
+    const cmd = platform === 'darwin'
+      ? 'pgrep -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
+      : platform === 'win32'
+        ? 'tasklist /FI "IMAGENAME eq chrome.exe" | findstr chrome.exe'
+        : 'pgrep -x chrome';
+    return new Promise(resolve => exec(cmd, (err) => resolve(!err)));
+  }
+
+  private static async _quitChrome(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<void> {
+    const cmd = platform === 'darwin'
+      ? `osascript -e 'tell application "Google Chrome" to quit'`
+      : platform === 'win32'
+        ? 'taskkill /IM chrome.exe'
+        : 'pkill -TERM chrome';
+    await new Promise<void>(resolve => exec(cmd, () => resolve()));
+    // Give Chrome up to 5s to exit cleanly.
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      if (!(await LocalBrowserService._isChromeRunning(exec, platform))) return;
+    }
+  }
+
+  private static async _killChrome(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<void> {
+    const cmd = platform === 'darwin'
+      ? 'pkill -TERM -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
+      : platform === 'win32'
+        ? 'taskkill /F /IM chrome.exe'
+        : 'pkill -KILL chrome';
+    await new Promise<void>(resolve => exec(cmd, () => resolve()));
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      if (!(await LocalBrowserService._isChromeRunning(exec, platform))) return;
+    }
+  }
+
+  private static _chromeBinaryPath(platform: NodeJS.Platform): string {
+    if (platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    if (platform === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    return 'google-chrome';
+  }
+
+  /**
+   * Create `~/.ohwow/chrome-debug/<profile>` as a symlink to the real Chrome
+   * profile directory. Returns the parent dir to pass as --user-data-dir, or
+   * null on failure.
+   *
+   * The symlink is idempotent: if it already exists pointing at the right
+   * profile, we leave it alone; if it points somewhere else, we recreate it.
+   */
+  private static async _ensureDebugProfileDir(profile: string): Promise<string | null> {
+    const { mkdir, symlink, unlink, readlink, lstat, existsSync } = await import('fs').then(m => ({
+      mkdir: m.promises.mkdir,
+      symlink: m.promises.symlink,
+      unlink: m.promises.unlink,
+      readlink: m.promises.readlink,
+      lstat: m.promises.lstat,
+      existsSync: m.existsSync,
+    }));
+    const path = await import('path');
+
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
+    const debugDataDir = path.join(homeDir, '.ohwow', 'chrome-debug');
+    const realProfilePath = path.join(LocalBrowserService.CHROME_DATA_DIR, profile);
+    const linkPath = path.join(debugDataDir, profile);
+
+    if (!existsSync(realProfilePath)) {
+      logger.warn(`[browser] Chrome profile not found: ${realProfilePath}`);
+      return null;
+    }
+
+    try {
+      await mkdir(debugDataDir, { recursive: true });
+      let needsLink = true;
+      try {
+        const stat = await lstat(linkPath);
+        if (stat.isSymbolicLink()) {
+          const target = await readlink(linkPath);
+          if (target === realProfilePath) {
+            needsLink = false;
+          } else {
+            await unlink(linkPath);
+          }
+        } else {
+          // It's a real dir or file we didn't create — refuse to clobber.
+          logger.warn(`[browser] ${linkPath} exists and is not a symlink; refusing to overwrite`);
+          return null;
+        }
+      } catch {
+        // Doesn't exist yet.
+      }
+      if (needsLink) {
+        await symlink(realProfilePath, linkPath, 'dir');
+        logger.debug(`[browser] Symlinked debug profile: ${linkPath} → ${realProfilePath}`);
+      }
+      return debugDataDir;
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to set up debug profile dir');
+      return null;
+    }
   }
 
   // ==========================================================================

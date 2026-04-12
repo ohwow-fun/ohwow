@@ -218,10 +218,10 @@ export class LocalOrchestrator {
           this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
           logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
         } else {
-          // Chrome is open with real profile but no CDP — use isolated Chromium for Playwright,
-          // desktop automation handles the real Chrome interaction
+          // CDP setup failed (Chrome wouldn't quit, port busy, profile missing, etc).
+          // Fall back to bundled Chromium so the user still gets browser tools.
           this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          logger.info('[orchestrator] Chrome launched with real profile (desktop automation mode)');
+          logger.info('[orchestrator] Chrome CDP unavailable, using bundled Chromium (no real profile)');
         }
       } catch (err) {
         logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome activation failed, falling back to Chromium');
