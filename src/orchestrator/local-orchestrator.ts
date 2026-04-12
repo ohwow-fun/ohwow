@@ -696,11 +696,23 @@ export class LocalOrchestrator {
     if (this.modelRouter) {
       let provider: ModelProvider;
       try {
-        // BPP-aware model selection: use brain confidence + endocrine state when available
+        // BPP-aware model selection: use brain confidence + endocrine state
+        // + recent prediction accuracy when available. Shape C wired the
+        // experience stream's accuracy signal into the routing decision so
+        // the router can escalate to a more capable model when the brain
+        // has been wrong about tool outcomes lately.
         if (this.brain || this.endocrineSystem) {
+          // 60-second window: recent enough to reflect current session
+          // performance, wide enough to smooth out single-call noise.
+          const RECENT_ACCURACY_WINDOW_MS = 60_000;
+          const recentPredictionAccuracy = this.brain
+            ? this.brain.experienceStream.getPredictionAccuracy(RECENT_ACCURACY_WINDOW_MS)
+            : undefined;
           provider = await this.modelRouter.selectModelWithContext('orchestrator', {
             selfModelConfidence: this.brain?.predictiveEngine?.getToolSuccessRate('orchestrator'),
             endocrineEffects: this.endocrineSystem?.getEffects(),
+            recentPredictionAccuracy,
+            operationType: 'orchestrator_chat',
           });
         } else {
           provider = await this.modelRouter.getProvider('orchestrator');

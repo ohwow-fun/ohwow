@@ -1899,6 +1899,8 @@ export class ModelRouter {
       recentPredictionAccuracy?: number;
       routingHistory?: RoutingHistory;
       difficulty?: 'simple' | 'moderate' | 'complex';
+      /** Legacy OperationType for execution-policy routing (optional). */
+      operationType?: OperationType;
     },
   ): Promise<ModelProvider> {
     let effectiveDifficulty = context.difficulty;
@@ -1929,7 +1931,10 @@ export class ModelRouter {
       effectiveDifficulty = 'complex';
     }
 
-    return this.getProvider(taskType, effectiveDifficulty, undefined, context.routingHistory);
+    // Forward operationType so execution-policy (planning/browser/memory/etc)
+    // can override the base routing. Previously dropped — caught by the
+    // Shape C audit.
+    return this.getProvider(taskType, effectiveDifficulty, context.operationType, context.routingHistory);
   }
 
   // ============================================================================
