@@ -218,16 +218,64 @@ export async function getKnowledgeDocument(
     }
   }
 
-  // 4. Semantic fallback: run the given query (or the raw title if no
-  // query) through the chunk retriever. The parent document of the
-  // highest-scoring chunk wins. Alternatives list the runner-up docs with
-  // their scores so callers can detect ambiguous matches.
+  // 4. Title-token overlap: before going to semantic chunk retrieval,
+  // score every title by the fraction of query tokens it contains.
+  // Catches the common case where the user's query LOOKS like a title
+  // but has one token off ("ops monitoring runbook" vs "Ops Monitoring
+  // Playbook"). Semantic chunk retrieval can rank the wrong doc when
+  // a larger doc has more matching chunks — token overlap on titles
+  // is deterministic and matches human intuition better.
   const semanticQuery = freeQuery || title;
   if (!semanticQuery) {
     return {
       success: false,
       error: 'Provide document_id, title, or query.',
     };
+  }
+
+  const STOP = new Set([
+    'a', 'an', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'by', 'and', 'or',
+    'is', 'are', 'with', 'from', 'about', 'it', 'that', 'this', 'these', 'those',
+  ]);
+  const tokenize = (s: string): string[] =>
+    s
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length > 1 && !STOP.has(t));
+
+  const queryTokens = tokenize(semanticQuery);
+  if (queryTokens.length > 0) {
+    const tokenMatches = allDocs
+      .map((d) => {
+        const docTokens = new Set(tokenize(d.title));
+        let hits = 0;
+        for (const qt of queryTokens) {
+          if (docTokens.has(qt)) hits += 1;
+        }
+        const coverage = hits / queryTokens.length;
+        return { doc: d, hits, coverage };
+      })
+      .filter((m) => m.hits >= Math.max(1, Math.floor(queryTokens.length * 0.5)))
+      .sort((a, b) => b.coverage - a.coverage || b.hits - a.hits);
+
+    if (tokenMatches.length > 0) {
+      const top = tokenMatches[0];
+      // Require a reasonably strong overlap (>= 50% of query tokens match
+      // the title) before trusting this path — otherwise fall through to
+      // semantic.
+      if (top.coverage >= 0.5) {
+        const row = await loadById(top.doc.id);
+        if (row) {
+          const alternatives = tokenMatches.slice(1, 4).map((m) => ({
+            id: m.doc.id,
+            title: m.doc.title,
+            score: Math.round(m.coverage * 100) / 100,
+          }));
+          return shape(row, 'substring_title', top.coverage, alternatives);
+        }
+      }
+    }
   }
 
   const chunks = await retrieveKnowledgeChunks({
