@@ -1,16 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock child_process before importing SessionRecorder
+// Mock child_process and fs before importing SessionRecorder. Without the fs
+// mock, tests that reach the success path would call mkdirSync against the
+// real filesystem — either /tmp or (worse) ~/.ohwow/media/desktop-recordings.
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
   spawn: vi.fn(),
 }));
 
+vi.mock('fs', () => ({
+  mkdirSync: vi.fn(),
+  statSync: vi.fn(() => ({ size: 0 })),
+}));
+
 import { execSync, spawn } from 'child_process';
+import { mkdirSync } from 'fs';
 import { SessionRecorder } from '../session-recorder.js';
 
 const mockExecSync = vi.mocked(execSync);
 const mockSpawn = vi.mocked(spawn);
+const mockMkdirSync = vi.mocked(mkdirSync);
+
+// Use an isolated fake directory for any test that needs a dataDir. The fs
+// mock intercepts mkdirSync so nothing hits disk either way, but passing an
+// explicit dataDir also prevents the DEFAULT_RECORDING_DIR code path (which
+// resolves to the user's real ~/.ohwow/media/desktop-recordings).
+const TEST_DATA_DIR = '/tmp/ohwow-test-session-recorder';
 
 describe('SessionRecorder', () => {
   beforeEach(() => {
@@ -70,7 +85,7 @@ describe('SessionRecorder', () => {
     mockSpawn.mockReturnValue(mockProcess as never);
 
     const recorder = new SessionRecorder();
-    await recorder.start('test-session', '/tmp/test-data');
+    await recorder.start('test-session', TEST_DATA_DIR);
 
     expect(recorder.isRecording()).toBe(true);
     expect(mockSpawn).toHaveBeenCalledWith(
@@ -78,6 +93,12 @@ describe('SessionRecorder', () => {
       expect.arrayContaining(['-f', 'avfoundation', '-framerate', '15']),
       expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] }),
     );
+    // mkdirSync must have been called against the isolated test dir, not
+    // against the real ~/.ohwow default. Guards against regressions that
+    // would write into the user's home while running tests.
+    expect(mockMkdirSync).toHaveBeenCalled();
+    const firstCallPath = mockMkdirSync.mock.calls[0]?.[0];
+    expect(String(firstCallPath)).toContain(TEST_DATA_DIR);
   });
 
   it('does not start twice', async () => {
@@ -91,8 +112,8 @@ describe('SessionRecorder', () => {
     mockSpawn.mockReturnValue(mockProcess as never);
 
     const recorder = new SessionRecorder();
-    await recorder.start('s1');
-    await recorder.start('s2');
+    await recorder.start('s1', TEST_DATA_DIR);
+    await recorder.start('s2', TEST_DATA_DIR);
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
   });
