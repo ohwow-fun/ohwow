@@ -310,6 +310,11 @@ export class LocalBrowserService {
    * from the profile. We detect that pending state by checking the open tabs
    * via /json/list, and throw an actionable error so the orchestrator can tell
    * the user exactly what to click.
+   *
+   * If desktop screen capture is available (macOS), we also grab a screenshot
+   * of the dialog and embed it in the error so the chat reply can show the
+   * user exactly which button to press. The screenshot is base64-prefixed in
+   * the error message after a sentinel marker so the cloud can parse it out.
    */
   private static async _assertNoConsentPending(cdpHttpUrl: string): Promise<void> {
     try {
@@ -320,15 +325,39 @@ export class LocalBrowserService {
         typeof t.url === 'string' && t.url.startsWith('chrome://managed-user-profile-notice'),
       );
       if (hasNotice) {
+        const screenshotMarker = await LocalBrowserService._captureConsentScreenshot();
         throw new Error(
           'CHROME_CONSENT_PENDING: Chrome opened your real profile but is waiting for one-time consent. ' +
           'Switch to the Chrome window showing "Your organization will be able to view some information" ' +
-          'and click Continue, then ask me again. (Chrome blocks auth cookies from loading until you accept.)',
+          'and click Continue, then ask me again. (Chrome blocks auth cookies from loading until you accept.)' +
+          screenshotMarker,
         );
       }
     } catch (err) {
       // Re-throw the consent error; swallow any unrelated fetch failures.
       if (err instanceof Error && err.message.startsWith('CHROME_CONSENT_PENDING:')) throw err;
+    }
+  }
+
+  /**
+   * Best-effort desktop screenshot of the consent dialog (macOS only). Returns
+   * an empty string if capture fails or is unavailable on this platform — we
+   * never want screenshot failure to mask the underlying CONSENT_PENDING.
+   *
+   * The format is `\n\n[CONSENT_SCREENSHOT_BASE64]\n<base64>` so callers can
+   * parse the data URL out of the error message without breaking the
+   * human-readable prefix.
+   */
+  private static async _captureConsentScreenshot(): Promise<string> {
+    if (process.platform !== 'darwin') return '';
+    try {
+      const { detectScreenInfo, captureAndScaleScreenshot } = await import('../desktop/screenshot-capture.js');
+      const screenInfo = detectScreenInfo();
+      const { base64 } = await captureAndScaleScreenshot(screenInfo, 1280);
+      return `\n\n[CONSENT_SCREENSHOT_BASE64]\n${base64}`;
+    } catch (err) {
+      logger.debug({ err: err instanceof Error ? err.message : err }, '[browser] consent screenshot capture failed');
+      return '';
     }
   }
 

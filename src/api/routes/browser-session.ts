@@ -85,11 +85,13 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
   // --------------------------------------------------------------------------
 
   router.get('/browser/health', (_req, res) => {
-    const service = getOrCreateService();
+    // Don't create a service here — this is called on every cloud session
+    // start to probe runtime availability. Creating a bare LocalBrowserService
+    // here would defeat the lazy CDP setup in /session/start.
     res.json({
       ok: true,
-      initialized: service.isActive(),
-      browserResponsive: service.isActive(),
+      initialized: !!browserService && browserService.isActive(),
+      browserResponsive: !!browserService && browserService.isActive(),
       headless: configuredHeadless,
     });
   });
