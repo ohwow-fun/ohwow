@@ -66,11 +66,13 @@ export async function ensureScraplingInstalled(): Promise<void> {
     });
   }
 
-  // Install browser binaries. Run as `python3 -m scrapling install` instead
-  // of bare `scrapling` so we don't depend on the daemon's subprocess PATH
-  // having the pip-installed scripts directory — caught live when the
-  // daemon logged `/bin/sh: scrapling: command not found` before every
-  // failed scrape_url call.
+  // Install browser binaries. The `scrapling install` command is a pip
+  // entry_point script (not `python -m scrapling`, which errors with
+  // "No module named scrapling.__main__"). Invoke it via the canonical
+  // `python -c "from scrapling.cli import main; main()"` pattern which
+  // works regardless of whether the scrapling script is on PATH. Caught
+  // live on 2026-04-12 after the daemon kept logging "scrapling: command
+  // not found" / "No module named scrapling.__main__" on every restart.
   logger.info('[Scrapling] Installing browser binaries (this may take a few minutes)...');
   const pythonCmd = findPythonCommand();
   if (!pythonCmd) {
@@ -78,15 +80,25 @@ export async function ensureScraplingInstalled(): Promise<void> {
     return;
   }
   try {
-    execFileSync(pythonCmd, ['-m', 'scrapling', 'install'], {
-      stdio: 'inherit',
-      timeout: 600000, // 10 minutes
-    });
+    execFileSync(
+      pythonCmd,
+      [
+        '-c',
+        'import sys; from scrapling.cli import main; sys.argv = ["scrapling", "install"]; main()',
+      ],
+      {
+        stdio: 'inherit',
+        timeout: 600000, // 10 minutes
+      },
+    );
     markSetupComplete();
     logger.info('[Scrapling] Setup complete.');
   } catch (err) {
     logger.warn(`[Scrapling] Browser binary installation had issues: ${err instanceof Error ? err.message : err}`);
-    logger.warn('[Scrapling] Some fetchers may not work without browser binaries. Will retry next time.');
+    logger.warn('[Scrapling] Some fetchers may not work without browser binaries. The server will still start; some fetchers may degrade.');
+    // Don't mark as complete — we'll retry on next restart. But also don't
+    // block the scrapling server from starting for pure HTTP fetches which
+    // don't need the browser binaries.
   }
 }
 

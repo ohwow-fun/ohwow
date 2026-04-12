@@ -58,7 +58,7 @@
     "typecheck": "tsc --noEmit",
     "build": "npm run build:web && tsup && npm run copy-assets",
     "build:web": "cd src/web && npm install --ignore-scripts && npx vite build",
-    "copy-assets": "node -e \"require('fs').cpSync('src/db/migrations','dist/migrations',{recursive:true})\"",
+    "copy-assets": "node -e \"const fs=require('fs');fs.cpSync('src/db/migrations','dist/migrations',{recursive:true});fs.cpSync('scrapling-server','dist/scrapling-server',{recursive:true});\"",
     "clean": "node -e \"['dist','tsconfig.build.tsbuildinfo'].forEach(p=>{try{require('fs').rmSync(p,{recursive:true,force:true})}catch{}})\"",
     "prepublishOnly": "npm run clean && npm run build",
     "start": "node dist/index.js",

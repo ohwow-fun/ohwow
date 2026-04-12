@@ -6,6 +6,7 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type {
@@ -23,6 +24,29 @@ const DEFAULT_PORT = 8100;
 const STARTUP_TIMEOUT_MS = 30000;
 const HEALTH_CHECK_INTERVAL_MS = 500;
 
+/**
+ * Locate the scrapling-server directory. Robust to both source execution
+ * (`tsx src/...`) where `__dirname` is `src/execution/scrapling/` and
+ * bundled execution where tsup produces `dist/index.js` and `__dirname`
+ * is `dist/`. We try a list of candidate ancestors and return the first
+ * that contains `server.py`. Returns null if we cannot find it, which
+ * causes ScraplingService to refuse to start with a clear error instead
+ * of ENOENT-ing inside child_process.spawn with a broken cwd.
+ */
+function locateScraplingServerDir(): string | null {
+  const candidates = [
+    join(__dirname, 'scrapling-server'),           // bundled alongside dist/
+    join(__dirname, '..', 'scrapling-server'),     // dist/scrapling-server/ from dist/subdir/
+    join(__dirname, '..', '..', 'scrapling-server'),
+    join(__dirname, '..', '..', '..', 'scrapling-server'), // src/execution/scrapling/ → project root
+    join(process.cwd(), 'scrapling-server'),       // cwd fallback
+  ];
+  for (const c of candidates) {
+    if (existsSync(join(c, 'server.py'))) return c;
+  }
+  return null;
+}
+
 export class ScraplingService {
   private process: ChildProcess | null = null;
   private port: number;
@@ -35,7 +59,7 @@ export class ScraplingService {
   constructor(config: ScraplingServiceConfig = {}) {
     this.port = config.port || DEFAULT_PORT;
     this.baseUrl = `http://127.0.0.1:${this.port}`;
-    this.serverPath = config.serverPath || join(__dirname, '..', '..', '..', 'scrapling-server');
+    this.serverPath = config.serverPath || locateScraplingServerDir() || join(__dirname, '..', '..', '..', 'scrapling-server');
     this.proxies = config.proxies || (config.proxy ? [config.proxy] : []);
   }
 
@@ -53,6 +77,17 @@ export class ScraplingService {
 
   /** Actual start logic, called via the promise latch. */
   private async doStart(): Promise<void> {
+    // Pre-flight: server directory must exist. When bundled via tsup the
+    // scrapling-server tree is copied into dist/ by copy-assets; if that
+    // step was skipped the process would later ENOENT inside spawn with
+    // a confusing "spawn python3 ENOENT" error. Fail loudly here instead.
+    if (!existsSync(join(this.serverPath, 'server.py'))) {
+      throw new Error(
+        `Scrapling server directory not found at ${this.serverPath}. ` +
+        `Run 'npm run build' to populate dist/scrapling-server, or set OHWOW_SCRAPLING_PATH.`,
+      );
+    }
+
     // Pre-flight: check that python3 or python is available
     const pythonCmd = findPythonCommand();
     if (!pythonCmd) {
