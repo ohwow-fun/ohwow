@@ -331,6 +331,41 @@ const INTENT_SIGNALS: IntentSignals[] = [
     ],
   },
 
+  // ── Knowledge base: ingest, upload, manage documents ──
+  // Distinct from `research` (which reads/searches). This intent triggers when
+  // the user wants to ADD content to the knowledge base or MANAGE existing
+  // docs (upload, ingest, re-index, delete, list), which needs the same 'rag'
+  // section so upload_knowledge/list_knowledge/etc. are surfaced to the model.
+  // Also loads 'filesystem' because ingest typically starts from a local file.
+  {
+    intent: 'knowledge',
+    sections: new Set<IntentSection>(['rag', 'filesystem', 'memory']),
+    statusLabel: 'Loading knowledge base...',
+    strong: [
+      /\bknowledge\s*base\b/,
+      /\bknowledge\s*doc/,
+      /\bingest\b/,
+      /\bupload\s+.*(?:knowledge|doc|file|pdf|markdown|md\b)/,
+      /\badd\s+.*to\s+(?:the\s+)?(?:knowledge|kb|rag|docs?)\b/,
+      /\bindex\s+.*(?:document|file|content)\b/,
+      /\bliving\s*doc/,
+    ],
+    medium: [
+      /\bkb\b/,
+      /\brag\b/,
+      /\bdocument\b/,
+    ],
+    weak: [
+      /\bupload\b/,
+      /\bingest\b/,
+    ],
+    negative: [
+      /\bclick\b/,
+      /\bdrag\b/,
+      /\bcursor\b/,
+    ],
+  },
+
   // ── CRM: contact and lead management ──
   {
     intent: 'crm',
