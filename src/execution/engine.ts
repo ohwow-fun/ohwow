@@ -113,6 +113,7 @@ import {
 import { detectAndPersistAnomalies } from './anomaly-monitoring.js';
 import { createDefaultToolRegistry } from './tool-dispatch/index.js';
 import type { ToolExecutionContext, ToolCallResult } from './tool-dispatch/index.js';
+import { getAgentDefaultModel } from './execution-policy.js';
 import { STATE_TOOL_DEFINITIONS, loadStateContext, loadPreviousTaskContext } from './state/index.js';
 import { LocalLLMCache } from './llm-cache.js';
 import { serializeCheckpoint, type TaskCheckpoint } from './checkpoint-types.js';
@@ -828,6 +829,10 @@ export class RuntimeEngine {
       if (!agentData) throw new Error(`Agent not found: ${agentId}`);
       const agent = agentData;
       const agentConfig = typeof agent.config === 'string' ? JSON.parse(agent.config) : agent.config;
+      // Shape C: resolve the agent's preferred model from model_policy.default
+      // rather than reading the deprecated config.model pin. Legacy pins have
+      // been migrated by db/migrations/100-agent-model-policy.sql.
+      const agentModel: string | undefined = getAgentDefaultModel(agentConfig);
 
       const { data: taskData } = await this.db
         .from<TaskRow>('agent_workforce_tasks')
@@ -1161,7 +1166,7 @@ export class RuntimeEngine {
       });
 
       // 6. Call Claude
-      const modelId = MODEL_MAP[agentConfig.model as ClaudeModel] || MODEL_MAP['claude-sonnet-4-5'];
+      const modelId = MODEL_MAP[agentModel as ClaudeModel] || MODEL_MAP['claude-sonnet-4-5'];
 
       // Connect MCP clients (global servers merged with per-agent servers)
       let mcpClients: McpClientManager | null = null;
@@ -1259,14 +1264,14 @@ export class RuntimeEngine {
       const systemPromptHash = crypto.createHash('sha256').update(systemPrompt).digest('hex');
 
       // Decide execution path: model router (OpenRouter/Ollama/etc) vs direct Anthropic SDK
-      // Use model router when: no Anthropic API key, OR agent has a non-Claude model
-      const agentModelIsLocal = agentConfig.model
-        && !(agentConfig.model as string).startsWith('claude-');
+      // Use model router when: no Anthropic API key, OR agent's resolved model isn't a Claude model
+      const agentModelIsLocal = agentModel
+        && !agentModel.startsWith('claude-');
       const useModelRouter = agentModelIsLocal
         ? !!this.modelRouter
         : !this.config.anthropicApiKey && !!this.modelRouter;
       if (!useModelRouter && !this.anthropic) {
-        throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentConfig.model || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
+        throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentModel || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
       }
 
       // Budget guard: pre-flight check for external providers
@@ -1336,7 +1341,7 @@ export class RuntimeEngine {
             desktopOptions,
             difficulty,
             gitEnabled: bashEnabled,
-            agentModel: agentConfig.model as string | undefined,
+            agentModel,
             skillsDocument: skillsDoc || undefined,
           });
           fullContent = routerResult.fullContent;
@@ -1774,7 +1779,7 @@ export class RuntimeEngine {
         : useModelRouter
         ? 0
         : calculateCostCents(
-            (agentConfig.model as ClaudeModel) || 'claude-sonnet-4-5',
+            (agentModel as ClaudeModel) || 'claude-sonnet-4-5',
             totalInputTokens,
             totalOutputTokens,
           );
@@ -1826,7 +1831,7 @@ export class RuntimeEngine {
         status: finalStatus,
         output: cleanContent,
         response_type: responseType || null,
-        model_used: (agentConfig as Record<string, unknown>)._resolvedModel as string || agentConfig.model,
+        model_used: (agentConfig as Record<string, unknown>)._resolvedModel as string || agentModel,
         tokens_used: totalTokens,
         cost_cents: costCents,
         completed_at: new Date().toISOString(),
@@ -1962,7 +1967,7 @@ export class RuntimeEngine {
         task_id: taskId,
         role: 'assistant',
         content: cleanContent,
-        metadata: JSON.stringify({ model: agentConfig.model, tokensUsed: totalTokens }),
+        metadata: JSON.stringify({ model: agentModel, tokensUsed: totalTokens }),
       });
 
       // Update agent stats with running averages
@@ -2015,7 +2020,7 @@ export class RuntimeEngine {
         p_description: `${totalTokens} tokens, ${durationSeconds}s`,
         p_agent_id: agentId,
         p_task_id: taskId,
-        p_metadata: { runtime: true, model: agentConfig.model },
+        p_metadata: { runtime: true, model: agentModel },
       });
 
       if (finalStatus === 'needs_approval') {
@@ -2202,7 +2207,7 @@ export class RuntimeEngine {
         tokensUsed: totalTokens,
         costCents,
         durationSeconds,
-        modelUsed: agentConfig.model,
+        modelUsed: agentModel,
         startedAt: new Date(startTime).toISOString(),
         completedAt: new Date().toISOString(),
         taskOutput: cleanContent || undefined,

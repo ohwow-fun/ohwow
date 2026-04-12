@@ -5,6 +5,7 @@
  */
 
 import { scoreDifficulty, type DifficultyLevel } from '../execution/difficulty-scorer.js';
+import { getAgentDefaultModel } from '../execution/execution-policy.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 
 export interface TaskRequirements {
@@ -28,7 +29,7 @@ export function extractRequirements(
     t === 'read_file' || t === 'write_file' || t === 'list_directory' || t.startsWith('filesystem_')
   );
 
-  const preferredModel = (agentConfig.model as string) || null;
+  const preferredModel = getAgentDefaultModel(agentConfig) ?? null;
 
   const difficulty = scoreDifficulty({
     taskDescription,

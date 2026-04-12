@@ -179,3 +179,33 @@ export function resolveAgentModelString(
   if (perPurpose) return perPurpose;
   return agent.default;
 }
+
+/**
+ * Read the AgentModelPolicy from an agent config blob (parsed JSON). Returns
+ * undefined when the blob is missing or malformed. This is the single choke
+ * point for "what model policy does this agent carry" — do not reach into
+ * `config.model_policy` directly elsewhere, so the shape can evolve without
+ * chasing call sites.
+ */
+export function getAgentModelPolicy(
+  agentConfig: unknown,
+): AgentModelPolicy | undefined {
+  if (!agentConfig || typeof agentConfig !== 'object') return undefined;
+  const cfg = agentConfig as { model_policy?: unknown };
+  const raw = cfg.model_policy;
+  if (!raw || typeof raw !== 'object') return undefined;
+  return raw as AgentModelPolicy;
+}
+
+/**
+ * Convenience: the default model string an agent prefers across purposes.
+ * Returns undefined when no policy exists or the default is "auto"/missing.
+ * Use this in legacy call sites that still need a single string — it reads
+ * from `model_policy.default` and never from the deprecated `config.model`.
+ */
+export function getAgentDefaultModel(agentConfig: unknown): string | undefined {
+  const policy = getAgentModelPolicy(agentConfig);
+  if (!policy?.default) return undefined;
+  if (policy.default === 'auto') return undefined;
+  return policy.default;
+}

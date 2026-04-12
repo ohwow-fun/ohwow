@@ -208,7 +208,7 @@ export function AgentDetailPage() {
   };
 
   const configFields = useMemo((): ConfigField[] => [
-    { key: 'model', label: 'Model', value: String(config.model || 'claude-sonnet-4-5') },
+    { key: 'model', label: 'Model', value: String(config.model_policy?.default || 'auto') },
     { key: 'temperature', label: 'Temperature', value: String(config.temperature ?? '0.7') },
     { key: 'max_tokens', label: 'Max tokens', value: String(config.max_tokens || '4096') },
     { key: 'requires_approval', label: 'Requires approval', value: String(config.requires_approval ?? 'no') },
