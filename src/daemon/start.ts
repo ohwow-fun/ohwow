@@ -639,7 +639,26 @@ export async function startDaemon(): Promise<DaemonHandle> {
   }
 
   // 10. Initialize channel registry + orchestrator
+  //
+  // IMPORTANT: there are TWO workspace identities in this process.
+  //
+  // `workspaceId` is the cloud-visible identity — when the control plane is
+  // connected, it's the Supabase workspace UUID. Cloud-proxy calls, heartbeats,
+  // and anything that mirrors state up to the cloud uses this id.
+  //
+  // `localWorkspaceId` is always the string "local". All local SQLite tables
+  // (contacts, tasks, activity, agents, knowledge docs, etc.) are keyed off
+  // this sentinel regardless of cloud connectivity. The HTTP API's auth
+  // middleware sets req.workspaceId = "local" for local session tokens, so
+  // any query that joins HTTP-inserted rows must also scope to "local".
+  //
+  // Before this split, the orchestrator was instantiated with the cloud UUID
+  // and its tools queried local tables with workspace_id=<cloud-uuid>,
+  // returning zero rows even when the HTTP API happily returned the same
+  // rows. Caught live on 2026-04-12 while probing local-vs-cloud contacts:
+  // list_contacts returned [] while /api/contacts returned 3.
   const workspaceId = controlPlane?.connectedWorkspaceId || 'local';
+  const localWorkspaceId = 'local';
   const channelRegistry = new ChannelRegistry();
   const connectorRegistry = new ConnectorRegistry();
   connectorRegistry.registerFactory('github', (cfg) => new GitHubConnector(cfg));
@@ -650,8 +669,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
   triggerEvaluatorRef.current = triggerEvaluator;
 
   // Workers skip orchestrator/messaging (task execution only)
+  // Orchestrator uses localWorkspaceId so its tool queries hit the same
+  // rows the HTTP API inserts. Cloud-proxy calls it makes still use the
+  // cloud workspace id because those go through the control plane client
+  // directly, not the local DB scope.
   const orchestrator = isWorker ? null : new LocalOrchestrator(
-    db, engine, workspaceId, config.anthropicApiKey,
+    db, engine, localWorkspaceId, config.anthropicApiKey,
     channelRegistry, controlPlane!, modelRouter, scraplingService, config.orchestratorModel, process.cwd(),
     config.browserHeadless, dataDir, config.mcpServers,
     config.browserTarget, config.chromeCdpPort,
