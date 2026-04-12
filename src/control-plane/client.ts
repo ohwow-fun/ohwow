@@ -494,12 +494,42 @@ export class ControlPlaneClient {
         body: JSON.stringify(body),
       });
 
-      if (!response.ok) {
-        const errorBody = await response.json().catch(() => ({}));
-        const errMsg = (errorBody as { error?: string }).error || `HTTP ${response.status}`;
+      // Robust success check: the response must be (a) a 2xx status,
+      // (b) content-type application/json, and (c) a body that looks
+      // like a sync-resource success envelope. Without this check,
+      // Next.js's soft-404 (HTTP 200 with the HTML 404 page) would be
+      // mistaken for success and the queue would never fill.
+      const contentType = response.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+
+      if (!response.ok || !isJson) {
+        const errMsg = !isJson
+          ? `HTTP ${response.status} non-JSON response (likely endpoint not deployed)`
+          : `HTTP ${response.status}`;
         logger.warn(
-          { resource, action, id: payload.id, status: response.status, error: errMsg },
+          { resource, action, id: payload.id, status: response.status, contentType },
           '[ControlPlane] resource sync failed, queuing',
+        );
+        await this.outboundQueue.enqueue('resource_sync', body);
+        return { ok: false, error: errMsg };
+      }
+
+      // Validate body shape: the sync-resource endpoint returns
+      //   { action: 'upserted'|'deleted', id, resource }
+      // via successResponse() on the cloud side (which is NOT wrapped in
+      // a data envelope). Anything else gets queued.
+      const rawText = await response.text().catch(() => '');
+      let parsed: { action?: string; id?: string; error?: string } | null = null;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || parsed.error || !parsed.action || !parsed.id) {
+        const errMsg = parsed?.error || 'Unexpected sync-resource response shape';
+        logger.warn(
+          { resource, action, id: payload.id, status: response.status, rawText: rawText.slice(0, 400) },
+          '[ControlPlane] resource sync response invalid, queuing',
         );
         await this.outboundQueue.enqueue('resource_sync', body);
         return { ok: false, error: errMsg };
