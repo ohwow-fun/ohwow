@@ -1484,6 +1484,28 @@ function isOperationType(p: Purpose): p is OperationType {
 }
 
 /**
+ * Inspect a model string and infer which provider should serve it. Returns
+ * `null` when the name is ambiguous and normal routing should decide.
+ *
+ * Patterns:
+ * - `claude-*` → Anthropic SDK
+ * - `anthropic/*`, `openai/*`, `google/*`, `x-ai/*`, `meta-llama/*`,
+ *   `deepseek/*`, `mistralai/*`, `qwen/*` (with a slash) → OpenRouter
+ * - `mlx-community/*` → MLX provider (Apple Silicon native)
+ * - anything with a colon like `qwen3:0.6b`, `llama3.1:8b`, `gemma2:9b` →
+ *   Ollama (its native tag format)
+ */
+export type InferredProvider = 'anthropic' | 'openrouter' | 'ollama' | 'mlx' | null;
+export function inferProviderFromModel(model: string): InferredProvider {
+  if (!model) return null;
+  if (model.startsWith('claude-')) return 'anthropic';
+  if (model.startsWith('mlx-community/')) return 'mlx';
+  if (model.includes('/')) return 'openrouter';
+  if (model.includes(':')) return 'ollama';
+  return null;
+}
+
+/**
  * Map a Purpose onto the legacy TaskType dispatch used by getProvider. Legacy
  * OperationType values get their natural TaskType; new Shape C purposes slot
  * into the closest existing bucket so they benefit from existing routing
@@ -1996,6 +2018,42 @@ export class ModelRouter {
       }
     }
 
+    // Shape C: when the caller/agent supplies a concrete model string, infer
+    // which provider serves it and return that provider directly instead of
+    // dispatching through the generic auto-mode routing. Without this, an
+    // Ollama tag like "qwen3:0.6b" would be handed to OpenRouter and rejected
+    // as an unknown model.
+    //
+    // If the inferred provider is unavailable we fall through to normal
+    // dispatch, and critically we DROP the model hint — the fallback
+    // provider cannot serve the original model string (that's why inference
+    // wanted a different provider in the first place), so handing it the
+    // hint would just produce the same "unknown model" error.
+    let effectiveModelHint = modelHint;
+    if (modelHint) {
+      const inferred = inferProviderFromModel(modelHint);
+      const inferredProvider = inferred ? this.getProviderByName(inferred) : null;
+      if (inferredProvider) {
+        const isUp = await inferredProvider.isAvailable();
+        if (isUp) {
+          return {
+            provider: inferredProvider,
+            model: modelHint,
+            purpose,
+            policy,
+            maxCostCents: constraints?.maxCostCents ?? agent?.maxCostCents,
+          };
+        }
+        // Inferred provider is unavailable. Fall through WITHOUT the hint so
+        // the fallback provider picks its own default model.
+        effectiveModelHint = undefined;
+      } else if (inferred) {
+        // Inferred a provider but it isn't configured on this router. Same
+        // story — drop the hint and let the fallback pick its default.
+        effectiveModelHint = undefined;
+      }
+    }
+
     const provider = await this.getProvider(
       taskType,
       constraints?.difficulty,
@@ -2005,11 +2063,27 @@ export class ModelRouter {
 
     return {
       provider,
-      model: modelHint,
+      model: effectiveModelHint,
       purpose,
       policy,
       maxCostCents: constraints?.maxCostCents ?? agent?.maxCostCents,
     };
+  }
+
+  /**
+   * Return a configured provider instance by its canonical name. Returns null
+   * when the provider is not configured in this router. Used by
+   * selectForPurpose to honor a model hint by routing to the matching
+   * provider.
+   */
+  private getProviderByName(name: 'anthropic' | 'openrouter' | 'ollama' | 'mlx'): ModelProvider | null {
+    switch (name) {
+      case 'anthropic':  return this.anthropic;
+      case 'openrouter': return this.openrouter;
+      case 'ollama':     return this.ollama;
+      case 'mlx':        return this.mlx;
+      default:           return null;
+    }
   }
 
   /** Get the Anthropic provider directly (for tool-using tasks that need the SDK) */

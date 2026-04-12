@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ModelRouter, type ModelProvider } from '../model-router.js';
+import { ModelRouter, inferProviderFromModel, type ModelProvider } from '../model-router.js';
 import type { AgentModelPolicy, Purpose } from '../execution-policy.js';
 
 function makeStubProvider(name: string): ModelProvider {
@@ -138,12 +138,33 @@ describe('ModelRouter.selectForPurpose', () => {
   });
 
   describe('model hint resolution', () => {
+    // These tests install fake providers on the router so the model-hint
+    // → provider inference path can actually resolve (otherwise my "drop
+    // the hint when the inferred provider is not configured" logic clears
+    // the hint, which is correct real-world behavior).
+    beforeEach(() => {
+      const fakeAnthropic: ModelProvider = {
+        name: 'anthropic',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      const fakeOpenRouter: ModelProvider = {
+        name: 'openrouter',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      (router as unknown as { anthropic: ModelProvider }).anthropic = fakeAnthropic;
+      (router as unknown as { openrouter: ModelProvider }).openrouter = fakeOpenRouter;
+    });
+
     it('returns no model hint when the agent has no opinion', async () => {
       const result = await router.selectForPurpose({ purpose: 'reasoning' });
       expect(result.model).toBeUndefined();
     });
 
     it('uses agent.default when no per-purpose override exists', async () => {
+      // grok-4.20 has no slash → inference returns null → the hint survives
+      // to the result via the normal (non-inference) path.
       const agent: AgentModelPolicy = { default: 'grok-4.20' };
       const result = await router.selectForPurpose({ purpose: 'reasoning', agent });
       expect(result.model).toBe('grok-4.20');
@@ -155,7 +176,10 @@ describe('ModelRouter.selectForPurpose', () => {
         purposes: { generation: 'claude-sonnet-4.6' },
       };
       const result = await router.selectForPurpose({ purpose: 'generation', agent });
+      // claude-sonnet-4.6 → infers anthropic → fake anthropic is configured
+      // and available → routes there directly with the hint preserved.
       expect(result.model).toBe('claude-sonnet-4.6');
+      expect(result.provider.name).toBe('anthropic');
     });
 
     it('falls back to agent.default for unspecified purposes', async () => {
@@ -214,6 +238,141 @@ describe('ModelRouter.selectForPurpose', () => {
         agent: { maxCostCents: 100 },
       });
       expect(result.maxCostCents).toBe(100);
+    });
+  });
+
+  describe('inferProviderFromModel', () => {
+    it.each<[string, string | null]>([
+      ['claude-sonnet-4-6', 'anthropic'],
+      ['claude-opus-4-6', 'anthropic'],
+      ['claude-haiku-4-5-20251001', 'anthropic'],
+      ['mlx-community/gemma-4-e4b-it-4bit', 'mlx'],
+      ['anthropic/claude-sonnet-4.6', 'openrouter'],
+      ['openai/gpt-4o-mini', 'openrouter'],
+      ['x-ai/grok-4.20', 'openrouter'],
+      ['google/gemini-2.5-flash', 'openrouter'],
+      ['meta-llama/llama-3.1-405b', 'openrouter'],
+      ['deepseek/deepseek-v3.2', 'openrouter'],
+      ['qwen3:0.6b', 'ollama'],
+      ['qwen3.5:9b', 'ollama'],
+      ['llama3.1:8b', 'ollama'],
+      ['gemma2:9b', 'ollama'],
+      ['', null],
+      ['some-random-name', null],
+    ])('infers provider for %s as %s', (model, expected) => {
+      expect(inferProviderFromModel(model)).toBe(expected);
+    });
+  });
+
+  describe('model-hint provider override', () => {
+    it('routes to Ollama when the hint is an Ollama tag and Ollama is available', async () => {
+      // Install a fake Ollama provider on the private field so the test can
+      // inspect how selectForPurpose resolves the hint.
+      const fakeOllama: ModelProvider = {
+        name: 'ollama',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      (router as unknown as { ollama: ModelProvider }).ollama = fakeOllama;
+
+      const result = await router.selectForPurpose({
+        purpose: 'reasoning',
+        agent: { default: 'qwen3:0.6b' },
+      });
+
+      expect(result.provider.name).toBe('ollama');
+      expect(result.model).toBe('qwen3:0.6b');
+      // getProvider should NOT have been consulted because the hint matched
+      // a configured provider directly.
+      expect(getProviderSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls through to normal dispatch when the inferred provider is unavailable', async () => {
+      const fakeOllama: ModelProvider = {
+        name: 'ollama',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => false),
+      };
+      (router as unknown as { ollama: ModelProvider }).ollama = fakeOllama;
+
+      const result = await router.selectForPurpose({
+        purpose: 'reasoning',
+        agent: { default: 'qwen3:0.6b' },
+      });
+
+      // Should have fallen through to the mocked getProvider which returns anthropicStub.
+      expect(result.provider.name).toBe('anthropic');
+      expect(getProviderSpy).toHaveBeenCalled();
+      // Critically, the hint must be DROPPED on fall-through so the
+      // fallback provider uses its own default model instead of trying
+      // (and failing) to serve the unavailable provider's model string.
+      expect(result.model).toBeUndefined();
+    });
+
+    it('drops the hint when the inferred provider is not configured at all', async () => {
+      // No ollama configured on this router.
+      (router as unknown as { ollama: ModelProvider | null }).ollama = null;
+
+      const result = await router.selectForPurpose({
+        purpose: 'reasoning',
+        agent: { default: 'llama3.1:8b' },
+      });
+
+      expect(result.provider.name).toBe('anthropic');
+      expect(result.model).toBeUndefined();
+    });
+
+    it('routes to OpenRouter when the hint looks like a namespaced cloud model', async () => {
+      const fakeOpenRouter: ModelProvider = {
+        name: 'openrouter',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      (router as unknown as { openrouter: ModelProvider }).openrouter = fakeOpenRouter;
+
+      const result = await router.selectForPurpose({
+        purpose: 'generation',
+        agent: { default: 'x-ai/grok-4.20' },
+      });
+
+      expect(result.provider.name).toBe('openrouter');
+      expect(result.model).toBe('x-ai/grok-4.20');
+    });
+
+    it('routes to Anthropic when the hint is a claude-* model', async () => {
+      const fakeAnthropic: ModelProvider = {
+        name: 'anthropic',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      (router as unknown as { anthropic: ModelProvider }).anthropic = fakeAnthropic;
+
+      const result = await router.selectForPurpose({
+        purpose: 'reasoning',
+        agent: { default: 'claude-sonnet-4-6' },
+      });
+
+      expect(result.provider.name).toBe('anthropic');
+      expect(result.model).toBe('claude-sonnet-4-6');
+    });
+
+    it('honors constraints.preferModel for provider inference', async () => {
+      const fakeOllama: ModelProvider = {
+        name: 'ollama',
+        createMessage: vi.fn(),
+        isAvailable: vi.fn(async () => true),
+      };
+      (router as unknown as { ollama: ModelProvider }).ollama = fakeOllama;
+
+      // Agent prefers a cloud model, but the call site overrides to a local.
+      const result = await router.selectForPurpose({
+        purpose: 'reasoning',
+        agent: { default: 'claude-sonnet-4-6' },
+        constraints: { preferModel: 'llama3.1:8b' },
+      });
+
+      expect(result.provider.name).toBe('ollama');
+      expect(result.model).toBe('llama3.1:8b');
     });
   });
 
