@@ -173,6 +173,7 @@ export class LocalDesktopService {
   private autonomyLevel: number;
   private enablePreActionScreenshots: boolean;
   private enableRecording: boolean;
+  private chromeProfileAliases: Record<string, string>;
   private journal: DesktopJournal | null = null;
   private recorder: SessionRecorder | null = null;
 
@@ -190,6 +191,12 @@ export class LocalDesktopService {
     this.autonomyLevel = opts?.autonomyLevel ?? 5;
     this.enablePreActionScreenshots = opts?.enablePreActionScreenshots ?? false;
     this.enableRecording = opts?.enableRecording ?? false;
+    this.chromeProfileAliases = opts?.chromeProfileAliases ?? {};
+  }
+
+  /** Runtime update for chrome profile aliases (called after config reload). */
+  setChromeProfileAliases(aliases: Record<string, string>): void {
+    this.chromeProfileAliases = aliases;
   }
 
   // ==========================================================================
@@ -603,7 +610,36 @@ end tell`;
             const isChromeFamily = /^(google chrome|chrome|chromium|brave browser|arc|microsoft edge)$/i
               .test(action.appName);
 
+            // Resolve the chrome_profile input (directory, email, alias,
+            // or display name) to a concrete profile directory. Surfaces
+            // a clear error with the full profile list if we can't match.
+            let resolvedProfile: string | undefined;
             if (isChromeFamily && action.chromeProfile) {
+              const { resolveChromeProfile, discoverChromeProfiles } =
+                await import('./chrome-profile-resolver.js');
+              const profiles = discoverChromeProfiles();
+              resolvedProfile =
+                resolveChromeProfile(action.chromeProfile, {
+                  profiles,
+                  aliases: this.chromeProfileAliases,
+                }) ?? undefined;
+              if (!resolvedProfile) {
+                const available = profiles
+                  .map((p) => `  - ${p.directory} (${p.name}${p.email ? ` / ${p.email}` : ''})`)
+                  .join('\n');
+                const aliasHint = Object.keys(this.chromeProfileAliases).length > 0
+                  ? `\n\nConfigured aliases: ${Object.keys(this.chromeProfileAliases).join(', ')}`
+                  : `\n\nNo chromeProfileAliases configured. Add one to ~/.ohwow/config.json to map custom emails (e.g. "ogsus@ohwow.fun": "Profile 1") to their profile directories.`;
+                result = {
+                  success: false,
+                  type: 'focus_app',
+                  error: `Couldn't resolve "${action.chromeProfile}" to a Chrome profile.\n\nAvailable profiles:\n${available}${aliasHint}`,
+                };
+                break;
+              }
+            }
+
+            if (isChromeFamily && resolvedProfile) {
               // Profile-aware Chrome activation. `tell Chrome to activate`
               // is profile-blind, and `open -a Chrome --args
               // --profile-directory=X` is *also* effectively profile-blind
@@ -616,7 +652,7 @@ end tell`;
               //
               // We locate the binary at the standard macOS path first,
               // then fall back to `open` as a last resort.
-              const escapedProfile = action.chromeProfile.replace(/"/g, '\\"');
+              const escapedProfile = resolvedProfile.replace(/"/g, '\\"');
               const binaryPaths = [
                 '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
                 '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
@@ -642,7 +678,7 @@ end tell`;
                   execFileSync('/usr/bin/open', [
                     '-a', action.appName,
                     '--args',
-                    `--profile-directory=${action.chromeProfile}`,
+                    `--profile-directory=${resolvedProfile}`,
                     '--new-window',
                   ], { timeout: 5000 });
                 }
@@ -650,7 +686,7 @@ end tell`;
                 result = {
                   success: false,
                   type: 'focus_app',
-                  error: `Couldn't launch ${action.appName} with profile "${action.chromeProfile}": ${err instanceof Error ? err.message : err}`,
+                  error: `Couldn't launch ${action.appName} with profile "${resolvedProfile}": ${err instanceof Error ? err.message : err}`,
                 };
                 break;
               }

@@ -131,6 +131,7 @@ export class LocalOrchestrator {
   private _ragBm25Weight?: number;
   private _rerankerEnabled?: boolean;
   private _meshRagEnabled?: boolean;
+  private _chromeProfileAliases: Record<string, string> = {};
   private exchangeCount = 0;
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
@@ -481,6 +482,15 @@ export class LocalOrchestrator {
     this._ragBm25Weight = opts.ragBm25Weight;
     this._rerankerEnabled = opts.rerankerEnabled;
     this._meshRagEnabled = opts.meshRagEnabled;
+  }
+
+  /** Set Chrome profile aliases (email → profile directory) from config. */
+  setChromeProfileAliases(aliases: Record<string, string>): void {
+    this._chromeProfileAliases = aliases || {};
+    // Propagate to any already-constructed desktop service
+    if (this.desktopService) {
+      this.desktopService.setChromeProfileAliases(this._chromeProfileAliases);
+    }
   }
 
   /** Set LSP manager for code intelligence tools. */
@@ -902,7 +912,7 @@ export class LocalOrchestrator {
     if (desktopPreActivated && !this.desktopActivated) {
       yield { type: 'status', message: '[debug] Desktop control launching (pre-activation)' };
       logger.debug('[desktop] Pre-activating desktop control');
-      this.desktopService = new LocalDesktopService();
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
@@ -1297,7 +1307,7 @@ export class LocalOrchestrator {
 
         // Handle desktop activation: same pattern as browser
         if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-          this.desktopService = new LocalDesktopService();
+          this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
           this.desktopActivated = true;
           const idx = tools.indexOf(REQUEST_DESKTOP_TOOL);
           if (idx !== -1) tools.splice(idx, 1, ...DESKTOP_TOOL_DEFINITIONS);
@@ -1709,7 +1719,7 @@ export class LocalOrchestrator {
     const desktopPreActivated = sections.has('desktop') && classified.intent === 'desktop';
     if (desktopPreActivated && !this.desktopActivated) {
       logger.debug('[desktop] Pre-activating desktop control (openrouter)');
-      this.desktopService = new LocalDesktopService();
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
@@ -2103,7 +2113,7 @@ export class LocalOrchestrator {
 
           // Handle desktop activation
           if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-            this.desktopService = new LocalDesktopService();
+            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
             this.desktopActivated = true;
             const desktopOpenAI = convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_desktop');
@@ -2397,7 +2407,7 @@ export class LocalOrchestrator {
     if (desktopPreActivated && !this.desktopActivated) {
       yield { type: 'status', message: '[debug] Desktop control launching (pre-activation)' };
       logger.debug('[desktop] Pre-activating desktop control (ollama)');
-      this.desktopService = new LocalDesktopService();
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
@@ -2768,7 +2778,7 @@ export class LocalOrchestrator {
 
           // Handle desktop activation: same pattern as browser
           if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-            this.desktopService = new LocalDesktopService();
+            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
             this.desktopActivated = true;
             const desktopOpenAI = convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_desktop');

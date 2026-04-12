@@ -248,7 +248,7 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
         },
         chrome_profile: {
           type: 'string',
-          description: 'Chrome profile directory name (e.g. "Profile 1", "Default", "Profile 4"). Only meaningful for Chrome-family apps. When set, launches Chrome with --profile-directory=<value> which raises (or opens) a window belonging to that specific profile. Get valid directory names from desktop_list_chrome_profiles.',
+          description: 'Chrome profile to target. Accepts any of: (a) a directory name like "Profile 1" or "Default", (b) an email like "ogsus@ohwow.fun" (resolves via workspace config aliases, then Chrome\'s account_info, then domain match), or (c) a profile display name substring like "OGSUS". Only meaningful for Chrome-family apps. Prefer email-based identifiers when possible — they survive Chrome re-numbering profiles. Use desktop_list_chrome_profiles to see what is available.',
         },
       },
       required: ['app'],

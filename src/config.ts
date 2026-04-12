@@ -51,6 +51,14 @@ export interface RuntimeConfig {
   browserTarget: 'chromium' | 'chrome';
   /** CDP port for Chrome remote debugging (default: 9222). Only used when browserTarget is 'chrome'. */
   chromeCdpPort: number;
+  /**
+   * Map of email → Chrome profile directory for desktop_focus_app
+   * resolution. Lets users pass a human identity (ogsus@ohwow.fun) and
+   * have the tool target the right profile, even when that email is
+   * not a Google account and therefore isn't stored in Chrome's
+   * account_info. Example: { "ogsus@ohwow.fun": "Profile 1" }.
+   */
+  chromeProfileAliases: Record<string, string>;
   /** Ollama URL for local model inference (default: http://localhost:11434) */
   ollamaUrl: string;
   /** Ollama model name (default: llama3.1) */
@@ -166,6 +174,7 @@ interface ConfigFile {
   browserHeadless?: boolean;
   browserTarget?: 'chromium' | 'chrome';
   chromeCdpPort?: number;
+  chromeProfileAliases?: Record<string, string>;
   ollamaUrl?: string;
   ollamaModel?: string;
   preferLocalModel?: boolean;
@@ -275,6 +284,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     browserHeadless: process.env.OHWOW_BROWSER_HEADLESS === 'true' ? true : (fileConfig.browserHeadless === true),
     browserTarget: (process.env.OHWOW_BROWSER_TARGET as 'chromium' | 'chrome') || fileConfig.browserTarget || 'chrome',
     chromeCdpPort: parseInt(process.env.OHWOW_CHROME_CDP_PORT || '', 10) || fileConfig.chromeCdpPort || 9222,
+    chromeProfileAliases: fileConfig.chromeProfileAliases || {},
     ollamaUrl: process.env.OHWOW_OLLAMA_URL || fileConfig.ollamaUrl || 'http://localhost:11434',
     ollamaModel: process.env.OHWOW_OLLAMA_MODEL || fileConfig.ollamaModel || 'qwen3:4b',
     preferLocalModel: process.env.OHWOW_PREFER_LOCAL === 'true' || fileConfig.preferLocalModel === true,

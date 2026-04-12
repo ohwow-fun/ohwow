@@ -775,6 +775,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
       meshRagEnabled: config.meshRagEnabled,
     });
     orchestrator.setConnectorRegistry(connectorRegistry);
+    orchestrator.setChromeProfileAliases(config.chromeProfileAliases);
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
 
     // LSP manager — lazy-start language servers on first tool call

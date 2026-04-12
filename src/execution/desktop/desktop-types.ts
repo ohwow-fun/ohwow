@@ -128,6 +128,13 @@ export interface DesktopServiceOptions {
   enablePreActionScreenshots?: boolean;
   /** Record the desktop session as video via FFmpeg (default: false) */
   enableRecording?: boolean;
+  /**
+   * Map of email → Chrome profile directory, used to resolve
+   * human-friendly identifiers (e.g. "ogsus@ohwow.fun") to concrete
+   * profile directories (e.g. "Profile 1") when a desktop_focus_app
+   * call passes `chrome_profile`. Populated from RuntimeConfig.
+   */
+  chromeProfileAliases?: Record<string, string>;
 }
 
 // ============================================================================

@@ -180,6 +180,7 @@ export class OnboardingService {
       browserHeadless: false,
       browserTarget: 'chrome',
       chromeCdpPort: 9222,
+      chromeProfileAliases: {},
       ollamaUrl: 'http://localhost:11434',
       ollamaModel: modelTag,
       preferLocalModel: true,
