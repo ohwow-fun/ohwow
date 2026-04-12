@@ -13,6 +13,7 @@ import { registerKnowledgeTools } from './tools/knowledge.js';
 import { registerResearchTools } from './tools/research.js';
 import { registerMessagingTools } from './tools/messaging.js';
 import { registerCloudTools } from './tools/cloud.js';
+import { registerDaemonTools } from './tools/daemon.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -23,4 +24,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerResearchTools(server, client);
   registerMessagingTools(server, client);
   registerCloudTools(server, client);
+  registerDaemonTools(server);
 }
