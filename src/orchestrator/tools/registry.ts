@@ -24,7 +24,7 @@ import { listContacts, createContact, updateContact, logContactEvent, searchCont
 import { deepResearch } from './research.js';
 import { scrapeUrl, scrapeBulk, scrapeSearch } from './scraping.js';
 import { ocrExtractText, analyzeImage } from './ocr.js';
-import { listKnowledge, uploadKnowledge, addKnowledgeFromUrl, assignKnowledge, deleteKnowledge, searchKnowledge } from './knowledge.js';
+import { listKnowledge, uploadKnowledge, addKnowledgeFromUrl, assignKnowledge, deleteKnowledge, searchKnowledge, getKnowledgeDocument } from './knowledge.js';
 import { localListDirectory, localReadFile, localSearchFiles, localSearchContent, localWriteFile, localEditFile } from './filesystem.js';
 import { localRunBash } from './bash.js';
 import { pdfInspectFields, pdfFillForm } from './pdf.js';
@@ -51,10 +51,14 @@ import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDeleg
 import { getWorkPatterns, getTimeAllocation, detectAutomationOpportunities, getObservationInsights } from './observation.js';
 import { getCrossPollination, scheduleTeamCouncil, getCollectiveBriefing, rebalanceWorkload } from './collective-intelligence.js';
 import { llmTool } from './llm.js';
+import { getDaemonInfo } from './daemon-info.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
   ['llm', (ctx, input) => llmTool(ctx, input)],
+
+  // Daemon introspection — canonical paths, db location, key tables
+  ['get_daemon_info', (ctx) => getDaemonInfo(ctx)],
 
   // Agent tools
   ['list_agents', (ctx) => listAgents(ctx)],
@@ -166,6 +170,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['assign_knowledge', (ctx, input) => assignKnowledge(ctx, input)],
   ['delete_knowledge', (ctx, input) => deleteKnowledge(ctx, input)],
   ['search_knowledge', (ctx, input) => searchKnowledge(ctx, input)],
+  ['get_knowledge_document', (ctx, input) => getKnowledgeDocument(ctx, input)],
 
   // Data source connector tools
   ['list_connectors', (ctx) => listConnectors(ctx)],

@@ -70,6 +70,239 @@ export async function enqueueDocument(
 // LIST KNOWLEDGE
 // ============================================================================
 
+/**
+ * Fetch a single knowledge document in its entirety, with a resolution
+ * cascade that handles exact ids, exact titles, fuzzy title substrings,
+ * and semantic matches via the existing chunk-retrieval embeddings.
+ *
+ * Fills a real gap in RAG workflows: `search_knowledge` only returns
+ * similarity-ranked fragments, so when an agent wants to follow a specific
+ * playbook or reference end-to-end it needs the whole thing. Without this
+ * tool, agents end up guessing procedure details and hitting real failures
+ * (wrong file paths, wrong table names, missed red-flag patterns) because
+ * they never saw the full doc.
+ *
+ * Resolution order:
+ *   1. `document_id` exact match
+ *   2. `title` exact match (case-insensitive, whitespace-normalized)
+ *   3. `title` substring match (case-insensitive) — returns the longest-
+ *      matching title, with a `matchType` hint so callers know it's fuzzy
+ *   4. `query` (or `title` when no exact match) → semantic search via the
+ *      existing chunk retriever. The document whose chunks score highest
+ *      wins. Returns full content plus confidence + alternatives so the
+ *      caller can decide whether to trust the match or ask for clarification
+ *
+ * The cascade means an agent can ask for "ops playbook" or "monitoring
+ * guide" and land on "Ops Monitoring Playbook" without knowing the exact
+ * id or title.
+ */
+export async function getKnowledgeDocument(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>
+): Promise<ToolResult> {
+  const id = typeof input.document_id === 'string' ? input.document_id.trim() : '';
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  const freeQuery = typeof input.query === 'string' ? input.query.trim() : '';
+
+  if (!id && !title && !freeQuery) {
+    return {
+      success: false,
+      error: 'Provide one of: document_id, title, or query. Use list_knowledge or search_knowledge to discover docs.',
+    };
+  }
+
+  const FULL_SELECT =
+    'id, title, filename, file_type, file_size, source_type, compiled_text, compiled_token_count, chunk_count, processing_status, created_at, processed_at, content_hash';
+
+  /** Load a full document row by id. Returns null on miss. */
+  const loadById = async (docId: string) => {
+    const { data } = await ctx.db
+      .from('agent_workforce_knowledge_documents')
+      .select(FULL_SELECT)
+      .eq('workspace_id', ctx.workspaceId)
+      .eq('is_active', 1)
+      .eq('id', docId)
+      .maybeSingle();
+    return data as Record<string, unknown> | null;
+  };
+
+  /** Shape a row into the tool result payload. */
+  const shape = (
+    row: Record<string, unknown>,
+    matchType: 'id' | 'exact_title' | 'substring_title' | 'semantic',
+    confidence: number,
+    alternatives: Array<{ id: string; title: string; score: number }> = [],
+  ) => ({
+    success: true as const,
+    data: {
+      id: row.id,
+      title: row.title,
+      filename: row.filename,
+      fileType: row.file_type,
+      fileSize: row.file_size,
+      source: row.source_type,
+      status: row.processing_status,
+      chunks: row.chunk_count,
+      tokens: row.compiled_token_count,
+      contentHash: row.content_hash,
+      createdAt: row.created_at,
+      processedAt: row.processed_at,
+      matchType,
+      confidence,
+      alternatives: alternatives.length > 0 ? alternatives : undefined,
+      content: (row.compiled_text as string) || '',
+    },
+  });
+
+  // 1. Exact id match — highest confidence.
+  if (id) {
+    const row = await loadById(id);
+    if (row) return shape(row, 'id', 1.0);
+    return {
+      success: false,
+      error: `No knowledge document found with id "${id}". Use list_knowledge to see available doc ids.`,
+    };
+  }
+
+  // Load the full title index once — we use it for exact, substring, AND
+  // to enrich alternatives from semantic matches.
+  const { data: indexRows } = await ctx.db
+    .from<{ id: string; title: string }>('agent_workforce_knowledge_documents')
+    .select('id, title')
+    .eq('workspace_id', ctx.workspaceId)
+    .eq('is_active', 1);
+  const allDocs = (indexRows ?? []) as Array<{ id: string; title: string }>;
+
+  if (allDocs.length === 0) {
+    return { success: false, error: 'Knowledge base is empty.' };
+  }
+
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+
+  // 2. Exact title match (case-insensitive, whitespace-normalized).
+  if (title) {
+    const normTitle = normalize(title);
+    const exact = allDocs.find((d) => normalize(d.title) === normTitle);
+    if (exact) {
+      const row = await loadById(exact.id);
+      if (row) return shape(row, 'exact_title', 1.0);
+    }
+
+    // 3. Substring title match — returns the longest title that contains
+    // the query (or that the query contains). Bidirectional so "ops" finds
+    // "Ops Monitoring Playbook" AND "monitoring playbook" finds it too.
+    const substrMatches = allDocs
+      .map((d) => {
+        const dn = normalize(d.title);
+        if (dn.includes(normTitle) || normTitle.includes(dn)) {
+          // Rank by length of the shorter side — longer overlap wins.
+          const overlap = Math.min(dn.length, normTitle.length);
+          return { doc: d, overlap };
+        }
+        return null;
+      })
+      .filter((x): x is { doc: { id: string; title: string }; overlap: number } => x !== null)
+      .sort((a, b) => b.overlap - a.overlap);
+
+    if (substrMatches.length > 0) {
+      const best = substrMatches[0].doc;
+      const row = await loadById(best.id);
+      if (row) {
+        const alternatives = substrMatches.slice(1, 4).map((m) => ({
+          id: m.doc.id,
+          title: m.doc.title,
+          score: Math.round((m.overlap / normTitle.length) * 100) / 100,
+        }));
+        return shape(row, 'substring_title', 0.85, alternatives);
+      }
+    }
+  }
+
+  // 4. Semantic fallback: run the given query (or the raw title if no
+  // query) through the chunk retriever. The parent document of the
+  // highest-scoring chunk wins. Alternatives list the runner-up docs with
+  // their scores so callers can detect ambiguous matches.
+  const semanticQuery = freeQuery || title;
+  if (!semanticQuery) {
+    return {
+      success: false,
+      error: 'Provide document_id, title, or query.',
+    };
+  }
+
+  const chunks = await retrieveKnowledgeChunks({
+    db: ctx.db,
+    workspaceId: ctx.workspaceId,
+    agentId: '__orchestrator__',
+    query: semanticQuery,
+    tokenBudget: 4000,
+    maxChunks: 10,
+    ollamaUrl: ctx.ollamaUrl,
+    embeddingModel: ctx.embeddingModel,
+    bm25Weight: ctx.ragBm25Weight,
+    expandQueries: !!ctx.ollamaUrl,
+    ollamaModel: ctx.ollamaModel,
+    rerankerEnabled: ctx.rerankerEnabled,
+    meshRagEnabled: ctx.meshRagEnabled,
+  });
+
+  if (chunks.length === 0) {
+    return {
+      success: false,
+      error: `No knowledge document matched "${semanticQuery}" by id, title, or semantic search. Try list_knowledge to see what's available.`,
+    };
+  }
+
+  // Aggregate chunk scores per document. The doc with the highest summed
+  // top-chunk score wins. We use the title field from the chunk result
+  // (which retrieveKnowledgeChunks includes) and resolve back to an id via
+  // the title index.
+  const scoresByTitle = new Map<string, number>();
+  for (const c of chunks) {
+    scoresByTitle.set(c.documentTitle, (scoresByTitle.get(c.documentTitle) ?? 0) + c.score);
+  }
+  const ranked = [...scoresByTitle.entries()]
+    .map(([docTitle, score]) => {
+      const match = allDocs.find((d) => d.title === docTitle);
+      return match ? { id: match.id, title: docTitle, score } : null;
+    })
+    .filter((x): x is { id: string; title: string; score: number } => x !== null)
+    .sort((a, b) => b.score - a.score);
+
+  if (ranked.length === 0) {
+    return {
+      success: false,
+      error: `Retrieved chunks but could not resolve them back to a known document. Try list_knowledge.`,
+    };
+  }
+
+  const winner = ranked[0];
+  const row = await loadById(winner.id);
+  if (!row) {
+    return {
+      success: false,
+      error: `Semantic match found doc "${winner.title}" but failed to load it. Try again or use list_knowledge.`,
+    };
+  }
+
+  // Normalize confidence to 0-1: the winner's aggregate score divided by
+  // itself is 1; we want a softer measure. Use the ratio of winner score
+  // to total score as the confidence — close to 1 means the winner
+  // dominates, close to 0 means results are split across many docs.
+  const totalScore = ranked.reduce((sum, r) => sum + r.score, 0);
+  const confidence = totalScore > 0
+    ? Math.round((winner.score / totalScore) * 100) / 100
+    : 0;
+
+  const alternatives = ranked.slice(1, 4).map((r) => ({
+    id: r.id,
+    title: r.title,
+    score: Math.round((r.score / (winner.score || 1)) * 100) / 100,
+  }));
+
+  return shape(row, 'semantic', confidence, alternatives);
+}
+
 export async function listKnowledge(
   ctx: LocalToolContext,
   input?: Record<string, unknown>
@@ -730,6 +963,29 @@ export async function searchKnowledge(
 
   const maxResults = Math.min(Number(input.max_results) || 5, 10);
 
+  // Exact-title boost: if the user's query matches a document title
+  // (case-insensitive, whitespace-normalized), surface a hint pointing at
+  // get_knowledge_document AND bias the chunk retrieval so that doc's
+  // chunks rank higher. Without this, BM25 similarity can return chunks
+  // from a completely different doc because they happen to share tokens
+  // with the query, even when the user literally asked for a known
+  // document by title.
+  const normalizedQuery = query.trim().toLowerCase();
+  let exactTitleMatch: { id: string; title: string } | null = null;
+  try {
+    const { data: titleRows } = await ctx.db
+      .from<{ id: string; title: string }>('agent_workforce_knowledge_documents')
+      .select('id, title')
+      .eq('workspace_id', ctx.workspaceId)
+      .eq('is_active', 1);
+    if (titleRows) {
+      const match = (titleRows as Array<{ id: string; title: string }>).find(
+        (r) => r.title.trim().toLowerCase() === normalizedQuery,
+      );
+      if (match) exactTitleMatch = match;
+    }
+  } catch { /* non-fatal, continue with plain search */ }
+
   const chunks = await retrieveKnowledgeChunks({
     db: ctx.db,
     workspaceId: ctx.workspaceId,
@@ -746,19 +1002,39 @@ export async function searchKnowledge(
     meshRagEnabled: ctx.meshRagEnabled,
   });
 
-  if (chunks.length === 0) {
+  // Re-rank: if we have an exact title match, promote chunks from that
+  // doc to the top of the result list. Preserves ordering within each
+  // group. Cheap and deterministic.
+  let rerankedChunks = chunks;
+  if (exactTitleMatch) {
+    const matchTitle = exactTitleMatch.title;
+    rerankedChunks = [
+      ...chunks.filter((c) => c.documentTitle === matchTitle),
+      ...chunks.filter((c) => c.documentTitle !== matchTitle),
+    ];
+  }
+
+  if (rerankedChunks.length === 0 && !exactTitleMatch) {
     return {
       success: true,
       data: { message: 'Nothing in the knowledge base matched that query.', results: [] },
     };
   }
 
+  const titleHint = exactTitleMatch
+    ? `Your query exactly matches the title of document "${exactTitleMatch.title}" (id: ${exactTitleMatch.id}). For the full document text, call get_knowledge_document with document_id="${exactTitleMatch.id}" — the chunks below are similarity fragments and may not include the whole procedure.`
+    : undefined;
+
   return {
     success: true,
     data: {
       query,
-      resultCount: chunks.length,
-      results: chunks.map((c) => ({
+      resultCount: rerankedChunks.length,
+      exactTitleMatch: exactTitleMatch
+        ? { id: exactTitleMatch.id, title: exactTitleMatch.title }
+        : undefined,
+      hint: titleHint,
+      results: rerankedChunks.map((c) => ({
         documentTitle: c.documentTitle,
         content: c.content,
         score: Math.round(c.score * 100) / 100,

@@ -60,6 +60,15 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'get_daemon_info',
+    description: 'Return canonical paths, database location, and key table names for the running ohwow daemon. Call this BEFORE guessing file paths or sqlite commands — it gives you the absolute runtime.db path, auth token path, screenshots dir, repo locations, and an example sqlite3 command. Always available regardless of intent. Use it whenever an agent task involves local filesystem reads, sqlite queries, or anything that depends on where the daemon keeps its state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
     name: 'update_plan',
     description:
       'Update your working task plan. Call at the start of a multi-step response with all planned tasks, then call again to mark tasks as in_progress or done as you complete them. This shows a live plan panel in the UI.',
@@ -1724,14 +1733,27 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   },
   {
     name: 'search_knowledge',
-    description: 'Search the knowledge base for content relevant to a query. Uses BM25 retrieval to find the most relevant chunks. Use when asked about specific topics that may have been uploaded to the knowledge base.',
+    description: 'Search the knowledge base for content relevant to a query. Uses BM25 retrieval with an exact-title boost: if the query exactly matches a document title, that document\'s chunks are surfaced first. Returns similarity-ranked CHUNKS, not whole documents — when you need the full text of a specific document (to follow a procedure, playbook, or reference end-to-end), use `get_knowledge_document` instead.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        query: { type: 'string', description: 'What to search for (natural language works)' },
+        query: { type: 'string', description: 'What to search for (natural language works). Quoting an exact document title will boost that doc in the results.' },
         max_results: { type: 'number', description: 'Max chunks to return (default 5, max 10)' },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'get_knowledge_document',
+    description: 'Fetch a single knowledge document end-to-end with a cascading resolver — returns full compiled text plus match metadata. Use this (not search_knowledge) when an agent needs to follow a playbook, procedure, or reference document without guessing. Resolution order: (1) document_id exact, (2) title exact, (3) title substring, (4) semantic via embeddings — a natural-language `query` like "ops playbook" finds "Ops Monitoring Playbook" without needing the exact title. Returns `matchType` so you know if the match was exact or fuzzy, `confidence` so you can detect ambiguous matches, and `alternatives` listing runner-up docs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        document_id: { type: 'string', description: 'Exact document id. Highest confidence. Get ids from list_knowledge or search_knowledge.' },
+        title: { type: 'string', description: 'Document title. Tried exact (case-insensitive) first, then substring. Example: "Ops Monitoring Playbook".' },
+        query: { type: 'string', description: 'Natural-language query for semantic matching via embeddings. Use when you do not know the exact id or title. Example: "how to check vercel deploys", "monitoring procedure", "ops runbook".' },
+      },
+      required: [],
     },
   },
 
@@ -2444,6 +2466,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   assign_knowledge: ['rag'],
   delete_knowledge: ['rag'],
   search_knowledge: ['rag'],
+  get_knowledge_document: ['rag'],
 
   // PDF → 'vision' (document processing)
   pdf_inspect_fields: ['vision'],
@@ -2486,6 +2509,9 @@ const ALWAYS_INCLUDED_TOOLS = new Set([
   'update_plan', 'delegate_subtask',
   'cloud_list_contacts', 'cloud_list_schedules', 'cloud_list_agents',
   'cloud_list_tasks', 'cloud_get_analytics', 'cloud_list_members',
+  // Daemon introspection: always available so agents can discover paths
+  // and key tables without relying on intent classification.
+  'get_daemon_info',
 ]);
 
 /**
