@@ -1,15 +1,36 @@
 /**
  * Contacts Routes
  * CRUD for agent_workforce_contacts + timeline from contact_events.
+ *
+ * Every mutating path fires a fire-and-forget upstream sync via the
+ * control plane so the cloud dashboard and cloud agents see the same
+ * contact state. Sync failures are logged and queued, never surfaced
+ * to the caller.
  */
 
 import { Router } from 'express';
 import type { TypedEventBus } from '../../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../../tui/types.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import type { ControlPlaneClient } from '../../control-plane/client.js';
+import { logger } from '../../lib/logger.js';
 
-export function createContactsRouter(db: DatabaseAdapter, eventBus: TypedEventBus<RuntimeEvents>): Router {
+export function createContactsRouter(
+  db: DatabaseAdapter,
+  eventBus: TypedEventBus<RuntimeEvents>,
+  controlPlane?: ControlPlaneClient | null,
+): Router {
   const router = Router();
+
+  /** Fire-and-forget sync helper. Never throws, never blocks. */
+  const syncContact = (action: 'upsert' | 'delete', payload: Record<string, unknown> & { id: string }) => {
+    if (!controlPlane) return;
+    controlPlane
+      .reportResource('contact', action, payload)
+      .catch((err) => {
+        logger.warn({ err, action, id: payload.id }, '[contacts] upstream sync threw');
+      });
+  };
 
   // List contacts
   router.get('/api/contacts', async (req, res) => {
@@ -53,6 +74,9 @@ export function createContactsRouter(db: DatabaseAdapter, eventBus: TypedEventBu
         .select('*').eq('id', id).single();
 
       eventBus.emit('contact:upserted', created);
+      if (created) {
+        syncContact('upsert', created as Record<string, unknown> & { id: string });
+      }
       res.status(201).json({ data: created });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
@@ -79,6 +103,9 @@ export function createContactsRouter(db: DatabaseAdapter, eventBus: TypedEventBu
         .select('*').eq('id', req.params.id).single();
 
       eventBus.emit('contact:upserted', updated);
+      if (updated) {
+        syncContact('upsert', updated as Record<string, unknown> & { id: string });
+      }
       res.json({ data: updated });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
@@ -96,6 +123,7 @@ export function createContactsRouter(db: DatabaseAdapter, eventBus: TypedEventBu
 
       if (error) { res.status(500).json({ error: error.message }); return; }
       eventBus.emit('contact:removed', { id: req.params.id });
+      syncContact('delete', { id: req.params.id });
       res.json({ data: { id: req.params.id } });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });

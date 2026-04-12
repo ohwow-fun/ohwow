@@ -327,7 +327,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createAutomationsRouter(db, workspaceId || 'local', triggerEvaluator || undefined, onScheduleChange));
   app.use(createTemplatesRouter(db, workspaceId || 'local'));
   app.use(createDashboardRouter(db));
-  app.use(createContactsRouter(db, eventBus));
+  app.use(createContactsRouter(db, eventBus, controlPlane ?? null));
   app.use(createRevenueRouter(db, eventBus));
   app.use(createGoalsRouter(db, eventBus));
   app.use(createDepartmentsRouter(db, eventBus));

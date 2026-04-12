@@ -1,6 +1,10 @@
 /**
  * Orchestrator Tools — Knowledge Base
  * Local runtime handlers for knowledge document management.
+ *
+ * Upload and delete paths fire a best-effort upstream sync via the control
+ * plane so cloud agents see the same knowledge corpus. Sync failures
+ * never block the local write.
  */
 
 import type { LocalToolContext } from '../local-tool-types.js';
@@ -11,6 +15,24 @@ import { createHash } from 'node:crypto';
 import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 import { chunkText } from '../../lib/rag/chunker.js';
+import { logger } from '../../lib/logger.js';
+
+/** Fire-and-forget upstream knowledge-doc sync. Never throws. */
+async function syncKnowledgeUpstream(
+  ctx: LocalToolContext,
+  action: 'upsert' | 'delete',
+  payload: Record<string, unknown> & { id: string },
+): Promise<void> {
+  if (!ctx.controlPlane) return;
+  try {
+    const result = await ctx.controlPlane.reportResource('knowledge_document', action, payload);
+    if (!result.ok) {
+      logger.debug({ action, id: payload.id, error: result.error }, '[knowledge] cloud sync deferred');
+    }
+  } catch (err) {
+    logger.warn({ err, action, id: payload.id }, '[knowledge] cloud sync threw');
+  }
+}
 
 // ============================================================================
 // ENQUEUE DOCUMENT FOR BACKGROUND PROCESSING
@@ -216,6 +238,26 @@ export async function uploadKnowledge(
         ...(embeddingModel ? { embedding_model: embeddingModel } : {}),
       })
       .eq('id', docId);
+
+    // Cloud mirror: after the doc is fully processed, push it upstream so
+    // cloud agents can see it. Send metadata only (not chunks or embeddings)
+    // since cloud handles its own chunking/embedding pipeline.
+    void syncKnowledgeUpstream(ctx, 'upsert', {
+      id: docId,
+      title,
+      filename,
+      file_type: ext,
+      file_size: fileStats.size,
+      storage_path: storagePath,
+      source_type: 'upload',
+      processing_status: 'ready',
+      chunk_count: chunks.length,
+      compiled_token_count: Math.ceil(text.length / 4),
+      content_hash: contentHash,
+      compiled_text: text,
+      agent_id: agentId,
+      is_active: 1,
+    });
 
     return {
       success: true,
@@ -495,6 +537,8 @@ export async function deleteKnowledge(
     .from('agent_workforce_knowledge_documents')
     .delete()
     .eq('id', documentId);
+
+  void syncKnowledgeUpstream(ctx, 'delete', { id: documentId });
 
   return {
     success: true,

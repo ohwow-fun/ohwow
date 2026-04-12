@@ -48,6 +48,142 @@ function isMediaMcpTool(toolName: string): boolean {
 }
 
 // ============================================================================
+// ACTIVITY LOGGING
+// ============================================================================
+
+/**
+ * Tool names that should NOT log to the activity feed. These are read-only
+ * or high-frequency calls whose appearance in the feed would just be noise.
+ * Writes, sends, creates, uploads, and any state mutation DO log.
+ */
+const ACTIVITY_SKIP_TOOLS = new Set<string>([
+  'update_plan',          // planning UI only, not a world change
+  'llm',                  // too chatty to log individually
+  'list_agents', 'list_tasks', 'list_workflows', 'list_projects', 'list_goals',
+  'list_contacts', 'list_knowledge', 'list_workflow_triggers', 'list_automations',
+  'list_a2a_connections', 'list_peers', 'list_peer_agents', 'list_connectors',
+  'list_telegram_chats', 'list_whatsapp_chats', 'list_whatsapp_messages',
+  'list_whatsapp_connections', 'list_telegram_connections',
+  'list_agent_state', 'list_person_models', 'list_doc_mounts', 'list_available_presets',
+  'cloud_list_contacts', 'cloud_list_schedules', 'cloud_list_agents',
+  'cloud_list_tasks', 'cloud_get_analytics', 'cloud_list_members',
+  'get_task_detail', 'get_workspace_stats', 'get_activity_feed',
+  'get_business_pulse', 'get_body_state', 'get_contact_pipeline',
+  'get_daily_reps_status', 'get_agent_schedules', 'get_project_board',
+  'get_pending_approvals', 'get_whatsapp_status', 'get_whatsapp_messages',
+  'get_person_model', 'get_agent_state', 'get_workflow_detail',
+  'get_transition_status', 'get_human_growth', 'get_skill_paths',
+  'get_team_health', 'get_delegation_metrics', 'get_work_patterns',
+  'get_time_allocation', 'get_observation_insights', 'get_cross_pollination',
+  'get_collective_briefing', 'get_workload_balance', 'get_routing_recommendations',
+  'get_task_augmentation', 'get_pillar_detail', 'get_time_saved',
+  'search_contacts', 'search_knowledge', 'search_files', 'search_mounted_docs',
+  'local_read_file', 'local_list_directory', 'local_search_files', 'local_search_content',
+  'lsp_diagnostics', 'lsp_hover', 'lsp_go_to_definition', 'lsp_references', 'lsp_completions',
+  'assess_operations', 'detect_task_patterns', 'detect_automation_opportunities',
+  'body_state', 'business_pulse',
+]);
+
+/** Human-readable activity title for a given tool. */
+function titleForTool(toolName: string, input: Record<string, unknown>): string {
+  // Try to pull a sensible name out of the input for specific tools
+  if (toolName === 'create_contact') {
+    return `Created contact "${input.name ?? 'unnamed'}"`;
+  }
+  if (toolName === 'update_contact') {
+    return `Updated contact ${input.contact_id ?? ''}`.trim();
+  }
+  if (toolName === 'upload_knowledge') {
+    return `Ingested knowledge doc "${input.title ?? basenameOfPath(input.file_path)}"`;
+  }
+  if (toolName === 'delete_knowledge') {
+    return `Deleted knowledge doc ${input.document_id ?? ''}`.trim();
+  }
+  if (toolName === 'local_write_file') {
+    return `Wrote file ${String(input.path ?? '')}`;
+  }
+  if (toolName === 'local_edit_file') {
+    return `Edited file ${String(input.path ?? '')}`;
+  }
+  if (toolName === 'send_whatsapp_message') {
+    return `Sent WhatsApp message to ${input.chat_id ?? input.to ?? 'contact'}`;
+  }
+  if (toolName === 'send_telegram_message') {
+    return `Sent Telegram message to ${input.chat_id ?? 'contact'}`;
+  }
+  if (toolName === 'run_agent') {
+    return `Dispatched agent ${input.agent_id ?? ''}`.trim();
+  }
+  if (toolName === 'run_workflow') {
+    return `Ran workflow ${input.workflow_id ?? ''}`.trim();
+  }
+  if (toolName === 'create_workflow' || toolName === 'generate_workflow') {
+    return `Created workflow "${input.name ?? 'unnamed'}"`;
+  }
+  if (toolName === 'create_project') {
+    return `Created project "${input.name ?? 'unnamed'}"`;
+  }
+  if (toolName === 'create_goal') {
+    return `Created goal "${input.title ?? input.name ?? 'unnamed'}"`;
+  }
+  if (toolName === 'create_automation' || toolName === 'propose_automation') {
+    return `Created automation "${input.name ?? 'unnamed'}"`;
+  }
+  // Fallback: human-ish version of the tool name
+  return toolName.replace(/_/g, ' ');
+}
+
+function basenameOfPath(p: unknown): string {
+  if (typeof p !== 'string') return 'file';
+  const parts = p.split('/');
+  return parts[parts.length - 1] || p;
+}
+
+async function recordOrchestratorActivity(
+  toolCtx: LocalToolContext,
+  toolName: string,
+  input: Record<string, unknown>,
+  result: ToolResult,
+): Promise<void> {
+  // Skip noisy/read-only tools
+  if (ACTIVITY_SKIP_TOOLS.has(toolName)) return;
+  // Skip any `get_*` or `list_*` not explicitly covered above
+  if (toolName.startsWith('get_') || toolName.startsWith('list_') || toolName.startsWith('search_')) return;
+
+  try {
+    const title = titleForTool(toolName, input);
+    const description = result.success
+      ? summarizeResultForActivity(result)
+      : `Failed: ${result.error ?? 'unknown error'}`;
+    await toolCtx.db.rpc('create_agent_activity', {
+      p_workspace_id: toolCtx.workspaceId,
+      p_activity_type: result.success ? 'orchestrator_tool' : 'orchestrator_tool_failed',
+      p_title: title,
+      p_description: description,
+      p_agent_id: toolCtx.currentAgentId ?? null,
+      p_task_id: null,
+      p_metadata: {
+        tool_name: toolName,
+        source: 'orchestrator',
+      },
+    });
+  } catch (err) {
+    logger.debug({ err, toolName }, '[tool-executor] activity log failed (non-fatal)');
+  }
+}
+
+function summarizeResultForActivity(result: ToolResult): string {
+  if (!result.data) return 'OK';
+  if (typeof result.data === 'string') return result.data.slice(0, 200);
+  if (typeof result.data === 'object' && result.data !== null) {
+    const r = result.data as Record<string, unknown>;
+    if (typeof r.message === 'string') return r.message.slice(0, 200);
+    if (typeof r.text === 'string') return r.text.slice(0, 200).replace(/\s+/g, ' ');
+  }
+  return 'OK';
+}
+
+// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -713,6 +849,9 @@ export async function* executeToolCall(
     }
     ctx.executedToolCalls.set(toolKey, result);
     ctx.toolCache?.set(request.name, toolInput, result);
+    // Activity feed: log notable orchestrator tool calls so dashboard shows
+    // dogfood work in real time. Best-effort, never blocks tool execution.
+    void recordOrchestratorActivity(ctx.toolCtx, request.name, toolInput, result);
     yield { type: 'tool_done', name: request.name, result };
 
     if (result.switchTab) {

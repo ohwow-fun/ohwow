@@ -460,6 +460,61 @@ export class ControlPlaneClient {
   }
 
   /**
+   * Push a Local → Cloud resource change upstream (fire and forget).
+   *
+   * Closes the sync gap where local create/update/delete events on
+   * contacts, knowledge documents, etc. never propagated to cloud.
+   * The cloud route at /api/local-runtime/sync-resource upserts or
+   * deletes the resource scoped to the authenticated workspace.
+   *
+   * Idempotent on the cloud side via upsert onConflict=id. When the
+   * control plane is not connected, the call is queued in the outbound
+   * queue under "resource_sync" so the change is not lost.
+   */
+  async reportResource(
+    resource: 'contact' | 'knowledge_document',
+    action: 'upsert' | 'delete',
+    payload: Record<string, unknown> & { id: string },
+  ): Promise<{ ok: boolean; error?: string }> {
+    const body = { resource, action, payload };
+
+    if (!this.sessionToken) {
+      logger.debug({ resource, action, id: payload.id }, '[ControlPlane] Not connected, queuing resource sync');
+      await this.outboundQueue.enqueue('resource_sync', body);
+      return { ok: false, error: 'Not connected to cloud' };
+    }
+
+    try {
+      const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/sync-resource`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.sessionToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        const errMsg = (errorBody as { error?: string }).error || `HTTP ${response.status}`;
+        logger.warn(
+          { resource, action, id: payload.id, status: response.status, error: errMsg },
+          '[ControlPlane] resource sync failed, queuing',
+        );
+        await this.outboundQueue.enqueue('resource_sync', body);
+        return { ok: false, error: errMsg };
+      }
+
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      logger.warn({ err, resource, action, id: payload.id }, '[ControlPlane] resource sync error, queuing');
+      await this.outboundQueue.enqueue('resource_sync', body);
+      return { ok: false, error: msg };
+    }
+  }
+
+  /**
    * Proxy a GET request to the cloud API.
    * Used by daemon routes that need to fetch data from ohwow.fun on behalf of MCP clients.
    */
