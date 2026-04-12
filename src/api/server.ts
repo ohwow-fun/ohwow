@@ -359,7 +359,7 @@ export function createServer(deps: ServerDeps): {
   app.use(errorHandler);
 
   const attachWs = (server: Server) => {
-    attachWebSocket(server, eventBus, sessionToken);
+    attachWebSocket(server, eventBus, sessionToken, config.contentPublicKey);
 
     // Voice WebSocket at /ws/voice
     if (orchestrator) {
