@@ -237,6 +237,7 @@ export class LocalBrowserService {
     const existing = await LocalBrowserService._probeCdp(cdpHttpUrl);
     if (existing) {
       logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
+      await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
       return existing;
     }
 
@@ -290,12 +291,45 @@ export class LocalBrowserService {
       const wsUrl = await LocalBrowserService._probeCdp(cdpHttpUrl);
       if (wsUrl) {
         logger.info(`[browser] Chrome CDP ready on port ${port} (profile: ${effectiveProfile})`);
+        // Give Chrome a moment to render any first-run dialogs (managed
+        // profile notice, keychain prompt) before checking.
+        await new Promise(r => setTimeout(r, 1500));
+        await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
         return wsUrl;
       }
     }
 
     logger.warn('[browser] Chrome launched but CDP did not become ready within 10s');
     return null;
+  }
+
+  /**
+   * Chrome 147 shows a "managed user profile notice" the first time a Google-
+   * signed-in profile is launched from a non-default user-data-dir. Until the
+   * user clicks "Continue" on that dialog, Chrome refuses to load auth cookies
+   * from the profile. We detect that pending state by checking the open tabs
+   * via /json/list, and throw an actionable error so the orchestrator can tell
+   * the user exactly what to click.
+   */
+  private static async _assertNoConsentPending(cdpHttpUrl: string): Promise<void> {
+    try {
+      const res = await fetch(`${cdpHttpUrl}/json/list`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return;
+      const tabs = await res.json() as Array<{ url?: string; type?: string }>;
+      const hasNotice = tabs.some(t =>
+        typeof t.url === 'string' && t.url.startsWith('chrome://managed-user-profile-notice'),
+      );
+      if (hasNotice) {
+        throw new Error(
+          'CHROME_CONSENT_PENDING: Chrome opened your real profile but is waiting for one-time consent. ' +
+          'Switch to the Chrome window showing "Your organization will be able to view some information" ' +
+          'and click Continue, then ask me again. (Chrome blocks auth cookies from loading until you accept.)',
+        );
+      }
+    } catch (err) {
+      // Re-throw the consent error; swallow any unrelated fetch failures.
+      if (err instanceof Error && err.message.startsWith('CHROME_CONSENT_PENDING:')) throw err;
+    }
   }
 
   // ----- CDP helpers -----
@@ -311,28 +345,75 @@ export class LocalBrowserService {
     }
   }
 
+  /**
+   * Detect ONLY the user's "real" Chrome — the one running against their default
+   * Chrome user-data-dir. Stagehand and Playwright/MCP Chromes use temp profile
+   * dirs (e.g. /tmp/, /var/folders/.../stagehand-v3, /Library/Caches/ms-playwright/),
+   * and we must never touch those, since the daemon and our test harness depend on
+   * them.
+   */
   private static _isChromeRunning(
     exec: typeof import('child_process').exec,
     platform: NodeJS.Platform,
   ): Promise<boolean> {
-    const cmd = platform === 'darwin'
+    if (platform === 'win32') {
+      return new Promise(resolve => exec('tasklist /FI "IMAGENAME eq chrome.exe" | findstr chrome.exe', (err) => resolve(!err)));
+    }
+    return LocalBrowserService._findRealChromePids(exec, platform).then(pids => pids.length > 0);
+  }
+
+  private static _findRealChromePids(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<number[]> {
+    const pgrepCmd = platform === 'darwin'
       ? 'pgrep -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
-      : platform === 'win32'
-        ? 'tasklist /FI "IMAGENAME eq chrome.exe" | findstr chrome.exe'
-        : 'pgrep -x chrome';
-    return new Promise(resolve => exec(cmd, (err) => resolve(!err)));
+      : 'pgrep -f "google-chrome|/chrome "';
+    return new Promise(resolve => {
+      exec(pgrepCmd, (err, stdout) => {
+        if (err || !stdout) return resolve([]);
+        const pids = stdout.trim().split('\n').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+        if (pids.length === 0) return resolve([]);
+        // For each pid, check its argv: only count it as "real Chrome" if it
+        // does NOT have --user-data-dir pointing at a temp/test profile dir.
+        Promise.all(pids.map(pid => new Promise<{ pid: number; isReal: boolean }>(res => {
+          exec(`ps -o command= -p ${pid}`, (e, out) => {
+            if (e || !out) return res({ pid, isReal: false });
+            const cmd = out.trim();
+            // Skip if it's a helper subprocess (renderer, GPU, etc).
+            if (/--type=/.test(cmd)) return res({ pid, isReal: false });
+            const dirMatch = cmd.match(/--user-data-dir=([^ ]+)/);
+            const userDataDir = dirMatch ? dirMatch[1] : '';
+            const isTempProfile = !!userDataDir && (
+              userDataDir.includes('/stagehand-v3') ||
+              userDataDir.includes('/ms-playwright') ||
+              userDataDir.includes('/.ohwow/chrome-debug') ||
+              userDataDir.startsWith('/tmp/') ||
+              userDataDir.startsWith('/var/folders/')
+            );
+            // Real Chrome = main process, not a helper, not a test/temp profile.
+            res({ pid, isReal: !isTempProfile });
+          });
+        }))).then(rows => resolve(rows.filter(r => r.isReal).map(r => r.pid)));
+      });
+    });
   }
 
   private static async _quitChrome(
     exec: typeof import('child_process').exec,
     platform: NodeJS.Platform,
   ): Promise<void> {
-    const cmd = platform === 'darwin'
-      ? `osascript -e 'tell application "Google Chrome" to quit'`
-      : platform === 'win32'
-        ? 'taskkill /IM chrome.exe'
-        : 'pkill -TERM chrome';
-    await new Promise<void>(resolve => exec(cmd, () => resolve()));
+    if (platform === 'win32') {
+      await new Promise<void>(resolve => exec('taskkill /IM chrome.exe', () => resolve()));
+    } else if (platform === 'darwin') {
+      await new Promise<void>(resolve => exec(`osascript -e 'tell application "Google Chrome" to quit'`, () => resolve()));
+    } else {
+      // Linux: signal only the real-Chrome pids we identified, leaving Stagehand alone.
+      const pids = await LocalBrowserService._findRealChromePids(exec, platform);
+      if (pids.length > 0) {
+        await new Promise<void>(resolve => exec(`kill -TERM ${pids.join(' ')}`, () => resolve()));
+      }
+    }
     // Give Chrome up to 5s to exit cleanly.
     for (let i = 0; i < 20; i++) {
       await new Promise(r => setTimeout(r, 250));
@@ -344,12 +425,15 @@ export class LocalBrowserService {
     exec: typeof import('child_process').exec,
     platform: NodeJS.Platform,
   ): Promise<void> {
-    const cmd = platform === 'darwin'
-      ? 'pkill -TERM -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
-      : platform === 'win32'
-        ? 'taskkill /F /IM chrome.exe'
-        : 'pkill -KILL chrome';
-    await new Promise<void>(resolve => exec(cmd, () => resolve()));
+    if (platform === 'win32') {
+      await new Promise<void>(resolve => exec('taskkill /F /IM chrome.exe', () => resolve()));
+    } else {
+      // Only signal the user's real Chrome, never Stagehand/Playwright Chromes.
+      const pids = await LocalBrowserService._findRealChromePids(exec, platform);
+      if (pids.length > 0) {
+        await new Promise<void>(resolve => exec(`kill -TERM ${pids.join(' ')}`, () => resolve()));
+      }
+    }
     for (let i = 0; i < 20; i++) {
       await new Promise(r => setTimeout(r, 250));
       if (!(await LocalBrowserService._isChromeRunning(exec, platform))) return;

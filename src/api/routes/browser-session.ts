@@ -16,6 +16,11 @@ import { logger } from '../../lib/logger.js';
 let browserService: LocalBrowserService | null = null;
 let configuredHeadless = false;
 
+/**
+ * Sync getter — returns the existing service, or a bare bundled-Chromium
+ * service if none has been created yet. Used by health checks and any route
+ * that runs after /session/start has already initialized things.
+ */
 function getOrCreateService(opts?: { modelName?: string; modelApiKey?: string }): LocalBrowserService {
   if (!browserService) {
     browserService = new LocalBrowserService({
@@ -24,6 +29,50 @@ function getOrCreateService(opts?: { modelName?: string; modelApiKey?: string })
       modelApiKey: opts?.modelApiKey,
     });
   }
+  return browserService;
+}
+
+/**
+ * Async ensurer — used by /session/start. If the user has Chrome running with
+ * CDP (or we can launch one with the right profile), connect to it so the
+ * session uses their real cookies/logins. Otherwise fall back to bundled
+ * Chromium.
+ */
+async function ensureBrowserService(opts?: {
+  modelName?: string;
+  modelApiKey?: string;
+  chromeProfile?: string;
+  preferRealChrome?: boolean;
+}): Promise<LocalBrowserService> {
+  if (browserService) return browserService;
+
+  let cdpUrl: string | undefined;
+  if (opts?.preferRealChrome !== false) {
+    try {
+      const found = await LocalBrowserService.connectToChrome(9222, opts?.chromeProfile);
+      if (found) {
+        cdpUrl = found;
+        logger.info('[BrowserSession] Using real Chrome via CDP');
+      }
+    } catch (err) {
+      // CHROME_CONSENT_PENDING is actionable — propagate it to the caller so
+      // the orchestrator can tell the user exactly what to click. Other
+      // failures fall through to bundled Chromium.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.startsWith('CHROME_CONSENT_PENDING:')) throw err;
+      logger.warn(
+        { err: msg },
+        '[BrowserSession] Chrome CDP setup failed, falling back to bundled Chromium',
+      );
+    }
+  }
+
+  browserService = new LocalBrowserService({
+    headless: cdpUrl ? false : configuredHeadless,
+    modelName: opts?.modelName,
+    modelApiKey: opts?.modelApiKey,
+    cdpUrl,
+  });
   return browserService;
 }
 
@@ -51,8 +100,17 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.post('/browser/session/start', async (req, res) => {
     try {
-      const { modelName, modelApiKey } = req.body || {};
-      const service = getOrCreateService({ modelName, modelApiKey });
+      const { modelName, modelApiKey, chromeProfile, preferRealChrome } = req.body || {};
+      // Profile can be specified by the caller, or via OHWOW_CHROME_PROFILE
+      // env var, or defaults to 'Default'. The CDP fast-path doesn't care
+      // about this when Chrome is already running with debug port enabled.
+      const effectiveProfile = chromeProfile || process.env.OHWOW_CHROME_PROFILE || undefined;
+      const service = await ensureBrowserService({
+        modelName,
+        modelApiKey,
+        chromeProfile: effectiveProfile,
+        preferRealChrome,
+      });
       await service.ensureBrowser();
       res.json({ success: true });
     } catch (err) {
