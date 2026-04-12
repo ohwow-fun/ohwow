@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { FileAccessGuard } from '../filesystem/filesystem-guard.js';
-import { scrubEnvironment, scrubEnvironmentForGit } from '../../lib/env-scrub.js';
+import { scrubEnvironment, scrubEnvironmentForGit, scrubBashOutput } from '../../lib/env-scrub.js';
 
 // ============================================================================
 // TYPES
@@ -210,9 +210,10 @@ export async function executeBashTool(
   const gitMode = options?.gitEnabled === true && isGitCommand(command);
   const result = await executeCommand(command, cwd, timeoutMs, gitMode);
 
-  // Format output
-  const stdout = truncateOutput(result.stdout, 'stdout');
-  const stderr = truncateOutput(result.stderr, 'stderr');
+  // Format output. Secrets are redacted BEFORE truncation so partial token
+  // fragments don't survive the cut — see scrubBashOutput for pattern list.
+  const stdout = truncateOutput(scrubBashOutput(result.stdout), 'stdout');
+  const stderr = truncateOutput(scrubBashOutput(result.stderr), 'stderr');
 
   const parts = [`Exit code: ${result.exitCode}`];
   if (stdout.length > 0) {

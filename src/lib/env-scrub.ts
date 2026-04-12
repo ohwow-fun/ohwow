@@ -67,3 +67,45 @@ export function scrubEnvironmentForGit(): Record<string, string> {
   }
   return env;
 }
+
+/**
+ * Output-side redaction. Scrubs high-signal token patterns from bash stdout/stderr
+ * before the result reaches model context. Defense-in-depth: agents sometimes
+ * source .env files or run commands that echo credentials. We do not want raw
+ * tokens flowing through chat streams, telemetry, or activity logs.
+ *
+ * Conservative by design — only redacts patterns with near-zero false positive
+ * rate (known prefixes, URI credential syntax). Generic entropy detection is
+ * avoided because it mangles legitimate base64 output.
+ */
+const SECRET_OUTPUT_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  // Fly.io tokens: "FlyV1 fm2_..." or bare "fm2_..." with optional second token after comma
+  { pattern: /FlyV1\s+fm2_[A-Za-z0-9+/=_,-]{40,}/g, label: 'FLY_TOKEN' },
+  { pattern: /\bfm2_[A-Za-z0-9+/=_-]{60,}(?:,fm2_[A-Za-z0-9+/=_-]{60,})?/g, label: 'FLY_TOKEN' },
+  // Anthropic / OpenAI / Google / Groq API keys
+  { pattern: /sk-ant-(?:api|admin)[0-9]*-[A-Za-z0-9_-]{20,}/g, label: 'ANTHROPIC_KEY' },
+  { pattern: /sk-proj-[A-Za-z0-9_-]{20,}/g, label: 'OPENAI_KEY' },
+  { pattern: /\bsk-[A-Za-z0-9]{32,}\b/g, label: 'OPENAI_KEY' },
+  { pattern: /\bgsk_[A-Za-z0-9]{40,}\b/g, label: 'GROQ_KEY' },
+  // GitHub personal / OAuth / app tokens
+  { pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, label: 'GITHUB_TOKEN' },
+  // Postgres / generic URI credentials "scheme://user:password@host"
+  { pattern: /([a-z][a-z0-9+.-]{2,}):\/\/([^:/@\s]+):([^@\s]+)@/gi, label: 'URI_CREDENTIAL' },
+  // Supabase service role / anon JWTs (eyJ + two more base64 segments, 100+ chars)
+  { pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/g, label: 'JWT' },
+  // AWS access key id + secret access key
+  { pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, label: 'AWS_KEY_ID' },
+];
+
+export function scrubBashOutput(text: string): string {
+  if (!text) return text;
+  let out = text;
+  for (const { pattern, label } of SECRET_OUTPUT_PATTERNS) {
+    if (label === 'URI_CREDENTIAL') {
+      out = out.replace(pattern, (_m, scheme, user) => `${scheme}://${user}:[REDACTED:${label}]@`);
+    } else {
+      out = out.replace(pattern, `[REDACTED:${label}]`);
+    }
+  }
+  return out;
+}
