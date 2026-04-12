@@ -74,8 +74,30 @@ export function attachWebSocket(
   sessionToken: string,
   contentPublicKey?: JsonWebKey,
 ): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  // Use noServer mode and route upgrades manually. The daemon attaches three
+  // WebSocketServers (/ws, /ws/terminal, /ws/voice) to the same HTTP server;
+  // if each had its own `{ server, path }` wiring they'd all register upgrade
+  // listeners on the HTTP server. For any given upgrade request one handles
+  // it correctly but the others see a path mismatch and leave the socket in
+  // a state where Node's HTTP parser picks up the first WS frame as a new
+  // HTTP request, fails to parse it, and sends "400 Bad Request" on the same
+  // TCP connection. The WS client sees the 400 bytes after the 101 Switching
+  // Protocols and reports "Invalid WebSocket frame: RSV1 must be clear" /
+  // "Invalid frame header" because the `H` in `HTTP/1.1` has the RSV1 bit
+  // (0x40) set when interpreted as a WS frame byte.
+  //
+  // perMessageDeflate is also disabled because it has its own RSV1 hazards
+  // and compression isn't worth it for small JSON events.
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
   const verifyToken = createWsAuthVerifier({ sessionToken, cloudPublicKey: contentPublicKey });
+
+  server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url || '/', `http://${request.headers.host}`);
+    if (url.pathname !== '/ws') return;
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
 
   // Heartbeat: ping every 30s, terminate unresponsive clients
   const heartbeat = setInterval(() => {

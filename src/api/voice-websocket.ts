@@ -47,7 +47,18 @@ interface VoiceClient extends WebSocket {
 export function attachVoiceWebSocket(deps: VoiceWebSocketDeps): WebSocketServer {
   const { server, sessionToken, createVoiceSession } = deps;
 
-  const wss = new WebSocketServer({ server, path: '/ws/voice' });
+  // noServer mode so multiple ws servers can share the same HTTP server
+  // without stepping on each other's upgrade events. See websocket.ts for
+  // the full explanation.
+  const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+
+  server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url || '/', `http://${request.headers.host}`);
+    if (url.pathname !== '/ws/voice') return;
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
 
   // Heartbeat
   const heartbeat = setInterval(() => {
