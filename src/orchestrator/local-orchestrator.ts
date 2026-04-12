@@ -17,7 +17,7 @@ import type {
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
-import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { invalidateBashAccessCache } from './tools/bash.js';
 import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
@@ -1097,7 +1097,7 @@ export class LocalOrchestrator {
 
     // Build tool list (conditionally includes filesystem tools, filtered by intent for Anthropic)
     // Apply tool embodiment: compress descriptions for mastered tools (Merleau-Ponty)
-    const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated);
+    const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated, undefined, userMessage);
     const cloudToolCount = rawTools.filter(t => t.name.startsWith('cloud_')).length;
     logger.info({ toolCount: rawTools.length, cloudToolCount, sections: [...(sections ?? [])] }, '[orchestrator] Anthropic path tool list');
     const tools = this.brain ? this.brain.applyEmbodiment(rawTools) : rawTools;
@@ -1573,6 +1573,7 @@ export class LocalOrchestrator {
     sections?: Set<IntentSection>,
     desktopPreActivated?: boolean,
     maxPriority?: 1 | 2 | 3,
+    userMessageForToolExtraction?: string,
   ): Promise<Tool[]> {
     let tools = options?.excludedTools?.length
       ? ORCHESTRATOR_TOOL_DEFINITIONS.filter((t) => !options.excludedTools.includes(t.name))
@@ -1604,9 +1605,17 @@ export class LocalOrchestrator {
     // Append MCP tools (skip intent filtering — MCP tools aren't in TOOL_SECTION_MAP)
     const mcpTools = this.mcpClients?.getToolDefinitions() ?? [];
 
-    // Filter by intent sections and priority when provided
+    // Filter by intent sections and priority when provided. Explicit
+    // tool names mentioned in the user message bypass the filter — if
+    // the user writes "call upload_knowledge" or mentions any other
+    // snake_case tool name, that tool must always be loaded regardless
+    // of intent classification. This is the safety valve for classifier
+    // misses, especially around word-boundary quirks with underscores.
     if (sections) {
-      tools = filterToolsByIntent(tools, sections, maxPriority);
+      const explicitNames = userMessageForToolExtraction
+        ? extractExplicitToolNames(userMessageForToolExtraction, tools)
+        : undefined;
+      tools = filterToolsByIntent(tools, sections, maxPriority, explicitNames);
     }
 
     // Add MCP tools after filtering (they pass through since they're not mapped)
@@ -1854,7 +1863,7 @@ export class LocalOrchestrator {
     }
 
     // Tools: full set with embodiment (same as Anthropic path)
-    const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated);
+    const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated, undefined, userMessage);
     const embeddedTools = this.brain ? this.brain.applyEmbodiment(rawTools) : rawTools;
     let openaiTools = convertToolsToOpenAI(embeddedTools);
     logger.info({ toolCount: openaiTools.length, sections: [...(sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
@@ -2467,7 +2476,7 @@ export class LocalOrchestrator {
     }
 
     // Convert Anthropic tool definitions to OpenAI format (with priority filtering)
-    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated, priorityLimit);
+    const anthropicTools = await this.getTools(options, browserPreActivated || this.browserActivated, classified.sections, desktopPreActivated || this.desktopActivated, priorityLimit, userMessage);
     let openaiTools = convertToolsToOpenAI(anthropicTools);
     if (priorityLimit < 3) {
       logger.debug(`[orchestrator] Progressive tool revelation: P${priorityLimit} limit, ${anthropicTools.length} tools (model: ${modelSizeGB}GB, ctx: ${numCtx})`);

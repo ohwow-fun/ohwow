@@ -2580,13 +2580,51 @@ export function getToolPriorityLimit(modelSizeGB: number, availableContextTokens
 }
 
 /**
+ * Detect explicit tool-name mentions in a user message. When the user
+ * literally writes `upload_knowledge`, `delete_knowledge`, `run_bash`,
+ * or any other snake_case tool name, those tools must always be loaded
+ * regardless of which intent the classifier picks. Otherwise word-boundary
+ * quirks around underscores (`\bknowledge\b` doesn't match inside
+ * `upload_knowledge`) cause the classifier to miss intent and the model
+ * reports "tool not available" for a tool the user literally named.
+ *
+ * Returns the set of tool names found in the text. Matches are exact
+ * (whole identifier) and case-sensitive, so incidental prose won't trigger.
+ */
+export function extractExplicitToolNames(text: string, allTools: Tool[]): Set<string> {
+  if (!text) return new Set();
+  const hits = new Set<string>();
+  // Single regex pass over the text: match any snake_case identifier of
+  // reasonable length. Then intersect with the known tool set. Cheap and
+  // robust — O(text length) + O(tools).
+  const idents = text.match(/\b[a-z][a-z0-9_]{2,}\b/g);
+  if (!idents) return hits;
+  const toolNameSet = new Set(allTools.map((t) => t.name));
+  for (const id of idents) {
+    if (toolNameSet.has(id)) hits.add(id);
+  }
+  return hits;
+}
+
+/**
  * Filter tools to only those relevant to the active intent sections.
  * When `maxPriority` is set, additionally filters out tools above that priority tier.
  * Tools not in TOOL_SECTION_MAP or in ALWAYS_INCLUDED_TOOLS are always kept.
+ *
+ * `explicitToolNames` is a set of tool names the user literally named in
+ * their prompt — those tools bypass intent and priority filters entirely.
+ * This is the safety valve for classifier misses: if the user says "call
+ * upload_knowledge", that tool is always in the loaded set.
  */
-export function filterToolsByIntent(tools: Tool[], sections: Set<IntentSection>, maxPriority?: 1 | 2 | 3): Tool[] {
+export function filterToolsByIntent(
+  tools: Tool[],
+  sections: Set<IntentSection>,
+  maxPriority?: 1 | 2 | 3,
+  explicitToolNames?: Set<string>,
+): Tool[] {
   return tools.filter((t) => {
     if (ALWAYS_INCLUDED_TOOLS.has(t.name)) return true;
+    if (explicitToolNames?.has(t.name)) return true;
 
     // Priority filter
     if (maxPriority) {
