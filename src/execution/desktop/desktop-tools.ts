@@ -36,10 +36,17 @@ export const DESKTOP_ACTIVATION_MESSAGE = `Desktop control activated. You now ha
 - desktop_scroll: Scroll at position
 - desktop_drag: Click-drag between two points
 - desktop_move_window: Move frontmost window to a different display
-- desktop_focus_app: Bring a specific app to the foreground (ALWAYS use this before typing in an app)
+- desktop_focus_app: Bring a specific app to the foreground (ALWAYS use this before typing in an app). For Google Chrome, also pass chrome_profile to target the right profile.
+- desktop_list_chrome_profiles: Enumerate all Chrome profiles with their directory names and emails. Use this before desktop_focus_app when the task needs a specific Chrome profile (e.g. the one logged into x.com).
 - desktop_wait: Pause for a duration
 
-Workflow: focus the app first (desktop_focus_app), screenshot to see it, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.`;
+Workflow: focus the app first (desktop_focus_app), screenshot to see it, then click/type/key to interact. A screenshot is automatically taken after each action so you can see the result.
+
+Chrome profile workflow for tasks like "check my X messages" or "post to my Twitter":
+1. desktop_list_chrome_profiles to see which profiles exist
+2. Pick the one whose email matches the target account
+3. desktop_focus_app(app: "Google Chrome", chrome_profile: "<directory>") to open a window in that profile
+4. Navigate and interact`;
 
 /**
  * Build the desktop system prompt, optionally including multi-monitor layout info.
@@ -231,7 +238,7 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'desktop_focus_app',
     description:
-      'Bring a specific application to the foreground. ALWAYS call this before typing or clicking in an app to make sure it is focused. More reliable than Cmd+Tab or Spotlight.',
+      'Bring a specific application to the foreground. ALWAYS call this before typing or clicking in an app to make sure it is focused. More reliable than Cmd+Tab or Spotlight. For Google Chrome on a machine with multiple profiles, ALSO pass chrome_profile to target the right profile — without it you get whatever profile was last frontmost, which on dev machines is almost never the one logged into the target site. Use desktop_list_chrome_profiles first to discover profile directory names and emails.',
     input_schema: {
       type: 'object',
       properties: {
@@ -239,8 +246,21 @@ export const DESKTOP_TOOL_DEFINITIONS: Tool[] = [
           type: 'string',
           description: 'Application name exactly as macOS knows it (e.g. "Google Chrome", "Visual Studio Code", "Terminal", "Discord", "Finder")',
         },
+        chrome_profile: {
+          type: 'string',
+          description: 'Chrome profile directory name (e.g. "Profile 1", "Default", "Profile 4"). Only meaningful for Chrome-family apps. When set, launches Chrome with --profile-directory=<value> which raises (or opens) a window belonging to that specific profile. Get valid directory names from desktop_list_chrome_profiles.',
+        },
       },
       required: ['app'],
+    },
+  },
+  {
+    name: 'desktop_list_chrome_profiles',
+    description:
+      'Enumerate every Chrome profile on this machine with its directory name (e.g. "Profile 1"), display name, and primary email. Use this to pick the right profile for a task before calling desktop_focus_app. Essential when the user has multiple Chrome profiles (dev, personal, social) and the task needs the session/cookies of a specific one.',
+    input_schema: {
+      type: 'object',
+      properties: {},
     },
   },
   {
@@ -289,6 +309,7 @@ const DESKTOP_TOOL_NAMES = new Set([
   'desktop_focus_app',
   'desktop_focus_window',
   'desktop_list_windows',
+  'desktop_list_chrome_profiles',
 ]);
 
 /** Check if a tool name is a desktop tool */
@@ -373,13 +394,20 @@ function mapToolToAction(
       return { type: 'move_window', display: input.display as number };
 
     case 'desktop_focus_app':
-      return { type: 'focus_app', appName: input.app as string };
+      return {
+        type: 'focus_app',
+        appName: input.app as string,
+        chromeProfile: typeof input.chrome_profile === 'string' ? input.chrome_profile : undefined,
+      };
 
     case 'desktop_focus_window':
       return { type: 'focus_window', appName: input.app as string, titleContains: input.title_contains as string | undefined };
 
     case 'desktop_list_windows':
       return { type: 'list_windows' };
+
+    case 'desktop_list_chrome_profiles':
+      return { type: 'list_chrome_profiles' };
 
     default:
       return null;

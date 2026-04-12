@@ -24,7 +24,8 @@ export type DesktopActionType =
   | 'move_window'
   | 'focus_app'
   | 'focus_window'
-  | 'list_windows';
+  | 'list_windows'
+  | 'list_chrome_profiles';
 
 // ============================================================================
 // DESKTOP ACTIONS (tool inputs for the LLM)
@@ -43,9 +44,22 @@ export interface DesktopMouseMoveAction { type: 'mouse_move'; x: number; y: numb
 export interface DesktopWaitAction { type: 'wait'; duration: number }
 export interface DesktopLeftClickDragAction { type: 'left_click_drag'; startX: number; startY: number; endX: number; endY: number }
 export interface DesktopMoveWindowAction { type: 'move_window'; display: number }
-export interface DesktopFocusAppAction { type: 'focus_app'; appName: string }
+export interface DesktopFocusAppAction {
+  type: 'focus_app';
+  appName: string;
+  /**
+   * For Chrome-family apps only: the profile directory to target, e.g.
+   * "Profile 1" or "Default". When set, the handler raises (or launches)
+   * a window belonging to that specific profile instead of whichever
+   * profile happens to be most recently frontmost. Essential on machines
+   * with multiple Chrome profiles (dev, personal, social account) since
+   * bare `tell Chrome to activate` is profile-blind.
+   */
+  chromeProfile?: string;
+}
 export interface DesktopFocusWindowAction { type: 'focus_window'; appName: string; titleContains?: string }
 export interface DesktopListWindowsAction { type: 'list_windows' }
+export interface DesktopListChromeProfilesAction { type: 'list_chrome_profiles' }
 
 export type DesktopAction =
   | DesktopScreenshotAction
@@ -63,7 +77,8 @@ export type DesktopAction =
   | DesktopMoveWindowAction
   | DesktopFocusAppAction
   | DesktopFocusWindowAction
-  | DesktopListWindowsAction;
+  | DesktopListWindowsAction
+  | DesktopListChromeProfilesAction;
 
 // ============================================================================
 // ACTION RESULTS

@@ -64,8 +64,11 @@ function describeAction(action: DesktopAction, appName: string | null): string {
     case 'scroll': return `Scroll ${action.direction} at (${action.x}, ${action.y})${inApp}`;
     case 'left_click_drag': return `Drag from (${action.startX}, ${action.startY}) to (${action.endX}, ${action.endY})${inApp}`;
     case 'move_window': return `Move window to display ${action.display}`;
-    case 'focus_app': return `Focus ${action.appName}`;
+    case 'focus_app': return action.chromeProfile
+      ? `Focus ${action.appName} (profile: ${action.chromeProfile})`
+      : `Focus ${action.appName}`;
     case 'list_windows': return 'List open windows';
+    case 'list_chrome_profiles': return 'List Chrome profiles';
     default: return `${action.type}${inApp}`;
   }
 }
@@ -532,12 +535,104 @@ end tell`;
           break;
         }
 
+        case 'list_chrome_profiles': {
+          // Enumerate every Chrome profile on this machine with its
+          // directory name, display name, and primary email. The
+          // directory name (e.g. "Profile 1") is what desktop_focus_app's
+          // chromeProfile param expects. Reads Chrome's Preferences JSON
+          // directly so it works even when Chrome isn't running.
+          try {
+            const { readdirSync, readFileSync, existsSync } = await import('fs');
+            const { join } = await import('path');
+            const { homedir } = await import('os');
+            const chromeDir = join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
+            if (!existsSync(chromeDir)) {
+              result = {
+                success: true,
+                type: 'list_chrome_profiles',
+                content: 'No Chrome data directory found at ~/Library/Application Support/Google/Chrome. Is Chrome installed?',
+              };
+              break;
+            }
+            const profiles: Array<{ directory: string; name: string; email: string }> = [];
+            for (const entry of readdirSync(chromeDir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              if (entry.name !== 'Default' && !entry.name.startsWith('Profile ')) continue;
+              const prefsPath = join(chromeDir, entry.name, 'Preferences');
+              if (!existsSync(prefsPath)) continue;
+              try {
+                const prefs = JSON.parse(readFileSync(prefsPath, 'utf-8')) as {
+                  profile?: { name?: string };
+                  account_info?: Array<{ email?: string }>;
+                };
+                const name = prefs.profile?.name || entry.name;
+                const email = prefs.account_info?.[0]?.email || '';
+                profiles.push({ directory: entry.name, name, email });
+              } catch { /* skip corrupt */ }
+            }
+            if (profiles.length === 0) {
+              result = {
+                success: true,
+                type: 'list_chrome_profiles',
+                content: 'No Chrome profiles found.',
+              };
+              break;
+            }
+            const lines = profiles.map((p, i) =>
+              `${i + 1}. directory="${p.directory}" name="${p.name}" email="${p.email || '(none)'}"`,
+            );
+            result = {
+              success: true,
+              type: 'list_chrome_profiles',
+              content: `Chrome profiles on this machine:\n${lines.join('\n')}\n\nTo open a specific profile, call desktop_focus_app with app="Google Chrome" and chrome_profile=<directory>.`,
+            };
+          } catch (err) {
+            result = {
+              success: false,
+              type: 'list_chrome_profiles',
+              error: `Couldn't enumerate Chrome profiles: ${err instanceof Error ? err.message : err}`,
+            };
+          }
+          break;
+        }
+
         case 'focus_app': {
           try {
-            const { execSync } = await import('child_process');
+            const { execSync, execFileSync } = await import('child_process');
             const escapedName = action.appName.replace(/"/g, '\\"');
-            execSync(`osascript -e 'tell application "${escapedName}" to activate'`, { timeout: 5000 });
-            await new Promise(r => setTimeout(r, 500));
+            const isChromeFamily = /^(google chrome|chrome|chromium|brave browser|arc|microsoft edge)$/i
+              .test(action.appName);
+
+            if (isChromeFamily && action.chromeProfile) {
+              // Profile-aware Chrome activation. `tell Chrome to activate` is
+              // profile-blind — it raises whichever Chrome window was most
+              // recently frontmost, which on machines with many profiles
+              // (dev, personal, social) is the wrong one ~100% of the time.
+              //
+              // The fix is to launch Chrome with --profile-directory=<dir>,
+              // which Chrome interprets as "raise (or open) a window in
+              // that profile". We use `open -a` (the macOS launcher) so
+              // the OS handles activation semantics including focus, mouse,
+              // and menu bar.
+              try {
+                execFileSync('/usr/bin/open', [
+                  '-a', action.appName,
+                  '--args',
+                  `--profile-directory=${action.chromeProfile}`,
+                ], { timeout: 5000 });
+              } catch (err) {
+                result = {
+                  success: false,
+                  type: 'focus_app',
+                  error: `Couldn't launch ${action.appName} with profile "${action.chromeProfile}": ${err instanceof Error ? err.message : err}`,
+                };
+                break;
+              }
+              await new Promise(r => setTimeout(r, 800));
+            } else {
+              execSync(`osascript -e 'tell application "${escapedName}" to activate'`, { timeout: 5000 });
+              await new Promise(r => setTimeout(r, 500));
+            }
 
             // Verify the activation actually succeeded. `tell ... to activate`
             // is a request, not a guarantee — macOS can refuse to bring an app
