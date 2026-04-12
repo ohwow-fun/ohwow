@@ -604,22 +604,48 @@ end tell`;
               .test(action.appName);
 
             if (isChromeFamily && action.chromeProfile) {
-              // Profile-aware Chrome activation. `tell Chrome to activate` is
-              // profile-blind — it raises whichever Chrome window was most
-              // recently frontmost, which on machines with many profiles
-              // (dev, personal, social) is the wrong one ~100% of the time.
+              // Profile-aware Chrome activation. `tell Chrome to activate`
+              // is profile-blind, and `open -a Chrome --args
+              // --profile-directory=X` is *also* effectively profile-blind
+              // when Chrome is already running — it just re-activates
+              // whichever window was most recently frontmost, silently
+              // ignoring --profile-directory. The only reliable way to
+              // force a NEW window in a specific profile is to spawn
+              // Chrome's binary directly with --new-window and pass the
+              // profile flag.
               //
-              // The fix is to launch Chrome with --profile-directory=<dir>,
-              // which Chrome interprets as "raise (or open) a window in
-              // that profile". We use `open -a` (the macOS launcher) so
-              // the OS handles activation semantics including focus, mouse,
-              // and menu bar.
+              // We locate the binary at the standard macOS path first,
+              // then fall back to `open` as a last resort.
+              const escapedProfile = action.chromeProfile.replace(/"/g, '\\"');
+              const binaryPaths = [
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+                '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+                '/Applications/Chromium.app/Contents/MacOS/Chromium',
+              ];
+              const { existsSync: existsSyncFs } = await import('fs');
+              const binaryPath = binaryPaths.find((p) => existsSyncFs(p));
               try {
-                execFileSync('/usr/bin/open', [
-                  '-a', action.appName,
-                  '--args',
-                  `--profile-directory=${action.chromeProfile}`,
-                ], { timeout: 5000 });
+                if (binaryPath) {
+                  // Spawn detached so Chrome takes over the process;
+                  // don't hold the daemon hostage waiting for Chrome
+                  // to exit.
+                  const { spawn: spawnChild } = await import('child_process');
+                  const child = spawnChild(
+                    binaryPath,
+                    [`--profile-directory=${escapedProfile}`, '--new-window'],
+                    { detached: true, stdio: 'ignore' },
+                  );
+                  child.unref();
+                } else {
+                  // Fallback: use `open` (works at least for fresh Chrome launches)
+                  execFileSync('/usr/bin/open', [
+                    '-a', action.appName,
+                    '--args',
+                    `--profile-directory=${action.chromeProfile}`,
+                    '--new-window',
+                  ], { timeout: 5000 });
+                }
               } catch (err) {
                 result = {
                   success: false,
@@ -628,7 +654,8 @@ end tell`;
                 };
                 break;
               }
-              await new Promise(r => setTimeout(r, 800));
+              // Chrome takes longer to open a new window than a re-activation
+              await new Promise(r => setTimeout(r, 1500));
             } else {
               execSync(`osascript -e 'tell application "${escapedName}" to activate'`, { timeout: 5000 });
               await new Promise(r => setTimeout(r, 500));
