@@ -328,6 +328,7 @@ export class RuntimeEngine {
       desktopOptions: opts.desktopOptions,
       docMountManager: this.docMountManager,
       gitEnabled: opts.gitEnabled,
+      modelRouter: this.modelRouter,
     };
   }
 

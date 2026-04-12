@@ -14,6 +14,7 @@ import type { LocalDesktopService } from '../desktop/local-desktop.service.js';
 import type { DesktopServiceOptions } from '../desktop/desktop-types.js';
 import type { CircuitBreaker } from '../../orchestrator/error-recovery.js';
 import type { DocMountManager } from '../doc-mounts/mount-manager.js';
+import type { ModelRouter } from '../model-router.js';
 
 /** Context shared across all tool executors for a single task execution */
 export interface ToolExecutionContext {
@@ -40,6 +41,12 @@ export interface ToolExecutionContext {
   docMountManager: DocMountManager | null;
   /** Whether git-aware env scrubbing is enabled (preserves SSH_AUTH_SOCK for git push) */
   gitEnabled?: boolean;
+  /**
+   * Model router for the `llm` organ. Exposes per-sub-task provider +
+   * model selection to tool executors so agents can act as mini
+   * sub-orchestrators instead of being pinned to a single model.
+   */
+  modelRouter: ModelRouter | null;
 }
 
 /** Result from a tool execution */

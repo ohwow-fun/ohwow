@@ -18,6 +18,7 @@ function makeCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContex
     desktopService: null,
     desktopActivated: false,
     docMountManager: null,
+    modelRouter: null,
     ...overrides,
   };
 }

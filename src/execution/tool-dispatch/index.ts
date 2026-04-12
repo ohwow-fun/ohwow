@@ -17,11 +17,13 @@ import { bashExecutor } from './bash-executor.js';
 import { mcpExecutor } from './mcp-executor.js';
 import { stateExecutor } from './state-executor.js';
 import { docMountExecutor } from '../doc-mounts/doc-mount-executor.js';
+import { llmExecutor } from './llm-executor.js';
 
 /** Create a registry with all default tool executors */
 export function createDefaultToolRegistry(): ToolExecutorRegistry {
   const registry = new ToolExecutorRegistry();
   // Order matters: request_* must be checked before full tool executors
+  registry.register(llmExecutor);
   registry.register(requestDesktopExecutor);
   registry.register(desktopExecutor);
   registry.register(requestBrowserExecutor);
