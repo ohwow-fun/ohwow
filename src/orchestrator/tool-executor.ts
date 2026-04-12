@@ -271,12 +271,28 @@ export async function* executeToolCall(
   }
 
   // Observation tools must always re-execute — screen/page state changes between actions
-  const isObservationTool = /^(desktop_screenshot|browser_snapshot|browser_screenshot|browser_take_screenshot)$/.test(request.name)
+  const isObservationTool = /^(desktop_screenshot|browser_snapshot|browser_screenshot|browser_take_screenshot|desktop_list_windows)$/.test(request.name)
     || /^mcp__.*__(browser_snapshot|browser_take_screenshot)$/.test(request.name);
+
+  // State-mutating tools must also always re-execute. Deduping them is
+  // wrong on two counts:
+  //   1. The same input can legitimately be re-applied (press cmd+l
+  //      twice, write the same bytes twice, send the same whatsapp twice).
+  //   2. When the model gets confused and retries, dedup silently
+  //      no-ops the action AND echoes the old "Done" — which reinforces
+  //      the confusion into a hard loop. We saw this live on 2026-04-12
+  //      where an X-messages task burned 737k tokens bouncing between
+  //      identical desktop_key/desktop_type calls that were all cached.
+  // Covers: desktop keyboard/mouse/window actions, browser actions,
+  // filesystem writes, bash, create/update/delete/upload/send/run verbs,
+  // A2A / workflow / agent dispatch, and messaging sends.
+  const isStateMutating = /^(desktop_(key|type|click|scroll|drag|hotkey|focus|wait|move_mouse|double_click|right_click|triple_click|paste|press)|browser_(click|type|navigate|scroll|drag|press_key|fill|select|wait_for|hover|file_upload|handle_dialog|back|forward|reload|evaluate|close|resize|open_new_tab|switch_tab|go_to)|local_(write_file|edit_file|delete_file|move_file|copy_file)|run_bash|save_deliverable|upload_knowledge|add_knowledge_from_url|delete_knowledge|assign_knowledge|create_contact|update_contact|delete_contact|log_contact_event|create_project|update_project|delete_project|create_goal|update_goal|link_task_to_goal|link_project_to_goal|create_workflow|update_workflow|delete_workflow|generate_workflow|create_workflow_trigger|update_workflow_trigger|delete_workflow_trigger|create_automation|propose_automation|run_workflow|run_agent|run_sequence|spawn_agents|queue_task|retry_task|cancel_task|approve_task|reject_task|update_agent_status|update_agent_schedule|send_whatsapp_message|send_telegram_message|connect_whatsapp|disconnect_whatsapp|add_whatsapp_chat|remove_whatsapp_chat|update_whatsapp_chat|send_a2a_task|evolve_task|delegate_to_peer|ask_peer|set_agent_state|delete_agent_state|override_transition_stage|schedule_team_council|rebalance_workload|mount_docs|unmount_docs|build_pillar|update_pillar_status|create_skill_path|record_skill_assessment|trigger_pre_work|record_routing_outcome|route_task|generate_slides|export_slides_to_pdf|generate_music|generate_video|generate_voice|transcribe_audio|start_meeting_listener|stop_meeting_listener|openclaw_import_skill|openclaw_remove_skill|pdf_fill_form|start_person_ingestion|update_person_model|add_connector|remove_connector|sync_connector|test_connector)$/.test(request.name)
+    || /^mcp__.*__(browser_(click|type|navigate|scroll|drag|press_key|fill|select|hover|file_upload|handle_dialog|back|forward|reload|evaluate|close|resize|run_code))$/.test(request.name)
+    || /^llm$/.test(request.name); // llm is also non-idempotent (each call is a fresh LLM roll)
 
   // Deduplicate: return cached result for identical tool+input (per-turn)
   const toolKey = `${request.name}:${stableKey(toolInput)}`;
-  if (!isObservationTool) {
+  if (!isObservationTool && !isStateMutating) {
     const cachedResult = ctx.executedToolCalls.get(toolKey);
     if (cachedResult) {
       yield { type: 'tool_done', name: request.name, result: cachedResult };

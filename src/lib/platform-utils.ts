@@ -34,6 +34,42 @@ export function commandExists(cmd: string): boolean {
 }
 
 /**
+ * Resolve a command to its absolute path via `command -v` (POSIX) or
+ * `where.exe` (Windows). Returns null when not found. Use this instead of
+ * {@link commandExists} when you need to spawn the binary — the daemon's
+ * subprocess environment sometimes has a stripped PATH that breaks bare
+ * name lookups even though /bin/sh can still resolve them.
+ *
+ * Caught live on 2026-04-12: the scrapling sidecar was spawning with
+ * `spawn('python3', ...)` which returned ENOENT because the daemon's
+ * process.env.PATH didn't include /usr/bin, while commandExists returned
+ * true because /bin/sh -c 'command -v python3' has its own PATH resolution.
+ */
+export function resolveCommandPath(cmd: string): string | null {
+  if (!SAFE_CMD_RE.test(cmd)) return null;
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('where.exe', [cmd], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 3000,
+        encoding: 'utf-8',
+      });
+      const firstLine = out.split(/\r?\n/)[0]?.trim();
+      return firstLine || null;
+    }
+    const out = execFileSync('/bin/sh', ['-c', `command -v ${cmd}`], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 3000,
+      encoding: 'utf-8',
+    });
+    const trimmed = out.trim();
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Detect the system package manager on Linux.
  * Returns the manager name and its install command prefix, or null on non-Linux / unknown.
  */
@@ -93,21 +129,23 @@ export function popplerInstallHint(): string {
 
 /**
  * Find a working Python command (python3 or python).
- * Returns the command name or null if neither is found.
+ * Returns the absolute path to the binary so callers can spawn it
+ * without depending on the subprocess PATH. Returns null if neither
+ * is found.
  */
 export function findPythonCommand(): string | null {
-  if (commandExists('python3')) return 'python3';
-  if (commandExists('python')) return 'python';
-  return null;
+  return resolveCommandPath('python3') || resolveCommandPath('python');
 }
 
 /**
  * Find a working pip command (pip3 or pip).
- * Returns the command name or null if neither is found.
+ * Returns the absolute path to the binary so callers can spawn it
+ * without depending on the subprocess PATH. Returns null if neither
+ * is found.
  */
 export function findPipCommand(): string | null {
-  if (commandExists('pip3')) return 'pip3';
-  if (commandExists('pip')) return 'pip';
+  if (resolveCommandPath('pip3')) return resolveCommandPath('pip3');
+  if (resolveCommandPath('pip')) return resolveCommandPath('pip');
   return null;
 }
 

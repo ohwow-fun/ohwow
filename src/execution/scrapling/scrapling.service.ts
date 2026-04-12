@@ -76,6 +76,20 @@ export class ScraplingService {
     let stderrBuffer = '';
     let portInUseDetected = false;
 
+    // Spawn with an explicit augmented PATH: if the daemon started with a
+    // stripped PATH (e.g. via a nohup-ed launcher), inheriting process.env
+    // is not enough and child processes that exec other binaries by name
+    // (pip, scrapling, playwright install) fail with ENOENT. Prepend the
+    // directory containing pythonCmd (which is now an absolute path) plus
+    // common bin directories so sub-spawned tools still find their
+    // siblings.
+    const { dirname: pathDirname } = await import('path');
+    const pythonDir = pathDirname(pythonCmd);
+    const extraPathDirs = [pythonDir, '/usr/local/bin', '/opt/homebrew/bin', '/usr/bin', '/bin'];
+    const augmentedPath = Array.from(
+      new Set([...extraPathDirs, ...(process.env.PATH ?? '').split(':').filter(Boolean)]),
+    ).join(':');
+
     this.process = spawn(pythonCmd, [
       '-m', 'uvicorn',
       'server:app',
@@ -85,7 +99,7 @@ export class ScraplingService {
     ], {
       cwd: this.serverPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, PATH: augmentedPath },
     });
 
     // Capture stderr for debugging and port-in-use detection

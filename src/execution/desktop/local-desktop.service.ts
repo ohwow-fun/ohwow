@@ -539,6 +539,43 @@ end tell`;
             execSync(`osascript -e 'tell application "${escapedName}" to activate'`, { timeout: 5000 });
             await new Promise(r => setTimeout(r, 500));
 
+            // Verify the activation actually succeeded. `tell ... to activate`
+            // is a request, not a guarantee — macOS can refuse to bring an app
+            // forward if another app is grabbing focus, if the target has no
+            // visible windows on the active Space, or if window-server is
+            // busy. Without this check we silently return "Done" while the
+            // frontmost app is still something else, and the next desktop_key
+            // / desktop_type sends input to the wrong window (blocked by the
+            // terminal-safety guard in a cruel surprise).
+            let frontmost: string | null = null;
+            try {
+              frontmost = execSync(
+                `osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null`,
+                { encoding: 'utf-8', timeout: 3000 },
+              ).trim().toLowerCase();
+            } catch {
+              frontmost = null;
+            }
+            const wantedLower = action.appName.toLowerCase();
+            const focusVerified =
+              frontmost !== null &&
+              (frontmost === wantedLower ||
+                frontmost.includes(wantedLower) ||
+                wantedLower.includes(frontmost));
+
+            if (!focusVerified) {
+              result = {
+                success: false,
+                type: 'focus_app',
+                error:
+                  `Tried to focus "${action.appName}" but the frontmost app is "${frontmost ?? 'unknown'}". ` +
+                  `The target app may be on a different macOS Space, minimized, or without a visible window on the active display. ` +
+                  `Try: (1) desktop_list_windows to see where it is, (2) desktop_focus_window with a title_contains filter, ` +
+                  `or (3) unhide/bring the window to the active Space first.`,
+              };
+              break;
+            }
+
             // Auto-detect which display the focused app is on for correct screenshots
             try {
               const posScript = `tell application "System Events" to tell process "${escapedName}" to get position of front window`;

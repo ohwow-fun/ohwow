@@ -66,10 +66,19 @@ export async function ensureScraplingInstalled(): Promise<void> {
     });
   }
 
-  // Install browser binaries
+  // Install browser binaries. Run as `python3 -m scrapling install` instead
+  // of bare `scrapling` so we don't depend on the daemon's subprocess PATH
+  // having the pip-installed scripts directory — caught live when the
+  // daemon logged `/bin/sh: scrapling: command not found` before every
+  // failed scrape_url call.
   logger.info('[Scrapling] Installing browser binaries (this may take a few minutes)...');
+  const pythonCmd = findPythonCommand();
+  if (!pythonCmd) {
+    logger.warn('[Scrapling] Python unavailable; skipping browser binary install.');
+    return;
+  }
   try {
-    execSync('scrapling install', {
+    execFileSync(pythonCmd, ['-m', 'scrapling', 'install'], {
       stdio: 'inherit',
       timeout: 600000, // 10 minutes
     });
