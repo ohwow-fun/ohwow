@@ -222,9 +222,26 @@ export async function generateMusic(
       bpm,
     });
 
+    // Return a relative URL (leading slash, no host). The cloud chat route
+    // rewrites this to an absolute URL using the active runtime base —
+    // loopback in dev, tunnel URL when the cloud calls back into a remote
+    // local runtime. That way one tool works identically in local-dev and
+    // cloud+local modes without the tool itself needing to know which.
+    const audio_url = `/media/audio/${encodeURIComponent(result.filename)}`;
+    const download_url = `${audio_url}?download=1`;
+
     return {
       success: true,
-      data: result.message,
+      data: {
+        audio_url,
+        download_url,
+        path: result.path,
+        filename: result.filename,
+        size_bytes: result.sizeBytes,
+        mime_type: result.mimeType,
+        duration_seconds: durationSeconds,
+        message: result.message,
+      },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Music generation failed';

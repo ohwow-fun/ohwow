@@ -60,6 +60,7 @@ import { createOrgRouter } from './routes/org.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createBrowserSessionRouter } from './routes/browser-session.js';
 import { createDesktopSessionRouter } from './routes/desktop-session.js';
+import { createMediaRouter } from './routes/media.js';
 import { errorHandler } from './error-handler.js';
 import { VoiceSession } from '../voice/voice-session.js';
 import { VoiceboxSTTProvider } from '../voice/voicebox-stt-provider.js';
@@ -263,6 +264,11 @@ export function createServer(deps: ServerDeps): {
 
   // Peer RAG query route (peer-token auth, must be before session auth middleware)
   app.use(createRagPublicRouter(db, deps.ragConfig ?? {}));
+
+  // Media file serving (public; loopback-only; path-sanitized).
+  // Lets the chat UI render inline <audio>/<video>/<img> for files the
+  // local runtime's media tools save under ~/.ohwow/media/.
+  app.use(createMediaRouter());
 
   // Browser session routes (cloud dashboard calls these for local browser automation)
   // /browser/health is public; /browser/session/* require auth

@@ -84,9 +84,9 @@ export class LyriaOpenRouterBridge {
 
   /**
    * Generate music from a text prompt via Google Lyria on OpenRouter.
-   * Returns the saved audio file path.
+   * Returns the saved audio file path plus the filename for URL construction.
    */
-  async generateMusic(params: MusicGenerationParams): Promise<{ path: string; message: string }> {
+  async generateMusic(params: MusicGenerationParams): Promise<{ path: string; filename: string; sizeBytes: number; mimeType: string; message: string }> {
     const {
       prompt,
       durationSeconds = 15,
@@ -190,6 +190,9 @@ export class LyriaOpenRouterBridge {
         const saved = await saveMediaBuffer(buffer, mimeType, 'music');
         return {
           path: saved.path,
+          filename: saved.filename,
+          sizeBytes: saved.sizeBytes,
+          mimeType: saved.mimeType,
           message: `Music generated and saved to ${saved.path} (${Math.round(buffer.length / 1024)}KB)`,
         };
       }
@@ -200,6 +203,9 @@ export class LyriaOpenRouterBridge {
       const saved = await saveMediaFromUrl(audioUrl, mimeType, 'music');
       return {
         path: saved.path,
+        filename: saved.filename,
+        sizeBytes: saved.sizeBytes,
+        mimeType: saved.mimeType,
         message: `Music generated and saved to ${saved.path}`,
       };
     }
