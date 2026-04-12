@@ -131,6 +131,19 @@ export class LocalBrowserService {
     return this.stagehand !== null && this.page !== null;
   }
 
+  /**
+   * Which backend this service is driving. 'chrome-cdp' = CDP-attached to
+   * the user's real Chrome (has their cookies / logins). 'chromium' =
+   * isolated bundled Chromium (anonymous, no real profile). The cloud
+   * orchestrator uses this to tag tool results accurately and stop
+   * hallucinating "opened in your real Chrome" when it's actually in a
+   * fresh Chromium with no session.
+   */
+  getBackend(): 'chrome-cdp' | 'chromium' | 'uninitialized' {
+    if (!this.stagehand) return 'uninitialized';
+    return this.cdpUrl ? 'chrome-cdp' : 'chromium';
+  }
+
   getPage(): StagehandPage | null {
     return this.page;
   }

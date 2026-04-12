@@ -39,18 +39,18 @@ export async function closeBrowserSessionService(): Promise<void> {
 }
 
 /**
- * Sync getter — returns the existing service, or a bare bundled-Chromium
- * service if none has been created yet. Used by health checks and any route
- * that runs after /session/start has already initialized things.
+ * Sync getter — returns the existing service, or null. IMPORTANT: this must
+ * NEVER create a fresh LocalBrowserService. If a cleanup/mutation route is
+ * called before /session/start, creating a bare bundled-Chromium singleton
+ * here would "win" and /session/start would skip the smart Chrome CDP
+ * launcher — making every subsequent tool call run on isolated Chromium
+ * with no real profile, and the orchestrator would hallucinate "I opened
+ * X with your session" when it actually has an anonymous browser.
+ *
+ * Only /session/start is allowed to create the singleton, via
+ * ensureBrowserService() below.
  */
-function getOrCreateService(opts?: { modelName?: string; modelApiKey?: string }): LocalBrowserService {
-  if (!browserService) {
-    browserService = new LocalBrowserService({
-      headless: configuredHeadless,
-      modelName: opts?.modelName,
-      modelApiKey: opts?.modelApiKey,
-    });
-  }
+function getBrowserService(): LocalBrowserService | null {
   return browserService;
 }
 
@@ -115,6 +115,7 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
       initialized: !!browserService && browserService.isActive(),
       browserResponsive: !!browserService && browserService.isActive(),
       headless: configuredHeadless,
+      browserBackend: browserService?.getBackend() ?? 'uninitialized',
     });
   });
 
@@ -136,7 +137,11 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
         preferRealChrome,
       });
       await service.ensureBrowser();
-      res.json({ success: true });
+      // Expose the actual backend in the response so the cloud can tell
+      // whether this session is driving real Chrome (with user cookies) or
+      // isolated Chromium. Prevents the orchestrator from hallucinating
+      // "opened in your real Chrome session" when it's really anonymous.
+      res.json({ success: true, browserBackend: service.getBackend() });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Browser launch failed';
       logger.error({ err }, '[BrowserSession] /session/start failed');
@@ -150,8 +155,8 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.post('/browser/session/action', async (req, res) => {
     try {
-      const service = getOrCreateService();
-      if (!service.isActive()) {
+      const service = getBrowserService();
+      if (!service || !service.isActive()) {
         res.status(400).json({ error: 'Browser not initialized. Call /session/start first.' });
         return;
       }
@@ -178,9 +183,9 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.get('/browser/session/snapshot', async (_req, res) => {
     try {
-      const service = getOrCreateService();
-      const page = service.getPage();
-      if (!page) {
+      const service = getBrowserService();
+      const page = service?.getPage();
+      if (!service || !page) {
         res.status(400).json({ error: 'Browser not initialized. Call /session/start first.' });
         return;
       }
@@ -206,7 +211,11 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.get('/browser/session/screenshot', async (_req, res) => {
     try {
-      const service = getOrCreateService();
+      const service = getBrowserService();
+      if (!service || !service.isActive()) {
+        res.status(400).json({ error: 'Browser not initialized. Call /session/start first.' });
+        return;
+      }
       const result = await service.executeAction({ type: 'screenshot' });
       res.json(result);
     } catch (err) {
@@ -222,7 +231,11 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.post('/browser/session/inject-cookies', async (req, res) => {
     try {
-      const service = getOrCreateService();
+      const service = getBrowserService();
+      if (!service || !service.isActive()) {
+        res.status(400).json({ error: 'Browser not initialized. Call /session/start first.' });
+        return;
+      }
       const cookies = req.body?.cookies;
       if (!Array.isArray(cookies)) {
         res.status(400).json({ error: 'Missing cookies array in request body' });
@@ -244,9 +257,18 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   // Support both GET (for ad-hoc inspection) and POST (matches the cloud's
   // expectation that all mutating session endpoints are POST).
+  // IMPORTANT: never auto-create a service here. The cloud calls this during
+  // stale-session cleanup BEFORE /session/start fires; auto-creating would
+  // spawn a bundled-Chromium singleton and defeat the smart Chrome launcher
+  // that /session/start would otherwise run. If there's no active browser,
+  // just return an empty cookies list — cleanup is a no-op.
   const exportCookiesHandler = async (_req: import('express').Request, res: import('express').Response) => {
     try {
-      const service = getOrCreateService();
+      const service = getBrowserService();
+      if (!service || !service.isActive()) {
+        res.json({ cookies: [] });
+        return;
+      }
       const cookies = await service.exportCookies();
       res.json({ cookies });
     } catch (err) {
@@ -264,8 +286,15 @@ export function createBrowserSessionRouter(options?: { headless?: boolean }): Ro
 
   router.post('/browser/session/close', async (_req, res) => {
     try {
-      const service = getOrCreateService();
+      // Never auto-create here either. If the cloud calls close on a session
+      // that was never /session/start'd on this daemon, treat as no-op.
+      const service = getBrowserService();
+      if (!service) {
+        res.json({ success: true });
+        return;
+      }
       await service.close();
+      browserService = null;
       res.json({ success: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Browser close failed';
