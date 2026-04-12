@@ -367,9 +367,15 @@ const INTENT_SIGNALS: IntentSignals[] = [
   },
 
   // ── CRM: contact and lead management ──
+  //
+  // Loads 'business' because that's where list_contacts, create_contact,
+  // update_contact, search_contacts, log_contact_event, and
+  // get_contact_pipeline live in the tool section map. Without this,
+  // any focused CRM request would match this intent but then have no
+  // contact tools available to use — a confusing silent failure mode.
   {
     intent: 'crm',
-    sections: new Set<IntentSection>(['memory', 'agents']),
+    sections: new Set<IntentSection>(['memory', 'agents', 'business']),
     statusLabel: 'Loading CRM context...',
     strong: [
       /\blead\b/,
