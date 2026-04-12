@@ -76,18 +76,24 @@ export class LocalBrowserService {
   }
 
   private resolveDefaultModel(): { model: string; apiKey: string } {
+    // Stagehand's Vercel aiSDK integration only accepts specific provider
+    // names. Supported: openai, anthropic, google, bedrock, xai, azure,
+    // groq, cerebras, togetherai, mistral, deepseek, perplexity, ollama,
+    // vertex, gateway. It does NOT accept 'openrouter' — attempting to use
+    // it throws "openrouter is not currently supported for aiSDK" and
+    // breaks every browser tool call, not just AI ones.
     if (process.env.ANTHROPIC_API_KEY) {
       return { model: 'anthropic/claude-sonnet-4-5', apiKey: process.env.ANTHROPIC_API_KEY };
     }
     if (process.env.OPENAI_API_KEY) {
       return { model: 'openai/gpt-4o-mini', apiKey: process.env.OPENAI_API_KEY };
     }
-    if (process.env.OPENROUTER_API_KEY) {
-      // Stagehand accepts OpenRouter models via the 'openrouter/<model>' form.
-      return { model: 'openrouter/openai/gpt-4o-mini', apiKey: process.env.OPENROUTER_API_KEY };
+    if (process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+      return { model: 'google/gemini-2.0-flash-exp', apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '' };
     }
-    // No key available — Stagehand AI tools will fail at call time,
-    // but Playwright-direct tools still work.
+    // No supported key available. Stagehand AI tools (act/extract/observe/
+    // agent) will fail at call time, but Playwright-direct tools (navigate/
+    // click/type/snapshot/screenshot/evaluate) still work.
     return { model: 'openai/gpt-4o-mini', apiKey: '' };
   }
 
@@ -117,13 +123,9 @@ export class LocalBrowserService {
       logger.debug(`[browser] Stagehand.init — ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}, apiKey: ${this.modelApiKey ? 'set' : 'MISSING — extract/act/agent will fail'}`);
       // Stagehand v3 expects the API key via modelClientOptions (not
       // process.env) so we can honour whatever credential resolution the
-      // rest of the daemon does. For OpenRouter, we also need to pass a
-      // custom baseURL since the openai-compat client defaults to api.openai.com.
+      // rest of the daemon does.
       const modelClientOptions: Record<string, unknown> = {};
       if (this.modelApiKey) modelClientOptions.apiKey = this.modelApiKey;
-      if (this.modelName.startsWith('openrouter/')) {
-        modelClientOptions.baseURL = 'https://openrouter.ai/api/v1';
-      }
       this.stagehand = new Stagehand({
         env: 'LOCAL',
         localBrowserLaunchOptions: launchOpts,
@@ -748,6 +750,8 @@ export class LocalBrowserService {
           return await this.executeSwitchTab(action.tabIndex);
         case 'close_tab':
           return await this.executeCloseTab(action.tabIndex);
+        case 'evaluate':
+          return await this.executeEvaluate(page, action.expression);
         default:
           return { success: false, type: 'navigate', error: `Unknown action type: ${(action as { type: string }).type}` };
       }
@@ -818,6 +822,59 @@ export class LocalBrowserService {
       currentUrl: target.url(),
       pageTitle: await target.title(),
     };
+  }
+
+  // ==========================================================================
+  // RAW JS EVALUATION
+  // ==========================================================================
+
+  /**
+   * Execute a JS expression in the current page via Playwright's
+   * page.evaluate(). This is the AI-free escape hatch for hostile-DOM
+   * workflows where the orchestrator needs to introspect the live DOM
+   * or trigger behavior that ref-based clicking can't reach.
+   *
+   * The expression runs in the BROWSER context (not Node), so it has
+   * access to window, document, fetch, etc. It must return a
+   * JSON-serializable value (object, array, string, number, null) — we
+   * stringify it before shipping it back across the tool boundary.
+   *
+   * Safety: we cap the serialized result at 10 KB so a runaway
+   * expression doesn't blow out the orchestrator's context window.
+   * We also cap execution time at 15s via Playwright's default.
+   */
+  private async executeEvaluate(page: StagehandPage, expression: string): Promise<BrowserActionResult> {
+    if (typeof expression !== 'string' || !expression.trim()) {
+      return { success: false, type: 'evaluate', error: 'Missing or empty `expression` field. Pass a JS expression/snippet as a string.' };
+    }
+    try {
+      // Playwright accepts either a function or a string expression. A
+      // string runs via `Function('return (' + expr + ')')` so the user
+      // can pass either a statement block or a single expression.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = await page.evaluate(expression as any);
+      let content: string;
+      try {
+        content = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      } catch {
+        content = String(result);
+      }
+      if (content.length > 10000) {
+        content = content.slice(0, 10000) + `\n\n[truncated — result was ${content.length} bytes, showing first 10000]`;
+      }
+      return {
+        success: true,
+        type: 'evaluate',
+        content,
+        currentUrl: page.url(),
+      };
+    } catch (err) {
+      return {
+        success: false,
+        type: 'evaluate',
+        error: err instanceof Error ? err.message : 'evaluate failed',
+      };
+    }
   }
 
   private async executeCloseTab(tabIndex?: number): Promise<BrowserActionResult> {

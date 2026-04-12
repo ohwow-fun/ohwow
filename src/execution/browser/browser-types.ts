@@ -28,7 +28,8 @@ export type BrowserActionType =
   | 'type_text'
   | 'new_tab'
   | 'switch_tab'
-  | 'close_tab';
+  | 'close_tab'
+  | 'evaluate';
 
 // ============================================================================
 // BROWSER ACTIONS (tool inputs/outputs for Claude)
@@ -54,6 +55,13 @@ export interface BrowserTypeTextAction { type: 'type_text'; text: string; x?: nu
 export interface BrowserNewTabAction { type: 'new_tab'; url?: string }
 export interface BrowserSwitchTabAction { type: 'switch_tab'; tabIndex: number }
 export interface BrowserCloseTabAction { type: 'close_tab'; tabIndex?: number }
+/**
+ * Raw JS evaluation — runs the given expression via Playwright's
+ * page.evaluate() on the active page and returns the JSON-serialized
+ * result. Zero AI, zero Stagehand. The escape hatch for hostile DOMs
+ * and anything where you just need to introspect the page directly.
+ */
+export interface BrowserEvaluateAction { type: 'evaluate'; expression: string }
 
 export type BrowserAction =
   | BrowserNavigateAction
@@ -75,7 +83,8 @@ export type BrowserAction =
   | BrowserTypeTextAction
   | BrowserNewTabAction
   | BrowserSwitchTabAction
-  | BrowserCloseTabAction;
+  | BrowserCloseTabAction
+  | BrowserEvaluateAction;
 
 export interface BrowserActionResult {
   success: boolean;
