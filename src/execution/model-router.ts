@@ -10,8 +10,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getWorkingNumCtx } from '../lib/ollama-models.js';
 import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
-import type { OperationType } from './execution-policy.js';
-import { resolvePolicy, shouldPreferLocal } from './execution-policy.js';
+import type { AgentModelPolicy, OperationType, Purpose } from './execution-policy.js';
+import { resolveAgentModelString, resolvePolicy, resolvePurposePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import { MLXProvider } from './providers/mlx-provider.js';
@@ -1465,6 +1465,56 @@ export interface RoutingHistory {
   attempts: number;
 }
 
+/** True when a Purpose value is also a legacy OperationType. */
+function isOperationType(p: Purpose): p is OperationType {
+  switch (p) {
+    case 'orchestrator_chat':
+    case 'agent_task':
+    case 'planning':
+    case 'browser_automation':
+    case 'memory_extraction':
+    case 'ocr':
+    case 'workflow_step':
+    case 'simple_classification':
+    case 'desktop_control':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Map a Purpose onto the legacy TaskType dispatch used by getProvider. Legacy
+ * OperationType values get their natural TaskType; new Shape C purposes slot
+ * into the closest existing bucket so they benefit from existing routing
+ * heuristics (difficulty escalation, vision detection, etc.).
+ */
+function purposeToTaskType(p: Purpose): TaskType {
+  switch (p) {
+    case 'orchestrator_chat':   return 'orchestrator';
+    case 'agent_task':          return 'agent_task';
+    case 'planning':            return 'planning';
+    case 'browser_automation':  return 'browser';
+    case 'memory_extraction':   return 'memory_extraction';
+    case 'ocr':                 return 'ocr';
+    case 'workflow_step':       return 'agent_task';
+    case 'simple_classification': return 'memory_extraction';
+    case 'desktop_control':     return 'agent_task';
+    // Shape C purposes
+    case 'reasoning':           return 'agent_task';
+    case 'generation':          return 'agent_task';
+    case 'summarization':       return 'memory_extraction';
+    case 'extraction':          return 'memory_extraction';
+    case 'critique':            return 'planning';
+    case 'translation':         return 'agent_task';
+    case 'embedding':           return 'memory_extraction';
+    default: {
+      const exhaustive: never = p;
+      return exhaustive;
+    }
+  }
+}
+
 export class ModelRouter {
   private anthropic: AnthropicProvider | null;
   private ollama: OllamaProvider | null;
@@ -1858,6 +1908,108 @@ export class ModelRouter {
     }
 
     return this.getProvider(taskType, effectiveDifficulty, undefined, context.routingHistory);
+  }
+
+  // ============================================================================
+  // PURPOSE-BASED SELECTION (Shape C — the `llm` organ entry point)
+  // ============================================================================
+
+  /**
+   * Select a provider and model string for a given Purpose, honoring an
+   * agent's model policy. This is the entry point agents use when they act
+   * as sub-orchestrators and invoke the `llm` organ tool — each call picks a
+   * brain appropriate for the sub-task rather than pinning the agent to a
+   * single model up front.
+   *
+   * Resolution order for the concrete model string:
+   *   1. `constraints.preferModel` (call-site override, tightest win)
+   *   2. `agent.purposes[purpose]`
+   *   3. `agent.default`
+   *   4. provider default (returned as undefined; provider picks)
+   *
+   * Resolution order for the provider:
+   *   1. `agent.localOnly === true` → force local mode
+   *   2. `resolvePurposePolicy(purpose, agent)` policy shape
+   *   3. Existing `getProvider(taskType, difficulty, operationType, routingHistory)`
+   *
+   * `maxCostCents` is recorded on the selection but enforced by callers — the
+   * router cannot see actual costs until after a response returns.
+   */
+  async selectForPurpose(args: {
+    purpose: Purpose;
+    agent?: AgentModelPolicy;
+    constraints?: {
+      preferModel?: string;
+      maxCostCents?: number;
+      localOnly?: boolean;
+      difficulty?: 'simple' | 'moderate' | 'complex';
+    };
+    routingHistory?: RoutingHistory;
+  }): Promise<{
+    provider: ModelProvider;
+    model?: string;
+    purpose: Purpose;
+    policy: ReturnType<typeof resolvePurposePolicy>;
+    maxCostCents?: number;
+  }> {
+    const { purpose, agent, constraints, routingHistory } = args;
+
+    // Resolve policy shape (modelSource / fallback) taking agent + purpose into account.
+    const policy = resolvePurposePolicy(purpose, agent);
+
+    // Concrete model string preference (may be undefined, meaning "router picks").
+    const preferredModel =
+      constraints?.preferModel ?? resolveAgentModelString(purpose, agent);
+    const modelHint = preferredModel && preferredModel !== 'auto' ? preferredModel : undefined;
+
+    // Hard constraint: localOnly from either the agent or the call site clamps
+    // the modelSource for this selection without mutating router state.
+    const forceLocal = constraints?.localOnly === true || agent?.localOnly === true;
+
+    // Map Purpose → TaskType for the existing getProvider dispatch. New purposes
+    // fall into 'orchestrator' (fast interactive) or 'agent_task' (deliberate)
+    // depending on their policy. Legacy values pass through unchanged.
+    const taskType: TaskType = purposeToTaskType(purpose);
+
+    // Map Purpose → OperationType for execution-policy hooks. Only legacy values
+    // get an OperationType; new ones pass undefined so getProvider doesn't
+    // double-apply policy (resolvePurposePolicy already applied it).
+    const operationType: OperationType | undefined = isOperationType(purpose)
+      ? purpose
+      : undefined;
+
+    // Force-local path: temporarily bypass auto/cloud routing by going through
+    // the existing 'local' modelSource branch of getProvider.
+    if (forceLocal) {
+      const savedSource = this.modelSource;
+      this.modelSource = 'local';
+      try {
+        const provider = await this.getProvider(
+          taskType,
+          constraints?.difficulty,
+          operationType,
+          routingHistory,
+        );
+        return { provider, model: modelHint, purpose, policy, maxCostCents: constraints?.maxCostCents ?? agent?.maxCostCents };
+      } finally {
+        this.modelSource = savedSource;
+      }
+    }
+
+    const provider = await this.getProvider(
+      taskType,
+      constraints?.difficulty,
+      operationType,
+      routingHistory,
+    );
+
+    return {
+      provider,
+      model: modelHint,
+      purpose,
+      policy,
+      maxCostCents: constraints?.maxCostCents ?? agent?.maxCostCents,
+    };
   }
 
   /** Get the Anthropic provider directly (for tool-using tasks that need the SDK) */
