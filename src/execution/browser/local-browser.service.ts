@@ -64,15 +64,31 @@ export class LocalBrowserService {
 
   constructor(opts?: LocalBrowserServiceOptions) {
     this.headless = opts?.headless !== false; // default headless
-    this.modelName = opts?.modelName || this.resolveDefaultModel();
-    this.modelApiKey = opts?.modelApiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    // Order: explicit opts → Anthropic → OpenAI → OpenRouter.
+    // Stagehand AI tools (act, extract, observe, agent) need a real
+    // LLM backend — they call a model under the hood. If no key is
+    // available, AI tools will fail at runtime but Playwright-direct
+    // tools (navigate, click, type, snapshot, screenshot) still work.
+    const resolved = this.resolveDefaultModel();
+    this.modelName = opts?.modelName || resolved.model;
+    this.modelApiKey = opts?.modelApiKey || resolved.apiKey || '';
     this.cdpUrl = opts?.cdpUrl;
   }
 
-  private resolveDefaultModel(): string {
-    if (process.env.ANTHROPIC_API_KEY) return 'anthropic/claude-sonnet-4-5';
-    if (process.env.OPENAI_API_KEY) return 'openai/gpt-4o-mini';
-    return 'openai/gpt-4o-mini'; // Stagehand default
+  private resolveDefaultModel(): { model: string; apiKey: string } {
+    if (process.env.ANTHROPIC_API_KEY) {
+      return { model: 'anthropic/claude-sonnet-4-5', apiKey: process.env.ANTHROPIC_API_KEY };
+    }
+    if (process.env.OPENAI_API_KEY) {
+      return { model: 'openai/gpt-4o-mini', apiKey: process.env.OPENAI_API_KEY };
+    }
+    if (process.env.OPENROUTER_API_KEY) {
+      // Stagehand accepts OpenRouter models via the 'openrouter/<model>' form.
+      return { model: 'openrouter/openai/gpt-4o-mini', apiKey: process.env.OPENROUTER_API_KEY };
+    }
+    // No key available — Stagehand AI tools will fail at call time,
+    // but Playwright-direct tools still work.
+    return { model: 'openai/gpt-4o-mini', apiKey: '' };
   }
 
   // ==========================================================================
@@ -98,11 +114,21 @@ export class LocalBrowserService {
       const launchOpts: Record<string, unknown> = this.cdpUrl
         ? { cdpUrl: this.cdpUrl }
         : { headless: this.headless };
-      logger.debug(`[browser] Stagehand.init — ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}`);
+      logger.debug(`[browser] Stagehand.init — ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}, apiKey: ${this.modelApiKey ? 'set' : 'MISSING — extract/act/agent will fail'}`);
+      // Stagehand v3 expects the API key via modelClientOptions (not
+      // process.env) so we can honour whatever credential resolution the
+      // rest of the daemon does. For OpenRouter, we also need to pass a
+      // custom baseURL since the openai-compat client defaults to api.openai.com.
+      const modelClientOptions: Record<string, unknown> = {};
+      if (this.modelApiKey) modelClientOptions.apiKey = this.modelApiKey;
+      if (this.modelName.startsWith('openrouter/')) {
+        modelClientOptions.baseURL = 'https://openrouter.ai/api/v1';
+      }
       this.stagehand = new Stagehand({
         env: 'LOCAL',
         localBrowserLaunchOptions: launchOpts,
         model: this.modelName,
+        modelClientOptions,
         verbose: 0,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any);
