@@ -209,10 +209,29 @@ export class LocalOrchestrator {
 
     if (this.browserTarget === 'chrome') {
       try {
-        // Resolve profile directory from email if needed
+        // Resolve profile identifier (directory, email, alias, display
+        // name) to a concrete Chrome profile directory using the same
+        // resolver as desktop_focus_app so the two paths stay in sync.
+        // This is the fix that lets ogsus@ohwow.fun land on Profile 1
+        // via the chromeProfileAliases config map, instead of falling
+        // through to the bare account_info match and ending up on the
+        // Default profile.
         let profileDir = requestedProfile;
-        if (profileDir && profileDir.includes('@')) {
-          profileDir = await LocalBrowserService.findProfileForEmail(profileDir) || undefined;
+        if (profileDir) {
+          const { resolveChromeProfile, discoverChromeProfiles } = await import(
+            '../execution/desktop/chrome-profile-resolver.js'
+          );
+          const resolved = resolveChromeProfile(profileDir, {
+            profiles: discoverChromeProfiles(),
+            aliases: this._chromeProfileAliases,
+          });
+          if (resolved) {
+            profileDir = resolved;
+          } else if (profileDir.includes('@')) {
+            // Last-resort: try the browser service's own email lookup
+            // (covers Google-signed-in accounts that aren't in the alias map)
+            profileDir = await LocalBrowserService.findProfileForEmail(profileDir) || undefined;
+          }
         }
         const cdpUrl = await LocalBrowserService.connectToChrome(this.chromeCdpPort, profileDir);
         if (cdpUrl) {
