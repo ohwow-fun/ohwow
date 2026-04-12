@@ -416,6 +416,109 @@ describe('llm-organ', () => {
     });
   });
 
+  describe('routing history', () => {
+    /**
+     * Build a fake DB that returns a canned array of llm_calls rows when
+     * queried for historical success rate, plus a no-op insert for
+     * telemetry writes. The agent-policy lookup path is left empty so it
+     * returns no policy.
+     */
+    function fakeDbWithHistory(history: number[]): LlmCallDeps['db'] {
+      return {
+        from: (table: string) => {
+          if (table === 'llm_calls') {
+            const builder: Record<string, unknown> = {
+              select: () => builder,
+              eq: () => builder,
+              order: () => builder,
+              limit: async () => ({
+                data: history.map((success) => ({ success })),
+                error: null,
+              }),
+              insert: async () => ({ data: null, error: null }),
+            };
+            return builder;
+          }
+          // agent_workforce_agents + any other table
+          return {
+            select: () => ({
+              eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
+            }),
+            insert: async () => ({ data: null, error: null }),
+          };
+        },
+        rpc: vi.fn(),
+      } as unknown as LlmCallDeps['db'];
+    }
+
+    it('computes avgTruthScore from llm_calls success rate and forwards it', async () => {
+      const selectForPurpose = vi.fn(async () => ({
+        provider: makeProvider('ollama'),
+        model: undefined,
+        purpose: 'reasoning' as const,
+        policy: { modelSource: 'auto', fallback: 'local' },
+        maxCostCents: undefined,
+      }));
+      const deps: LlmCallDeps = {
+        modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
+        db: fakeDbWithHistory([1, 1, 1, 0, 1, 1, 0, 1, 1, 1]), // 8/10 = 80%
+        workspaceId: 'test-workspace',
+      };
+
+      await runLlmCall(deps, { prompt: 'hi' });
+
+      expect(selectForPurpose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          routingHistory: { avgTruthScore: 80, attempts: 10 },
+        }),
+      );
+    });
+
+    it('sends undefined routingHistory when fewer than 3 rows exist', async () => {
+      const selectForPurpose = vi.fn(async () => ({
+        provider: makeProvider('ollama'),
+        model: undefined,
+        purpose: 'reasoning' as const,
+        policy: { modelSource: 'auto', fallback: 'local' },
+        maxCostCents: undefined,
+      }));
+      const deps: LlmCallDeps = {
+        modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
+        db: fakeDbWithHistory([1, 0]),
+        workspaceId: 'test-workspace',
+      };
+
+      await runLlmCall(deps, { prompt: 'hi' });
+
+      expect(selectForPurpose).toHaveBeenCalledWith(
+        expect.objectContaining({ routingHistory: undefined }),
+      );
+    });
+
+    it('flags a majority-failure history as a low truth score', async () => {
+      const selectForPurpose = vi.fn(async () => ({
+        provider: makeProvider('ollama'),
+        model: undefined,
+        purpose: 'reasoning' as const,
+        policy: { modelSource: 'auto', fallback: 'local' },
+        maxCostCents: undefined,
+      }));
+      const deps: LlmCallDeps = {
+        modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
+        db: fakeDbWithHistory([0, 0, 0, 1, 0]), // 1/5 = 20%
+        workspaceId: 'test-workspace',
+      };
+
+      await runLlmCall(deps, { prompt: 'hi' });
+
+      expect(selectForPurpose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          routingHistory: { avgTruthScore: 20, attempts: 5 },
+        }),
+      );
+    });
+  });
+
   describe('constraint passthrough', () => {
     it('passes preferModel, localOnly, maxCostCents, and difficulty to the router', async () => {
       const deps = makeDeps({});

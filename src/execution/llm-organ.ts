@@ -15,6 +15,7 @@ import type {
   CreateMessageParams,
   ModelMessage,
   ModelRouter,
+  RoutingHistory,
 } from './model-router.js';
 
 export const VALID_PURPOSES: readonly Purpose[] = [
@@ -45,6 +46,53 @@ export interface LlmCallDeps {
   currentAgentId?: string;
   /** The task this call belongs to, when known. Recorded in telemetry. */
   currentTaskId?: string;
+}
+
+/**
+ * Build a RoutingHistory from recent llm_calls rows for this workspace,
+ * agent, and purpose. Feeds adaptive routing in ModelRouter.getProvider:
+ * the router escalates to a more capable model when recent quality is
+ * low, and allows downgrade when quality has been consistently high.
+ *
+ * Signal used: success rate of the last N llm_calls rows, scaled to
+ * 0-100 as a proxy for the router's `avgTruthScore` field. This is a
+ * pragmatic approximation — a provider that always returns garbage
+ * would still have a 100% success rate — but it correctly catches the
+ * "provider keeps failing, escalate" pattern which is the main thing
+ * the current router adaptive path uses routingHistory for.
+ *
+ * When proper response scoring lands, swap `success_rate * 100` for
+ * the real score without touching callers.
+ */
+async function computeRoutingHistory(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  agentId: string | undefined,
+  purpose: Purpose,
+): Promise<RoutingHistory | undefined> {
+  try {
+    // Read the most recent 20 rows for this (workspace, agent, purpose)
+    // tuple. 20 is enough to see a pattern without dragging in ancient data.
+    let query = db
+      .from<{ success: number }>('llm_calls')
+      .select('success')
+      .eq('workspace_id', workspaceId)
+      .eq('purpose', purpose);
+    if (agentId) {
+      query = query.eq('agent_id', agentId);
+    }
+    const { data } = await query
+      .order('created_at', { ascending: false })
+      .limit(20);
+    const rows = (data ?? []) as Array<{ success: number }>;
+    if (rows.length < 3) return undefined; // not enough signal yet
+    const successes = rows.reduce((sum, r) => sum + (r.success ? 1 : 0), 0);
+    const avgTruthScore = Math.round((successes / rows.length) * 100);
+    return { avgTruthScore, attempts: rows.length };
+  } catch (err) {
+    logger.warn({ err, workspaceId, agentId, purpose }, 'llm organ: failed to compute routingHistory');
+    return undefined;
+  }
 }
 
 /**
@@ -247,6 +295,18 @@ export async function runLlmCall(
     agentPolicy = await loadAgentPolicy(deps.db, deps.currentAgentId);
   }
 
+  // Compute recent success history for this (workspace, agent, purpose)
+  // triple so the router can adaptively escalate on low quality or
+  // downgrade on consistently-high quality. Best-effort — on failure or
+  // insufficient data, returns undefined and the router uses its own
+  // default routing.
+  const routingHistory = await computeRoutingHistory(
+    deps.db,
+    deps.workspaceId,
+    deps.currentAgentId,
+    purpose,
+  );
+
   let selection;
   try {
     selection = await deps.modelRouter.selectForPurpose({
@@ -258,6 +318,7 @@ export async function runLlmCall(
         maxCostCents: asNumber(input.max_cost_cents),
         difficulty: asDifficulty(input.difficulty),
       },
+      routingHistory,
     });
   } catch (err) {
     const errorMessage = `llm organ: no provider available for purpose "${purpose}": ${err instanceof Error ? err.message : 'unknown error'}`;
