@@ -220,9 +220,51 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       res.setHeader('X-Session-Id', session);
       res.flushHeaders();
 
+      // Compute the base URL callers should use to fetch media files
+      // this stream mints. Browsers that hit /api/chat directly at
+      // http://localhost:7700 want absolute loopback URLs; cloud proxies
+      // that read this stream server-side don't care (they rewrite URLs
+      // again on their end). Honor X-Forwarded-Proto/Host when present
+      // so a tunnel can project the right external origin.
+      const xfProto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim();
+      const xfHost = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim();
+      const reqProto = xfProto || (req.socket && (req.socket as { encrypted?: boolean }).encrypted ? 'https' : 'http');
+      const reqHost = xfHost || (req.headers.host as string) || `127.0.0.1:${process.env.OHWOW_PORT || 7700}`;
+      const runtimeBase = `${reqProto}://${reqHost}`;
+      const toAbsolute = (u: string): string => (u.startsWith('/') ? `${runtimeBase}${u}` : u);
+
       for await (const event of orchestrator.chat(message, session, seedMessages)) {
-        const data = JSON.stringify(event);
-        res.write(`data: ${data}\n\n`);
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+        // Synthesize a companion `generated_media` event whenever a
+        // successful tool_done carries a media URL in its data payload.
+        // Lets the chat UI render an inline <audio>/<video>/<img>
+        // player without each tool handler having to emit the event
+        // itself.
+        if (
+          event &&
+          typeof event === 'object' &&
+          (event as { type?: string }).type === 'tool_done'
+        ) {
+          const te = event as { result?: { success?: boolean; data?: unknown } };
+          if (te.result?.success && te.result.data && typeof te.result.data === 'object') {
+            const rd = te.result.data as Record<string, unknown>;
+            const mediaMap: Array<{ key: string; mediaType: 'audio' | 'image' | 'video' }> = [
+              { key: 'audio_url', mediaType: 'audio' },
+              { key: 'image_url', mediaType: 'image' },
+              { key: 'video_url', mediaType: 'video' },
+            ];
+            for (const { key, mediaType } of mediaMap) {
+              const raw = rd[key];
+              if (typeof raw === 'string' && raw.length > 0) {
+                res.write(
+                  `data: ${JSON.stringify({ type: 'generated_media', url: toAbsolute(raw), mediaType })}\n\n`
+                );
+                break;
+              }
+            }
+          }
+        }
       }
 
       res.write('data: [DONE]\n\n');
