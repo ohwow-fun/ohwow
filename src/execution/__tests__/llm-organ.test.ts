@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { runLlmCall, VALID_PURPOSES, type LlmCallDeps } from '../llm-organ.js';
-import type { ModelProvider, ModelResponse, CreateMessageParams } from '../model-router.js';
+import type { ModelProvider, ModelResponse, CreateMessageParams, ModelResponseWithTools, OpenAITool } from '../model-router.js';
 import type { AgentModelPolicy } from '../execution-policy.js';
 
 type StubSelection = {
@@ -516,6 +516,207 @@ describe('llm-organ', () => {
           routingHistory: { avgTruthScore: 20, attempts: 5 },
         }),
       );
+    });
+  });
+
+  describe('content blocks', () => {
+    it('always returns a content array (single text block when no tools)', async () => {
+      const deps = makeDeps({});
+      const result = await runLlmCall(deps, { prompt: 'hello' });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.content).toEqual([{ type: 'text', text: 'stubbed response' }]);
+      }
+    });
+  });
+
+  describe('tool use', () => {
+    function makeToolCapableProvider(toolCalls: ModelResponseWithTools['toolCalls']): ModelProvider {
+      const createMessageWithTools = vi.fn(async (
+        _params: CreateMessageParams & { tools: OpenAITool[] },
+      ): Promise<ModelResponseWithTools> => ({
+        content: 'thinking out loud',
+        inputTokens: 5,
+        outputTokens: 7,
+        model: 'tool-capable-model',
+        provider: 'anthropic',
+        costCents: 1,
+        toolCalls,
+      }));
+      return {
+        name: 'anthropic',
+        createMessage: vi.fn(async (): Promise<ModelResponse> => ({
+          content: 'should not be called',
+          inputTokens: 0,
+          outputTokens: 0,
+          model: 'tool-capable-model',
+          provider: 'anthropic',
+        })),
+        createMessageWithTools,
+        isAvailable: vi.fn(async () => true),
+      };
+    }
+
+    it('dispatches to createMessageWithTools when tools array is non-empty', async () => {
+      const provider = makeToolCapableProvider([
+        { id: 'call-1', type: 'function', function: { name: 'test_tool', arguments: '{"q":"42"}' } },
+      ]);
+      const deps = makeDeps({
+        selection: {
+          provider,
+          model: undefined,
+          purpose: 'reasoning',
+          policy: { modelSource: 'auto', fallback: 'local' },
+        },
+      });
+      const result = await runLlmCall(deps, {
+        prompt: 'use the tool',
+        tools: [
+          { name: 'test_tool', description: 'a test', input_schema: { type: 'object', properties: { q: { type: 'string' } } } },
+        ],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(provider.createMessageWithTools).toHaveBeenCalledTimes(1);
+        // Text + one tool_use block
+        expect(result.data.content).toHaveLength(2);
+        expect(result.data.content[0]).toEqual({ type: 'text', text: 'thinking out loud' });
+        expect(result.data.content[1]).toEqual({
+          type: 'tool_use',
+          id: 'call-1',
+          name: 'test_tool',
+          input: { q: '42' },
+        });
+      }
+    });
+
+    it('returns multiple tool_use blocks when the model emits parallel calls', async () => {
+      const provider = makeToolCapableProvider([
+        { id: 'call-a', type: 'function', function: { name: 'tool_a', arguments: '{}' } },
+        { id: 'call-b', type: 'function', function: { name: 'tool_b', arguments: '{"k":1}' } },
+      ]);
+      const deps = makeDeps({
+        selection: {
+          provider,
+          model: undefined,
+          purpose: 'reasoning',
+          policy: { modelSource: 'auto', fallback: 'local' },
+        },
+      });
+      const result = await runLlmCall(deps, {
+        prompt: 'do things',
+        tools: [{ name: 'tool_a' }, { name: 'tool_b' }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const toolUseBlocks = result.data.content.filter((b) => b.type === 'tool_use');
+        expect(toolUseBlocks).toHaveLength(2);
+      }
+    });
+
+    it('preserves raw arguments when the provider returns invalid JSON', async () => {
+      const provider = makeToolCapableProvider([
+        { id: 'call-bad', type: 'function', function: { name: 'tool', arguments: '{not_json' } },
+      ]);
+      const deps = makeDeps({
+        selection: {
+          provider,
+          model: undefined,
+          purpose: 'reasoning',
+          policy: { modelSource: 'auto', fallback: 'local' },
+        },
+      });
+      const result = await runLlmCall(deps, {
+        prompt: 'oops',
+        tools: [{ name: 'tool' }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const toolBlock = result.data.content.find((b) => b.type === 'tool_use');
+        expect(toolBlock).toBeDefined();
+        if (toolBlock?.type === 'tool_use') {
+          expect(toolBlock.input).toEqual({ _raw_arguments: '{not_json' });
+        }
+      }
+    });
+
+    it('fails clearly when the selected provider does not support tool calls', async () => {
+      const provider: ModelProvider = {
+        name: 'no-tools-provider',
+        createMessage: async () => ({
+          content: '', inputTokens: 0, outputTokens: 0, model: 'm', provider: 'ollama',
+        }),
+        // createMessageWithTools deliberately omitted
+        isAvailable: async () => true,
+      };
+      const deps = makeDeps({
+        selection: {
+          provider,
+          model: undefined,
+          purpose: 'reasoning',
+          policy: { modelSource: 'auto', fallback: 'local' },
+        },
+      });
+      const result = await runLlmCall(deps, {
+        prompt: 'hi',
+        tools: [{ name: 'tool' }],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain('does not support tool calls');
+      }
+    });
+
+    it('rejects malformed tool entries with a clear error', async () => {
+      const deps = makeDeps({});
+      const result = await runLlmCall(deps, {
+        prompt: 'hi',
+        tools: [{ description: 'missing name' }],
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.toLowerCase()).toContain('name');
+      }
+    });
+
+    it('accepts a top-level messages array as conversation history', async () => {
+      const provider = makeToolCapableProvider([]);
+      const deps = makeDeps({
+        selection: {
+          provider,
+          model: undefined,
+          purpose: 'reasoning',
+          policy: { modelSource: 'auto', fallback: 'local' },
+        },
+      });
+      const result = await runLlmCall(deps, {
+        messages: [
+          { role: 'user', content: 'first turn' },
+          { role: 'assistant', content: 'reply', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'tool', arguments: '{}' } }] },
+          { role: 'tool', content: 'tool result text', tool_call_id: 'c1' },
+        ],
+        tools: [{ name: 'tool' }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(provider.createMessageWithTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messages: [
+              { role: 'user', content: 'first turn' },
+              expect.objectContaining({
+                role: 'assistant',
+                content: 'reply',
+                tool_calls: [{ id: 'c1', type: 'function', function: { name: 'tool', arguments: '{}' } }],
+              }),
+              expect.objectContaining({
+                role: 'tool',
+                content: 'tool result text',
+                tool_call_id: 'c1',
+              }),
+            ],
+          }),
+        );
+      }
     });
   });
 

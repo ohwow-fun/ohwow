@@ -148,9 +148,19 @@ export function registerCoreTools(server: McpServer, client: DaemonApiClient): v
   // result with telemetry (model_used, provider, tokens, cost_cents,
   // latency_ms). This is how Claude Code uses ohwow AS a router instead of
   // picking models itself.
+  //
+  // Tool-use loop:
+  //   - Pass `tools: [{name, description, input_schema}, ...]` to enable
+  //     tool calls. The response includes `content: ContentBlock[]` with
+  //     either { type: 'text' } or { type: 'tool_use', id, name, input }
+  //     entries. The CALLER executes the tools and feeds the results back
+  //     into the next call via `messages: [..., { role: 'user', content:
+  //     [{ type: 'tool_result', tool_use_id, content }] }]`.
+  //   - Single-shot only — ohwow_llm itself does not loop. Build the loop
+  //     in your own code.
   server.tool(
     'ohwow_llm',
-    '[LLM Organ] Invoke ohwow\'s model router for a specific sub-task. Pass a `purpose` (reasoning, generation, summarization, extraction, critique, translation, planning, classification, etc.) and a `prompt` string. ohwow resolves the agent\'s model_policy (if agentId is given), workspace defaults, and constraints, then picks a provider+model and runs the call. Returns { text, model_used, provider, purpose, tokens, cost_cents, latency_ms }. Use this when you want ohwow to act as your model selector instead of pinning to a specific model yourself.',
+    '[LLM Organ] Invoke ohwow\'s model router for a specific sub-task. Pass a `purpose` (reasoning, generation, summarization, extraction, critique, translation, planning, classification, etc.) and either a `prompt` string OR a `messages` history array. Optionally pass `tools` to enable tool calls. ohwow resolves the agent\'s model_policy (if agentId is given), workspace defaults, and constraints, then picks a provider+model and runs the call. Returns { text, content: ContentBlock[], model_used, provider, purpose, tokens, cost_cents, latency_ms }. The caller is responsible for executing tool calls and looping by appending tool_result blocks to `messages` on the next call.',
     {
       purpose: z.enum([
         'orchestrator_chat', 'agent_task', 'planning', 'browser_automation',
@@ -158,7 +168,23 @@ export function registerCoreTools(server: McpServer, client: DaemonApiClient): v
         'desktop_control', 'reasoning', 'generation', 'summarization',
         'extraction', 'critique', 'translation', 'embedding',
       ]).optional().describe('Semantic purpose that drives routing. Defaults to "reasoning".'),
-      prompt: z.string().describe('The user prompt to send to the selected model.'),
+      prompt: z.string().optional().describe('The user prompt to send to the selected model. Omit when passing `messages` instead.'),
+      messages: z.array(z.object({
+        role: z.enum(['user', 'assistant', 'system', 'tool']),
+        content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
+        tool_calls: z.array(z.object({
+          id: z.string(),
+          type: z.literal('function'),
+          function: z.object({ name: z.string(), arguments: z.string() }),
+        })).optional(),
+        tool_call_id: z.string().optional(),
+      })).optional().describe('Multi-turn conversation history. Preferred over `prompt` for tool-use loops — append assistant tool_calls and user tool_result blocks each iteration.'),
+      tools: z.array(z.object({
+        name: z.string(),
+        description: z.string().optional(),
+        input_schema: z.record(z.string(), z.unknown()).optional(),
+      })).optional().describe('Optional tool definitions. When non-empty, the response `content` array includes `tool_use` blocks the caller must execute and feed back via `messages`.'),
+      tool_choice: z.enum(['auto', 'required', 'none']).optional().describe('Tool selection mode. Defaults to provider default.'),
       system: z.string().optional().describe('Optional system prompt.'),
       agentId: z.string().optional().describe('Agent ID to load model_policy from. Omit to use workspace defaults only.'),
       max_tokens: z.number().optional().describe('Maximum output tokens.'),

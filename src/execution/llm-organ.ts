@@ -14,7 +14,9 @@ import type { AgentModelPolicy, Purpose } from './execution-policy.js';
 import type {
   CreateMessageParams,
   ModelMessage,
+  ModelResponseWithTools,
   ModelRouter,
+  OpenAITool,
   RoutingHistory,
 } from './model-router.js';
 
@@ -144,6 +146,24 @@ export interface LlmCallInput {
   purpose?: unknown;
   prompt?: unknown;
   system?: unknown;
+  /**
+   * Multi-turn conversation history. Top-level alternative to passing an
+   * object `prompt` with `{ system?, messages[] }`. When both `prompt`
+   * and `messages` are supplied, `messages` wins. Each entry carries
+   * { role, content, tool_calls?, tool_call_id? } so callers can feed
+   * tool_use / tool_result blocks back into the next turn.
+   */
+  messages?: unknown;
+  /**
+   * OpenAI-format tool definitions. When non-empty, the organ dispatches
+   * to provider.createMessageWithTools and the response includes a
+   * `content` array with text and tool_use blocks. The caller is
+   * responsible for executing tools and looping by feeding tool_result
+   * blocks back via `messages` on the next call.
+   */
+  tools?: unknown;
+  /** OpenAI-format tool_choice ('auto' | 'required' | 'none'). Optional. */
+  tool_choice?: unknown;
   max_tokens?: unknown;
   temperature?: unknown;
   local_only?: unknown;
@@ -152,8 +172,24 @@ export interface LlmCallInput {
   difficulty?: unknown;
 }
 
+/**
+ * Normalized content block returned by ohwow_llm. Mirrors the shape used
+ * by Anthropic's content blocks so callers can feed tool_use blocks back
+ * into the next turn as tool_result blocks via the `messages` history.
+ */
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
+
 export interface LlmCallOk {
+  /** Joined text content. Convenience field for the no-tools case. */
   text: string;
+  /**
+   * Structured content blocks. Always present. For text-only responses
+   * this is a single { type: 'text' } entry. When the model called
+   * tools, includes one { type: 'tool_use' } entry per tool call.
+   */
+  content: ContentBlock[];
   model_used: string;
   provider: string;
   purpose: Purpose;
@@ -219,14 +255,64 @@ async function loadAgentPolicy(
 }
 
 /**
- * Normalize a free-form `prompt` input into a ModelMessage array and an
- * optional system prompt. Accepts either a plain string or an object of the
- * shape { system?, messages: [{role, content}] }.
+ * Normalize a free-form `prompt` / `messages` input into a ModelMessage
+ * array and an optional system prompt.
+ *
+ * Accepted shapes:
+ *  - top-level `messages: [{role, content, tool_calls?, tool_call_id?}]`
+ *    (preferred for multi-turn / tool-use loops)
+ *  - top-level `prompt: string` plus optional top-level `system`
+ *  - top-level `prompt: { system?, messages[] }` (legacy compound form)
+ *
+ * When both are supplied, `messages` wins because it's the structured
+ * form callers reach for when they're feeding tool_result blocks back
+ * into the next iteration of a tool-use loop.
  */
+function normalizeMessageEntry(m: unknown): ModelMessage {
+  const mObj = (m ?? {}) as {
+    role?: unknown;
+    content?: unknown;
+    tool_calls?: unknown;
+    tool_call_id?: unknown;
+  };
+  const message: ModelMessage = {
+    role: asMessageRole(mObj.role),
+    content: typeof mObj.content === 'string'
+      ? mObj.content
+      : (Array.isArray(mObj.content)
+        // Tool-result / multipart blocks pass through as-is so providers
+        // that understand them (Anthropic) can dispatch them; the OpenAI
+        // adapters serialize them via tool_calls + tool_call_id below.
+        ? (mObj.content as ModelMessage['content'])
+        : JSON.stringify(mObj.content ?? '')),
+  };
+  if (Array.isArray(mObj.tool_calls)) {
+    message.tool_calls = mObj.tool_calls as ModelMessage['tool_calls'];
+  }
+  if (typeof mObj.tool_call_id === 'string') {
+    message.tool_call_id = mObj.tool_call_id;
+  }
+  return message;
+}
+
 function normalizePrompt(
   input: LlmCallInput,
 ): { ok: true; system?: string; messages: ModelMessage[] } | { ok: false; error: string } {
   const systemFallback = asString(input.system);
+
+  // Top-level messages array wins. This is the path tool-use callers use
+  // when looping (each iteration appends an assistant message with
+  // tool_calls, then a user/tool message with tool_results).
+  if (Array.isArray(input.messages)) {
+    if (input.messages.length === 0) {
+      return { ok: false, error: 'llm organ: `messages` must contain at least one message.' };
+    }
+    return {
+      ok: true,
+      system: systemFallback,
+      messages: input.messages.map(normalizeMessageEntry),
+    };
+  }
 
   if (typeof input.prompt === 'string') {
     if (!input.prompt.trim()) {
@@ -246,20 +332,105 @@ function normalizePrompt(
     if (rawMessages.length === 0) {
       return { ok: false, error: 'llm organ: `prompt.messages` must contain at least one message.' };
     }
-    const messages: ModelMessage[] = rawMessages.map((m) => {
-      const mObj = m as { role?: unknown; content?: unknown };
-      return {
-        role: asMessageRole(mObj.role),
-        content: typeof mObj.content === 'string' ? mObj.content : JSON.stringify(mObj.content ?? ''),
-      };
-    });
-    return { ok: true, system, messages };
+    return { ok: true, system, messages: rawMessages.map(normalizeMessageEntry) };
   }
 
   return {
     ok: false,
-    error: 'llm organ: `prompt` is required — either a string or an object with { system?, messages[] }.',
+    error: 'llm organ: `prompt` or `messages` is required.',
   };
+}
+
+/**
+ * Validate and normalize the optional `tools` array. Returns ok:false
+ * when the shape is invalid so the call fails fast with a clear error
+ * instead of dispatching to a provider that would 400 on malformed
+ * tool definitions.
+ */
+function normalizeTools(
+  raw: unknown,
+): { ok: true; tools: OpenAITool[] | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, tools: undefined };
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'llm organ: `tools` must be an array of tool definitions.' };
+  }
+  if (raw.length === 0) return { ok: true, tools: undefined };
+  const tools: OpenAITool[] = [];
+  for (const t of raw) {
+    if (!t || typeof t !== 'object') {
+      return { ok: false, error: 'llm organ: each tool must be an object.' };
+    }
+    const tObj = t as Record<string, unknown>;
+    // Accept either Anthropic shape ({name, description, input_schema}) or
+    // OpenAI shape ({type:"function", function:{name, description, parameters}}).
+    if (tObj.type === 'function' && tObj.function && typeof tObj.function === 'object') {
+      const fn = tObj.function as Record<string, unknown>;
+      if (typeof fn.name !== 'string') {
+        return { ok: false, error: 'llm organ: tool.function.name is required.' };
+      }
+      tools.push({
+        type: 'function',
+        function: {
+          name: fn.name,
+          description: typeof fn.description === 'string' ? fn.description : '',
+          parameters: (fn.parameters as Record<string, unknown>) ?? { type: 'object', properties: {} },
+        },
+      });
+      continue;
+    }
+    if (typeof tObj.name === 'string') {
+      tools.push({
+        type: 'function',
+        function: {
+          name: tObj.name,
+          description: typeof tObj.description === 'string' ? tObj.description : '',
+          parameters: (tObj.input_schema as Record<string, unknown>)
+            ?? (tObj.parameters as Record<string, unknown>)
+            ?? { type: 'object', properties: {} },
+        },
+      });
+      continue;
+    }
+    return { ok: false, error: 'llm organ: tool entry missing name (expected {name, description, input_schema} or {type:"function", function:{...}}).' };
+  }
+  return { ok: true, tools };
+}
+
+/**
+ * Convert a provider response (with or without toolCalls) into the
+ * normalized ContentBlock[] shape that ohwow_llm returns to callers.
+ * Anthropic-style block layout: text first, tool_use blocks after.
+ */
+function buildContentBlocks(response: { content: string }, toolCalls?: ModelResponseWithTools['toolCalls']): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  if (response.content && response.content.length > 0) {
+    blocks.push({ type: 'text', text: response.content });
+  }
+  if (toolCalls) {
+    for (const call of toolCalls) {
+      let parsedInput: Record<string, unknown> = {};
+      try {
+        parsedInput = call.function.arguments
+          ? JSON.parse(call.function.arguments) as Record<string, unknown>
+          : {};
+      } catch {
+        // Provider returned a non-JSON arguments string. Surface it raw so
+        // the caller can decide how to handle it instead of dropping the
+        // entire tool call.
+        parsedInput = { _raw_arguments: call.function.arguments };
+      }
+      blocks.push({
+        type: 'tool_use',
+        id: call.id,
+        name: call.function.name,
+        input: parsedInput,
+      });
+    }
+  }
+  if (blocks.length === 0) {
+    blocks.push({ type: 'text', text: '' });
+  }
+  return blocks;
 }
 
 /**
@@ -289,6 +460,12 @@ export async function runLlmCall(
   if (!normalized.ok) {
     return { ok: false, error: normalized.error };
   }
+
+  const normalizedTools = normalizeTools(input.tools);
+  if (!normalizedTools.ok) {
+    return { ok: false, error: normalizedTools.error };
+  }
+  const tools = normalizedTools.tools;
 
   let agentPolicy: AgentModelPolicy | undefined;
   if (deps.currentAgentId) {
@@ -348,7 +525,37 @@ export async function runLlmCall(
     if (selection.model) {
       params.model = selection.model;
     }
-    const response = await selection.provider.createMessage(params);
+
+    // Dispatch through createMessageWithTools when the caller supplied a
+    // non-empty tools array AND the selected provider supports it. All
+    // providers in the codebase implement it today, but the interface
+    // marks it optional, so guard before calling. If a provider lacks
+    // tool-use support, fail fast with a clear error rather than silently
+    // dropping the tools array.
+    let response: { content: string; inputTokens: number; outputTokens: number; model: string; provider: ModelResponseWithTools['provider']; costCents?: number };
+    let toolCalls: ModelResponseWithTools['toolCalls'] | undefined;
+    if (tools && tools.length > 0) {
+      if (!selection.provider.createMessageWithTools) {
+        const errorMessage = `llm organ: provider "${selection.provider.name}" does not support tool calls.`;
+        await recordLlmCallTelemetry(deps, {
+          purpose,
+          provider: selection.provider.name,
+          model: selection.model ?? 'unknown',
+          inputTokens: 0,
+          outputTokens: 0,
+          costCents: 0,
+          latencyMs: Date.now() - startMs,
+          success: false,
+          errorMessage,
+        });
+        return { ok: false, error: errorMessage };
+      }
+      const toolResponse = await selection.provider.createMessageWithTools({ ...params, tools });
+      response = toolResponse;
+      toolCalls = toolResponse.toolCalls;
+    } else {
+      response = await selection.provider.createMessage(params);
+    }
     const latencyMs = Date.now() - startMs;
 
     const capWarning =
@@ -375,6 +582,7 @@ export async function runLlmCall(
       ok: true,
       data: {
         text: response.content,
+        content: buildContentBlocks(response, toolCalls),
         model_used: response.model,
         provider: response.provider,
         purpose,
