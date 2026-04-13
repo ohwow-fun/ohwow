@@ -192,6 +192,14 @@ export class ControlPlaneClient {
       ...(totalVramGb > 0 ? { totalVramGb } : {}),
     };
 
+    // Forward-compat: if the active workspace has a pinned
+    // requestedCloudWorkspaceId, send it so a future multi-workspace-per-license
+    // cloud can honor it. Current cloud ignores unknown fields, so this is safe
+    // to include unconditionally.
+    const { resolveActiveWorkspace, readWorkspaceConfig } = await import('../config.js');
+    const activeWs = readWorkspaceConfig(resolveActiveWorkspace().name);
+    const requestedWorkspaceId = activeWs?.requestedCloudWorkspaceId;
+
     const body: ConnectRequest = {
       licenseKey: this.config.licenseKey,
       runtimeVersion: VERSION,
@@ -201,6 +209,7 @@ export class ControlPlaneClient {
       localUrl: this.config.localUrl,
       machineId: getMachineId(),
       deviceCapabilities,
+      ...(requestedWorkspaceId ? { requestedWorkspaceId } : {}),
     };
 
     const response = await fetch(`${this.config.cloudUrl}/api/local-runtime/connect`, {

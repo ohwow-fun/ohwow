@@ -294,6 +294,102 @@ if (subcommand === 'logs') {
     process.exit(0);
   }
 
+  if (action === 'link') {
+    const name = process.argv[4];
+    const licenseKeyArg = process.argv.find((a) => a.startsWith('--license-key='))?.split('=')[1];
+    const displayNameArg = process.argv.find((a) => a.startsWith('--name='))?.split('=')[1];
+
+    if (!name || !licenseKeyArg) {
+      console.error('Usage: ohwow workspace link <name> --license-key=<key> [--name="Label"]');
+      process.exit(1);
+    }
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    if (name === DEFAULT_WORKSPACE) {
+      console.error(
+        `Cannot link the default workspace. Set licenseKey in ~/.ohwow/config.json directly, or ` +
+          `create a new workspace with --license-key.`,
+      );
+      process.exit(1);
+    }
+
+    const { existsSync } = await import('fs');
+    const layout = workspaceLayoutFor(name);
+    if (!existsSync(layout.dataDir)) {
+      console.error(`Workspace "${name}" does not exist. Run "ohwow workspace create ${name}" first.`);
+      process.exit(1);
+    }
+
+    const existing = readWorkspaceConfig(name);
+    if (existing?.mode === 'cloud') {
+      console.error(
+        `Workspace "${name}" is already linked to cloud workspace ${existing.cloudWorkspaceId ?? '(pending)'}. ` +
+          `Run "ohwow workspace unlink ${name}" first.`,
+      );
+      process.exit(1);
+    }
+
+    // Mirror detection.
+    const clash = findWorkspaceByLicenseKey(licenseKeyArg);
+    if (clash && clash !== name) {
+      console.error(
+        `License key is already used by workspace "${clash}". ` +
+          `Use a different license, or run "ohwow workspace unlink ${clash}" first.`,
+      );
+      process.exit(1);
+    }
+
+    writeWorkspaceConfig(name, {
+      schemaVersion: 1,
+      mode: 'cloud',
+      licenseKey: licenseKeyArg,
+      ...(displayNameArg ? { displayName: displayNameArg } : existing?.displayName ? { displayName: existing.displayName } : {}),
+    });
+    console.log(`Linked workspace "${name}" to cloud.`);
+    console.log(`  License: ${licenseKeyArg.slice(0, 7)}***`);
+    console.log(`Switch to it with "ohwow workspace use ${name}" — first connect will populate cloud metadata.`);
+    process.exit(0);
+  }
+
+  if (action === 'unlink') {
+    const name = process.argv[4];
+    if (!name) {
+      console.error('Usage: ohwow workspace unlink <name>');
+      process.exit(1);
+    }
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    if (name === DEFAULT_WORKSPACE) {
+      console.error('Cannot unlink the default workspace.');
+      process.exit(1);
+    }
+
+    const existing = readWorkspaceConfig(name);
+    if (!existing) {
+      console.error(`Workspace "${name}" has no workspace.json — nothing to unlink.`);
+      process.exit(1);
+    }
+    if (existing.mode !== 'cloud') {
+      console.log(`Workspace "${name}" is already ${existing.mode}.`);
+      process.exit(0);
+    }
+
+    // Drop license + cloud identity; preserve local data.
+    writeWorkspaceConfig(name, {
+      schemaVersion: 1,
+      mode: 'local-only',
+      ...(existing.displayName ? { displayName: existing.displayName } : {}),
+    });
+    console.log(`Unlinked workspace "${name}" from cloud. Local data preserved.`);
+    console.log('If the daemon is currently running on this workspace, restart it to apply: ');
+    console.log(`  ohwow workspace use ${name} --restart`);
+    process.exit(0);
+  }
+
   if (action === 'use') {
     const name = process.argv[4];
     const force = process.argv.includes('--restart');
@@ -372,9 +468,15 @@ if (subcommand === 'logs') {
   }
 
   console.error(`Unknown workspace action: ${action}`);
-  console.error(
-    'Usage: ohwow workspace [list|current|info [<name>]|create <name> [--local-only | --license-key=<key>] [--name="Label"]|use <name> [--restart]]',
-  );
+  console.error('Usage: ohwow workspace <action> [args]');
+  console.error('  list                                          List workspaces');
+  console.error('  current                                       Print the active workspace name');
+  console.error('  info [<name>]                                 Show mode/tier/status for a workspace');
+  console.error('  create <name> --local-only [--name="Label"]   Create a disconnected local workspace');
+  console.error('  create <name> --license-key=<k> [--name=...]  Create a cloud-linked workspace');
+  console.error('  link <name> --license-key=<k> [--name=...]    Promote local-only → cloud');
+  console.error('  unlink <name>                                 Demote cloud → local-only (keeps data)');
+  console.error('  use <name> [--restart]                        Switch active workspace (restarts daemon)');
   process.exit(1);
 } else if (subcommand === 'mcp-server') {
   const { startMcpServer } = await import('./mcp-server/index.js');

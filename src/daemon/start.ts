@@ -13,7 +13,14 @@ import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { TypedEventBus } from '../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../tui/types.js';
-import { loadConfig, isFirstRun } from '../config.js';
+import {
+  loadConfig,
+  isFirstRun,
+  resolveActiveWorkspace,
+  readWorkspaceConfig,
+  writeWorkspaceConfig,
+  findWorkspaceByCloudId,
+} from '../config.js';
 import type { RuntimeConfig } from '../config.js';
 import { initDatabase } from '../db/init.js';
 import { createSqliteAdapter } from '../db/sqlite-adapter.js';
@@ -553,6 +560,24 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // This must happen before cloud connect — if connect fails, the marker would persist.
   clearReplacedMarker(dataDir);
 
+  // Multi-workspace safety: if this workspace is cloud-mode and has a pinned
+  // cloudWorkspaceId from a prior connect, refuse to boot if any OTHER local
+  // workspace also points at that cloud id. Two local workspaces cannot mirror
+  // the same cloud workspace — that's exactly the silent-data-collision bug
+  // workspace isolation exists to prevent.
+  const activeWsName = resolveActiveWorkspace().name;
+  const activeWs = readWorkspaceConfig(activeWsName);
+  if (activeWs?.mode === 'cloud' && activeWs.cloudWorkspaceId) {
+    const conflict = findWorkspaceByCloudId(activeWs.cloudWorkspaceId);
+    if (conflict && conflict !== activeWsName) {
+      throw new Error(
+        `Cloud workspace ${activeWs.cloudWorkspaceId} is already bound to local workspace ` +
+          `"${conflict}". Two local workspaces cannot mirror the same cloud workspace. ` +
+          `Run "ohwow workspace unlink ${conflict}" first or use a different license.`,
+      );
+    }
+  }
+
   if (isConnected && config.licenseKey) {
     controlPlane = new ControlPlaneClient(config, db, {
       onTaskDispatch: (agentId, taskId) => {
@@ -605,6 +630,28 @@ export async function startDaemon(): Promise<DaemonHandle> {
     } catch (err) {
       logger.warn(`[daemon] Cloud connect failed (offline mode): ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  // Multi-workspace: persist the cloud identity the control plane resolved for
+  // this workspace. Future boots use it for mirror detection (above) and for
+  // `ohwow workspace info` display. If we had a pinned cloudWorkspaceId and
+  // the cloud returned a different one, that signals a license reassignment —
+  // refuse rather than silently re-pointing at a different cloud brain.
+  if (controlPlane?.connectedWorkspaceId && activeWs?.mode === 'cloud') {
+    const resolvedCloudId = controlPlane.connectedWorkspaceId;
+    if (activeWs.cloudWorkspaceId && activeWs.cloudWorkspaceId !== resolvedCloudId) {
+      throw new Error(
+        `Workspace "${activeWsName}" is pinned to cloud workspace ${activeWs.cloudWorkspaceId} ` +
+          `but the cloud returned ${resolvedCloudId}. License key may have been reassigned. ` +
+          `Re-link the workspace explicitly if this is intentional.`,
+      );
+    }
+    writeWorkspaceConfig(activeWsName, {
+      ...activeWs,
+      cloudWorkspaceId: resolvedCloudId,
+      cloudDeviceId: controlPlane.connectedDeviceId ?? undefined,
+      lastConnectAt: new Date().toISOString(),
+    });
   }
 
   // 7.5 Detect Claude Code CLI availability

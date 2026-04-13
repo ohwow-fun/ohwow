@@ -32,6 +32,14 @@ export interface ConnectRequest {
   deviceCapabilities?: DeviceCapabilities;
   force?: boolean;
   acknowledgeMemoryLoss?: boolean;
+  /**
+   * Forward-compat: when set, ask the cloud to connect as this workspace
+   * instead of the license's default. Older cloud backends ignore unknown
+   * fields; newer ones (once multi-workspace-per-license is implemented) can
+   * honor it to give a single license key access to multiple cloud brains.
+   * Sourced from workspace.json's `requestedCloudWorkspaceId` field.
+   */
+  requestedWorkspaceId?: string;
 }
 
 export interface AgentConfigPayload {
