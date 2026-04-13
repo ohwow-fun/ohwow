@@ -268,14 +268,29 @@ if (subcommand === 'logs') {
       }
 
       if (!provisionResponse.ok) {
-        let msg = `Cloud refused (${provisionResponse.status})`;
+        let serverMsg = '';
         try {
-          const errBody = await provisionResponse.json() as { error?: string };
-          if (errBody.error) msg += `: ${errBody.error}`;
+          const errBody = (await provisionResponse.json()) as { error?: string };
+          if (errBody.error) serverMsg = errBody.error;
         } catch {
           // Non-JSON body — fall through with status-only message.
         }
-        console.error(msg);
+        console.error(
+          serverMsg
+            ? `Cloud refused (${provisionResponse.status}): ${serverMsg}`
+            : `Cloud refused (${provisionResponse.status})`,
+        );
+        // Friendly nudge when the cap is the cause: local-only is always
+        // available and doesn't burn a cloud workspace slot.
+        if (
+          provisionResponse.status === 403 &&
+          /1-workspace limit|workspace_creation_limit_reached/i.test(serverMsg)
+        ) {
+          console.error('');
+          console.error('Tip: create a fully local workspace instead — they are unlimited:');
+          const labelFlag = displayNameArg ? ` --name="${displayNameArg}"` : '';
+          console.error(`  ohwow workspace create ${name} --local-only${labelFlag}`);
+        }
         process.exit(1);
       }
 
