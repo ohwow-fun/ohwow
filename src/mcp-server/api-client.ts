@@ -12,7 +12,15 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { resolveActiveWorkspace, portForWorkspace, DEFAULT_PORT, LEGACY_DATA_DIR } from '../config.js';
+import {
+  resolveActiveWorkspace,
+  portForWorkspace,
+  workspaceLayoutFor,
+  writeWorkspacePointer,
+  isValidWorkspaceName,
+  DEFAULT_PORT,
+  LEGACY_DATA_DIR,
+} from '../config.js';
 
 export class DaemonApiClient {
   private baseUrl: string;
@@ -68,6 +76,76 @@ export class DaemonApiClient {
     }
 
     return client;
+  }
+
+  /**
+   * Repoint this client at a different workspace's daemon. Used by the
+   * `ohwow_workspace_use` MCP tool so callers can switch the MCP session's
+   * target without restarting Claude Code. Health-checks the new daemon
+   * before swapping internal state — if the target is down, the client
+   * stays attached to its current workspace and the caller gets a clear
+   * error.
+   *
+   * Side effects: also updates ~/.ohwow/current-workspace so future TUI
+   * launches and new MCP sessions default to this workspace.
+   */
+  async switchTo(workspaceName: string): Promise<{ port: number; workspaceName: string }> {
+    if (!isValidWorkspaceName(workspaceName)) {
+      throw new Error(`Invalid workspace name: ${workspaceName}`);
+    }
+
+    const layout = workspaceLayoutFor(workspaceName);
+    const port = portForWorkspace(workspaceName);
+    if (port === null) {
+      throw new Error(
+        `Workspace "${workspaceName}" has no port assigned yet. Start it once with: ohwow workspace start ${workspaceName}`,
+      );
+    }
+
+    const newTokenPath = join(layout.dataDir, 'daemon.token');
+    if (!existsSync(newTokenPath)) {
+      throw new Error(
+        `Daemon for workspace "${workspaceName}" is not running. Start it with: ohwow workspace start ${workspaceName}`,
+      );
+    }
+
+    const newToken = readFileSync(newTokenPath, 'utf-8').trim();
+    if (!newToken) {
+      throw new Error(`Empty daemon token for workspace "${workspaceName}"`);
+    }
+
+    const newBaseUrl = `http://127.0.0.1:${port}`;
+
+    // Health check the candidate BEFORE swapping so a failed switch leaves
+    // the client attached to the previous workspace cleanly.
+    try {
+      const res = await fetch(`${newBaseUrl}/health`, {
+        headers: { Authorization: `Bearer ${newToken}` },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (err) {
+      throw new Error(
+        `Daemon for "${workspaceName}" not responding on port ${port}: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+
+    // Swap atomically (simple field assignment, all on one tick)
+    this.baseUrl = newBaseUrl;
+    this.token = newToken;
+    this.tokenPath = newTokenPath;
+
+    // Persist the focus shift for future sessions/launches.
+    writeWorkspacePointer(workspaceName);
+
+    // Also set OHWOW_WORKSPACE in this MCP process's env so any child
+    // daemon spawned by daemon-tools (start/restart) explicitly inherits
+    // the new workspace instead of relying solely on the pointer file.
+    process.env.OHWOW_WORKSPACE = workspaceName;
+
+    return { port, workspaceName };
   }
 
   /**

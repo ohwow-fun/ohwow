@@ -13,8 +13,7 @@
 
 import { z } from 'zod';
 import { join, dirname } from 'path';
-import { homedir } from 'os';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
@@ -24,28 +23,29 @@ import {
   waitForDaemon,
   waitForDaemonStop,
 } from '../../daemon/lifecycle.js';
+import {
+  resolveActiveWorkspace,
+  portForWorkspace,
+  DEFAULT_PORT,
+} from '../../config.js';
 
 interface ResolvedDaemonConfig {
+  workspaceName: string;
   dataDir: string;
   port: number;
   entryPath: string | null;
 }
 
+/**
+ * Resolve the daemon config for the FOCUSED workspace. Under parallel mode
+ * each workspace runs its own daemon on its own port and dataDir, so these
+ * tools always operate on whichever one ~/.ohwow/current-workspace points
+ * at. Use `ohwow_workspace_use` to switch focus, then call these tools to
+ * act on the new target.
+ */
 function resolveConfig(): ResolvedDaemonConfig {
-  const configDir = join(homedir(), '.ohwow');
-  const dataDir = join(configDir, 'data');
-
-  let port = 7700;
-  const configPath = join(configDir, 'config.json');
-  if (existsSync(configPath)) {
-    try {
-      const raw = readFileSync(configPath, 'utf-8');
-      const config = JSON.parse(raw);
-      if (typeof config.port === 'number') port = config.port;
-    } catch {
-      // Fall back to default
-    }
-  }
+  const active = resolveActiveWorkspace();
+  const port = portForWorkspace(active.name) ?? DEFAULT_PORT;
 
   // Entry resolution mirrors the TUI's `/restart` slash command: walk up
   // from this module's compiled location to find `dist/index.js`, then
@@ -59,7 +59,7 @@ function resolveConfig(): ResolvedDaemonConfig {
   ];
   const entryPath = candidates.find((p) => existsSync(p)) ?? null;
 
-  return { dataDir, port, entryPath };
+  return { workspaceName: active.name, dataDir: active.dataDir, port, entryPath };
 }
 
 async function snapshotStatus(
