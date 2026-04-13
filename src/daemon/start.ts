@@ -688,6 +688,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     modelSource: config.modelSource,
     daemonPort: config.port,
     daemonToken: sessionToken,
+    desktopToolsEnabled: config.desktopToolsEnabled,
   }, {
     reportToCloud: controlPlane ? (report) => controlPlane!.reportTask(report) : () => Promise.resolve(),
   }, businessContext, bus, modelRouter, scraplingService);
@@ -853,6 +854,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     channelRegistry, controlPlane!, modelRouter, scraplingService, config.orchestratorModel, process.cwd(),
     config.browserHeadless, dataDir, config.mcpServers,
     config.browserTarget, config.chromeCdpPort,
+    config.desktopToolsEnabled,
   );
 
   if (orchestrator) {

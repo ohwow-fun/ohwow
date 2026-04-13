@@ -44,6 +44,14 @@ export interface EngineConfig {
   daemonPort?: number;
   /** Daemon auth token for API callbacks */
   daemonToken?: string;
+  /**
+   * Workspace-level kill switch for desktop control tools. When false
+   * (default), agents can never call desktop tools regardless of their
+   * own per-agent `desktop_enabled` flag — the workspace setting wins.
+   * When true, the existing per-agent gate determines whether a given
+   * agent gets desktop tools.
+   */
+  desktopToolsEnabled?: boolean;
 }
 
 // ============================================================================

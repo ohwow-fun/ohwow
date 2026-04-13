@@ -162,6 +162,17 @@ export class LocalOrchestrator {
   private mcpClients: McpClientManager | null = null;
   private mcpServers: McpServerConfig[];
   /**
+   * Workspace-level kill switch for desktop control tools. When false
+   * (default), the orchestrator does NOT inject request_desktop or any
+   * desktop_* tools into its surface unless the user message was
+   * explicitly classified as a desktop intent (intent classifier
+   * returned `desktop`). This stops the "confused model takes a
+   * screenshot of an unrelated app and laundering its contents into the
+   * response" pathology. Enable per-workspace via workspace.json
+   * `desktopToolsEnabled: true` or globally via OHWOW_DESKTOP_TOOLS_ENABLED.
+   */
+  private desktopToolsEnabled: boolean;
+  /**
    * Snapshot of the most recent MCP reload outcome. Updated by
    * reloadMcpServers() and ensureMcpConnected() so daemon health endpoints
    * (and the /api/mcp routes) can surface per-server connect failures
@@ -420,6 +431,7 @@ export class LocalOrchestrator {
     mcpServers?: McpServerConfig[],
     browserTarget?: 'chromium' | 'chrome',
     chromeCdpPort?: number,
+    desktopToolsEnabled?: boolean,
   ) {
     this.db = db;
     this.engine = engine;
@@ -451,6 +463,7 @@ export class LocalOrchestrator {
     this.chromeCdpPort = chromeCdpPort || 9222;
     this.dataDir = dataDir || '';
     this.mcpServers = mcpServers || [];
+    this.desktopToolsEnabled = desktopToolsEnabled === true;
 
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
@@ -1897,11 +1910,24 @@ export class LocalOrchestrator {
       tools = [REQUEST_BROWSER_TOOL, LIST_CHROME_PROFILES_TOOL, ...tools];
     }
 
-    // Add desktop tools: same two-step pattern as browser
-    if (desktopPreActivated || this.desktopActivated) {
-      tools = [...DESKTOP_TOOL_DEFINITIONS, ...tools];
-    } else {
-      tools = [REQUEST_DESKTOP_TOOL, ...tools];
+    // Add desktop tools: gated by an explicit-intent + workspace allow check.
+    // The legacy behavior was to always inject REQUEST_DESKTOP_TOOL; that let
+    // a confused model fall into a desktop_screenshot loop on routine tasks
+    // and read window contents from unrelated applications, leaking
+    // cross-workspace data into the response. Default-off; opt in either by
+    // workspace setting or by the intent classifier explicitly recognizing
+    // a desktop request. Once activated this turn, stay activated so
+    // multi-step desktop workflows keep their tool surface.
+    const desktopAllowed =
+      this.desktopToolsEnabled
+      || desktopPreActivated === true
+      || this.desktopActivated;
+    if (desktopAllowed) {
+      if (desktopPreActivated || this.desktopActivated) {
+        tools = [...DESKTOP_TOOL_DEFINITIONS, ...tools];
+      } else {
+        tools = [REQUEST_DESKTOP_TOOL, ...tools];
+      }
     }
 
     // Add filesystem/bash tools: if already activated this session or paths exist in DB,

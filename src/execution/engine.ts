@@ -894,12 +894,19 @@ export class RuntimeEngine {
       const devopsEnabled = isAllowlistMode
         ? false
         : agentConfig.devops_enabled === true;
-      // Desktop/browser can be enabled via agent config OR via SOP in the task input
+      // Desktop/browser can be enabled via agent config OR via SOP in the task input.
+      // The workspace-level desktopToolsEnabled kill switch always wins: when the
+      // workspace has desktop disabled (default), no agent gets desktop tools
+      // regardless of its own opt-in. Agents that previously relied on desktop
+      // need their workspace opted in via workspace.json `desktopToolsEnabled: true`
+      // or globally via OHWOW_DESKTOP_TOOLS_ENABLED=true.
       const sopTaskInputForCaps = String(task.input || '');
       const sopNeedsDesktop = sopTaskInputForCaps.includes('request_desktop') || sopTaskInputForCaps.includes('desktop_focus_app');
-      const desktopEnabled = isAllowlistMode
+      const workspaceDesktopAllowed = this.config.desktopToolsEnabled === true;
+      const desktopEnabledRaw = isAllowlistMode
         ? allowlistPermits(toolPolicy, 'request_desktop')
         : (agentConfig.desktop_enabled === true || agentConfig.desktop_enabled === 1 || sopNeedsDesktop);
+      const desktopEnabled = workspaceDesktopAllowed && desktopEnabledRaw;
       const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
       const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
       const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];

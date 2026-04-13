@@ -58,6 +58,15 @@ New file: `~/.ohwow/workspaces/<name>/workspace.json`
   // Optional. Human label for `workspace list` / `workspace info`.
   "displayName": "AvenueD Ops",
 
+  // Optional. Per-workspace override for the desktop control kill switch.
+  // When omitted, inherits the global `desktopToolsEnabled` (default false).
+  // Default-off prevents the orchestrator from injecting request_desktop /
+  // desktop_screenshot into routine turns, where a confused model could
+  // otherwise read window contents from unrelated apps and leak cross-
+  // workspace data into the response. Set true on workspaces that legitimately
+  // need desktop automation.
+  "desktopToolsEnabled": false,
+
   // Future: forward-compatible slot for multi-workspace-per-license.
   // Forwarded as ConnectRequest.requestedWorkspaceId when the cloud supports it.
   "requestedCloudWorkspaceId": null

@@ -157,6 +157,21 @@ export interface RuntimeConfig {
   staleBranchPolicy: 'off' | 'warn' | 'block' | 'auto-rebase' | 'auto-merge';
   /** Number of commits behind main before triggering stale branch detection (default: 5) */
   staleBranchThreshold: number;
+  /**
+   * Workspace-level kill switch for the orchestrator's desktop control tools.
+   * Default `false` — desktop tools (request_desktop, desktop_screenshot,
+   * desktop_focus_app, etc.) are NOT injected into the orchestrator's
+   * tool surface unless the user message was explicitly classified as a
+   * desktop intent. When `true`, the orchestrator can call request_desktop
+   * on any turn the way the legacy default behaved. The agent runner gates
+   * its existing per-agent `desktop_enabled` flag against this same setting,
+   * so a workspace-wide `false` overrides any agent's opt-in.
+   *
+   * The reason this defaults off: a confused model can fall into a
+   * desktop_screenshot loop and read window contents from unrelated apps,
+   * leaking cross-workspace data into the response. Opt-in only.
+   */
+  desktopToolsEnabled: boolean;
 }
 
 interface ConfigFile {
@@ -232,6 +247,7 @@ interface ConfigFile {
   recoveryAuditEnabled?: boolean;
   staleBranchPolicy?: 'off' | 'warn' | 'block' | 'auto-rebase' | 'auto-merge';
   staleBranchThreshold?: number;
+  desktopToolsEnabled?: boolean;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -415,6 +431,13 @@ export interface WorkspaceConfig {
    * include today — cloud backends that don't know about it ignore it.
    */
   requestedCloudWorkspaceId?: string;
+  /**
+   * Per-workspace override for the desktop tools kill switch. When set,
+   * overrides the global config's desktopToolsEnabled. Default behavior
+   * (omitted): inherit the global setting, which itself defaults to false.
+   * See RuntimeConfig.desktopToolsEnabled for the security rationale.
+   */
+  desktopToolsEnabled?: boolean;
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -525,6 +548,12 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   // port so they don't fight for 7700.
   if (typeof ws.port === 'number' && ws.port > 0) {
     next.port = ws.port;
+  }
+  // Per-workspace desktop kill switch overrides the global setting. Lets
+  // an operator opt one workspace into desktop control without enabling
+  // it globally, or vice-versa.
+  if (typeof ws.desktopToolsEnabled === 'boolean') {
+    next.desktopToolsEnabled = ws.desktopToolsEnabled;
   }
   return next;
 }
@@ -710,6 +739,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       const env = parseInt(process.env.OHWOW_STALE_BRANCH_THRESHOLD || '', 10);
       return !isNaN(env) ? env : (fileConfig.staleBranchThreshold ?? 5);
     })(),
+    desktopToolsEnabled: process.env.OHWOW_DESKTOP_TOOLS_ENABLED === 'true' || fileConfig.desktopToolsEnabled === true,
   };
 
 

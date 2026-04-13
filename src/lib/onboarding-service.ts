@@ -237,6 +237,7 @@ export class OnboardingService {
       recoveryAuditEnabled: true,
       staleBranchPolicy: 'warn',
       staleBranchThreshold: 5,
+      desktopToolsEnabled: false,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;
