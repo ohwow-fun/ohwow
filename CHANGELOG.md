@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.1] — 2026-04-13
+
+### Added
+- **Multi-workspace (phase 1 — local-only)**: Per-workspace config via `~/.ohwow/workspaces/<name>/workspace.json` layered on top of global `config.json`. Local-only mode blanks `licenseKey` and forces `tier='free'` so the daemon boots fully isolated, no `ControlPlaneClient`, no cloud sync — useful for operational sandbox brains. New CLI: `workspace create <name> --local-only`, `workspace create --name="Label"`, `workspace info [<name>]`; `workspace list` now shows `(local-only)` / `(cloud: Label)` markers. Helpers added to `config.ts`: `WorkspaceConfig`, `read/writeWorkspaceConfig`, `findWorkspaceByLicenseKey`, `findWorkspaceByCloudId`, `applyWorkspaceOverrides`.
+- **Multi-workspace (phase 2 — cloud-integrated)**: Per-workspace license keys map to distinct cloud workspaces, so two local workspaces can each connect to their own ohwow.fun workspace without sharing state. Zero cloud-side changes. New CLI: `workspace link <name> --license-key=<k> [--name=...]`, `workspace unlink <name>`, `workspace create <name> --license-key=<k>`; `workspace info` now shows cloud metadata. Three-layer mirror-detection safety:
+  1. Pre-create: refuses a license already in use by another local workspace (including the default via global `config.json`)
+  2. Pre-connect (daemon boot): refuses if another `workspace.json` has pinned the same `cloudWorkspaceId`
+  3. Post-connect: throws if a pinned `cloudId` doesn't match what the cloud returned (detects license reassignment), never silently re-points
+
+  After a successful `ControlPlaneClient.connect()`, `cloudWorkspaceId` / `cloudDeviceId` / `lastConnectAt` are persisted back to `workspace.json`; failed connects skip persistence so retries stay idempotent. Forward-compat: `ConnectRequest` gains an optional `requestedWorkspaceId` populated from `workspace.json.requestedCloudWorkspaceId` (current cloud ignores unknown fields; enables future multi-workspace-per-license).
+
+### Fixed
+- **Security** — patch 4 Dependabot advisories via `package.json` override floors:
+  - `axios >=1.15.0` — GHSA-fvcv-3m26-pcqx (critical: cloud metadata exfiltration via header injection chain) and GHSA-3p68-rc4w-qgx5 / CVE-2025-62718 (critical: NO_PROXY hostname normalization bypass → SSRF). Pulled in by `@whiskeysockets/baileys`.
+  - `basic-ftp >=5.2.2` — GHSA-6v7q-wjvx-w8wg (high: incomplete CRLF injection protection allows arbitrary FTP command execution). Pulled in via `stagehand → puppeteer-core → pac-proxy-agent → get-uri`.
+  - `langsmith >=0.5.18` — GHSA-fw9q-39r9-c252 / CVE-2026-40190 (medium: prototype pollution via incomplete `__proto__` guard in internal lodash `set()`). Pulled in via `stagehand → @langchain/core`.
+
 ## [0.8.0] — 2026-04-13
 
 ### Added
