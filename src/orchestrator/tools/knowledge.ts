@@ -537,7 +537,7 @@ export async function uploadKnowledge(
         filename,
         chunk_count: chunks.length,
         token_count: Math.ceil(text.length / 4),
-        preview: text.slice(0, 2000),
+        body: text.slice(0, 4000),
       },
       provider: 'knowledge-base',
     });

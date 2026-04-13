@@ -147,7 +147,7 @@ export async function localWriteFile(ctx: LocalToolContext, input: Record<string
     void recordDeliverable(ctx, {
       title: path ? basename(path) : 'Untitled file',
       type: deliverableTypeForPath(path),
-      content: { file_path: path, byte_size: content.length, preview: content.slice(0, 2000) },
+      content: { file_path: path, byte_size: content.length, body: content.slice(0, 4000) },
       provider: 'local-fs',
     });
   }

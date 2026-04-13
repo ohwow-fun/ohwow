@@ -116,9 +116,19 @@ export async function recordDeliverable(
 
   const id = newHexId();
   const now = new Date().toISOString();
-  const contentString = typeof input.content === 'string'
-    ? input.content
-    : JSON.stringify(input.content);
+
+  // Normalize the content payload into a structured object. Tools pass
+  // either a string (raw text artifact) or an object (typed payload
+  // with file_path / document_id / body / etc.). Keep the structure on
+  // the way out so the dashboard can render type-aware previews
+  // without re-parsing escaped JSON. Local SQLite stores it as a TEXT
+  // column so we stringify here for the local insert; the cloud sync
+  // sends the object directly into the jsonb column.
+  const contentObject: Record<string, unknown> =
+    typeof input.content === 'string'
+      ? { body: input.content.slice(0, 100_000) }
+      : (input.content as Record<string, unknown>);
+  const localContentString = JSON.stringify(contentObject);
 
   try {
     const { error } = await ctx.db.from('agent_workforce_deliverables').insert({
@@ -130,7 +140,7 @@ export async function recordDeliverable(
       deliverable_type: input.type,
       provider: input.provider ?? null,
       title: input.title.slice(0, 500),
-      content: contentString,
+      content: localContentString,
       status: 'pending_review',
       auto_created: 1,
       produced_by_type: producedByType,
@@ -149,9 +159,11 @@ export async function recordDeliverable(
     return null;
   }
 
-  // Fire-and-forget sync to cloud. Same shape the other synced
-  // resources use: payload contains the raw column values, hex ids
-  // get translated to dashed UUIDs by hexToUuid.
+  // Fire-and-forget sync to cloud. Send the content object directly
+  // so the cloud jsonb column stores it as a real object — the
+  // dashboard's type-aware preview renderer then walks the structured
+  // fields (file_path, document_id, body, chunk_count, etc.) without
+  // having to reparse double-encoded strings.
   void syncResource(ctx, 'deliverable', 'upsert', {
     id: hexToUuid(id),
     task_id: (() => {
@@ -163,7 +175,7 @@ export async function recordDeliverable(
     deliverable_type: input.type,
     provider: input.provider ?? null,
     title: input.title.slice(0, 500),
-    content: { text: contentString.slice(0, 100_000) },
+    content: contentObject,
     status: 'pending_review',
     auto_created: true,
     produced_by_type: producedByType,
