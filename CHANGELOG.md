@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.8.0] — 2026-04-13
+
+### Added
+- **Wiki layer**: Karpathy-style wiki with tools + daemon API, lint, version history, orchestrator tool surface, and ambient curation (system prompt nudge + post-turn reflector emitting summaries/backlinks)
+- **Workspace**: Switchable single-workspace support
+- **Orchestrator**: Three-layer context-overflow defense, conversation persona (agents can drive a chat thread), `team_member` + chief-of-staff tools for human onboarding, knowledge intent for ingest/upload verbs
+- **Onboarding**: `propose_first_month_plan` tool with persist + accept, `send_cloud_invite` tool, onboarding plan leverages ohwow
+- **Team**: Cloud-side persona wiring, sync upstream + auto-activate on chat
+- **Sync**: Centralized local→cloud dispatcher, sync agents/tasks/goals/onboarding plans upstream, contact + knowledge doc sync + activity feed, auto-record + attribute deliverables from chat tool chains
+- **LLM organ**: Per-sub-task model selection via `selectForPurpose`, `llm_calls` telemetry table populating `RoutingHistory`, `config.model → config.model_policy.default` migration, `ohwow_llm` MCP tool + `/api/llm` route, router forwards `operationType` + predictive engine signal, `Purpose` superset + `AgentModelPolicy` types
+- **Media**: Lyria audio SSE streaming served over loopback, `generated_media` SSE event beside `tool_done`
+- **Browser**: `browser_evaluate` raw Playwright JS, auto-launch real Chrome with CDP + consent detection, `new_tab`/`switch_tab`/`close_tab`, Chrome profile resolution by email or alias for `desktop_focus_app` and browser path
+- **MCP**: Daemon lifecycle tools
+- **Tunnel**: Propagate cloudflared URL rotations + auto-restart on exit
+- **Desktop**: Multi-monitor screenshot support
+- **API**: Stub endpoints for dashboard-expected routes
+- **Ramp tasks**: Default to guide-owned, justify member-owned
+
+### Fixed
+- **Workspace**: Handle pinned legacy `dbPath` in config.json, unify local workspace identity across HTTP + orchestrator, rename parent workspaces row during consolidation
+- **Wiki-reflector**: Emit summaries + backlinks so curated pages stay lint-clean
+- **Onboarding-plan**: Route synthesis through sonnet-4.6 + bump tokens
+- **Person-model**: Observations FK + camelCase tolerance
+- **Orchestrator**: Explicit tool-name mentions bypass intent filter, CRM intent loads business section, browser path uses `chromeProfileAliases`
+- **RAG**: Title-token overlap before semantic chunk retrieval, knowledge discovery + filesystem + daemon introspection
+- **Research**: Graceful degradation without Anthropic key
+- **Bash**: Redact high-signal secrets from `run_bash` output
+- **Browser**: Pass Stagehand API key + OpenRouter fallback, clone whole user-data-dir instead of symlinking, never auto-create browser singleton outside `/session/start`, `/browser/health` no longer creates singleton, `/export-cookies` accepts POST
+- **Media**: Use valid Lyria model IDs, stream Lyria audio responses via SSE
+- **WS**: Route upgrades via `noServer` mode so `/ws`, `/ws/terminal`, `/ws/voice` coexist; `/ws` accepts cloud content tokens for dashboard via tunnel
+- **Daemon**: Scope local queries to `'local'` workspace, tear down HTTP-route browser singleton on shutdown, include cloud providers in `modelReady`
+- **Desktop**: Persist remote desktop service across actions, screenshot endpoint returns raw JPEG for `Accept: */*`
+- **Scrapling**: Bundle server tree + robust path + correct CLI invocation
+- **Control-plane**: Accept real sync-resource response shape
+- **MCP**: Resolve absolute ohwow path + PATH env for Claude Code spawn
+- **API**: Move stub endpoints before agents router to avoid catch-all match, resolve `package.json` version from cwd
+- **Deliverables**: Stop double-encoding content payloads
+
+### Changed
+- chore: Point `.mcp.json` to local dev binary instead of npx
+
 ## [0.7.0] — 2026-04-11
 
 ### Added
