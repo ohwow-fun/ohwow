@@ -7,27 +7,24 @@ import { basename, isAbsolute, resolve as resolvePath } from 'path';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { FileAccessGuard, executeFilesystemTool } from '../../execution/filesystem/index.js';
 import { recordDeliverable, type DeliverableType } from '../deliverables-recorder.js';
+import { loadWorkspaceDefaultPaths } from '../../db/workspace-paths.js';
 
 /** Cached guard per workspace+cwd combination to avoid re-querying on every tool call. */
 let cachedGuard: FileAccessGuard | null = null;
 let cachedKey: string | null = null;
-
-/**
- * Paths that are always allowed for orchestrator file ops on top of
- * whatever the workspace has configured. /tmp is ephemeral per-user
- * scratch space that ops tasks routinely need for reading CLI output,
- * writing intermediate artifacts, or staging files before upload. Not
- * including it by default means simple dogfood loops (read /tmp/foo.md
- * to stage a knowledge doc) silently fail with "Path is outside allowed
- * directories" even though every shell user already has full access.
- */
-const BASELINE_ORCHESTRATOR_PATHS = ['/tmp'];
 
 async function getGuard(ctx: LocalToolContext): Promise<FileAccessGuard | null> {
   const key = ctx.workspaceId;
   if (cachedGuard && cachedKey === key) {
     return cachedGuard;
   }
+
+  // Workspace-level defaults (default_filesystem_paths, e.g. /tmp) are the
+  // single source of truth shared with engine.ts agent execution. Admins
+  // can extend it per-workspace; per-orchestrator overrides still extend
+  // the union via the legacy agent_file_access_paths rows keyed on the
+  // '__orchestrator__' pseudo-agent.
+  const workspacePaths = await loadWorkspaceDefaultPaths(ctx.db, ctx.workspaceId);
 
   const { data } = await ctx.db
     .from('agent_file_access_paths')
@@ -36,8 +33,7 @@ async function getGuard(ctx: LocalToolContext): Promise<FileAccessGuard | null> 
     .eq('workspace_id', ctx.workspaceId);
 
   const configuredPaths = data ? (data as Array<{ path: string }>).map((p) => p.path) : [];
-  // Deduplicate baseline + configured paths.
-  const paths = Array.from(new Set([...BASELINE_ORCHESTRATOR_PATHS, ...configuredPaths]));
+  const paths = Array.from(new Set([...workspacePaths, ...configuredPaths]));
   if (paths.length === 0) return null;
 
   cachedGuard = new FileAccessGuard(paths);

@@ -19,6 +19,7 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages
 import type { TypedEventBus } from '../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../tui/types.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { loadWorkspaceDefaultPaths } from '../db/workspace-paths.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
 import {
@@ -926,20 +927,27 @@ export class RuntimeEngine {
         autonomyLevel,
       };
 
-      // Load file access guard if enabled
+      // Load file access guard if enabled. Workspace-level defaults
+      // (default_filesystem_paths, e.g. /tmp) flow to every agent so that
+      // SOP-delegated work that touches scratch space doesn't fail with
+      // "no directories configured" just because the agent has no per-agent
+      // path rows. Per-agent paths still extend the union.
       let fileAccessGuard: FileAccessGuard | null = null;
       if (localFilesEnabled) {
+        const workspacePaths = await loadWorkspaceDefaultPaths(this.db, workspaceId);
+
         const { data: pathData } = await this.db
           .from('agent_file_access_paths')
           .select('path')
           .eq('agent_id', agentId);
 
-        const paths = pathData
+        const agentPaths = pathData
           ? (pathData as Array<{ path: string }>).map((p) => p.path)
           : [];
 
-        if (paths.length > 0) {
-          fileAccessGuard = new FileAccessGuard(paths);
+        const merged = Array.from(new Set([...workspacePaths, ...agentPaths]));
+        if (merged.length > 0) {
+          fileAccessGuard = new FileAccessGuard(merged);
         }
       }
 
