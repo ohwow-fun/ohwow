@@ -190,6 +190,38 @@ export function createServer(deps: ServerDeps): {
     }));
   }
 
+  // Maintenance: walk every synced row in the workspace and re-fire
+  // reportResource for each. Used to bootstrap the cloud mirror after a
+  // workspace ran locally for a while, or after a new resource type
+  // was added to the registry. Idempotent.
+  app.post('/api/maintenance/resync-cloud', async (_req, res) => {
+    if (!controlPlane) {
+      res.status(503).json({ error: 'Control plane not connected' });
+      return;
+    }
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { resyncWorkspaceToCloud } = await import('../control-plane/sync-resources.js');
+      // Build a minimal LocalToolContext shaped for the sync walker. Most
+      // fields are unused by the walker but the type requires them.
+      const ctx = {
+        db,
+        workspaceId,
+        engine: engine!,
+        channels: channelRegistry!,
+        controlPlane,
+      } as Parameters<typeof resyncWorkspaceToCloud>[0];
+      const counts = await resyncWorkspaceToCloud(ctx);
+      const total = Object.values(counts).reduce((acc, c) => acc + c.attempted, 0);
+      res.json({ data: { total, counts } });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // Public tier endpoint (used by web UI Layout for feature gating + model status)
   app.get('/api/runtime/tier', async (_req, res) => {
     const tierValue = config.tier || 'free';

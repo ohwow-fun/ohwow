@@ -32,6 +32,61 @@
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { logger } from '../../lib/logger.js';
+import { syncResource, hexToUuid } from '../../control-plane/sync-resources.js';
+import { syncTaskById } from './tasks.js';
+import { syncGoalById } from './goals.js';
+
+/**
+ * Reshape a local onboarding_plan row into the payload the cloud
+ * sync-resource endpoint upserts into agent_workforce_onboarding_plans.
+ * Local stores `weeks` as a JSON-encoded string; cloud stores it as
+ * jsonb so we parse here. Local primary keys are 32-char hex; cloud
+ * needs dashed UUIDs.
+ */
+export function onboardingPlanSyncPayload(row: {
+  id: string;
+  workspace_id?: string;
+  team_member_id: string;
+  person_model_id?: string | null;
+  created_by_agent_id?: string | null;
+  status: string;
+  rationale: string | null;
+  closing_question?: string | null;
+  weeks: unknown;
+  model_used?: string | null;
+  provider?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  accepted_at?: string | null;
+  completed_at?: string | null;
+}): Record<string, unknown> & { id: string } {
+  let weeksJson: unknown = [];
+  if (typeof row.weeks === 'string') {
+    try {
+      weeksJson = JSON.parse(row.weeks);
+    } catch {
+      weeksJson = [];
+    }
+  } else if (row.weeks != null) {
+    weeksJson = row.weeks;
+  }
+  return {
+    id: hexToUuid(row.id),
+    team_member_id: hexToUuid(row.team_member_id),
+    person_model_id: row.person_model_id ? hexToUuid(row.person_model_id) : null,
+    created_by_agent_id: row.created_by_agent_id ? hexToUuid(row.created_by_agent_id) : null,
+    status: row.status,
+    rationale: row.rationale ?? null,
+    closing_question: row.closing_question ?? null,
+    weeks: weeksJson,
+    model_used: row.model_used ?? null,
+    provider: row.provider ?? null,
+    input_tokens: row.input_tokens ?? 0,
+    output_tokens: row.output_tokens ?? 0,
+    accepted_at: row.accepted_at ?? null,
+    completed_at: row.completed_at ?? null,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -450,6 +505,10 @@ export async function proposeFirstMonthPlan(
   // NOT fatal — the synthesis itself already succeeded, so the chat can
   // render the plan even if the row didn't land.
   const planId = newId();
+  const stampedWeeks = plan.weeks.map((w) => ({
+    ...w,
+    tasks: w.tasks.map((t) => ({ ...t, materialized_task_id: null })),
+  }));
   try {
     await ctx.db.from('agent_workforce_onboarding_plans').insert({
       id: planId,
@@ -462,17 +521,30 @@ export async function proposeFirstMonthPlan(
       closing_question: plan.closing_question,
       // Stamp each task with materialized_task_id=null so accept() can fill
       // them in without touching the original plan shape.
-      weeks: JSON.stringify(
-        plan.weeks.map((w) => ({
-          ...w,
-          tasks: w.tasks.map((t) => ({ ...t, materialized_task_id: null })),
-        })),
-      ),
+      weeks: JSON.stringify(stampedWeeks),
       model_used: llmResult.data.model_used,
       provider: llmResult.data.provider,
       input_tokens: llmResult.data.tokens.input,
       output_tokens: llmResult.data.tokens.output,
     });
+
+    // Mirror upstream so the cloud chat-briefing can show the member
+    // their current ramp week the moment they open the dashboard.
+    void syncResource(ctx, 'onboarding_plan', 'upsert', onboardingPlanSyncPayload({
+      id: planId,
+      workspace_id: ctx.workspaceId,
+      team_member_id: teamMemberId,
+      person_model_id: (personModel as { id?: string }).id ?? null,
+      created_by_agent_id: (member as { assigned_guide_agent_id?: string }).assigned_guide_agent_id ?? null,
+      status: 'draft',
+      rationale: plan.rationale,
+      closing_question: plan.closing_question,
+      weeks: stampedWeeks,
+      model_used: llmResult.data.model_used,
+      provider: llmResult.data.provider,
+      input_tokens: llmResult.data.tokens.input,
+      output_tokens: llmResult.data.tokens.output,
+    }));
   } catch (err) {
     logger.warn({ err, teamMemberId }, '[propose_first_month_plan] draft persistence failed (non-fatal)');
   }
@@ -633,6 +705,7 @@ export async function acceptOnboardingPlan(
         position: week.week,
       });
       createdGoalIds.push(goalId);
+      void syncGoalById(ctx, goalId);
     } catch (err) {
       logger.warn({ err, week: week.week }, '[accept_onboarding_plan] goal insert failed');
       continue;
@@ -666,6 +739,7 @@ export async function acceptOnboardingPlan(
           source_type: 'onboarding_plan',
         });
         materializedTaskIds.push(taskId);
+        void syncTaskById(ctx, taskId);
       } catch (err) {
         logger.warn({ err, taskId }, '[accept_onboarding_plan] task insert failed');
         continue;
@@ -719,6 +793,13 @@ export async function acceptOnboardingPlan(
         weeks: JSON.stringify(updatedWeeks),
       })
       .eq('id', planId);
+
+    // Mirror the accepted plan + its now-stamped materialized_task_ids
+    // upstream so the cloud briefing reflects the new state.
+    const refreshedPlan = await loadPlanRow(ctx, planId);
+    if (refreshedPlan) {
+      void syncResource(ctx, 'onboarding_plan', 'upsert', onboardingPlanSyncPayload(refreshedPlan));
+    }
   } catch (err) {
     logger.warn({ err, planId }, '[accept_onboarding_plan] status flip failed');
   }

@@ -5,6 +5,86 @@
 
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
+import { syncResource, hexToUuid, type SyncPayload } from '../../control-plane/sync-resources.js';
+
+/**
+ * Reshape a local agent_workforce_tasks row for the cloud sync-resource
+ * upsert. Translates local 'person' assignee_type into the cloud's
+ * 'human' constraint, and pulls the team_member id (which the local
+ * row stores in `assigned_to` for human-owned tasks) into the
+ * dedicated cloud column `assigned_team_member_id`. The cloud
+ * `assigned_to` column references workspace_members and we don't have
+ * that mapping from the runtime, so it gets nulled.
+ */
+export function taskSyncPayload(row: Record<string, unknown>): SyncPayload {
+  const assigneeType = (row.assignee_type as string | null) ?? 'agent';
+  const isHuman = assigneeType === 'person' || assigneeType === 'human';
+  const localAssignedTo = (row.assigned_to as string | null) ?? null;
+  let metadata: unknown = row.metadata;
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch {
+      metadata = null;
+    }
+  }
+  let input: unknown = row.input;
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch { /* leave as string */ }
+  }
+  let output: unknown = row.output;
+  if (typeof output === 'string') {
+    try { output = JSON.parse(output); } catch { /* leave as string */ }
+  }
+  return {
+    id: hexToUuid(row.id as string),
+    agent_id: row.agent_id ? hexToUuid(row.agent_id as string) : null,
+    title: row.title as string,
+    description: (row.description as string | null) ?? null,
+    status: row.status,
+    priority: (row.priority as string | null) ?? 'normal',
+    assignee_type: isHuman ? 'human' : 'agent',
+    assigned_team_member_id: isHuman && localAssignedTo ? hexToUuid(localAssignedTo) : null,
+    assigned_to: null,
+    assigned_at: row.assigned_at ?? null,
+    goal_id: row.goal_id ? hexToUuid(row.goal_id as string) : null,
+    // project_id intentionally omitted from sync — cloud projects are
+    // not yet mirrored, so a non-null value would FK-violate against
+    // agent_workforce_projects. The runtime is the source of truth for
+    // project assignment until projects join the synced registry.
+    project_id: null,
+    metadata,
+    input,
+    output,
+    source_type: (row.source_type as string | null) ?? 'manual',
+    requires_approval: row.requires_approval ?? false,
+    model_used: row.model_used ?? null,
+    tokens_used: row.tokens_used ?? 0,
+    cost_cents: row.cost_cents ?? 0,
+    started_at: row.started_at ?? null,
+    completed_at: row.completed_at ?? null,
+    duration_seconds: row.duration_seconds ?? null,
+    error_message: row.error_message ?? null,
+    due_date: row.due_date ?? null,
+    created_at: row.created_at ?? null,
+  };
+}
+
+/** Re-fetch a task row from the local DB and sync it upstream. Never throws. */
+export async function syncTaskById(ctx: LocalToolContext, taskId: string): Promise<void> {
+  try {
+    const { data } = await ctx.db
+      .from('agent_workforce_tasks')
+      .select('*')
+      .eq('id', taskId)
+      .eq('workspace_id', ctx.workspaceId)
+      .maybeSingle();
+    if (!data) return;
+    void syncResource(ctx, 'task', 'upsert', taskSyncPayload(data as Record<string, unknown>));
+  } catch (err) {
+    logger.debug({ err, taskId }, '[tasks] sync re-fetch failed');
+  }
+}
 
 export async function listTasks(
   ctx: LocalToolContext,
@@ -170,6 +250,7 @@ export async function approveTask(
     approved_by: 'runtime',
     updated_at: now,
   }).eq('id', taskId);
+  void syncTaskById(ctx, taskId);
 
   // Execute deferred action if present via the control plane
   let actionMessage = '';
@@ -219,6 +300,7 @@ export async function rejectTask(
     rejection_reason: reason,
     updated_at: now,
   }).eq('id', taskId);
+  void syncTaskById(ctx, taskId);
 
   // Update deliverable record if one exists
   const { data: deliverable } = await ctx.db
@@ -275,6 +357,7 @@ export async function rejectTask(
 
     if (newTask) {
       const newTaskId = (newTask as { id: string }).id;
+      void syncTaskById(ctx, newTaskId);
       ctx.engine.executeTask(t.agent_id as string, newTaskId).catch((err) => {
         logger.error(`[orchestrator:reject_task] Retry execution failed: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -324,10 +407,12 @@ export async function scheduleTask(
     .single();
 
   if (!task) return { success: false, error: "Couldn't create task" };
+  const newTaskId = (task as { id: string }).id;
+  void syncTaskById(ctx, newTaskId);
 
   return {
     success: true,
-    data: { message: `Task scheduled for ${a.name}: "${title}" (task ID: ${(task as { id: string }).id})` },
+    data: { message: `Task scheduled for ${a.name}: "${title}" (task ID: ${newTaskId})` },
   };
 }
 
@@ -369,6 +454,7 @@ export async function retryTask(
 
   if (!newTask) return { success: false, error: "Couldn't retry task" };
   const newTaskId = (newTask as { id: string }).id;
+  void syncTaskById(ctx, newTaskId);
 
   // Execute via engine
   ctx.engine.executeTask(t.agent_id as string, newTaskId).catch((err) => {
@@ -406,6 +492,7 @@ export async function cancelTask(
     status: 'failed',
     error_message: 'Cancelled by user via orchestrator',
   }).eq('id', taskId);
+  void syncTaskById(ctx, taskId);
 
   return { success: true, data: { message: `Task "${t.title}" has been cancelled.` } };
 }

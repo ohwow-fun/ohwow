@@ -55,6 +55,7 @@ import { getWorkPatterns, getTimeAllocation, detectAutomationOpportunities, getO
 import { getCrossPollination, scheduleTeamCouncil, getCollectiveBriefing, rebalanceWorkload } from './collective-intelligence.js';
 import { llmTool } from './llm.js';
 import { getDaemonInfo } from './daemon-info.js';
+import { resyncWorkspaceToCloudTool } from './resync.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
@@ -62,6 +63,9 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Daemon introspection — canonical paths, db location, key tables
   ['get_daemon_info', (ctx) => getDaemonInfo(ctx)],
+
+  // Maintenance — re-fire every synced row through the cloud sync path
+  ['resync_workspace_to_cloud', (ctx, input) => resyncWorkspaceToCloudTool(ctx, input)],
 
   // Agent tools
   ['list_agents', (ctx) => listAgents(ctx)],

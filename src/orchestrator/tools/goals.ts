@@ -5,6 +5,44 @@
 
 import { randomUUID } from 'node:crypto';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import { syncResource, hexToUuid, type SyncPayload } from '../../control-plane/sync-resources.js';
+import { logger } from '../../lib/logger.js';
+
+/** Reshape a local agent_workforce_goals row into the cloud sync payload. */
+export function goalSyncPayload(row: Record<string, unknown>): SyncPayload {
+  return {
+    id: hexToUuid(row.id as string),
+    title: row.title as string,
+    description: (row.description as string | null) ?? null,
+    status: (row.status as string | null) ?? 'active',
+    priority: (row.priority as string | null) ?? 'normal',
+    target_metric: (row.target_metric as string | null) ?? null,
+    target_value: row.target_value ?? null,
+    current_value: row.current_value ?? 0,
+    unit: (row.unit as string | null) ?? null,
+    due_date: (row.due_date as string | null) ?? null,
+    color: (row.color as string | null) ?? '#6366f1',
+    position: row.position ?? 0,
+    completed_at: (row.completed_at as string | null) ?? null,
+    created_at: (row.created_at as string | null) ?? null,
+  };
+}
+
+/** Re-fetch a goal row and sync upstream. Never throws. */
+export async function syncGoalById(ctx: LocalToolContext, goalId: string): Promise<void> {
+  try {
+    const { data } = await ctx.db
+      .from('agent_workforce_goals')
+      .select('*')
+      .eq('id', goalId)
+      .eq('workspace_id', ctx.workspaceId)
+      .maybeSingle();
+    if (!data) return;
+    void syncResource(ctx, 'goal', 'upsert', goalSyncPayload(data as Record<string, unknown>));
+  } catch (err) {
+    logger.debug({ err, goalId }, '[goals] sync re-fetch failed');
+  }
+}
 
 export async function listGoals(
   ctx: LocalToolContext,
@@ -103,6 +141,7 @@ export async function createGoal(
     });
 
   if (error) return { success: false, error: error.message };
+  void syncGoalById(ctx, id);
 
   return {
     success: true,
@@ -134,6 +173,7 @@ export async function updateGoal(
     .eq('id', goalId);
 
   if (error) return { success: false, error: error.message };
+  void syncGoalById(ctx, goalId);
 
   return { success: true, data: { message: 'Goal updated successfully.' } };
 }

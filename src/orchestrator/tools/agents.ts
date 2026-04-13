@@ -7,6 +7,40 @@ import type { SequenceDefinition, SequenceStep } from '../sequential/types.js';
 import { executeSequence } from '../sequential/sequential-executor.js';
 import { extractKeywords, matchesTriggers } from '../../lib/token-similarity.js';
 import { logger } from '../../lib/logger.js';
+import { hexToUuid, type SyncPayload } from '../../control-plane/sync-resources.js';
+
+/**
+ * Reshape a local agent_workforce_agents row for the cloud upsert.
+ * The cloud table requires `system_prompt` (NOT NULL) and accepts a
+ * jsonb `config`; the local row stores config as a JSON string. We
+ * parse it here and fall back to an empty object so a malformed local
+ * config doesn't block the sync.
+ */
+export function agentSyncPayload(row: Record<string, unknown>): SyncPayload {
+  let config: unknown = row.config;
+  if (typeof config === 'string') {
+    try { config = JSON.parse(config); } catch { config = {}; }
+  }
+  let stats: unknown = row.stats;
+  if (typeof stats === 'string') {
+    try { stats = JSON.parse(stats); } catch { stats = {}; }
+  }
+  return {
+    id: hexToUuid(row.id as string),
+    name: (row.name as string) ?? 'Agent',
+    role: (row.role as string) ?? 'general',
+    description: (row.description as string | null) ?? null,
+    avatar_url: (row.avatar_url as string | null) ?? null,
+    system_prompt: (row.system_prompt as string | null) ?? '',
+    config: config ?? {},
+    stats: stats ?? {},
+    total_tasks: row.total_tasks ?? 0,
+    completed_tasks: row.completed_tasks ?? 0,
+    failed_tasks: row.failed_tasks ?? 0,
+    tokens_used: row.tokens_used ?? 0,
+    paused: row.paused ?? false,
+  };
+}
 
 // ============================================================================
 // SOP → SEQUENCE DECOMPOSITION
