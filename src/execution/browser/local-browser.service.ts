@@ -14,6 +14,14 @@ import type {
   BrowserSnapshot,
 } from './browser-types.js';
 import { logger } from '../../lib/logger.js';
+import {
+  ChromeLifecycleError,
+  DEBUG_DATA_DIR,
+  assertNoConsentPending,
+  ensureDebugChrome,
+  findProfileByIdentity,
+  listProfiles,
+} from './chrome-lifecycle.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type StagehandInstance = any;
@@ -288,19 +296,47 @@ export class LocalBrowserService {
   }
 
   // ==========================================================================
-  // CHROME CDP CONNECTION
+  // CHROME CDP CONNECTION (delegates to chrome-lifecycle.ts)
   // ==========================================================================
-
-  /** Chrome profile info discovered from the filesystem */
-  static readonly CHROME_DATA_DIR = process.platform === 'darwin'
-    ? `${process.env.HOME}/Library/Application Support/Google/Chrome`
-    : process.platform === 'win32'
-      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\User Data`
-      : `${process.env.HOME}/.config/google-chrome`;
+  //
+  // Everything below used to live here as a pile of private static
+  // helpers — cloning the user's real Chrome dir into
+  // `~/.ohwow/chrome-debug/`, quitting the user's real Chrome,
+  // relaunching, symlinking, and so on. That entire path was the
+  // source of the "signed out but cookies kept" hybrid-state bug:
+  // the destructive clone on every reconnect raced with real Chrome's
+  // writes and the debug Chrome's account reconciler then cleared
+  // Google sign-in metadata while leaving Cookies SQLite untouched.
+  //
+  // The new design moves all Chrome process + profile lifecycle into
+  // `./chrome-lifecycle.ts`, which NEVER touches profile files — it
+  // only spawns processes and opens profile windows in the already-
+  // populated debug data dir. Full rationale in the top-of-file
+  // comment of `chrome-lifecycle.ts`. Bootstrapping the debug dir
+  // (one-time copy from real Chrome) is an explicit user-driven CLI
+  // action that lives OUTSIDE the runtime and is not invoked here.
 
   /**
-   * Discover all Chrome profiles on this machine.
-   * Returns profile directory names, display names, and associated email accounts.
+   * Absolute path to ohwow's debug Chrome user-data-dir. Exported
+   * as a static for callers that used to reference
+   * `LocalBrowserService.CHROME_DATA_DIR` — the new value points at
+   * the debug dir, not the user's real Chrome. Callers that want to
+   * enumerate profiles should use `discoverChromeProfiles()`, which
+   * reads the debug dir's Local State via chrome-lifecycle.
+   */
+  static readonly CHROME_DATA_DIR = DEBUG_DATA_DIR;
+
+  /**
+   * Discover all Chrome profiles in ohwow's debug Chrome data-dir.
+   * Returns the shape legacy callers expect (directory, name, email,
+   * hostedDomain). Reads from Local State via chrome-lifecycle, which
+   * is the same source Chrome's own profile picker uses.
+   *
+   * Note: previously this scanned the user's REAL Chrome data-dir.
+   * It now scans the debug dir because that's where ohwow actually
+   * drives Chrome from — the runtime has no business reaching into
+   * the real profile store, and the old behavior was only ever used
+   * to derive directory names that would then be re-cloned anyway.
    */
   static async discoverChromeProfiles(): Promise<Array<{
     directory: string;
@@ -308,535 +344,112 @@ export class LocalBrowserService {
     email: string;
     hostedDomain: string;
   }>> {
-    const { readFileSync, existsSync, readdirSync } = await import('fs');
-    const { join } = await import('path');
-    const chromeDir = LocalBrowserService.CHROME_DATA_DIR;
-
-    if (!existsSync(chromeDir)) return [];
-
-    const profiles: Array<{ directory: string; name: string; email: string; hostedDomain: string }> = [];
-    const dirs = readdirSync(chromeDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && (d.name === 'Default' || d.name.startsWith('Profile ')))
-      .map(d => d.name);
-
-    for (const dir of dirs) {
-      const prefsPath = join(chromeDir, dir, 'Preferences');
-      if (!existsSync(prefsPath)) continue;
-      try {
-        const prefs = JSON.parse(readFileSync(prefsPath, 'utf-8'));
-        const name = prefs.profile?.name || dir;
-        const accounts = prefs.account_info || [];
-        const primary = accounts[0] || {};
-        profiles.push({
-          directory: dir,
-          name,
-          email: primary.email || '',
-          hostedDomain: primary.hosted_domain || '',
-        });
-      } catch { /* skip corrupt profiles */ }
+    try {
+      const profiles = listProfiles();
+      return profiles.map((p) => ({
+        directory: p.directory,
+        name: p.localProfileName ?? p.directory,
+        email: p.email ?? '',
+        // hostedDomain used to come from Chrome's `account_info[0].hosted_domain`
+        // field. Local State doesn't carry that, and no current caller in the
+        // ohwow codebase reads it. Derive from the email domain as a fallback
+        // so legacy callers get a plausible value.
+        hostedDomain: p.email && p.email.includes('@') ? p.email.split('@')[1] : '',
+      }));
+    } catch (err) {
+      if (err instanceof ChromeLifecycleError && err.code === 'DEBUG_DIR_MISSING') {
+        logger.warn(
+          { path: DEBUG_DATA_DIR },
+          '[browser] discoverChromeProfiles: debug dir missing, returning empty list',
+        );
+        return [];
+      }
+      throw err;
     }
-
-    return profiles;
   }
 
   /**
    * Find the Chrome profile directory that matches a given email or domain.
    * Returns the profile directory name (e.g. "Profile 1") or null.
    */
+  /**
+   * Resolve an email (or directory name, or local display name) to a
+   * profile directory in ohwow's debug Chrome. Delegates to
+   * `chrome-lifecycle.findProfileByIdentity`, which does the same
+   * tiered match (exact email → exact dir → exact local name →
+   * substring) and is unit-tested there.
+   */
   static async findProfileForEmail(email: string): Promise<string | null> {
-    const profiles = await LocalBrowserService.discoverChromeProfiles();
-    const domain = email.split('@')[1];
-
-    // Exact email match first
-    const exact = profiles.find(p => p.email === email);
-    if (exact) return exact.directory;
-
-    // Domain match
-    const domainMatch = profiles.find(p => p.hostedDomain === domain || p.email.endsWith(`@${domain}`));
-    if (domainMatch) return domainMatch.directory;
-
-    return null;
+    try {
+      const profiles = listProfiles();
+      const match = findProfileByIdentity(profiles, email);
+      return match ? match.directory : null;
+    } catch (err) {
+      if (err instanceof ChromeLifecycleError && err.code === 'DEBUG_DIR_MISSING') return null;
+      throw err;
+    }
   }
 
   /**
-   * Connect to the user's real Chrome via CDP. If Chrome isn't already exposing
-   * CDP, this will quit any running Chrome and relaunch it with debugging enabled,
-   * pointing at the user's real profile (so cookies/logins are preserved).
+   * Connect to ohwow's debug Chrome via CDP. If the debug Chrome is
+   * already running on the port, attach to it. Otherwise spawn a new
+   * one against the existing `~/.ohwow/chrome-debug/` data dir (which
+   * must already exist — bootstrapping is a separate one-time user
+   * action, not runtime's business).
    *
-   * Returns the CDP WebSocket URL on success, or null if we couldn't get CDP up
-   * (caller should fall back to bundled Chromium).
+   * Returns the CDP WebSocket URL on success, or null on any lifecycle
+   * failure (missing debug dir, spawn failure, CDP timeout, consent
+   * dialog pending). Callers fall back to bundled Chromium.
    *
-   * Why this is non-trivial: Chrome 136+ silently disables `--remote-debugging-port`
-   * when launched against the default user-data-dir as a security measure. We work
-   * around this by setting up `~/.ohwow/chrome-debug/` as a non-default user-data-dir
-   * containing a symlink to the real profile directory — Chrome accepts the debugging
-   * port, and the symlink keeps cookies/sessions live.
+   * Behavior changes from the pre-redesign version:
+   *
+   *   - NEVER wipes or re-clones the debug data dir. The old
+   *     `_ensureDebugProfileDir` did `rm -rf ~/.ohwow/chrome-debug &&
+   *     cp -cR ~/Library/.../Chrome ...` on every connect, which raced
+   *     with real Chrome writes and corrupted Google sign-in state
+   *     into the "signed out but cookies kept" hybrid state.
+   *   - NEVER touches the user's real Chrome. The old code would
+   *     osascript-quit it on every connect if it was running without
+   *     CDP. The runtime no longer cares about real Chrome at all.
+   *   - Profile MISMATCH is no longer a reason to quit + relaunch.
+   *     If the running debug Chrome was launched with a different
+   *     `--profile-directory`, we still return its CDP URL. Callers
+   *     that want a specific profile should open a window for it via
+   *     `chrome-lifecycle.openProfileWindow(profileDir)` rather than
+   *     expecting the entire Chrome process to be on that profile.
+   *
+   * The `profileDir` parameter is kept for backcompat on the call
+   * sites but is now advisory — it's only used as the preferred
+   * profile if we have to spawn a fresh debug Chrome (and even then
+   * it just picks which profile's window opens first).
    */
   static async connectToChrome(port = 9222, profileDir?: string): Promise<string | null> {
-    const cdpHttpUrl = `http://localhost:${port}`;
-    const platform = process.platform;
-    const { exec, spawn } = await import('child_process');
-
-    // 1. Fast path: Chrome is already running with CDP.
-    const existing = await LocalBrowserService._probeCdp(cdpHttpUrl);
-    if (existing) {
-      // If the caller asked for a specific profile, verify the running
-      // debug Chrome is actually on that profile. Reusing a debug Chrome
-      // that was launched with a different --profile-directory silently
-      // gives the model the wrong account's cookies and logins — that's
-      // exactly how we ended up posting from the wrong X session.
-      if (profileDir) {
-        const running = await LocalBrowserService._getDebugChromeProfile(exec, platform);
-        if (running && running !== profileDir) {
-          logger.info(`[browser] Existing CDP Chrome is on profile "${running}" but caller requested "${profileDir}" — quitting debug Chrome and relaunching`);
-          await LocalBrowserService._quitDebugChrome(exec, platform);
-          // Fall through to relaunch below.
-        } else {
-          logger.info(`[browser] Connected to existing Chrome CDP at port ${port} (profile: ${running || 'unknown'})`);
-          await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
-          return existing;
-        }
-      } else {
-        logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
-        await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
-        return existing;
-      }
-    }
-
-    // 2. If Chrome is running (without CDP), quit it. We can't enable debugging
-    //    on a running instance, so we have to relaunch.
-    if (await LocalBrowserService._isChromeRunning(exec, platform)) {
-      logger.info('[browser] Chrome is running without CDP — quitting to relaunch with debugging');
-      await LocalBrowserService._quitChrome(exec, platform);
-      if (await LocalBrowserService._isChromeRunning(exec, platform)) {
-        logger.warn('[browser] Chrome did not respond to graceful quit, sending SIGTERM');
-        await LocalBrowserService._killChrome(exec, platform);
-      }
-      if (await LocalBrowserService._isChromeRunning(exec, platform)) {
-        logger.warn('[browser] Chrome still running after SIGTERM — aborting CDP setup');
-        return null;
-      }
-    }
-
-    // 3. Set up a non-default user-data-dir with a symlink to the real profile.
-    //    The symlink lets us keep cookies/sessions live while sidestepping
-    //    Chrome's default-user-data-dir debugging restriction.
-    const effectiveProfile = profileDir || 'Default';
-    const debugDataDir = await LocalBrowserService._ensureDebugProfileDir(effectiveProfile);
-    if (!debugDataDir) return null;
-
-    // 4. Launch Chrome with debugging enabled.
-    const chromeBin = LocalBrowserService._chromeBinaryPath(platform);
-    const args = [
-      `--user-data-dir=${debugDataDir}`,
-      `--profile-directory=${effectiveProfile}`,
-      `--remote-debugging-port=${port}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-    ];
-
-    logger.info(`[browser] Launching Chrome with profile "${effectiveProfile}" on debug port ${port}`);
     try {
-      const child = spawn(chromeBin, args, { detached: true, stdio: 'ignore' });
-      child.unref();
+      const handle = await ensureDebugChrome({ port, preferredProfile: profileDir });
+      await assertNoConsentPending(port);
+      return handle.cdpWsUrl;
     } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to spawn Chrome');
-      return null;
-    }
-
-    // 5. Poll for CDP availability (10s budget). Process running ≠ port bound.
-    for (let i = 0; i < 40; i++) {
-      await new Promise(r => setTimeout(r, 250));
-      const wsUrl = await LocalBrowserService._probeCdp(cdpHttpUrl);
-      if (wsUrl) {
-        logger.info(`[browser] Chrome CDP ready on port ${port} (profile: ${effectiveProfile})`);
-        // Give Chrome a moment to render any first-run dialogs (managed
-        // profile notice, keychain prompt) before checking.
-        await new Promise(r => setTimeout(r, 1500));
-        await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
-        return wsUrl;
-      }
-    }
-
-    logger.warn('[browser] Chrome launched but CDP did not become ready within 10s');
-    return null;
-  }
-
-  /**
-   * Chrome 147 shows a "managed user profile notice" the first time a Google-
-   * signed-in profile is launched from a non-default user-data-dir. Until the
-   * user clicks "Continue" on that dialog, Chrome refuses to load auth cookies
-   * from the profile. We detect that pending state by checking the open tabs
-   * via /json/list, and throw an actionable error so the orchestrator can tell
-   * the user exactly what to click.
-   *
-   * If desktop screen capture is available (macOS), we also grab a screenshot
-   * of the dialog and embed it in the error so the chat reply can show the
-   * user exactly which button to press. The screenshot is base64-prefixed in
-   * the error message after a sentinel marker so the cloud can parse it out.
-   */
-  private static async _assertNoConsentPending(cdpHttpUrl: string): Promise<void> {
-    try {
-      const res = await fetch(`${cdpHttpUrl}/json/list`, { signal: AbortSignal.timeout(2000) });
-      if (!res.ok) return;
-      const tabs = await res.json() as Array<{ url?: string; type?: string }>;
-      const hasNotice = tabs.some(t =>
-        typeof t.url === 'string' && t.url.startsWith('chrome://managed-user-profile-notice'),
-      );
-      if (hasNotice) {
-        const screenshotMarker = await LocalBrowserService._captureConsentScreenshot();
-        throw new Error(
-          'CHROME_CONSENT_PENDING: Chrome opened your real profile but is waiting for one-time consent. ' +
-          'Switch to the Chrome window showing "Your organization will be able to view some information" ' +
-          'and click Continue, then ask me again. (Chrome blocks auth cookies from loading until you accept.)' +
-          screenshotMarker,
+      if (err instanceof ChromeLifecycleError) {
+        logger.warn(
+          { code: err.code, message: err.message, data: err.data },
+          '[browser] connectToChrome failed',
         );
-      }
-    } catch (err) {
-      // Re-throw the consent error; swallow any unrelated fetch failures.
-      if (err instanceof Error && err.message.startsWith('CHROME_CONSENT_PENDING:')) throw err;
-    }
-  }
-
-  /**
-   * Best-effort desktop screenshot of the consent dialog (macOS only). Returns
-   * an empty string if capture fails or is unavailable on this platform — we
-   * never want screenshot failure to mask the underlying CONSENT_PENDING.
-   *
-   * The format is `\n\n[CONSENT_SCREENSHOT_BASE64]\n<base64>` so callers can
-   * parse the data URL out of the error message without breaking the
-   * human-readable prefix.
-   */
-  private static async _captureConsentScreenshot(): Promise<string> {
-    if (process.platform !== 'darwin') return '';
-    try {
-      const { detectScreenInfo, captureAndScaleScreenshot } = await import('../desktop/screenshot-capture.js');
-      const screenInfo = detectScreenInfo();
-      const { base64 } = await captureAndScaleScreenshot(screenInfo, 1280);
-      return `\n\n[CONSENT_SCREENSHOT_BASE64]\n${base64}`;
-    } catch (err) {
-      logger.debug({ err: err instanceof Error ? err.message : err }, '[browser] consent screenshot capture failed');
-      return '';
-    }
-  }
-
-  // ----- CDP helpers -----
-
-  private static async _probeCdp(cdpHttpUrl: string): Promise<string | null> {
-    try {
-      const res = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(2000) });
-      if (!res.ok) return null;
-      const data = await res.json() as { webSocketDebuggerUrl?: string };
-      return data.webSocketDebuggerUrl || null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Detect ONLY the user's "real" Chrome — the one running against their default
-   * Chrome user-data-dir. Stagehand and Playwright/MCP Chromes use temp profile
-   * dirs (e.g. /tmp/, /var/folders/.../stagehand-v3, /Library/Caches/ms-playwright/),
-   * and we must never touch those, since the daemon and our test harness depend on
-   * them.
-   */
-  private static _isChromeRunning(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<boolean> {
-    if (platform === 'win32') {
-      return new Promise(resolve => exec('tasklist /FI "IMAGENAME eq chrome.exe" | findstr chrome.exe', (err) => resolve(!err)));
-    }
-    return LocalBrowserService._findRealChromePids(exec, platform).then(pids => pids.length > 0);
-  }
-
-  private static _findRealChromePids(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<number[]> {
-    const pgrepCmd = platform === 'darwin'
-      ? 'pgrep -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
-      : 'pgrep -f "google-chrome|/chrome "';
-    return new Promise(resolve => {
-      exec(pgrepCmd, (err, stdout) => {
-        if (err || !stdout) return resolve([]);
-        const pids = stdout.trim().split('\n').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
-        if (pids.length === 0) return resolve([]);
-        // For each pid, check its argv: only count it as "real Chrome" if it
-        // does NOT have --user-data-dir pointing at a temp/test profile dir.
-        Promise.all(pids.map(pid => new Promise<{ pid: number; isReal: boolean }>(res => {
-          exec(`ps -o command= -p ${pid}`, (e, out) => {
-            if (e || !out) return res({ pid, isReal: false });
-            const cmd = out.trim();
-            // Skip if it's a helper subprocess (renderer, GPU, etc).
-            if (/--type=/.test(cmd)) return res({ pid, isReal: false });
-            const dirMatch = cmd.match(/--user-data-dir=([^ ]+)/);
-            const userDataDir = dirMatch ? dirMatch[1] : '';
-            const isTempProfile = !!userDataDir && (
-              userDataDir.includes('/stagehand-v3') ||
-              userDataDir.includes('/ms-playwright') ||
-              userDataDir.includes('/.ohwow/chrome-debug') ||
-              userDataDir.startsWith('/tmp/') ||
-              userDataDir.startsWith('/var/folders/')
-            );
-            // Real Chrome = main process, not a helper, not a test/temp profile.
-            res({ pid, isReal: !isTempProfile });
-          });
-        }))).then(rows => resolve(rows.filter(r => r.isReal).map(r => r.pid)));
-      });
-    });
-  }
-
-  /**
-   * Find the PID of the *debug* Chrome we launched earlier — the main
-   * process running with `--user-data-dir=~/.ohwow/chrome-debug`.
-   * Distinct from _findRealChromePids, which filters debug Chromes
-   * out. Returns null if no debug Chrome is running.
-   */
-  private static _findDebugChromePid(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<number | null> {
-    if (platform === 'win32') return Promise.resolve(null);
-    const debugDir = `${process.env.HOME}/.ohwow/chrome-debug`;
-    const pgrepCmd = platform === 'darwin'
-      ? 'pgrep -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
-      : 'pgrep -f "google-chrome|/chrome "';
-    return new Promise(resolve => {
-      exec(pgrepCmd, (err, stdout) => {
-        if (err || !stdout) return resolve(null);
-        const pids = stdout.trim().split('\n').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
-        if (pids.length === 0) return resolve(null);
-        Promise.all(pids.map(pid => new Promise<{ pid: number; isDebug: boolean }>(res => {
-          exec(`ps -o command= -p ${pid}`, (e, out) => {
-            if (e || !out) return res({ pid, isDebug: false });
-            const cmd = out.trim();
-            // Main process only, not a helper
-            if (/--type=/.test(cmd)) return res({ pid, isDebug: false });
-            const dirMatch = cmd.match(/--user-data-dir=([^ ]+)/);
-            const userDataDir = dirMatch ? dirMatch[1] : '';
-            res({ pid, isDebug: userDataDir === debugDir });
-          });
-        }))).then(rows => {
-          const debugRow = rows.find(r => r.isDebug);
-          resolve(debugRow ? debugRow.pid : null);
-        });
-      });
-    });
-  }
-
-  /**
-   * Read the --profile-directory argument from the currently-running
-   * debug Chrome's command line. Returns null if no debug Chrome is
-   * running, or if the argument isn't present (which means Chrome is
-   * using its default profile).
-   */
-  private static async _getDebugChromeProfile(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<string | null> {
-    const pid = await LocalBrowserService._findDebugChromePid(exec, platform);
-    if (!pid) return null;
-    return new Promise(resolve => {
-      exec(`ps -o command= -p ${pid}`, (err, out) => {
-        if (err || !out) return resolve(null);
-        // Profile names can contain spaces (e.g. "Profile 1"), so grab
-        // everything up to the next `--` flag or end-of-line. The trim
-        // at the end strips trailing whitespace before that boundary.
-        const m = out.match(/--profile-directory=(.+?)(?:\s--|$)/);
-        resolve(m ? m[1].trim() : 'Default');
-      });
-    });
-  }
-
-  /**
-   * Quit ONLY the debug Chrome we launched earlier. Unlike _quitChrome
-   * (which targets the user's real Chrome), this signals the specific
-   * PID running against `~/.ohwow/chrome-debug` — so the user's other
-   * Chrome windows on their real profile stay up.
-   */
-  private static async _quitDebugChrome(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<void> {
-    const pid = await LocalBrowserService._findDebugChromePid(exec, platform);
-    if (!pid) return;
-    await new Promise<void>(resolve => exec(`kill -TERM ${pid}`, () => resolve()));
-    // Wait up to 5s for the process to exit cleanly.
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 250));
-      const stillRunning = await LocalBrowserService._findDebugChromePid(exec, platform);
-      if (!stillRunning) return;
-    }
-    // Force kill if graceful didn't work.
-    const remaining = await LocalBrowserService._findDebugChromePid(exec, platform);
-    if (remaining) {
-      await new Promise<void>(resolve => exec(`kill -KILL ${remaining}`, () => resolve()));
-      await new Promise(r => setTimeout(r, 500));
-    }
-  }
-
-  private static async _quitChrome(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<void> {
-    if (platform === 'win32') {
-      await new Promise<void>(resolve => exec('taskkill /IM chrome.exe', () => resolve()));
-    } else if (platform === 'darwin') {
-      await new Promise<void>(resolve => exec(`osascript -e 'tell application "Google Chrome" to quit'`, () => resolve()));
-    } else {
-      // Linux: signal only the real-Chrome pids we identified, leaving Stagehand alone.
-      const pids = await LocalBrowserService._findRealChromePids(exec, platform);
-      if (pids.length > 0) {
-        await new Promise<void>(resolve => exec(`kill -TERM ${pids.join(' ')}`, () => resolve()));
-      }
-    }
-    // Give Chrome up to 5s to exit cleanly.
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 250));
-      if (!(await LocalBrowserService._isChromeRunning(exec, platform))) return;
-    }
-  }
-
-  private static async _killChrome(
-    exec: typeof import('child_process').exec,
-    platform: NodeJS.Platform,
-  ): Promise<void> {
-    if (platform === 'win32') {
-      await new Promise<void>(resolve => exec('taskkill /F /IM chrome.exe', () => resolve()));
-    } else {
-      // Only signal the user's real Chrome, never Stagehand/Playwright Chromes.
-      const pids = await LocalBrowserService._findRealChromePids(exec, platform);
-      if (pids.length > 0) {
-        await new Promise<void>(resolve => exec(`kill -TERM ${pids.join(' ')}`, () => resolve()));
-      }
-    }
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 250));
-      if (!(await LocalBrowserService._isChromeRunning(exec, platform))) return;
-    }
-  }
-
-  private static _chromeBinaryPath(platform: NodeJS.Platform): string {
-    if (platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    if (platform === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    return 'google-chrome';
-  }
-
-  /**
-   * Create `~/.ohwow/chrome-debug/` as a fresh clonefile copy of the user's
-   * entire Chrome user-data-dir, and return the path for --user-data-dir.
-   *
-   * Why a full copy instead of a symlink to just the profile:
-   *
-   * Chrome's per-user-data-dir state is NOT self-contained in Profile N/.
-   * A symlinked profile gives you the subdirectory contents (preferences,
-   * history, cached-ish things) but Chrome at the enclosing user-data-dir:
-   *
-   *   - writes a fresh Local State file containing encrypted master keys,
-   *     so the profile's cookies can't decrypt
-   *   - considers the Google sign-in state invalid because the enclosing
-   *     user-data-dir has no record of past sign-ins
-   *   - forces a "Your organization will..." managed-profile consent flow
-   *     for enterprise profiles, and even after clicking Continue the
-   *     auth cookies remain inaccessible
-   *   - doesn't find the other sibling profiles (user sees "this Chrome
-   *     doesn't have all my profiles")
-   *
-   * The result: user thinks the real Chrome profile opened but actually it's
-   * an empty shell that looks like the right profile directory. The X login
-   * page shows, DMs are inaccessible, etc.
-   *
-   * A full clonefile copy (APFS copy-on-write) of the whole user-data-dir
-   * sidesteps all of this: Local State, all profiles, encrypted cookie keys,
-   * everything comes along. On APFS it's near-instant and near-zero disk.
-   * On non-APFS we fall back to a regular recursive copy.
-   *
-   * We always start from a clean target so the debug Chrome reflects the
-   * CURRENT state of the real Chrome every time the daemon connects (the
-   * user's latest logins, history, etc).
-   */
-  private static async _ensureDebugProfileDir(profile: string): Promise<string | null> {
-    const { existsSync } = await import('fs');
-    const { rm, mkdir } = await import('fs/promises');
-    const path = await import('path');
-    const { exec } = await import('child_process');
-
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
-    const debugDataDir = path.join(homeDir, '.ohwow', 'chrome-debug');
-    const realDataDir = LocalBrowserService.CHROME_DATA_DIR;
-    const realProfilePath = path.join(realDataDir, profile);
-
-    if (!existsSync(realProfilePath)) {
-      logger.warn(`[browser] Chrome profile not found: ${realProfilePath} (available profiles will be listed below)`);
-      // Best-effort list of what IS available so users/callers can course-correct.
-      try {
-        const { readdir } = await import('fs/promises');
-        const entries = await readdir(realDataDir, { withFileTypes: true });
-        const profiles = entries
-          .filter(e => e.isDirectory() && (e.name === 'Default' || e.name.startsWith('Profile ')))
-          .map(e => e.name);
-        logger.warn(`[browser] Available Chrome profiles: ${profiles.join(', ') || '(none)'}`);
-      } catch { /* ignore */ }
-      return null;
-    }
-
-    // Always wipe and re-copy so the debug Chrome reflects the user's
-    // current real state. Clonefile on APFS makes this cheap.
-    try {
-      await rm(debugDataDir, { recursive: true, force: true });
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to wipe old debug profile dir');
-    }
-
-    try {
-      // Make sure the parent exists but the target itself does not (cp -c
-      // refuses to overwrite an existing target).
-      await mkdir(path.dirname(debugDataDir), { recursive: true });
-
-      const copyStart = Date.now();
-      const cpResult = await new Promise<{ code: number; err?: string }>((resolve) => {
-        // cp -c = clonefile (APFS copy-on-write, near-instant + zero disk)
-        // cp -R = recursive
-        // Source has a trailing slash-free form; we want to copy the directory
-        // itself to the new name, so pass source WITHOUT trailing slash and
-        // dest WITHOUT existing target.
-        exec(`cp -cR ${JSON.stringify(realDataDir)} ${JSON.stringify(debugDataDir)}`, (err, _stdout, stderr) => {
-          if (err) return resolve({ code: 1, err: stderr || err.message });
-          resolve({ code: 0 });
-        });
-      });
-
-      if (cpResult.code !== 0) {
-        // APFS clonefile may not be available (non-APFS volume, different
-        // filesystems); fall back to a regular recursive copy.
-        logger.info({ err: cpResult.err }, '[browser] cp -c (clonefile) failed, falling back to cp -R');
-        const fallbackResult = await new Promise<{ code: number; err?: string }>((resolve) => {
-          exec(`cp -R ${JSON.stringify(realDataDir)} ${JSON.stringify(debugDataDir)}`, (err, _stdout, stderr) => {
-            if (err) return resolve({ code: 1, err: stderr || err.message });
-            resolve({ code: 0 });
-          });
-        });
-        if (fallbackResult.code !== 0) {
-          logger.warn({ err: fallbackResult.err }, '[browser] cp -R also failed');
-          return null;
-        }
-      }
-
-      logger.info(`[browser] Cloned real Chrome user-data-dir to ${debugDataDir} in ${Date.now() - copyStart}ms`);
-
-      // Sanity check: the requested profile must exist in the copy.
-      if (!existsSync(path.join(debugDataDir, profile))) {
-        logger.warn(`[browser] Debug copy is missing profile ${profile}; refusing to launch`);
         return null;
       }
-
-      return debugDataDir;
-    } catch (err) {
-      logger.warn({ err: err instanceof Error ? err.message : err }, '[browser] Failed to set up debug profile dir');
-      return null;
+      throw err;
     }
   }
+
+  // All Chrome process + profile lifecycle helpers that used to live
+  // here (_probeCdp, _isChromeRunning, _findRealChromePids,
+  // _findDebugChromePid, _getDebugChromeProfile, _quitDebugChrome,
+  // _quitChrome, _killChrome, _chromeBinaryPath,
+  // _ensureDebugProfileDir, _assertNoConsentPending,
+  // _captureConsentScreenshot) have moved into `./chrome-lifecycle.ts`
+  // or been deleted outright. Runtime no longer touches real Chrome,
+  // never clones the user-data-dir, never wipes profile state. See
+  // the top-of-file comment in chrome-lifecycle.ts for the full
+  // rationale, and git history for the old implementations.
 
   // ==========================================================================
   // STAGEHAND AI METHODS
