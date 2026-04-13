@@ -195,7 +195,7 @@ describe('testSynthesizedSkill', () => {
     expect(typeof promoteUpdates[0].patch.promoted_at).toBe('string');
   });
 
-  it('records a fail_count bump when the handler throws', async () => {
+  it('records a fail_count bump AND flips is_active=0 when the handler throws', async () => {
     registerFakeSkill({
       name: 'will_throw',
       skillId: 'sk-throw',
@@ -218,6 +218,10 @@ describe('testSynthesizedSkill', () => {
     expect(result.message).toMatch(/boom/);
     const bump = updates.find((u) => typeof u.patch.fail_count === 'number');
     expect(bump?.patch.fail_count).toBe(1);
+    expect(bump?.patch.is_active).toBe(0);
+    // Failed skill is also evicted from the runtime registry so subsequent
+    // get() calls don't hand back a broken handler.
+    expect(runtimeToolRegistry.get('will_throw')).toBeUndefined();
   });
 
   it('records a fail_count bump when the handler returns success=false', async () => {
@@ -260,7 +264,7 @@ describe('testSynthesizedSkill', () => {
     expect(updates.find((u) => typeof u.patch.fail_count === 'number')).toBeDefined();
   });
 
-  it('fails when the vision model rejects the screenshot', async () => {
+  it('fails and deactivates when the vision model rejects the screenshot', async () => {
     registerFakeSkill({
       name: 'vision_fail',
       skillId: 'sk-vfail',
@@ -283,9 +287,11 @@ describe('testSynthesizedSkill', () => {
     expect(result.ok).toBe(false);
     expect(result.stage).toBe('vision_reject');
     expect(result.visionVerdict?.reason).toBe('saw login wall');
-    expect(updates.find((u) => typeof u.patch.fail_count === 'number')).toBeDefined();
-    // promoted_at must NOT have been set
+    const failed = updates.find((u) => typeof u.patch.fail_count === 'number');
+    expect(failed?.patch.fail_count).toBe(1);
+    expect(failed?.patch.is_active).toBe(0);
     expect(updates.find((u) => u.patch.promoted_at)).toBeUndefined();
+    expect(runtimeToolRegistry.get('vision_fail')).toBeUndefined();
   });
 
   it('forces dry_run=true on the handler input even if caller tries to override', async () => {

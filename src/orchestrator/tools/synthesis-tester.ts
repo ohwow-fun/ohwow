@@ -274,7 +274,22 @@ async function invokeHandlerDryRun(
 // DB mutators
 // ---------------------------------------------------------------------------
 
-async function incrementFailCount(
+/**
+ * Increment fail_count AND flip the row to is_active=0.
+ *
+ * Deactivating on failure is the only thing that keeps the DB +
+ * filesystem + registry from accumulating stale code skills across
+ * synthesis attempts. The runtime loader's findSkillRow query filters
+ * on is_active=1, so a deactivated row becomes invisible to the next
+ * boot scan — the .ts file stays on disk for forensic purposes but
+ * the tool name slot is freed for a fresh attempt.
+ *
+ * We never delete the row. Audit history matters — especially for
+ * post-launch analysis of "which goals did the generator fail on,
+ * and with which model". fail_count + is_active=0 + promoted_at=NULL
+ * is the canonical "failed attempt" shape.
+ */
+async function markFailed(
   db: DatabaseAdapter,
   skillId: string,
 ): Promise<void> {
@@ -289,13 +304,14 @@ async function incrementFailCount(
       .from('agent_workforce_skills')
       .update({
         fail_count: current + 1,
+        is_active: 0,
         updated_at: new Date().toISOString(),
       })
       .eq('id', skillId);
   } catch (err) {
     logger.warn(
       { err: err instanceof Error ? err.message : err, skillId },
-      '[synthesis-tester] failed to increment fail_count',
+      '[synthesis-tester] failed to mark skill failed',
     );
   }
 }
@@ -341,7 +357,8 @@ export async function testSynthesizedSkill(
   // Step 1: dry-run invocation
   const handlerResult = await invokeHandlerDryRun(def, input.ctx, input.testInput);
   if (!handlerResult.success) {
-    await incrementFailCount(input.db, def.skillId);
+    await markFailed(input.db, def.skillId);
+    runtimeToolRegistry.unregister(def.name);
     return {
       ok: false,
       stage: 'handler_error',
@@ -353,7 +370,8 @@ export async function testSynthesizedSkill(
   // Step 2: need a screenshot to verify
   const screenshotBase64 = handlerResult.screenshotBase64;
   if (!screenshotBase64 || typeof screenshotBase64 !== 'string' || screenshotBase64.length < 16) {
-    await incrementFailCount(input.db, def.skillId);
+    await markFailed(input.db, def.skillId);
+    runtimeToolRegistry.unregister(def.name);
     return {
       ok: false,
       stage: 'no_screenshot',
@@ -368,7 +386,8 @@ export async function testSynthesizedSkill(
     : await defaultVisionEval(input.modelRouter, screenshotBase64, input.goal);
 
   if (!verdict.ok) {
-    await incrementFailCount(input.db, def.skillId);
+    await markFailed(input.db, def.skillId);
+    runtimeToolRegistry.unregister(def.name);
     return {
       ok: false,
       stage: 'vision_reject',

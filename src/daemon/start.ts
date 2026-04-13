@@ -48,6 +48,7 @@ import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
+import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
 import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { PresenceEngine } from '../presence/presence-engine.js';
@@ -1365,6 +1366,33 @@ export async function startDaemon(): Promise<DaemonHandle> {
         logger.warn(`[daemon] Synthesis failure detector failed: ${err instanceof Error ? err.message : err}`);
       });
       bus.once('shutdown', () => failureDetector.stop());
+
+      // Autolearner: subscribes to the detector's events and drives
+      // the probe → generate → test pipeline automatically. Gated
+      // behind OHWOW_ENABLE_AUTO_LEARNING=1 on top of the synthesis
+      // flag so it stays opt-in for launch eve. When disabled the
+      // class logs and returns without subscribing.
+      if (isAutoLearningEnabled() && modelRouter && orchestrator) {
+        const autoLearnerCtx: import('../orchestrator/local-tool-types.js').LocalToolContext = {
+          db,
+          workspaceId,
+          engine: engineRef.current!,
+          channels: channelRegistry,
+          controlPlane,
+          modelRouter,
+        };
+        const autoLearner = new SynthesisAutoLearner({
+          bus,
+          db,
+          workspaceId,
+          modelRouter,
+          toolCtx: autoLearnerCtx,
+        });
+        autoLearner.start();
+        bus.once('shutdown', () => autoLearner.stop());
+      } else {
+        logger.info('[daemon] Synthesis autolearner disabled (OHWOW_ENABLE_AUTO_LEARNING=1 to enable)');
+      }
     } else {
       logger.info(`[daemon] Runtime skill loader disabled for workspace "${activeWsName}"`);
     }

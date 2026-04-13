@@ -41,19 +41,32 @@ interface GenDbChain {
   then: (resolve: (v: { data: []; error: null }) => void) => void;
 }
 
+interface GenDbUpdateChain {
+  eq: (col: string, val: unknown) => Promise<{ data: null; error: null }>;
+}
+
 interface GenDbTable {
   select: () => GenDbChain;
   insert: (row: Record<string, unknown>) => Promise<{ data: null; error: null }>;
+  update: (patch: Record<string, unknown>) => GenDbUpdateChain;
 }
 
-// A mock adapter that tracks inserts and returns canned select
-// responses keyed on the skill table.
+// A mock adapter that tracks inserts + updates and returns canned
+// select responses keyed on the skill table. Callers can pre-seed
+// a row via `seedExistingSkill` so the generator's collision-check
+// path sees something to react to.
 function makeMockDb(): {
   db: DatabaseAdapter;
   inserts: Array<{ table: string; row: Record<string, unknown> }>;
+  updates: Array<{ table: string; id: string; patch: Record<string, unknown> }>;
+  seedExistingSkill: (row: Record<string, unknown>) => void;
 } {
   const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
+  const updates: Array<{ table: string; id: string; patch: Record<string, unknown> }> = [];
   let pendingSkillRow: Record<string, unknown> | null = null;
+  const seedExistingSkill = (row: Record<string, unknown>) => {
+    pendingSkillRow = row;
+  };
 
   const makeSelectChain = (table: string): GenDbChain => {
     const chain: GenDbChain = {
@@ -96,6 +109,17 @@ function makeMockDb(): {
           }
           return Promise.resolve({ data: null, error: null });
         },
+        update: (patch: Record<string, unknown>): GenDbUpdateChain => ({
+          eq: (_col, val) => {
+            updates.push({ table, id: String(val), patch });
+            // Reflect the update in the pending row so subsequent
+            // selects see the patched state.
+            if (table === 'agent_workforce_skills' && pendingSkillRow && pendingSkillRow.id === val) {
+              pendingSkillRow = { ...pendingSkillRow, ...patch };
+            }
+            return Promise.resolve({ data: null, error: null });
+          },
+        }),
       }),
     ),
   };
@@ -103,7 +127,7 @@ function makeMockDb(): {
   // One localized bridge from the narrow in-file mock shape to the
   // full DatabaseAdapter the generator expects. Everything above
   // this point is strictly typed.
-  return { db: mock as unknown as DatabaseAdapter, inserts };
+  return { db: mock as unknown as DatabaseAdapter, inserts, updates, seedExistingSkill };
 }
 
 const CANDIDATE: SynthesisCandidate = {
@@ -324,6 +348,65 @@ describe('generateCodeSkill', () => {
     expect(result.stage).toBe('lint');
     expect(result.error).toMatch(/child_process/);
     expect(inserts).toHaveLength(0);
+  });
+
+  it('reuses an existing promoted skill without writing a new file or row', async () => {
+    const { db, inserts, seedExistingSkill } = makeMockDb();
+    seedExistingSkill({
+      id: 'existing-sk-001',
+      name: 'post_tweet_v1',
+      skill_type: 'code',
+      script_path: '/some/existing/path/post_tweet_v1_abcdef.ts',
+      promoted_at: '2026-04-13T18:00:00Z',
+      is_active: 1,
+    });
+    const result = await generateCodeSkill({
+      db,
+      workspaceId: 'ws-1',
+      modelRouter: {} as ModelRouter,
+      candidate: CANDIDATE,
+      manifest: MANIFEST,
+      skillsDir,
+      _llmCallForTest: async () => FAKE_LLM_RESPONSE,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.reused).toBe(true);
+    expect(result.skillId).toBe('existing-sk-001');
+    expect(result.scriptPath).toBe('/some/existing/path/post_tweet_v1_abcdef.ts');
+    // No new row inserted because the promoted skill already exists.
+    expect(inserts).toHaveLength(0);
+  });
+
+  it('retires an unpromoted predecessor and regenerates', async () => {
+    const { db, inserts, updates, seedExistingSkill } = makeMockDb();
+    seedExistingSkill({
+      id: 'dead-sk-001',
+      name: 'post_tweet_v1',
+      skill_type: 'code',
+      script_path: '/some/dead/post_tweet_v1_deadbeef.ts',
+      promoted_at: null,
+      is_active: 1,
+    });
+    const result = await generateCodeSkill({
+      db,
+      workspaceId: 'ws-1',
+      modelRouter: {} as ModelRouter,
+      candidate: CANDIDATE,
+      manifest: MANIFEST,
+      skillsDir,
+      _llmCallForTest: async () => FAKE_LLM_RESPONSE,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.reused).toBeUndefined();
+    // New row inserted with a fresh id.
+    const freshInsert = inserts.find((i) => i.table === 'agent_workforce_skills');
+    expect(freshInsert).toBeDefined();
+    expect(freshInsert?.row.id).not.toBe('dead-sk-001');
+    // Predecessor row was deactivated via update before the insert.
+    const retired = updates.find((u) => u.id === 'dead-sk-001' && u.patch.is_active === 0);
+    expect(retired).toBeDefined();
   });
 
   it('hot-loads into the runtime registry when an active loader exists', async () => {

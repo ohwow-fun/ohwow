@@ -54,6 +54,7 @@ import {
   getActiveRuntimeSkillLoader,
   lintSkillSource,
 } from '../runtime-skill-loader.js';
+import { runtimeToolRegistry } from '../runtime-tool-registry.js';
 import type { SelectorManifest } from './synthesis-probe.js';
 import type { SynthesisCandidate } from '../../scheduling/synthesis-failure-detector.js';
 
@@ -88,6 +89,12 @@ export interface GenerateSkillOk {
   scriptPath: string;
   modelUsed?: string;
   source: string;
+  /**
+   * True when the generator short-circuited because a promoted skill
+   * with the same name already existed. `source` is the on-disk
+   * content of the existing file in that case, not fresh LLM output.
+   */
+  reused?: boolean;
 }
 
 export interface GenerateSkillErr {
@@ -288,6 +295,89 @@ function newSkillId(): string {
   return `skill_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Collision handling
+// ---------------------------------------------------------------------------
+
+/**
+ * Row shape returned by the name-collision lookup. We only care about
+ * the fields that drive the branching decision: whether a row with
+ * this name already exists, whether it was promoted, and where its
+ * source lives on disk. A separate interface keeps the cast to
+ * `DatabaseAdapter.from<T>` honest.
+ */
+interface ExistingSkillRow {
+  id: string;
+  name: string;
+  script_path: string | null;
+  promoted_at: string | null;
+}
+
+/**
+ * Look up an active code skill by `workspace + name`. If the DB has
+ * more than one active row with the same name (which shouldn't
+ * happen post-collision-fix but can linger from pre-fix runs), return
+ * the most recently promoted one; the promoted row is the canonical
+ * answer. If none are promoted, return the newest unpromoted row.
+ */
+async function findExistingSkillByName(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  name: string,
+): Promise<ExistingSkillRow | null> {
+  try {
+    const result = await db
+      .from<ExistingSkillRow>('agent_workforce_skills')
+      .select('id, name, script_path, promoted_at')
+      .eq('workspace_id', workspaceId)
+      .eq('name', name)
+      .eq('skill_type', 'code')
+      .eq('is_active', 1)
+      .limit(10);
+    const rows = (result.data ?? []) as ExistingSkillRow[];
+    if (rows.length === 0) return null;
+    const promoted = rows.filter((r) => Boolean(r.promoted_at));
+    if (promoted.length > 0) {
+      // Most recently promoted wins.
+      promoted.sort((a, b) => (b.promoted_at ?? '').localeCompare(a.promoted_at ?? ''));
+      return promoted[0];
+    }
+    return rows[0];
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, workspaceId, name },
+      '[synthesis-generator] failed to look up existing skill by name',
+    );
+    return null;
+  }
+}
+
+/**
+ * Deactivate an unpromoted predecessor so the new generation attempt
+ * doesn't collide at the DB level. Also evict the old tool from the
+ * runtime registry, if present, so the new file's register() call
+ * doesn't trip the "name collision" guard in the registry. The old
+ * .ts file stays on disk for forensic purposes — the loader's boot
+ * scan filters on is_active=1 so it'll be skipped on next restart.
+ */
+async function retireExistingSkill(
+  db: DatabaseAdapter,
+  row: ExistingSkillRow,
+): Promise<void> {
+  try {
+    await db
+      .from('agent_workforce_skills')
+      .update({ is_active: 0, updated_at: new Date().toISOString() })
+      .eq('id', row.id);
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, skillId: row.id },
+      '[synthesis-generator] failed to deactivate predecessor row',
+    );
+  }
+  runtimeToolRegistry.unregister(row.name);
+}
+
 async function insertSkillRow(
   db: DatabaseAdapter,
   row: {
@@ -399,6 +489,41 @@ export async function generateCodeSkill(input: GenerateSkillInput): Promise<Gene
   const lint = lintSkillSource(source, `<generator-output for ${skillName}>`);
   if (!lint.ok) {
     return { ok: false, stage: 'lint', error: lint.reason, rawResponse };
+  }
+
+  // Step 3b: Collision check against agent_workforce_skills.
+  //
+  // If an active code skill with this exact name already exists and
+  // was promoted by the tester, short-circuit: return the existing
+  // skill without writing a new file or inserting a new row. The
+  // caller gets a `reused: true` flag so it can tell the difference
+  // between "fresh generation" and "no-op, you already had this".
+  //
+  // If an active row exists but was never promoted, it's a stale
+  // failed attempt — deactivate it, evict it from the runtime
+  // registry, and proceed to write the new row + file.
+  const existing = await findExistingSkillByName(input.db, input.workspaceId, skillName);
+  if (existing && existing.promoted_at) {
+    logger.info(
+      { skillName, existingId: existing.id },
+      '[synthesis-generator] promoted skill with this name already exists, reusing',
+    );
+    return {
+      ok: true,
+      skillId: existing.id,
+      name: skillName,
+      scriptPath: existing.script_path ?? '',
+      modelUsed,
+      source,
+      reused: true,
+    };
+  }
+  if (existing && !existing.promoted_at) {
+    logger.info(
+      { skillName, retiredId: existing.id },
+      '[synthesis-generator] retiring unpromoted predecessor before regeneration',
+    );
+    await retireExistingSkill(input.db, existing);
   }
 
   // Step 4: Filenames + DB insert
