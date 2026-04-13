@@ -95,7 +95,7 @@ import {
   type ToolExecutionContext,
 } from './tool-executor.js';
 import { executeToolCallsBatch } from './batch-executor.js';
-import { CircuitBreaker } from './error-recovery.js';
+import { CircuitBreaker, ConsecutiveToolBreaker } from './error-recovery.js';
 import { ToolCache } from './tool-cache.js';
 import { runSubOrchestrator, getFocusSections, getTimeoutForFocus, type SubOrchestratorResult } from './sub-orchestrator.js';
 import { logger } from '../lib/logger.js';
@@ -1330,6 +1330,13 @@ export class LocalOrchestrator {
     const sessionToolNames: string[] = [];
     const maxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
 
+    // Per-turn consecutive failure breaker. Catches the fast pathology where
+    // the model gets confused and calls the same tool 4-5 times in a row,
+    // each time getting the same error back, until iteration cap. Nudges at
+    // 3 consecutive same-tool failures, hard-aborts at 4. Independent of the
+    // process-global CircuitBreaker which tracks cumulative cross-turn flake.
+    const consecutiveBreaker = new ConsecutiveToolBreaker();
+
     // Reset brain session state for this turn
     this.brain?.resetSession();
 
@@ -1495,12 +1502,18 @@ export class LocalOrchestrator {
           continue;
         }
 
-        // Record success/failure for circuit breaker
+        // Record success/failure for both the global cumulative circuit breaker
+        // and the per-turn consecutive breaker.
         if (outcome.isError) {
           this.circuitBreaker.recordFailure(outcome.toolName);
         } else {
           this.circuitBreaker.recordSuccess(outcome.toolName);
         }
+        const consecutiveDecision = consecutiveBreaker.record(
+          outcome.toolName,
+          !outcome.isError,
+          outcome.isError ? outcome.resultContent : undefined,
+        );
 
         // Handle browser activation: create service and swap tools.
         // Because batch-executor runs request_browser first (before parallel tools),
@@ -1529,12 +1542,35 @@ export class LocalOrchestrator {
         }
 
         // Anthropic format: use formattedBlocks (with images) for browser/desktop results
+        // On the 3rd consecutive same-tool failure, append a nudge so the model
+        // sees "stop calling this" inline with the next tool result.
+        let resultContent: ToolResultBlockParam['content'] = outcome.formattedBlocks || outcome.resultContent;
+        if (consecutiveDecision === 'nudge') {
+          const nudge = consecutiveBreaker.buildNudgeMessage(outcome.toolName);
+          if (typeof resultContent === 'string') {
+            resultContent = `${resultContent}${nudge}`;
+          } else if (Array.isArray(resultContent)) {
+            resultContent = [...resultContent, { type: 'text', text: nudge }];
+          }
+        }
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseBlocks[i].id,
-          content: outcome.formattedBlocks || outcome.resultContent,
+          content: resultContent,
           is_error: outcome.isError,
         });
+      }
+
+      // Hard-abort the turn if any tool just hit the consecutive-failure cap.
+      // Push the in-flight tool results first so the model sees the failure
+      // chain in history, then break before the next iteration spawns more
+      // calls to the same broken tool.
+      if (consecutiveBreaker.isAborted()) {
+        loopMessages.push({ role: 'user', content: toolResults });
+        const abortMsg = consecutiveBreaker.buildAbortMessage();
+        yield { type: 'text', content: abortMsg };
+        fullContent += abortMsg;
+        break;
       }
 
       // After first tool round, always use auto (file intent forces 'any' only on first call)
@@ -2212,6 +2248,8 @@ export class LocalOrchestrator {
     let iterationsSinceSummarize = 2;
     let prevIterToolCount = 0;
     let iterHadErrors = false;
+    const consecutiveBreaker = new ConsecutiveToolBreaker();
+    let openrouterAborted = false;
 
     this.brain?.resetSession();
 
@@ -2415,6 +2453,11 @@ export class LocalOrchestrator {
           } else {
             this.circuitBreaker.recordSuccess(outcome.toolName);
           }
+          const consecutiveDecision = consecutiveBreaker.record(
+            outcome.toolName,
+            !outcome.isError,
+            outcome.isError ? outcome.resultContent : undefined,
+          );
 
           // Handle browser activation
           if (outcome.toolsModified && outcome.toolName === 'request_browser' && !this.browserActivated) {
@@ -2470,8 +2513,14 @@ export class LocalOrchestrator {
           }
 
           sessionToolNames.push(req.name);
-          loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
-          toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
+          // On 3rd consecutive same-tool failure, append a stop-and-rethink nudge
+          // to the tool message the model sees next iteration.
+          let toolMessageContent = outcome.resultContent;
+          if (consecutiveDecision === 'nudge') {
+            toolMessageContent = `${toolMessageContent}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
+          }
+          loopMessages.push({ role: 'tool', content: toolMessageContent, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: req.name, content: toolMessageContent });
 
           // Collect base64 images from formattedBlocks for vision-capable models (OpenRouter path)
           if (outcome.formattedBlocks) {
@@ -2485,7 +2534,18 @@ export class LocalOrchestrator {
             }
           }
         }
+
+        // Hard-abort if any tool just hit the consecutive-failure cap.
+        if (consecutiveBreaker.isAborted()) {
+          const abortMsg = consecutiveBreaker.buildAbortMessage();
+          yield { type: 'text', content: abortMsg };
+          fullContent += abortMsg;
+          openrouterAborted = true;
+          break;
+        }
       }
+
+      if (openrouterAborted) break;
 
       // Duplicate tool call detection
       for (const { req } of validRequests) {
@@ -2830,6 +2890,10 @@ export class LocalOrchestrator {
     const ollamaToolCallHashes: string[] = [];
     const ollamaSessionToolNames: string[] = [];
     const ollamaMaxIter = MODE_MAX_ITERATIONS[classified.mode] ?? MAX_ITERATIONS;
+    // Per-turn consecutive failure breaker (parity with Anthropic / OpenRouter loops).
+    // Catches the same fast pathology where the model gets confused and calls
+    // a failing tool 4-5 times in a row.
+    const consecutiveBreaker = new ConsecutiveToolBreaker();
 
     // Cast provider for streaming access — safe because we only enter this
     // method when provider.name === 'ollama'
@@ -3144,9 +3208,23 @@ export class LocalOrchestrator {
 
           ollamaSessionToolNames.push(req.name);
 
+          // Per-turn consecutive failure tracking (parity with Anthropic / OpenRouter).
+          // The Ollama path doesn't currently feed the global circuitBreaker either,
+          // but the per-turn breaker is enough to catch in-turn loops which is the
+          // failure mode that actually burns budget here.
+          const consecutiveDecision = consecutiveBreaker.record(
+            outcome.toolName,
+            !outcome.isError,
+            outcome.isError ? outcome.resultContent : undefined,
+          );
+
           // Ollama format: use text resultContent (no image blocks)
-          loopMessages.push({ role: 'tool', content: outcome.resultContent, tool_call_id: toolCall.id });
-          toolResultsSummary.push({ name: req.name, content: outcome.resultContent });
+          let toolMessageContent = outcome.resultContent;
+          if (consecutiveDecision === 'nudge') {
+            toolMessageContent = `${toolMessageContent}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
+          }
+          loopMessages.push({ role: 'tool', content: toolMessageContent, tool_call_id: toolCall.id });
+          toolResultsSummary.push({ name: req.name, content: toolMessageContent });
 
           // Collect base64 images from formattedBlocks for vision-capable models
           if (modelEntry?.vision && outcome.formattedBlocks) {
@@ -3159,6 +3237,15 @@ export class LocalOrchestrator {
               }
             }
           }
+        }
+
+        // Hard-abort if any tool just hit the consecutive-failure cap.
+        if (consecutiveBreaker.isAborted()) {
+          const abortMsg = consecutiveBreaker.buildAbortMessage();
+          yield { type: 'text', content: abortMsg };
+          fullContent += abortMsg;
+          toolLoopAborted = true;
+          break;
         }
       }
 

@@ -15,6 +15,7 @@ import type {
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ModelRouter, ModelProvider, ModelResponseWithTools } from '../execution/model-router.js';
 import type { CircuitBreaker } from './error-recovery.js';
+import { ConsecutiveToolBreaker } from './error-recovery.js';
 import type { IntentSection } from './tool-definitions.js';
 import type { ToolCallRequest, ToolExecutionContext, BrowserState } from './tool-executor.js';
 import type { ToolCache } from './tool-cache.js';
@@ -356,6 +357,7 @@ async function runAnthropicSubLoop(
   let totalInput = 0;
   let totalOutput = 0;
   let fullContent = '';
+  const consecutiveBreaker = new ConsecutiveToolBreaker();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     const response = await anthropic.messages.create({
@@ -406,7 +408,15 @@ async function runAnthropicSubLoop(
     for (let i = 0; i < outcomes.length; i++) {
       const outcome = outcomes[i];
       toolsCalled.push(outcome.toolName);
-      const summarized = summarizeToolResult(outcome.toolName, outcome.resultContent, outcome.isError);
+      const decision = consecutiveBreaker.record(
+        outcome.toolName,
+        !outcome.isError,
+        outcome.isError ? outcome.resultContent : undefined,
+      );
+      let summarized = summarizeToolResult(outcome.toolName, outcome.resultContent, outcome.isError);
+      if (decision === 'nudge') {
+        summarized = `${summarized}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
+      }
       toolResults.push({
         type: 'tool_result',
         tool_use_id: toolUseBlocks[i].id,
@@ -421,6 +431,11 @@ async function runAnthropicSubLoop(
       role: 'user',
       content: [...toolResults, { type: 'text' as const, text: reflectionText }],
     });
+
+    if (consecutiveBreaker.isAborted()) {
+      fullContent += `\n\n${consecutiveBreaker.buildAbortMessage()}`;
+      break;
+    }
   }
 
   const uniqueTools = [...new Set(toolsCalled)];
@@ -464,6 +479,7 @@ async function runOllamaSubLoop(
   let totalInput = 0;
   let totalOutput = 0;
   let fullContent = '';
+  const consecutiveBreaker = new ConsecutiveToolBreaker();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     let response: ModelResponseWithTools;
@@ -537,7 +553,15 @@ async function runOllamaSubLoop(
         const outcome = outcomes[i];
         const { toolCall } = validRequests[i];
         toolsCalled.push(outcome.toolName);
-        const summarized = summarizeToolResult(outcome.toolName, outcome.resultContent, outcome.isError);
+        const decision = consecutiveBreaker.record(
+          outcome.toolName,
+          !outcome.isError,
+          outcome.isError ? outcome.resultContent : undefined,
+        );
+        let summarized = summarizeToolResult(outcome.toolName, outcome.resultContent, outcome.isError);
+        if (decision === 'nudge') {
+          summarized = `${summarized}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
+        }
         messages.push({ role: 'tool', content: summarized, tool_call_id: toolCall.id });
         resultsSummary.push(`## ${outcome.toolName}\n${summarized}`);
       }
@@ -548,6 +572,11 @@ async function runOllamaSubLoop(
         role: 'user',
         content: `[Tool Results:\n${resultsSummary.join('\n\n')}\n\n${reflection}]`,
       });
+    }
+
+    if (consecutiveBreaker.isAborted()) {
+      fullContent += `\n\n${consecutiveBreaker.buildAbortMessage()}`;
+      break;
     }
   }
 

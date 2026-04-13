@@ -306,6 +306,115 @@ export class CircuitBreaker {
   }
 }
 
+// ============================================================================
+// CONSECUTIVE FAILURE BREAKER (per-turn)
+// ============================================================================
+//
+// CircuitBreaker above is process-global: it tracks cumulative failures across
+// every turn and resets after 5 minutes. That's the right shape for "tool X
+// has been flaky all day, fall back to alternatives" but it does nothing for
+// the fast pathology where a model gets confused inside a single turn and
+// calls the same tool 4-5 times in a row, each time getting the exact same
+// error back, until the loop hits maxIterations and burns 50 model calls of
+// budget.
+//
+// ConsecutiveToolBreaker is instantiated fresh per loop invocation. It tracks
+// only consecutive failures (a single success resets the counter) and decides
+// when to nudge the model and when to hard-abort the turn.
+//
+// Decision flow:
+//   - 1-2 consecutive failures: 'ok' (transient or self-correcting)
+//   - 3rd failure:               'nudge' (inject a stop-and-rethink hint into
+//                                 the next tool result)
+//   - 4th failure:               'abort' (yield abort message, break loop)
+//
+// Nudge-then-abort gives the model exactly one chance to recover after being
+// told "stop." Empirically this is what Claude Code does and it's enough for
+// most genuine-confusion cases without being trigger-happy on transient
+// failures (one bad fs read in the middle of a working sequence is fine).
+
+export type BreakerDecision = 'ok' | 'nudge' | 'abort';
+
+export const CONSECUTIVE_NUDGE_THRESHOLD = 3;
+export const CONSECUTIVE_ABORT_THRESHOLD = 4;
+
+interface ConsecutiveEntry {
+  failures: number;
+  lastError: string;
+}
+
+export class ConsecutiveToolBreaker {
+  private counts = new Map<string, ConsecutiveEntry>();
+  private nudged = new Set<string>();
+  private aborted: { toolName: string; lastError: string; failures: number } | null = null;
+
+  /**
+   * Record the outcome of a single tool execution.
+   * Returns 'ok' for success or 1-2 failures, 'nudge' on the 3rd consecutive
+   * failure (only fires once per tool), and 'abort' on the 4th and beyond.
+   */
+  record(toolName: string, success: boolean, errorMessage?: string): BreakerDecision {
+    if (success) {
+      this.counts.delete(toolName);
+      this.nudged.delete(toolName);
+      return 'ok';
+    }
+
+    const entry = this.counts.get(toolName) ?? { failures: 0, lastError: '' };
+    entry.failures += 1;
+    if (errorMessage) entry.lastError = errorMessage;
+    this.counts.set(toolName, entry);
+
+    if (entry.failures >= CONSECUTIVE_ABORT_THRESHOLD) {
+      this.aborted = { toolName, lastError: entry.lastError, failures: entry.failures };
+      return 'abort';
+    }
+    if (entry.failures === CONSECUTIVE_NUDGE_THRESHOLD && !this.nudged.has(toolName)) {
+      this.nudged.add(toolName);
+      return 'nudge';
+    }
+    return 'ok';
+  }
+
+  /** Whether the breaker has flipped into abort state from a prior record() call. */
+  isAborted(): boolean {
+    return this.aborted !== null;
+  }
+
+  /**
+   * Build a stop-and-rethink message to inject into the next tool result content.
+   * Triggered on the 3rd consecutive failure; the model gets one shot to adapt.
+   */
+  buildNudgeMessage(toolName: string): string {
+    const entry = this.counts.get(toolName);
+    const failures = entry?.failures ?? CONSECUTIVE_NUDGE_THRESHOLD;
+    const lastError = entry?.lastError || 'no error message';
+    return (
+      `\n\n[CONSECUTIVE FAILURE WARNING] Tool "${toolName}" has failed ` +
+      `${failures} times in a row with: ${lastError}. Stop calling this tool. ` +
+      `Either try a completely different approach or report the failure to ` +
+      `the user and end the turn. The next consecutive failure will hard-abort ` +
+      `this turn.`
+    );
+  }
+
+  /** Build the user-visible abort message that gets yielded before breaking the loop. */
+  buildAbortMessage(): string {
+    if (!this.aborted) return '';
+    return (
+      `[TURN ABORTED] Tool "${this.aborted.toolName}" failed ` +
+      `${this.aborted.failures} times in a row with: ${this.aborted.lastError}. ` +
+      `Aborting turn to prevent an infinite tool loop. Please review what was ` +
+      `attempted and try a different approach.`
+    );
+  }
+
+  /** Inspect the abort state for structured event emission. */
+  getAbortState(): { toolName: string; lastError: string; failures: number } | null {
+    return this.aborted;
+  }
+}
+
 /** Map of tool names to suggested alternatives when a tool is broken. */
 const TOOL_ALTERNATIVES: Record<string, string[]> = {
   scrape_url: ['deep_research', 'scrape_search'],
