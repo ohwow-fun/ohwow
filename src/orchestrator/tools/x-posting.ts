@@ -224,6 +224,47 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Convert a markdown article body to the plain-text shape X Articles
+ * can actually render. X Articles has its own toolbar for bold/italic/
+ * headings and treats raw markdown characters as literal text, so a
+ * body typed straight from `.md` shows up with `**bold**` and `---`
+ * hrs visible to readers. Strip the syntax, keep the words.
+ *
+ * What we do:
+ *   - fenced code blocks: drop the ``` fences, keep the content
+ *   - inline code: drop the backticks, keep the content
+ *   - links [text](url): unwrap to `text (url)` so the URL stays visible
+ *   - bare brackets [text]: unwrap to `text` (for placeholder tokens)
+ *   - horizontal rules (---, ***, ___ on their own line): remove
+ *   - headings (# .. ######): drop the marker, keep heading text as a paragraph
+ *   - bold **text** and __text__: unwrap
+ *   - collapse 3+ blank lines to 2
+ *
+ * Italic (_text_ / *text*) is intentionally left alone — it's too easy
+ * to munge real prose with asterisks, and X Articles shows italic
+ * markers as plain chars which is an acceptable fallback.
+ */
+export function stripMarkdownForXArticle(body: string): { plainText: string } {
+  let out = body;
+
+  out = out.replace(/```[a-zA-Z0-9_-]*\n?/g, '');
+  out = out.replace(/`([^`]+)`/g, '$1');
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
+  out = out.replace(/\[([^\]]+)\]/g, '$1');
+  out = out.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '');
+  out = out.replace(/^#{1,6}\s+/gm, '');
+  out = out.replace(/\*\*([^*]+)\*\*/g, '$1');
+  out = out.replace(/__([^_]+)__/g, '$1');
+  out = out
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .join('\n');
+  out = out.replace(/\n{3,}/g, '\n\n');
+
+  return { plainText: out.trim() };
+}
+
 function isLoginRedirect(url: string): boolean {
   return /\/(login|i\/flow\/login|i\/flow\/signup)/.test(url);
 }
@@ -550,7 +591,8 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
       screenshotBase64: await captureScreenshot(page),
     };
   }
-  await page.keyboard.type(body, { delay: KEYBOARD_DELAY_MS });
+  const { plainText: bodyPlain } = stripMarkdownForXArticle(body);
+  await page.keyboard.type(bodyPlain, { delay: KEYBOARD_DELAY_MS });
   await wait(400);
 
   const screenshotBase64 = await captureScreenshot(page);
