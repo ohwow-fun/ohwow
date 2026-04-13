@@ -47,6 +47,7 @@ import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
 import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { PresenceEngine } from '../presence/presence-engine.js';
 import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
@@ -1326,6 +1327,33 @@ export async function startDaemon(): Promise<DaemonHandle> {
     improvementScheduler.start().catch(err => {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
+
+    // Runtime skill loader: hot-loads synthesized code skills from
+    // <dataDir>/skills/*.ts into the runtime tool registry so the
+    // orchestrator sees them on the next chat turn without a daemon
+    // restart. Opt-in: default ON for "default", off for any other
+    // workspace unless OHWOW_ENABLE_SYNTHESIS=1 is set, so a parallel
+    // session (avenued) doesn't accidentally hot-load tools from its
+    // own skills dir.
+    const synthEnv = process.env.OHWOW_ENABLE_SYNTHESIS;
+    const synthesisEnabled =
+      synthEnv === '1' || (synthEnv !== '0' && activeWsName === 'default');
+    if (synthesisEnabled) {
+      const layout = resolveActiveWorkspace();
+      const runtimeSkillLoader = new RuntimeSkillLoader({
+        skillsDir: layout.skillsDir,
+        compiledDir: layout.compiledSkillsDir,
+        db,
+        workspaceId,
+      });
+      runtimeSkillLoader.start().catch(err => {
+        logger.warn(`[daemon] Runtime skill loader failed: ${err instanceof Error ? err.message : err}`);
+      });
+      bus.once('shutdown', () => runtimeSkillLoader.stop());
+      logger.info(`[daemon] Runtime skill loader started (skillsDir=${layout.skillsDir})`);
+    } else {
+      logger.info(`[daemon] Runtime skill loader disabled for workspace "${activeWsName}"`);
+    }
 
     // Inner thoughts loop + presence engine: ambient awareness for proactive greetings
     const orchWorkspace = orchestrator?.getBrain()?.workspace;

@@ -18,6 +18,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
 import { ORCHESTRATOR_TOOL_DEFINITIONS, LSP_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { runtimeToolRegistry } from './runtime-tool-registry.js';
 import { loadConversationPersona } from './conversation-persona.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { invalidateBashAccessCache } from './tools/bash.js';
@@ -1724,6 +1725,17 @@ export class LocalOrchestrator {
     // Add MCP tools after filtering (they pass through since they're not mapped)
     if (mcpTools.length > 0) {
       tools = [...tools, ...mcpTools];
+    }
+
+    // Append runtime-registered code skills (synthesized tools loaded
+    // hot from the workspace skills dir). They bypass intent filtering
+    // the same way MCP tools do: once a synthesized tool is promoted
+    // out of probation it should always be visible to the LLM. The
+    // registry itself hides probation skills behind OHWOW_SYNTHESIS_DEBUG
+    // so agents don't see half-tested tools during normal operation.
+    const runtimeSkillDefs = runtimeToolRegistry.getToolDefinitions();
+    if (runtimeSkillDefs.length > 0) {
+      tools = [...tools, ...runtimeSkillDefs];
     }
 
     return tools;

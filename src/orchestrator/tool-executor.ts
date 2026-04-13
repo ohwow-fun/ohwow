@@ -7,9 +7,10 @@ import type { TextBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resource
 
 /** Browser result blocks are always text or image, narrow from ContentBlockParam. */
 export type BrowserResultBlock = TextBlockParam | ImageBlockParam;
-import type { LocalToolContext, ToolResult } from './local-tool-types.js';
+import type { LocalToolContext, ToolHandler, ToolResult } from './local-tool-types.js';
 import type { OrchestratorEvent, ChannelChatOptions } from './orchestrator-types.js';
 import { toolRegistry } from './tools/registry.js';
+import { runtimeToolRegistry } from './runtime-tool-registry.js';
 import type { ToolCache } from './tool-cache.js';
 import {
   BROWSER_ACTIVATION_MESSAGE,
@@ -1060,7 +1061,20 @@ Constraints:
   }
 
   // --- Registry tool execution ---
-  const handler = toolRegistry.get(request.name);
+  // Static registry first (130 built-in tools), then the runtime
+  // registry (synthesized code skills loaded from the workspace
+  // skills dir). The runtime registry is an escape hatch so the
+  // synthesis pipeline can hot-register deterministic tools without
+  // a daemon restart — see runtime-tool-registry.ts.
+  let handler: ToolHandler | undefined = toolRegistry.get(request.name);
+  let runtimeSkillId: string | undefined;
+  if (!handler) {
+    const runtimeDef = runtimeToolRegistry.get(request.name);
+    if (runtimeDef) {
+      handler = runtimeDef.handler;
+      runtimeSkillId = runtimeDef.skillId;
+    }
+  }
   if (!handler) {
     const errorResult: ToolResult = { success: false, error: `Unknown tool: ${request.name}` };
     yield { type: 'tool_done', name: request.name, result: errorResult };
@@ -1071,6 +1085,9 @@ Constraints:
       isError: true,
     };
   }
+  // Silence unused-variable lint until M7 wires success/failure
+  // counters for runtime skills through the success path.
+  void runtimeSkillId;
 
   // Circuit breaker check: skip tools that have failed repeatedly
   const cb = ctx.circuitBreaker;
