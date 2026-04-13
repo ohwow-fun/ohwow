@@ -365,31 +365,58 @@ export async function writeWikiPage(
   const slug = explicitSlug || slugify(title);
   if (!slug) return { success: false, error: 'could not derive a slug from title' };
 
-  const sourceDocIds = Array.isArray(input.source_doc_ids) ? (input.source_doc_ids as string[]) : [];
-  const related = Array.isArray(input.related) ? (input.related as string[]) : [];
-  const summary = (input.summary as string | undefined) ?? '';
+  // Distinguish "caller explicitly passed this field" from "caller omitted
+  // the field entirely". Omitted optional fields must fall back to the
+  // existing page's frontmatter on update — otherwise a cheap backlink
+  // fix wipes an expensively-synthesized summary or related list. Explicit
+  // values (including `""` / `[]`) are treated as intentional clears.
+  const summaryProvided = Object.prototype.hasOwnProperty.call(input, 'summary');
+  const relatedProvided = Object.prototype.hasOwnProperty.call(input, 'related');
+  const sourceDocIdsProvided = Object.prototype.hasOwnProperty.call(input, 'source_doc_ids');
+  const summaryInput = summaryProvided ? ((input.summary as string | undefined) ?? '') : undefined;
+  const relatedInput = relatedProvided && Array.isArray(input.related)
+    ? (input.related as string[])
+    : undefined;
+  const sourceDocIdsInput = sourceDocIdsProvided && Array.isArray(input.source_doc_ids)
+    ? (input.source_doc_ids as string[])
+    : undefined;
 
   const dir = ensureWikiDir(ctx.workspaceId);
   const path = join(dir, `${slug}.md`);
 
   let prevVersion = 0;
   let prevRawForSnapshot: string | null = null;
+  let prevFrontmatter: WikiPageFrontmatter | null = null;
   if (existsSync(path)) {
     try {
       const prevRaw = readFileSync(path, 'utf-8');
       prevRawForSnapshot = prevRaw;
       const prev = parseWikiPage(slug, path, prevRaw);
       prevVersion = prev.frontmatter.version ?? 0;
+      prevFrontmatter = prev.frontmatter;
     } catch { /* noop */ }
   }
+
+  // Merge semantics: for each optional field, prefer the explicit input;
+  // otherwise carry forward whatever the previous version had. On create
+  // (no prevFrontmatter), omitted fields stay undefined.
+  const mergedSummary = summaryProvided
+    ? (summaryInput && summaryInput.length > 0 ? summaryInput : undefined)
+    : prevFrontmatter?.summary;
+  const mergedRelated = relatedProvided
+    ? (relatedInput && relatedInput.length > 0 ? relatedInput : undefined)
+    : prevFrontmatter?.related;
+  const mergedSourceDocIds = sourceDocIdsProvided
+    ? (sourceDocIdsInput && sourceDocIdsInput.length > 0 ? sourceDocIdsInput : undefined)
+    : prevFrontmatter?.source_doc_ids;
 
   const now = new Date().toISOString();
   const frontmatter: WikiPageFrontmatter = {
     title,
     slug,
-    summary: summary || undefined,
-    source_doc_ids: sourceDocIds.length > 0 ? sourceDocIds : undefined,
-    related: related.length > 0 ? related : undefined,
+    summary: mergedSummary,
+    source_doc_ids: mergedSourceDocIds,
+    related: mergedRelated,
     last_synthesized: now,
     synthesized_by: ctx.currentGuideAgentId ?? ctx.currentAgentId ?? undefined,
     version: prevVersion + 1,
