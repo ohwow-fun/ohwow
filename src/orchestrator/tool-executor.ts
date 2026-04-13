@@ -34,6 +34,14 @@ import { retryTransient, CircuitBreaker, attemptRecovery, classifyError } from '
 import { estimateMediaCost } from '../media/media-router.js';
 import type { ImmuneSystem } from '../immune/immune-system.js';
 import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
+import {
+  composeTweetViaBrowser,
+  composeThreadViaBrowser,
+  composeArticleViaBrowser,
+  sendDmViaBrowser,
+  listDmsViaBrowser,
+  deleteLastTweetViaBrowser,
+} from './tools/x-posting.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -209,8 +217,15 @@ export interface BrowserState {
   activated: boolean;
   headless: boolean;
   dataDir: string;
-  /** Lazy-activation callback: creates browser service on demand when a browser tool is called without prior request_browser */
-  activate?: () => Promise<void>;
+  /**
+   * Lazy-activation callback: creates a browser service on demand when
+   * a browser tool is called without a prior explicit `request_browser`.
+   * Returns the freshly-created (or already-active) service so callers
+   * that ran inside a single iteration can use the return value directly
+   * — the caller's captured `state.service` snapshot is stale after
+   * activation because it was taken before the service was instantiated.
+   */
+  activate?: () => Promise<LocalBrowserService | null>;
   /** Profile requested by the model via request_browser tool */
   requestedProfile?: string;
   /** Callback to set the requested profile on the orchestrator */
@@ -506,6 +521,134 @@ Constraints:
       ? `Wiki curate complete (${subResult.toolsCalled.length} tools used):\n\n${subResult.summary}`
       : `Wiki curate failed: ${subResult.summary}`;
     return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !subResult.success), isError: !subResult.success };
+  }
+
+  // --- X browser tools (tweet / thread / article / DM / delete) ---
+  // All drive the user's real Chrome via CDP. We activate the browser
+  // through the normal orchestrator path (which launches Chrome with
+  // the right profile at :9222 if it isn't already running), then the
+  // helpers connect their own playwright-core client to the same CDP
+  // endpoint — bypassing Stagehand's page wrapper which hides
+  // page.keyboard from external callers.
+  //
+  // Defaults: dry_run=true so an accidental LLM call never publishes.
+  if (
+    request.name === 'x_compose_tweet'
+    || request.name === 'x_compose_thread'
+    || request.name === 'x_compose_article'
+    || request.name === 'x_send_dm'
+    || request.name === 'x_list_dms'
+    || request.name === 'x_delete_tweet'
+  ) {
+    const profile = (toolInput.profile as string | undefined) || 'ogsus@ohwow.fun';
+    // Make sure Chrome is running at :9222 with the requested profile
+    // before we try to attach. We still call activate() even though
+    // the helpers use their own connectOverCDP — activate() is what
+    // launches Chrome + quits/relaunches on a profile mismatch.
+    if (!ctx.browserState.service && ctx.browserState.setRequestedProfile) {
+      ctx.browserState.setRequestedProfile(profile);
+    }
+    if (!ctx.browserState.service && ctx.browserState.activate) {
+      yield { type: 'status', message: `Opening Chrome with profile "${profile}" for X...` };
+      try {
+        await ctx.browserState.activate();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const errorResult: ToolResult = { success: false, error: `Browser activation failed: ${msg}` };
+        ctx.executedToolCalls.set(toolKey, errorResult);
+        yield { type: 'tool_done', name: request.name, result: errorResult };
+        return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
+      }
+    }
+
+    const dryRun = toolInput.dry_run !== false; // default dry_run=true
+    const opLabel = request.name.replace('x_', '').replace('_', ' ');
+    yield { type: 'status', message: `${dryRun ? 'DRY RUN' : 'LIVE'}: ${opLabel}...` };
+
+    let opResult: {
+      success: boolean;
+      message: string;
+      screenshotBase64?: string;
+      tweetsTyped?: number;
+      tweetsPublished?: number;
+      currentUrl?: string;
+      landedAt?: string;
+      threads?: unknown[];
+    };
+    try {
+      if (request.name === 'x_compose_tweet') {
+        opResult = await composeTweetViaBrowser({
+          text: String(toolInput.text || ''),
+          dryRun,
+        });
+      } else if (request.name === 'x_compose_thread') {
+        const tweets = Array.isArray(toolInput.tweets) ? (toolInput.tweets as string[]) : [];
+        opResult = await composeThreadViaBrowser({ tweets, dryRun });
+      } else if (request.name === 'x_compose_article') {
+        opResult = await composeArticleViaBrowser({
+          title: String(toolInput.title || ''),
+          body: String(toolInput.body || ''),
+          dryRun,
+        });
+      } else if (request.name === 'x_send_dm') {
+        opResult = await sendDmViaBrowser({
+          conversationPair: toolInput.conversation_pair as string | undefined,
+          handle: toolInput.handle as string | undefined,
+          text: String(toolInput.text || ''),
+          dryRun,
+        });
+      } else if (request.name === 'x_list_dms') {
+        const listed = await listDmsViaBrowser({ limit: toolInput.limit as number | undefined });
+        opResult = {
+          success: listed.success,
+          message: listed.message,
+          screenshotBase64: listed.screenshotBase64,
+          threads: listed.threads as unknown[],
+        };
+      } else /* x_delete_tweet */ {
+        opResult = await deleteLastTweetViaBrowser({
+          handle: String(toolInput.handle || ''),
+          marker: String(toolInput.marker || ''),
+          dryRun,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      logger.error({ err: msg, stack }, `[x-posting] ${request.name} threw`);
+      opResult = { success: false, message: `x-posting handler crashed: ${msg}` };
+    }
+
+    const dataEnvelope: Record<string, unknown> = {
+      message: opResult.message,
+      currentUrl: opResult.currentUrl,
+    };
+    if (opResult.tweetsTyped !== undefined) dataEnvelope.tweetsTyped = opResult.tweetsTyped;
+    if (opResult.tweetsPublished !== undefined) dataEnvelope.tweetsPublished = opResult.tweetsPublished;
+    if (opResult.landedAt !== undefined) dataEnvelope.landedAt = opResult.landedAt;
+    if (opResult.threads !== undefined) dataEnvelope.threads = opResult.threads;
+
+    if (opResult.screenshotBase64 && ctx.browserState.dataDir) {
+      try {
+        const saved = await saveScreenshotLocally(opResult.screenshotBase64, ctx.browserState.dataDir);
+        if (saved) dataEnvelope.screenshotPath = saved;
+      } catch (err) {
+        logger.warn({ err }, '[x-posting] failed to save screenshot');
+      }
+    }
+
+    const result: ToolResult = opResult.success
+      ? { success: true, data: dataEnvelope }
+      : { success: false, error: opResult.message, data: dataEnvelope };
+
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+    return {
+      toolName: request.name,
+      result,
+      resultContent: opResult.message,
+      isError: !opResult.success,
+    };
   }
 
   // --- Sequential multi-agent execution ---

@@ -273,17 +273,34 @@ export class LocalBrowserService {
    */
   static async connectToChrome(port = 9222, profileDir?: string): Promise<string | null> {
     const cdpHttpUrl = `http://localhost:${port}`;
+    const platform = process.platform;
+    const { exec, spawn } = await import('child_process');
 
     // 1. Fast path: Chrome is already running with CDP.
     const existing = await LocalBrowserService._probeCdp(cdpHttpUrl);
     if (existing) {
-      logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
-      await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
-      return existing;
+      // If the caller asked for a specific profile, verify the running
+      // debug Chrome is actually on that profile. Reusing a debug Chrome
+      // that was launched with a different --profile-directory silently
+      // gives the model the wrong account's cookies and logins — that's
+      // exactly how we ended up posting from the wrong X session.
+      if (profileDir) {
+        const running = await LocalBrowserService._getDebugChromeProfile(exec, platform);
+        if (running && running !== profileDir) {
+          logger.info(`[browser] Existing CDP Chrome is on profile "${running}" but caller requested "${profileDir}" — quitting debug Chrome and relaunching`);
+          await LocalBrowserService._quitDebugChrome(exec, platform);
+          // Fall through to relaunch below.
+        } else {
+          logger.info(`[browser] Connected to existing Chrome CDP at port ${port} (profile: ${running || 'unknown'})`);
+          await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
+          return existing;
+        }
+      } else {
+        logger.info(`[browser] Connected to existing Chrome CDP at port ${port}`);
+        await LocalBrowserService._assertNoConsentPending(cdpHttpUrl);
+        return existing;
+      }
     }
-
-    const platform = process.platform;
-    const { exec, spawn } = await import('child_process');
 
     // 2. If Chrome is running (without CDP), quit it. We can't enable debugging
     //    on a running instance, so we have to relaunch.
@@ -467,6 +484,95 @@ export class LocalBrowserService {
         }))).then(rows => resolve(rows.filter(r => r.isReal).map(r => r.pid)));
       });
     });
+  }
+
+  /**
+   * Find the PID of the *debug* Chrome we launched earlier — the main
+   * process running with `--user-data-dir=~/.ohwow/chrome-debug`.
+   * Distinct from _findRealChromePids, which filters debug Chromes
+   * out. Returns null if no debug Chrome is running.
+   */
+  private static _findDebugChromePid(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<number | null> {
+    if (platform === 'win32') return Promise.resolve(null);
+    const debugDir = `${process.env.HOME}/.ohwow/chrome-debug`;
+    const pgrepCmd = platform === 'darwin'
+      ? 'pgrep -f "Google Chrome.app/Contents/MacOS/Google Chrome"'
+      : 'pgrep -f "google-chrome|/chrome "';
+    return new Promise(resolve => {
+      exec(pgrepCmd, (err, stdout) => {
+        if (err || !stdout) return resolve(null);
+        const pids = stdout.trim().split('\n').map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+        if (pids.length === 0) return resolve(null);
+        Promise.all(pids.map(pid => new Promise<{ pid: number; isDebug: boolean }>(res => {
+          exec(`ps -o command= -p ${pid}`, (e, out) => {
+            if (e || !out) return res({ pid, isDebug: false });
+            const cmd = out.trim();
+            // Main process only, not a helper
+            if (/--type=/.test(cmd)) return res({ pid, isDebug: false });
+            const dirMatch = cmd.match(/--user-data-dir=([^ ]+)/);
+            const userDataDir = dirMatch ? dirMatch[1] : '';
+            res({ pid, isDebug: userDataDir === debugDir });
+          });
+        }))).then(rows => {
+          const debugRow = rows.find(r => r.isDebug);
+          resolve(debugRow ? debugRow.pid : null);
+        });
+      });
+    });
+  }
+
+  /**
+   * Read the --profile-directory argument from the currently-running
+   * debug Chrome's command line. Returns null if no debug Chrome is
+   * running, or if the argument isn't present (which means Chrome is
+   * using its default profile).
+   */
+  private static async _getDebugChromeProfile(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<string | null> {
+    const pid = await LocalBrowserService._findDebugChromePid(exec, platform);
+    if (!pid) return null;
+    return new Promise(resolve => {
+      exec(`ps -o command= -p ${pid}`, (err, out) => {
+        if (err || !out) return resolve(null);
+        // Profile names can contain spaces (e.g. "Profile 1"), so grab
+        // everything up to the next `--` flag or end-of-line. The trim
+        // at the end strips trailing whitespace before that boundary.
+        const m = out.match(/--profile-directory=(.+?)(?:\s--|$)/);
+        resolve(m ? m[1].trim() : 'Default');
+      });
+    });
+  }
+
+  /**
+   * Quit ONLY the debug Chrome we launched earlier. Unlike _quitChrome
+   * (which targets the user's real Chrome), this signals the specific
+   * PID running against `~/.ohwow/chrome-debug` — so the user's other
+   * Chrome windows on their real profile stay up.
+   */
+  private static async _quitDebugChrome(
+    exec: typeof import('child_process').exec,
+    platform: NodeJS.Platform,
+  ): Promise<void> {
+    const pid = await LocalBrowserService._findDebugChromePid(exec, platform);
+    if (!pid) return;
+    await new Promise<void>(resolve => exec(`kill -TERM ${pid}`, () => resolve()));
+    // Wait up to 5s for the process to exit cleanly.
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 250));
+      const stillRunning = await LocalBrowserService._findDebugChromePid(exec, platform);
+      if (!stillRunning) return;
+    }
+    // Force kill if graceful didn't work.
+    const remaining = await LocalBrowserService._findDebugChromePid(exec, platform);
+    if (remaining) {
+      await new Promise<void>(resolve => exec(`kill -KILL ${remaining}`, () => resolve()));
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   private static async _quitChrome(

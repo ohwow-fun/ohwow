@@ -196,6 +196,7 @@ export class LocalOrchestrator {
         if (!this.browserService) {
           await this.activateBrowser(this.browserRequestedProfile);
         }
+        return this.browserService;
       },
     };
   }

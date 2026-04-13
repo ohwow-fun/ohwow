@@ -1848,6 +1848,151 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   },
 
   // =========================================================================
+  // X / TWITTER POSTING TOOLS
+  // =========================================================================
+  // These tools drive the user's real Chrome (via CDP) to type and
+  // publish posts to x.com. No API key, no cloud proxy: the browser
+  // session is the user's own, so posts go out from their account
+  // exactly as if they typed them by hand. Default dry_run=true so
+  // accidental calls never publish.
+  {
+    name: 'x_compose_tweet',
+    description: 'Compose a single tweet (≤280 chars) on x.com by driving the user\'s real logged-in Chrome. Navigates to the compose modal, types the text, and optionally publishes. DEFAULTS TO DRY RUN: the tool types the text into compose but does NOT click Post unless you explicitly pass dry_run=false. Use this for short posts. Use x_compose_thread for multi-tweet threads.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        text: {
+          type: 'string',
+          description: 'The tweet text, verbatim, ≤280 characters. Will be typed exactly as provided.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true (default), types the text in compose and screenshots it but does NOT publish. Set to false to actually publish. Always dry-run first unless the user explicitly asked to publish.',
+        },
+        profile: {
+          type: 'string',
+          description: 'Chrome profile to use for the real logged-in session. Accepts an email (e.g. "ogsus@ohwow.fun") or a profile directory name. Defaults to the owner\'s profile.',
+        },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'x_compose_thread',
+    description: 'Compose a multi-tweet thread on x.com by driving the user\'s real logged-in Chrome. Opens the compose modal once, types each tweet in sequence, chains them via the "Add another post" button, and optionally publishes them all. DEFAULTS TO DRY RUN. Use this for launch threads, countdown threads, and any multi-tweet content where each segment is ≤280 chars.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        tweets: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of tweet strings, in order. Each ≤280 chars. The tool chains them into a thread.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true (default), composes the thread in the modal and screenshots it but does NOT publish. Set to false to publish all tweets in one shot.',
+        },
+        profile: {
+          type: 'string',
+          description: 'Chrome profile to use. Same rules as x_compose_tweet.',
+        },
+      },
+      required: ['tweets'],
+    },
+  },
+  {
+    name: 'x_compose_article',
+    description: 'Compose a long-form X Article by driving the user\'s real Chrome. Navigates to /compose/articles, clicks Write to create a new draft, types the title and body, and optionally publishes. DEFAULTS TO DRY RUN. Use this for launch blog-style posts (Article #1, Article #2, etc.) where the content is longer than a thread. Requires X Premium on the active account — the tool returns a useful error if Articles is not available for this profile.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: {
+          type: 'string',
+          description: 'Article title. Required.',
+        },
+        body: {
+          type: 'string',
+          description: 'Article body markdown/plain text. Minimum 100 characters. The tool types this into the X article editor one character at a time.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true (default), drafts the article but does NOT click Publish. Set to false to actually publish.',
+        },
+        profile: {
+          type: 'string',
+          description: 'Chrome profile to use.',
+        },
+      },
+      required: ['title', 'body'],
+    },
+  },
+  {
+    name: 'x_list_dms',
+    description: 'List the user\'s X DM inbox by driving the real Chrome. Returns an array of thread summaries with the conversation pair id, the primary correspondent name, a short preview of the last message, and an unread flag. Use this for DM triage: call it first to see what needs attention, then call x_send_dm to reply into a specific thread.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: {
+          type: 'number',
+          description: 'Max number of threads to return. Defaults to 20, capped at 50.',
+        },
+        profile: { type: 'string', description: 'Chrome profile to use.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'x_send_dm',
+    description: 'Send a DM to an existing X conversation by driving the real Chrome. Opens the thread, types the message into the composer, and optionally clicks Send. DEFAULTS TO DRY RUN. Prefer passing conversation_pair (from x_list_dms) for deterministic targeting; handle fallback is best-effort.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        conversation_pair: {
+          type: 'string',
+          description: 'The conversation pair id from x_list_dms (e.g. "<userIdA>:<userIdB>" or "<userIdA>-<userIdB>"). Either this or handle is required.',
+        },
+        handle: {
+          type: 'string',
+          description: 'Recipient handle (without @) as a fallback when the pair is unknown. The tool will pick the first inbox thread whose preview mentions this handle — best-effort only.',
+        },
+        text: {
+          type: 'string',
+          description: 'Message body. Required.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true (default), types the message into the composer but does NOT click Send. Set to false to send for real.',
+        },
+        profile: { type: 'string', description: 'Chrome profile to use.' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'x_delete_tweet',
+    description: 'Delete the user\'s most recent tweet matching a text marker. Used for cleanup after test posts. Opens the profile, finds an article whose text contains the marker, opens its menu, clicks Delete, and confirms. DEFAULTS TO DRY RUN.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        handle: {
+          type: 'string',
+          description: 'Profile handle (without @) to search on. Usually the active account.',
+        },
+        marker: {
+          type: 'string',
+          description: 'Unique substring that identifies the tweet to delete. The tool picks the first matching article.',
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'When true (default), locates the tweet but does NOT delete it. Set to false to actually delete.',
+        },
+        profile: { type: 'string', description: 'Chrome profile to use.' },
+      },
+      required: ['handle', 'marker'],
+    },
+  },
+
+  // =========================================================================
   // DATA SOURCE CONNECTOR TOOLS
   // =========================================================================
 
@@ -2766,6 +2911,16 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // Browser tools → 'browser'
   request_browser: ['browser'],
 
+  // X posting tools → 'browser' (they drive the real Chrome). Tagged
+  // browser so any session routed for a web task gets them; they lazy-
+  // activate the browser service on first call.
+  x_compose_tweet: ['browser'],
+  x_compose_thread: ['browser'],
+  x_compose_article: ['browser'],
+  x_list_dms: ['browser'],
+  x_send_dm: ['browser'],
+  x_delete_tweet: ['browser'],
+
   // Desktop tools → 'desktop'
   request_desktop: ['desktop'],
 
@@ -2823,6 +2978,11 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // needs the tool advertised at the top of its catalog so it picks
   // delegation over chained reads/writes that would bloat the parent.
   wiki_curate: 1,
+  // X posting — P1 for launch week. "Post this to X" / "tweet this" /
+  // "countdown tweet" must always surface the dedicated tools over
+  // generic browser_navigate + browser_click chains.
+  x_compose_tweet: 1, x_compose_thread: 1, x_compose_article: 1,
+  x_list_dms: 1, x_send_dm: 1, x_delete_tweet: 1,
   lsp_diagnostics: 1,
 
   // P2: Common extensions (default for unlisted tools)
