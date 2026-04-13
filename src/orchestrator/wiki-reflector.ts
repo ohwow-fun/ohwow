@@ -31,6 +31,10 @@ interface WikiReflectionUpdate {
   action: 'create' | 'append';
   section?: string;
   content: string;
+  /** One-line summary for the page index (only for action: 'create'). */
+  summary?: string;
+  /** Slugs of existing pages this update is related to — used to weave backlinks. */
+  related?: string[];
 }
 
 interface WikiReflectionPayload {
@@ -61,7 +65,7 @@ IGNORE (ephemeral, no future value):
 - Tool-call chatter or process narration
 
 Output STRICT JSON, no prose, no markdown fences:
-{"updates":[{"slug":"kebab-case","title":"Human Title","action":"create" | "append","section":"## Heading","content":"1-3 sentence markdown body to add. Terse and factual."}]}
+{"updates":[{"slug":"kebab-case","title":"Human Title","action":"create" | "append","section":"## Heading","content":"1-3 sentence markdown body to add. Terse and factual.","summary":"One-line catalog summary","related":["other-slug-1","other-slug-2"]}]}
 
 If nothing is durable, output: {"updates":[]}
 
@@ -69,6 +73,9 @@ Rules:
 - Use existing slugs from the EXISTING WIKI list when the new info belongs on an existing page (action: "append").
 - Only create a new page when no existing page is a natural fit.
 - "section" is required for "append" — pick the heading the new content should live under (create it if needed).
+- "summary" is required for "create" — one short sentence (≤ 100 chars) for the page index. Skip for "append".
+- "related" is the list of OTHER existing slugs from the EXISTING WIKI list that this update is conceptually connected to. The reflector turns these into [[backlinks]] inside the page body, so the wiki stays connected and lint-clean. Include 1-3 related slugs whenever there's a real conceptual link; empty list when truly standalone.
+- IMPORTANT: weave \`[[other-slug]]\` backlinks INTO the "content" markdown wherever a related page is named or implied. The backlink syntax is two square brackets around a slug, e.g. "escalates to [[the-fixer]] on incidents." Use the exact slugs from the EXISTING WIKI list. Don't invent slugs.
 - Maximum 3 updates per turn. Pick the most important.
 - Keep "content" terse: ≤ 3 sentences. Don't restate the conversation, distill the fact.`;
 
@@ -124,7 +131,7 @@ ASSISTANT: ${assistantResponse.slice(0, MAX_ASSISTANT_SLICE)}`;
     const result = await provider.createMessage({
       system: REFLECTION_PROMPT,
       messages: [{ role: 'user', content: userBlock }],
-      maxTokens: 1024,
+      maxTokens: 2500,
       temperature: 0,
     });
 
@@ -211,22 +218,36 @@ async function applyAppend(ctx: LocalToolContext, update: WikiReflectionUpdate):
     return;
   }
 
+  // Prefer the existing summary; fall back to the model's suggested
+  // summary when the page didn't have one. Lets ambient curation
+  // backfill missing summaries on older pages over time.
+  const summary = data.summary ?? (update.summary && update.summary.trim() ? update.summary.trim().slice(0, 200) : undefined);
+
   await writeWikiPage(ctx, {
     slug: update.slug,
     title: data.title,
     body: merged,
-    summary: data.summary ?? undefined,
+    summary,
   });
 }
 
 async function applyCreate(ctx: LocalToolContext, update: WikiReflectionUpdate): Promise<void> {
   const heading = update.section?.startsWith('#') ? update.section : '## Notes';
   const body = `${heading}\n\n${update.content}\n`;
-  await writeWikiPage(ctx, {
+  const writeInput: { slug: string; title: string; body: string; summary?: string; related?: string[] } = {
     slug: update.slug,
     title: update.title || update.slug,
     body,
-  });
+  };
+  if (update.summary && update.summary.trim()) {
+    writeInput.summary = update.summary.trim().slice(0, 200);
+  }
+  if (update.related && update.related.length > 0) {
+    writeInput.related = update.related
+      .filter((s) => typeof s === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(s))
+      .slice(0, 5);
+  }
+  await writeWikiPage(ctx, writeInput);
 }
 
 /**
