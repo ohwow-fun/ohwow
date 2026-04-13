@@ -87,4 +87,29 @@ describe('FileAccessGuard', () => {
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('No directories');
   });
+
+  it('allows new file under symlinked allow root (e.g. /tmp -> /private/tmp on macOS)', () => {
+    // Construct a guard with the un-realpath'd /tmp (the user-typed form).
+    // On macOS this resolves internally to /private/tmp. A target path that
+    // doesn't yet exist (a write to a brand-new file) used to fall through
+    // the realpath branch and compare the raw /tmp/... against the resolved
+    // /private/tmp/..., failing the prefix check. The fix walks up the
+    // target's path until it finds an existing ancestor, realpaths that,
+    // and re-attaches the missing tail.
+    const tildeGuard = new FileAccessGuard(['/tmp']);
+    const newFilePath = path.join('/tmp', `bench-guard-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+    const result = tildeGuard.isAllowed(newFilePath);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows new file under nested non-existent dir within allow root', () => {
+    // /tmp/ohwow-bench-<id>/<id>/file.txt — neither the parent nor grandparent
+    // exists yet. The walk-up resolution should still find /tmp (or its
+    // realpath) as the deepest existing ancestor.
+    const tildeGuard = new FileAccessGuard(['/tmp']);
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const deep = path.join('/tmp', `bench-${stamp}`, 'sub', 'leaf.txt');
+    const result = tildeGuard.isAllowed(deep);
+    expect(result.allowed).toBe(true);
+  });
 });

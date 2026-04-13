@@ -53,16 +53,34 @@ export class FileAccessGuard {
       return { allowed: false, reason: 'No directories are configured for file access.' };
     }
 
-    // Resolve the target path
+    // Resolve the target path. We need to handle three cases:
+    //   1. Target exists: realpath it directly so symlink-bearing paths
+    //      (e.g. macOS /tmp → /private/tmp) match the resolved allowlist.
+    //   2. Target doesn't exist yet (write/create): walk up the path until
+    //      we find an existing ancestor, realpath THAT, then re-attach the
+    //      missing suffix. Without this, every "create new file" call under
+    //      /tmp fails on macOS because /tmp resolves to /private/tmp in the
+    //      allowlist but the target was never normalized.
+    //   3. Nothing in the chain exists: fall back to the absolute path.
     let resolvedTarget: string;
     try {
-      // For paths that don't exist yet (search queries), resolve without following symlinks
       const absolute = path.resolve(expandTilde(targetPath));
       try {
         resolvedTarget = fs.realpathSync(absolute);
       } catch {
-        // Path doesn't exist — use the resolved absolute for prefix check
-        resolvedTarget = absolute;
+        // Walk up looking for an ancestor that exists, then realpath it.
+        const tail: string[] = [];
+        let cursor = absolute;
+        let resolved: string | null = null;
+        while (cursor !== path.dirname(cursor)) {
+          tail.unshift(path.basename(cursor));
+          cursor = path.dirname(cursor);
+          try {
+            resolved = fs.realpathSync(cursor);
+            break;
+          } catch { /* keep walking */ }
+        }
+        resolvedTarget = resolved ? path.join(resolved, ...tail) : absolute;
       }
     } catch {
       return { allowed: false, reason: 'Could not resolve path.' };
