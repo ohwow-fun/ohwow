@@ -178,19 +178,24 @@ if (subcommand === 'logs') {
   if (action === 'create') {
     const name = process.argv[4];
     const localOnly = process.argv.includes('--local-only');
+    const cloudProvision = process.argv.includes('--cloud');
     const licenseKeyArg = process.argv.find((a) => a.startsWith('--license-key='))?.split('=')[1];
     const displayNameArg = process.argv.find((a) => a.startsWith('--name='))?.split('=')[1];
+    const businessTypeArg = process.argv.find((a) => a.startsWith('--business-type='))?.split('=')[1];
 
     if (!name) {
-      console.error('Usage: ohwow workspace create <name> [--local-only | --license-key=<key>] [--name="Display Name"]');
+      console.error(
+        'Usage: ohwow workspace create <name> [--local-only | --license-key=<key> | --cloud] [--name="Display Name"]',
+      );
       process.exit(1);
     }
     if (!isValidWorkspaceName(name)) {
       console.error('Workspace name must be alphanumeric, dash, or underscore (no leading dot/dash).');
       process.exit(1);
     }
-    if (localOnly && licenseKeyArg) {
-      console.error('--local-only and --license-key are mutually exclusive.');
+    const modeFlags = [localOnly, !!licenseKeyArg, cloudProvision].filter(Boolean).length;
+    if (modeFlags > 1) {
+      console.error('--local-only, --license-key, and --cloud are mutually exclusive.');
       process.exit(1);
     }
     if (name === DEFAULT_WORKSPACE) {
@@ -226,6 +231,81 @@ if (subcommand === 'logs') {
         ...(displayNameArg ? { displayName: displayNameArg } : {}),
       });
       console.log(`Created local-only workspace "${name}" at ${layout.dataDir}`);
+    } else if (cloudProvision) {
+      // Mint a brand-new cloud workspace via POST /api/local-runtime/provision-workspace.
+      // Auth is the caller's existing license key from the global config — this
+      // proves to the cloud we're the same owner, so it can create a sibling
+      // workspace under the same user without a browser login flow.
+      const config = loadConfig();
+      if (!config.licenseKey) {
+        console.error(
+          'No license key in global config. Set OHWOW_LICENSE_KEY or run onboarding first, ' +
+            'then retry. `--cloud` mints a new workspace using your current license as auth.',
+        );
+        process.exit(1);
+      }
+      const cloudUrl = config.cloudUrl.replace(/\/+$/, '');
+      const displayName = displayNameArg || name;
+      console.log(`Provisioning cloud workspace "${displayName}" via ${cloudUrl}...`);
+
+      let provisionResponse: Response;
+      try {
+        provisionResponse = await fetch(`${cloudUrl}/api/local-runtime/provision-workspace`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            licenseKey: config.licenseKey,
+            businessName: displayName,
+            ...(businessTypeArg ? { businessType: businessTypeArg } : {}),
+          }),
+        });
+      } catch (err) {
+        console.error(
+          `Could not reach ${cloudUrl}: ${err instanceof Error ? err.message : err}. ` +
+            `Check your network or cloudUrl in ~/.ohwow/config.json.`,
+        );
+        process.exit(1);
+      }
+
+      if (!provisionResponse.ok) {
+        let msg = `Cloud refused (${provisionResponse.status})`;
+        try {
+          const errBody = await provisionResponse.json() as { error?: string };
+          if (errBody.error) msg += `: ${errBody.error}`;
+        } catch {
+          // Non-JSON body — fall through with status-only message.
+        }
+        console.error(msg);
+        process.exit(1);
+      }
+
+      interface ProvisionResult {
+        workspace: { id: string; slug: string; businessName: string };
+        license: {
+          licenseKey: string;
+          status: string;
+          plan: string;
+          maxAgents: number;
+          maxRuntimes: number;
+          issuedAt: string;
+          expiresAt: string | null;
+        };
+      }
+      const provisioned = (await provisionResponse.json()) as ProvisionResult;
+
+      writeWorkspaceConfig(name, {
+        schemaVersion: 1,
+        mode: 'cloud',
+        licenseKey: provisioned.license.licenseKey,
+        cloudWorkspaceId: provisioned.workspace.id,
+        displayName: provisioned.workspace.businessName,
+        lastConnectAt: new Date().toISOString(),
+      });
+      console.log(`Created cloud workspace "${name}" at ${layout.dataDir}`);
+      console.log(`  Cloud slug: ${provisioned.workspace.slug}`);
+      console.log(`  Cloud ID:   ${provisioned.workspace.id}`);
+      console.log(`  License:    ${provisioned.license.licenseKey.slice(0, 7)}*** (${provisioned.license.plan})`);
+      console.log(`  Limits:     ${provisioned.license.maxAgents} agents, ${provisioned.license.maxRuntimes} runtimes`);
     } else if (licenseKeyArg) {
       writeWorkspaceConfig(name, {
         schemaVersion: 1,
@@ -473,7 +553,8 @@ if (subcommand === 'logs') {
   console.error('  current                                       Print the active workspace name');
   console.error('  info [<name>]                                 Show mode/tier/status for a workspace');
   console.error('  create <name> --local-only [--name="Label"]   Create a disconnected local workspace');
-  console.error('  create <name> --license-key=<k> [--name=...]  Create a cloud-linked workspace');
+  console.error('  create <name> --cloud [--name="Label"]        Mint a new cloud workspace (uses current license as auth)');
+  console.error('  create <name> --license-key=<k> [--name=...]  Create a cloud workspace bound to an existing license');
   console.error('  link <name> --license-key=<k> [--name=...]    Promote local-only → cloud');
   console.error('  unlink <name>                                 Demote cloud → local-only (keeps data)');
   console.error('  use <name> [--restart]                        Switch active workspace (restarts daemon)');
