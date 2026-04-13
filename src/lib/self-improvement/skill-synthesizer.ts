@@ -1,186 +1,63 @@
 /**
- * Skill Synthesizer (E22) — Auto-Create Skills from Mined Patterns
+ * Skill Synthesizer — DEPRECATED no-op
  *
- * Takes mined tool-call patterns and uses LLM to generate
- * skill metadata (name, description, preconditions, effects).
- * Deduplicates against existing skills and creates new ones.
+ * This module used to take pattern-mined tool-call sequences,
+ * call an LLM to generate skill metadata, and INSERT new rows with
+ * `skill_type='procedure'` into agent_workforce_skills. That path
+ * has been deprecated — see
+ * /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
+ *
+ * Reason: procedure skills are discovered at runtime via three
+ * keyword matchers that collectively caused the launch-eve
+ * regression (a prompt to rewrite local `.md` files matched the
+ * word "write" and routed a sub-agent into an X-compose loop
+ * against an unauth'd Chrome). The matchers have been removed.
+ * Without them procedure rows have no runtime discovery path, so
+ * creating new ones is pointless.
+ *
+ * The pattern miner still runs on the 24h cron. Its output is
+ * discarded by this no-op. Post-launch phase C will bridge the
+ * miner to the synthesis autolearner's `synthesis:candidate` event
+ * bus so mined patterns flow into the code-skill pipeline and
+ * become `.ts` files the runtime registry picks up. Until then,
+ * pattern data is cheap to keep producing but unused.
+ *
+ * This file retains its public export `synthesizeSkills` with the
+ * same signature so its single caller (`runImprovementCycle` in
+ * improve.ts) doesn't need edits.
  */
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ModelRouter } from '../../execution/model-router.js';
-import type { MinedPattern, SynthesizedSkillMetadata, SynthesisResult } from './types.js';
-import { callLLM, parseJSONResponse, calculateCostCents } from './llm-helper.js';
+import type { MinedPattern, SynthesisResult } from './types.js';
 import { logger } from '../logger.js';
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const MAX_SKILLS_PER_RUN = 5;
-
-// ============================================================================
-// PROMPTS
-// ============================================================================
-
-const SYNTHESIS_SYSTEM_PROMPT = `You are a skill synthesis system. Given a recurring tool-call pattern from an AI agent's execution history, generate a named skill with metadata.
-
-Respond with ONLY a JSON object:
-{
-  "name": "short_snake_case_name",
-  "description": "1-2 sentence description of what this skill accomplishes",
-  "preconditions": ["condition that must be true before using this skill"],
-  "effects": ["outcome after successful execution"]
-}
-
-Rules:
-- Name should be descriptive and unique (e.g., "verify_then_send_email", "research_and_summarize")
-- Preconditions describe what inputs or state are needed
-- Effects describe what changes after successful execution
-- Be concise and actionable
-- Focus on the BUSINESS PURPOSE, not the technical tool names`;
-
-function buildSynthesisPrompt(pattern: MinedPattern): string {
-  return `Tool sequence pattern (appears in ${pattern.support} tasks, ${Math.round(pattern.avgSuccessRate * 100)}% success rate):
-
-${pattern.toolSequence.map((t, i) => `${i + 1}. ${t}`).join('\n')}
-
-Generate a named skill for this pattern.`;
-}
-
-// ============================================================================
-// DEDUPLICATION
-// ============================================================================
-
-interface ExistingSkill {
-  id: string;
-  definition: { tool_sequence?: string[] };
-}
-
-function isDuplicate(pattern: MinedPattern, existingSkills: ExistingSkill[]): boolean {
-  for (const skill of existingSkills) {
-    const existingSequence = skill.definition.tool_sequence;
-    if (!existingSequence || existingSequence.length === 0) continue;
-
-    if (
-      existingSequence.length === pattern.toolSequence.length &&
-      existingSequence.every((t, i) => t === pattern.toolSequence[i])
-    ) {
-      return true;
-    }
-
-    const overlapCount = pattern.toolSequence.filter((t) => existingSequence.includes(t)).length;
-    const overlapRatio = overlapCount / Math.max(pattern.toolSequence.length, existingSequence.length);
-    if (overlapRatio >= 0.8) return true;
-  }
-
-  return false;
-}
-
-// ============================================================================
-// MAIN SYNTHESIZER
-// ============================================================================
-
 /**
- * Synthesize skills from mined patterns.
+ * Deprecated — returns a zero-work SynthesisResult so the improvement
+ * cycle's metric aggregator sees "0 skills created" without erroring
+ * out. Phase C (post-launch) will replace this with a bridge that
+ * emits synthesis:candidate events from each MinedPattern so the
+ * code-skill autolearner can generate a real handler.
  */
 export async function synthesizeSkills(
-  db: DatabaseAdapter,
-  router: ModelRouter,
-  workspaceId: string,
-  agentId: string,
-  patterns: MinedPattern[]
+  _db: DatabaseAdapter,
+  _router: ModelRouter,
+  _workspaceId: string,
+  _agentId: string,
+  patterns: MinedPattern[],
 ): Promise<SynthesisResult> {
-  if (patterns.length === 0) {
-    return { tracesAnalyzed: 0, patternsFound: 0, skillsCreated: 0, duplicatesSkipped: 0, tokensUsed: 0, costCents: 0 };
+  if (patterns.length > 0) {
+    logger.debug(
+      { patternCount: patterns.length },
+      '[SkillSynthesizer] deprecated path — patterns discarded, bridge to autolearner pending (phase C)',
+    );
   }
-
-  // Fetch existing skills for dedup
-  const { data: existingData } = await db
-    .from('agent_workforce_skills')
-    .select('id, definition')
-    .eq('workspace_id', workspaceId)
-    .eq('is_active', 1);
-
-  const existingSkills: ExistingSkill[] = (existingData ?? []).map((d) => {
-    const row = d as Record<string, unknown>;
-    let definition: { tool_sequence?: string[] } = {};
-    try {
-      definition = typeof row.definition === 'string' ? JSON.parse(row.definition) : (row.definition as { tool_sequence?: string[] }) || {};
-    } catch { /* empty */ }
-    return { id: row.id as string, definition };
-  });
-
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let skillsCreated = 0;
-  let duplicatesSkipped = 0;
-
-  const toProcess = patterns.slice(0, MAX_SKILLS_PER_RUN);
-
-  for (const pattern of toProcess) {
-    if (isDuplicate(pattern, existingSkills)) {
-      duplicatesSkipped++;
-      continue;
-    }
-
-    const result = await callLLM(router, {
-      system: SYNTHESIS_SYSTEM_PROMPT,
-      userMessage: buildSynthesisPrompt(pattern),
-      maxTokens: 300,
-      temperature: 0.3,
-    });
-
-    if (!result.success) {
-      logger.error({ error: result.error }, '[SkillSynthesizer] LLM call failed');
-      continue;
-    }
-
-    totalInputTokens += result.inputTokens;
-    totalOutputTokens += result.outputTokens;
-
-    const metadata = parseJSONResponse<SynthesizedSkillMetadata>(result.content);
-    if (!metadata || !metadata.name || !metadata.description) {
-      logger.error({ content: result.content }, '[SkillSynthesizer] Invalid metadata response');
-      continue;
-    }
-
-    try {
-      const definition = JSON.stringify({
-        prompt_template: metadata.description,
-        tool_sequence: pattern.toolSequence,
-        preconditions: metadata.preconditions,
-        effects: metadata.effects,
-        verification_criteria: [],
-      });
-
-      await db
-        .from('agent_workforce_skills')
-        .insert({
-          workspace_id: workspaceId,
-          name: metadata.name,
-          description: metadata.description,
-          skill_type: 'procedure',
-          source_type: 'synthesized',
-          definition,
-          agent_ids: JSON.stringify([agentId]),
-          pattern_support: pattern.support,
-        });
-
-      skillsCreated++;
-      logger.info({ skillName: metadata.name, support: pattern.support, agentId }, '[SkillSynthesizer] Skill synthesized');
-    } catch (err) {
-      logger.error({ err, skillName: metadata.name }, '[SkillSynthesizer] Couldn\'t create skill');
-    }
-  }
-
-  const costCents = calculateCostCents(totalInputTokens, totalOutputTokens);
-
   return {
     tracesAnalyzed: patterns.length > 0 ? patterns[0].sourceTaskIds.length : 0,
     patternsFound: patterns.length,
-    skillsCreated,
-    duplicatesSkipped,
-    tokensUsed: totalInputTokens + totalOutputTokens,
-    costCents,
+    skillsCreated: 0,
+    duplicatesSkipped: 0,
+    tokensUsed: 0,
+    costCents: 0,
   };
 }
