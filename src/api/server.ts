@@ -222,6 +222,81 @@ export function createServer(deps: ServerDeps): {
     }
   });
 
+  // Wiki layer (Karpathy-style markdown synthesis above raw KB chunks).
+  // The dashboard's /dashboard/wiki page proxies these through the
+  // cloud → tunnel → daemon path the same way it reads /api/knowledge.
+  // List + read are unauthenticated within the daemon (the tunnel's
+  // existing JWT covers it); a future follow-up can lock this down
+  // further if we ever expose the daemon directly.
+  app.get('/api/wiki/pages', async (_req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { listWikiPages } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof listWikiPages>[0];
+      const result = await listWikiPages(ctx, {});
+      if (!result.success) {
+        res.status(500).json({ error: result.error });
+        return;
+      }
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/wiki/pages/:slug', async (req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { readWikiPage } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof readWikiPage>[0];
+      const result = await readWikiPage(ctx, { slug: req.params.slug });
+      if (!result.success) {
+        res.status(404).json({ error: result.error });
+        return;
+      }
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/wiki/index', async (_req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { readWikiIndex } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof readWikiIndex>[0];
+      const result = await readWikiIndex(ctx, {});
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get('/api/wiki/log', async (req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { readWikiLog } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof readWikiLog>[0];
+      const limit = parseInt((req.query.limit as string) || '50', 10);
+      const result = await readWikiLog(ctx, { limit });
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // Public tier endpoint (used by web UI Layout for feature gating + model status)
   app.get('/api/runtime/tier', async (_req, res) => {
     const tierValue = config.tier || 'free';
