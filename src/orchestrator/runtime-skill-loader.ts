@@ -152,7 +152,7 @@ function validateLoadedModule(mod: LoadedModule, scriptPath: string):
  * deny-list, not a full type system. False positives here are a fine
  * trade: a skill that looks suspicious should fail loud at load time.
  */
-const FORBIDDEN_SOURCE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+export const FORBIDDEN_SOURCE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bchild_process\b/, reason: 'child_process is not allowed in synthesized skills' },
   { pattern: /\bnode:child_process\b/, reason: 'node:child_process is not allowed' },
   { pattern: /\bprocess\.exit\b/, reason: 'process.exit is not allowed' },
@@ -164,7 +164,16 @@ const FORBIDDEN_SOURCE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bnode:net\b|\bnode:dgram\b|\bnode:http\s/, reason: 'raw network sockets are not allowed (use fetch)' },
 ];
 
-function lintSource(source: string, scriptPath: string): { ok: true } | { ok: false; reason: string } {
+/**
+ * Scan a TypeScript skill source for forbidden patterns. Exported so
+ * the synthesis generator can lint its own output before writing a
+ * single byte to disk — defense in depth on top of the lint that runs
+ * here at load time.
+ */
+export function lintSkillSource(
+  source: string,
+  scriptPath: string,
+): { ok: true } | { ok: false; reason: string } {
   for (const { pattern, reason } of FORBIDDEN_SOURCE_PATTERNS) {
     if (pattern.test(source)) {
       return { ok: false, reason: `${scriptPath}: ${reason}` };
@@ -177,6 +186,20 @@ function lintSource(source: string, scriptPath: string): { ok: true } | { ok: fa
 // Loader
 // ---------------------------------------------------------------------------
 
+/**
+ * Module-scoped pointer to the currently-running loader instance.
+ * The daemon only ever creates one per process, so one slot is enough.
+ * Exposed so the synthesis generator can trigger an immediate load
+ * after writing a new `.ts` file without waiting for the fs.watch
+ * debounce — the generator imports `getActiveRuntimeSkillLoader()`
+ * and calls `.loadFile(path)` synchronously in line.
+ */
+let activeLoader: RuntimeSkillLoader | null = null;
+
+export function getActiveRuntimeSkillLoader(): RuntimeSkillLoader | null {
+  return activeLoader;
+}
+
 export class RuntimeSkillLoader {
   private watcher: FSWatcher | null = null;
   private started = false;
@@ -188,6 +211,8 @@ export class RuntimeSkillLoader {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    activeLoader = this;
 
     await mkdir(this.opts.skillsDir, { recursive: true });
     await mkdir(this.opts.compiledDir, { recursive: true });
@@ -253,6 +278,13 @@ export class RuntimeSkillLoader {
     this.watcher?.close();
     this.watcher = null;
     this.started = false;
+    if (activeLoader === this) activeLoader = null;
+  }
+
+  /** Test-only: directly set this instance as the active loader. */
+  _setAsActive(): void {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    activeLoader = this;
   }
 
   private async handleWatcherEvent(eventType: string, tsPath: string): Promise<void> {
@@ -281,7 +313,7 @@ export class RuntimeSkillLoader {
     const slug = slugForPath(tsPath);
 
     const source = await readFile(tsPath, 'utf8');
-    const lint = lintSource(source, tsPath);
+    const lint = lintSkillSource(source, tsPath);
     if (!lint.ok) {
       logger.error({ tsPath, reason: lint.reason }, '[runtime-skill-loader] lint rejected');
       runtimeToolRegistry.unregisterByScriptPath(tsPath);
