@@ -60,7 +60,6 @@ export class TaskDistributor {
     }
 
     const bestPeer = await selectBestPeer(this.db, {
-      requiredModel: requirements.preferredModel || undefined,
       preferGpu: requirements.difficulty === 'complex',
       needsBrowser: requirements.needsBrowser,
       needsLocalFiles: requirements.needsLocalFiles,

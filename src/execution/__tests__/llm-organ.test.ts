@@ -239,10 +239,10 @@ describe('llm-organ', () => {
     });
 
     it('loads policy from the DB and passes it to the router', async () => {
+      // Agents never pin a model. Policy only carries hard constraints.
       const policy: AgentModelPolicy = {
-        default: 'grok-4',
-        purposes: { generation: 'claude-sonnet-4.6' },
         localOnly: false,
+        maxCostCents: 200,
       };
       const deps = makeDeps({
         agentPolicy: policy,

@@ -5,19 +5,18 @@
  */
 
 import { scoreDifficulty, type DifficultyLevel } from '../execution/difficulty-scorer.js';
-import { getAgentDefaultModel } from '../execution/execution-policy.js';
-import { MODEL_CATALOG } from '../lib/ollama-models.js';
 
 export interface TaskRequirements {
   needsBrowser: boolean;
   needsLocalFiles: boolean;
-  preferredModel: string | null;
   difficulty: DifficultyLevel;
   estimatedVramGB: number;
 }
 
 /**
  * Extract execution requirements from an agent config and task description.
+ * Agents never pin a model — the peer routing layer therefore reasons only
+ * about capabilities (browser, files, difficulty) rather than model size.
  */
 export function extractRequirements(
   agentConfig: Record<string, unknown>,
@@ -29,8 +28,6 @@ export function extractRequirements(
     t === 'read_file' || t === 'write_file' || t === 'list_directory' || t.startsWith('filesystem_')
   );
 
-  const preferredModel = getAgentDefaultModel(agentConfig) ?? null;
-
   const difficulty = scoreDifficulty({
     taskDescription,
     toolCount: tools.length,
@@ -38,19 +35,13 @@ export function extractRequirements(
     hasBrowserTools: needsBrowser,
   });
 
-  // Estimate VRAM from preferred model or default
-  let estimatedVramGB = 4; // default for a ~4b model
-  if (preferredModel) {
-    const catalogEntry = MODEL_CATALOG.find(m => m.tag === preferredModel);
-    if (catalogEntry) {
-      estimatedVramGB = catalogEntry.sizeGB;
-    }
-  }
+  // Rough VRAM envelope for a ~4B local model — tuned to the default
+  // Ollama footprint. Peer routing uses this as a lower-bound hint.
+  const estimatedVramGB = 4;
 
   return {
     needsBrowser,
     needsLocalFiles,
-    preferredModel,
     difficulty,
     estimatedVramGB,
   };

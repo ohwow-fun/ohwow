@@ -450,7 +450,7 @@ describe('Agent management tools', () => {
       id: 'uuid-1',
       name: 'daily-standup',
       system_prompt: 'You are a standup agent.',
-      config: '{"model":"claude-opus-4-6"}',
+      config: '{"tools_mode":"allowlist","tools_enabled":["list_tasks"]}',
     };
     const server = createMockServer();
     const client = createMockClient();

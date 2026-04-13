@@ -127,7 +127,7 @@ export function AgentDetail({ agentId, db, onBack, onMcpServers }: AgentDetailPr
   }, [db, agent, agentId]);
 
   const configFields = useMemo((): ConfigField[] => [
-    { key: 'model', label: 'Model', value: String(config.model_policy?.default || 'auto') },
+    { key: 'model', label: 'Model', value: 'router (auto)' },
     { key: 'temperature', label: 'Temperature', value: String(config.temperature ?? '0.7') },
     { key: 'max_tokens', label: 'Max tokens', value: String(config.max_tokens || '4096') },
     { key: 'requires_approval', label: 'Approval req', value: String(config.requires_approval ?? 'no') },
@@ -318,7 +318,7 @@ export function AgentDetail({ agentId, db, onBack, onMcpServers }: AgentDetailPr
           <Text>Failed:     <Text color="gray">{stats.failed_tasks || 0}</Text></Text>
           <Text>Tokens:     <Text color="gray">{(stats.tokens_used || 0).toLocaleString()}</Text></Text>
           <Text>Cost:       <Text color="gray">${((stats.cost_cents || 0) / 100).toFixed(2)}</Text></Text>
-          <Text>Model:      <Text color="gray">{config.model_policy?.default || 'auto'}</Text></Text>
+          <Text>Model:      <Text color="gray">router (auto)</Text></Text>
           {agent.description && <Text>Description: <Text color="gray">{agent.description}</Text></Text>}
         </Box>
       )}

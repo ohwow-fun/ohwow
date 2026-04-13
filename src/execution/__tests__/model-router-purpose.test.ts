@@ -157,57 +157,33 @@ describe('ModelRouter.selectForPurpose', () => {
       (router as unknown as { openrouter: ModelProvider }).openrouter = fakeOpenRouter;
     });
 
-    it('returns no model hint when the agent has no opinion', async () => {
+    it('returns no model hint when the call site has no preference', async () => {
       const result = await router.selectForPurpose({ purpose: 'reasoning' });
       expect(result.model).toBeUndefined();
     });
 
-    it('uses agent.default when no per-purpose override exists', async () => {
+    it('honors constraints.preferModel as the only opinion source', async () => {
       // grok-4.20 has no slash → inference returns null → the hint survives
       // to the result via the normal (non-inference) path.
-      const agent: AgentModelPolicy = { default: 'grok-4.20' };
-      const result = await router.selectForPurpose({ purpose: 'reasoning', agent });
-      expect(result.model).toBe('grok-4.20');
-    });
-
-    it('prefers agent.purposes[p] over agent.default', async () => {
-      const agent: AgentModelPolicy = {
-        default: 'grok-4.20',
-        purposes: { generation: 'claude-sonnet-4.6' },
-      };
-      const result = await router.selectForPurpose({ purpose: 'generation', agent });
-      // claude-sonnet-4.6 → infers anthropic → fake anthropic is configured
-      // and available → routes there directly with the hint preserved.
-      expect(result.model).toBe('claude-sonnet-4.6');
-      expect(result.provider.name).toBe('anthropic');
-    });
-
-    it('falls back to agent.default for unspecified purposes', async () => {
-      const agent: AgentModelPolicy = {
-        default: 'grok-4.20',
-        purposes: { generation: 'claude-sonnet-4.6' },
-      };
-      const result = await router.selectForPurpose({ purpose: 'critique', agent });
-      expect(result.model).toBe('grok-4.20');
-    });
-
-    it('constraints.preferModel wins over agent.purposes and agent.default', async () => {
-      const agent: AgentModelPolicy = {
-        default: 'grok-4.20',
-        purposes: { generation: 'claude-sonnet-4.6' },
-      };
       const result = await router.selectForPurpose({
-        purpose: 'generation',
-        agent,
-        constraints: { preferModel: 'claude-opus-4-6' },
+        purpose: 'reasoning',
+        constraints: { preferModel: 'grok-4.20' },
       });
-      expect(result.model).toBe('claude-opus-4-6');
+      expect(result.model).toBe('grok-4.20');
+    });
+
+    it('ignores an agent policy that has no hint-shaped fields', async () => {
+      // Agents never pin a model. Even with an AgentModelPolicy object,
+      // the only thing that can steer the model string is constraints.
+      const agent: AgentModelPolicy = { localOnly: false, maxCostCents: 100 };
+      const result = await router.selectForPurpose({ purpose: 'generation', agent });
+      expect(result.model).toBeUndefined();
     });
 
     it('treats "auto" as no hint', async () => {
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'auto' },
+        constraints: { preferModel: 'auto' },
       });
       expect(result.model).toBeUndefined();
     });
@@ -277,7 +253,7 @@ describe('ModelRouter.selectForPurpose', () => {
 
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'qwen3:0.6b' },
+        constraints: { preferModel: 'qwen3:0.6b' },
       });
 
       expect(result.provider.name).toBe('ollama');
@@ -297,7 +273,7 @@ describe('ModelRouter.selectForPurpose', () => {
 
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'qwen3:0.6b' },
+        constraints: { preferModel: 'qwen3:0.6b' },
       });
 
       // Should have fallen through to the mocked getProvider which returns anthropicStub.
@@ -315,7 +291,7 @@ describe('ModelRouter.selectForPurpose', () => {
 
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'llama3.1:8b' },
+        constraints: { preferModel: 'llama3.1:8b' },
       });
 
       expect(result.provider.name).toBe('anthropic');
@@ -332,7 +308,7 @@ describe('ModelRouter.selectForPurpose', () => {
 
       const result = await router.selectForPurpose({
         purpose: 'generation',
-        agent: { default: 'x-ai/grok-4.20' },
+        constraints: { preferModel: 'x-ai/grok-4.20' },
       });
 
       expect(result.provider.name).toBe('openrouter');
@@ -349,7 +325,7 @@ describe('ModelRouter.selectForPurpose', () => {
 
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'claude-sonnet-4-6' },
+        constraints: { preferModel: 'claude-sonnet-4-6' },
       });
 
       expect(result.provider.name).toBe('anthropic');
@@ -364,10 +340,8 @@ describe('ModelRouter.selectForPurpose', () => {
       };
       (router as unknown as { ollama: ModelProvider }).ollama = fakeOllama;
 
-      // Agent prefers a cloud model, but the call site overrides to a local.
       const result = await router.selectForPurpose({
         purpose: 'reasoning',
-        agent: { default: 'claude-sonnet-4-6' },
         constraints: { preferModel: 'llama3.1:8b' },
       });
 

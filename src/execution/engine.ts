@@ -116,7 +116,6 @@ import {
 import { detectAndPersistAnomalies } from './anomaly-monitoring.js';
 import { createDefaultToolRegistry } from './tool-dispatch/index.js';
 import type { ToolExecutionContext, ToolCallResult } from './tool-dispatch/index.js';
-import { getAgentDefaultModel } from './execution-policy.js';
 import {
   resolveAgentToolPolicy,
   filterToolsByPolicy,
@@ -153,38 +152,6 @@ const MODEL_MAP: Record<ClaudeModel, string> = {
   'claude-sonnet-4-5': 'claude-sonnet-4-5-20250929',
   'claude-haiku-4': 'claude-haiku-4-5-20251001',
 };
-
-/**
- * Map short model names and legacy aliases to OpenRouter catalog IDs.
- * Lets agents configured with 'claude-sonnet-4-5' or 'gemini' route correctly.
- */
-const OPENROUTER_MODEL_ALIASES: Record<string, string> = {
-  // Claude short names → latest OpenRouter IDs
-  'claude-sonnet-4-5': 'anthropic/claude-sonnet-4.6',
-  'claude-sonnet-4-5-20250929': 'anthropic/claude-sonnet-4.6',
-  'claude-haiku-4': 'anthropic/claude-haiku-4.5',
-  'claude-haiku-4-5-20251001': 'anthropic/claude-haiku-4.5',
-  'claude-opus-4': 'anthropic/claude-opus-4.6',
-  // Friendly short names → best catalog match
-  'grok': 'x-ai/grok-4.20',
-  'grok-fast': 'x-ai/grok-4.1-fast',
-  'gemini': 'google/gemini-3.1-flash-lite-preview',
-  'gemini-pro': 'google/gemini-3.1-pro-preview',
-  'gemini-flash': 'google/gemini-3-flash-preview',
-  'deepseek': 'deepseek/deepseek-v3.2',
-  'deepseek-r1': 'deepseek/deepseek-r1',
-  'qwen': 'qwen/qwen3.5-9b',
-  'qwen-flash': 'qwen/qwen3.5-flash-02-23',
-  'mimo': 'xiaomi/mimo-v2-flash',
-  'mimo-pro': 'xiaomi/mimo-v2-pro',
-  'devstral': 'mistralai/devstral-2512',
-  'glm': 'z-ai/glm-5.1',
-};
-
-/** Resolve a model name to a valid OpenRouter ID, or undefined if unknown */
-function resolveOpenRouterAlias(model: string): string | undefined {
-  return OPENROUTER_MODEL_ALIASES[model];
-}
 
 // Model tiers for per-iteration selection (from CURATED_OPENROUTER_MODELS)
 // Prioritize cost-effective models with reliable tool calling
@@ -837,10 +804,6 @@ export class RuntimeEngine {
       if (!agentData) throw new Error(`Agent not found: ${agentId}`);
       const agent = agentData;
       const agentConfig = typeof agent.config === 'string' ? JSON.parse(agent.config) : agent.config;
-      // Shape C: resolve the agent's preferred model from model_policy.default
-      // rather than reading the deprecated config.model pin. Legacy pins have
-      // been migrated by db/migrations/100-agent-model-policy.sql.
-      const agentModel: string | undefined = getAgentDefaultModel(agentConfig);
 
       const { data: taskData } = await this.db
         .from<TaskRow>('agent_workforce_tasks')
@@ -1200,7 +1163,11 @@ export class RuntimeEngine {
       });
 
       // 6. Call Claude
-      const modelId = MODEL_MAP[agentModel as ClaudeModel] || MODEL_MAP['claude-sonnet-4-5'];
+      // Agents never pin a model — the router (or the Anthropic SDK default)
+      // picks per task + iteration. `modelId` is only the starting model for
+      // the direct Anthropic SDK path; the router path picks dynamically
+      // inside `selectAgentModelForIteration`.
+      const modelId = MODEL_MAP['claude-sonnet-4-5'];
 
       // Connect MCP clients (global servers merged with per-agent servers)
       let mcpClients: McpClientManager | null = null;
@@ -1318,15 +1285,14 @@ export class RuntimeEngine {
       const llmCache = new LocalLLMCache(this.db, workspaceId);
       const systemPromptHash = crypto.createHash('sha256').update(systemPrompt).digest('hex');
 
-      // Decide execution path: model router (OpenRouter/Ollama/etc) vs direct Anthropic SDK
-      // Use model router when: no Anthropic API key, OR agent's resolved model isn't a Claude model
-      const agentModelIsLocal = agentModel
-        && !agentModel.startsWith('claude-');
-      const useModelRouter = agentModelIsLocal
-        ? !!this.modelRouter
-        : !this.config.anthropicApiKey && !!this.modelRouter;
+      // Decide execution path: model router (OpenRouter/Ollama/etc) vs direct Anthropic SDK.
+      // Use the router whenever no Anthropic key is configured and a router
+      // is available — the router handles OpenRouter, Ollama, and local
+      // models transparently and picks per iteration via difficulty +
+      // purpose. No per-agent pin is consulted.
+      const useModelRouter = !this.config.anthropicApiKey && !!this.modelRouter;
       if (!useModelRouter && !this.anthropic) {
-        throw new Error(`Agent "${agent.name}" requires an Anthropic API key for model ${agentModel || 'claude-sonnet-4-5'}, but none is configured. Add a key in Settings or switch the agent to a local model.`);
+        throw new Error(`Agent "${agent.name}" has no model provider configured. Add an Anthropic or OpenRouter API key in Settings, or enable Ollama for local inference.`);
       }
 
       // Budget guard: pre-flight check for external providers
@@ -1396,7 +1362,6 @@ export class RuntimeEngine {
             desktopOptions,
             difficulty,
             gitEnabled: bashEnabled,
-            agentModel,
             skillsDocument: skillsDoc || undefined,
           });
           fullContent = routerResult.fullContent;
@@ -1834,7 +1799,7 @@ export class RuntimeEngine {
         : useModelRouter
         ? 0
         : calculateCostCents(
-            (agentModel as ClaudeModel) || 'claude-sonnet-4-5',
+            'claude-sonnet-4-5',
             totalInputTokens,
             totalOutputTokens,
           );
@@ -1886,7 +1851,7 @@ export class RuntimeEngine {
         status: finalStatus,
         output: cleanContent,
         response_type: responseType || null,
-        model_used: (agentConfig as Record<string, unknown>)._resolvedModel as string || agentModel,
+        model_used: (agentConfig as Record<string, unknown>)._resolvedModel as string || (useModelRouter ? undefined : modelId),
         tokens_used: totalTokens,
         cost_cents: costCents,
         completed_at: new Date().toISOString(),
@@ -2022,7 +1987,7 @@ export class RuntimeEngine {
         task_id: taskId,
         role: 'assistant',
         content: cleanContent,
-        metadata: JSON.stringify({ model: agentModel, tokensUsed: totalTokens }),
+        metadata: JSON.stringify({ tokensUsed: totalTokens }),
       });
 
       // Update agent stats with running averages
@@ -2075,7 +2040,7 @@ export class RuntimeEngine {
         p_description: `${totalTokens} tokens, ${durationSeconds}s`,
         p_agent_id: agentId,
         p_task_id: taskId,
-        p_metadata: { runtime: true, model: agentModel },
+        p_metadata: { runtime: true },
       });
 
       if (finalStatus === 'needs_approval') {
@@ -2262,7 +2227,7 @@ export class RuntimeEngine {
         tokensUsed: totalTokens,
         costCents,
         durationSeconds,
-        modelUsed: agentModel,
+        modelUsed: (agentConfig as Record<string, unknown>)._resolvedModel as string | undefined,
         startedAt: new Date(startTime).toISOString(),
         completedAt: new Date().toISOString(),
         taskOutput: cleanContent || undefined,
@@ -2562,7 +2527,6 @@ export class RuntimeEngine {
     desktopOptions?: Partial<DesktopServiceOptions>;
     difficulty?: 'simple' | 'moderate' | 'complex';
     gitEnabled?: boolean;
-    agentModel?: string;
     /** When present, forces tool_choice: 'required' on first iteration */
     skillsDocument?: string;
   }): Promise<{ fullContent: string; totalInputTokens: number; totalOutputTokens: number; reactTrace: LocalReActStep[]; providerCostCents?: number; actualModelUsed?: string }> {
@@ -2591,13 +2555,9 @@ export class RuntimeEngine {
       difficulty: opts.difficulty,
     });
 
-    // Resolve agent model to a valid provider-specific ID
-    // Handles: 'claude-sonnet-4-5' → 'anthropic/claude-sonnet-4.6', 'gemini' → 'google/gemini-...', etc.
-    const resolvedAgentModel = this.resolveAgentModelForProvider(opts.agentModel, provider);
-    // Only pin to the resolved model if the agent config was ALREADY an OpenRouter ID (user explicitly chose it).
-    // Aliased models (claude-sonnet-4-5 → anthropic/claude-sonnet-4.6) should use dynamic per-iteration selection.
-    const isExplicitOpenRouterModel = opts.agentModel?.includes('/') ?? false;
-    const pinnedModel = isExplicitOpenRouterModel ? resolvedAgentModel : undefined;
+    // Agents never pin a model — the router picks dynamically per iteration
+    // via `selectAgentModelForIteration`, combining difficulty, iteration
+    // index, SOP presence, and vision needs.
     const needsVision = false; // TODO: detect from task/tools when vision tasks are supported
     let actualModelUsed: string | undefined;
 
@@ -2648,8 +2608,8 @@ export class RuntimeEngine {
         try {
           const providerWithTools = provider as ModelProvider & { createMessageWithTools?: typeof provider.createMessageWithTools };
           if (!providerWithTools.createMessageWithTools) {
-            // Provider doesn't support tools — text-only fallback
-            const fallbackModel = resolvedAgentModel || undefined;
+            // Provider doesn't support tools — text-only fallback.
+            // No model pin: let the provider use its configured default.
             const textResponse = await provider.createMessage({
               system: opts.systemPrompt,
               messages: loopMessages.map(m => ({
@@ -2658,7 +2618,6 @@ export class RuntimeEngine {
               })),
               maxTokens: opts.maxTokens,
               temperature: opts.temperature,
-              model: fallbackModel,
             });
             return {
               fullContent: textResponse.content,
@@ -2668,12 +2627,13 @@ export class RuntimeEngine {
             };
           }
 
-          // Dynamic per-iteration model selection (mirrors orchestrator's selectModelForIteration)
-          // pinnedModel only set when agent config has explicit OpenRouter ID (e.g., 'x-ai/grok-4.20')
-          // Aliased models (claude-sonnet-4-5) get dynamic selection across tiers
+          // Dynamic per-iteration model selection.
+          // Agents never pin — the router picks across tiers based on
+          // iteration index, difficulty, error signal, SOP presence, and
+          // vision requirements.
           const iterModel = this.selectAgentModelForIteration(
             iteration, opts.difficulty, consecutiveParseErrors > 0, !!opts.skillsDocument,
-            needsVision, pinnedModel, provider,
+            needsVision, provider,
           );
           if (!actualModelUsed && iterModel) actualModelUsed = iterModel;
           logger.debug({ model: iterModel, iteration, provider: provider.name, difficulty: opts.difficulty }, '[engine] agent iteration model');
@@ -3104,38 +3064,11 @@ export class RuntimeEngine {
   // ==========================================================================
 
   /**
-   * Resolve an agent's configured model to a valid provider-specific ID.
-   * Handles: OpenRouter IDs (pass-through), short aliases (map), Ollama tags (pass-through),
-   * legacy Claude names (map to OpenRouter).
-   */
-  private resolveAgentModelForProvider(
-    agentModel: string | undefined,
-    provider: ModelProvider,
-  ): string | undefined {
-    if (!agentModel) return undefined;
-
-    // Already a valid OpenRouter ID (provider/model format)
-    if (agentModel.includes('/')) return agentModel;
-
-    // Map known aliases to OpenRouter catalog IDs
-    const resolved = resolveOpenRouterAlias(agentModel);
-    if (resolved && provider.name === 'openrouter') return resolved;
-
-    // For Ollama, model names like 'qwen3:4b' are valid as-is
-    if (provider.name === 'ollama') return agentModel;
-
-    // For Anthropic SDK, the original name works (handled by MODEL_MAP elsewhere)
-    if (provider.name === 'anthropic') return agentModel;
-
-    // Unknown model for this provider — let provider use its default
-    logger.debug({ agentModel, provider: provider.name }, '[engine] unknown agent model, using provider default');
-    return undefined;
-  }
-
-  /**
-   * Per-iteration model selection for agents.
-   * Mirrors the orchestrator's selectModelForIteration() pattern but catalog-aware,
-   * picking from multiple model tiers based on task needs per iteration.
+   * Per-iteration model selection for agents. Picks from the model tiers
+   * below based on iteration index, task difficulty, whether earlier
+   * iterations produced parse errors, whether an SOP procedure is in the
+   * prompt, and whether vision is required. No per-agent pin is consulted —
+   * the router owns this decision entirely.
    */
   private selectAgentModelForIteration(
     iteration: number,
@@ -3143,12 +3076,8 @@ export class RuntimeEngine {
     hasErrors: boolean,
     hasSOP: boolean,
     needsVision: boolean,
-    resolvedModel: string | undefined,
     provider: ModelProvider,
   ): string | undefined {
-    // If agent has an explicit provider-valid model, respect user choice
-    if (resolvedModel) return resolvedModel;
-
     // For non-OpenRouter providers, let them use their own default
     if (provider.name !== 'openrouter') return undefined;
 

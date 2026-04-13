@@ -109,26 +109,20 @@ export const PURPOSE_DEFAULTS: Record<Exclude<Purpose, OperationType>, Execution
 };
 
 /**
- * Per-agent model policy. An agent is a sub-orchestrator: it picks a model
- * per sub-task via the `llm` organ. This policy describes the preferences and
- * constraints the agent carries into every LLM call. Resolution order is:
+ * Per-agent model policy. Agents NEVER pin a model — the router picks per
+ * sub-task. This policy only exposes hard constraints the router must honor
+ * while choosing on the agent's behalf.
  *
- *   1. call-site constraints (tightest win)
- *   2. `purposes[purpose]`
- *   3. `default`
- *   4. workspace `PURPOSE_DEFAULTS[purpose]`
- *   5. workspace `DEFAULT_POLICIES[operationType]`
- *   6. router internal fallback chain
+ * Resolution order for a concrete model string:
  *
- * Model strings are optional throughout — "auto" or undefined defers to the
- * router's own selection. `localOnly` and `maxCostCents` are hard constraints
- * the router must honor.
+ *   1. call-site constraints (tightest win, e.g. `preferModel`)
+ *   2. workspace `PURPOSE_DEFAULTS[purpose]`
+ *   3. workspace `DEFAULT_POLICIES[operationType]`
+ *   4. router internal fallback chain
+ *
+ * `localOnly` and `maxCostCents` are hard constraints the router must honor.
  */
 export interface AgentModelPolicy {
-  /** Default model id for this agent. `"auto"` or omitted defers to the router. */
-  default?: string | 'auto';
-  /** Per-purpose model id overrides. Composed on top of `default`. */
-  purposes?: Partial<Record<Purpose, string | 'auto'>>;
   /** Hard constraint: force local inference for this agent regardless of purpose. */
   localOnly?: boolean;
   /** Hard constraint: reject calls that would exceed this cost in cents. */
@@ -140,7 +134,7 @@ export interface AgentModelPolicy {
 /**
  * Resolve the effective ExecutionPolicy for a Purpose, honoring agent-level
  * constraints. Returns the shape-level policy (modelSource / fallback); the
- * concrete model string is resolved later by ModelRouter via agent.purposes.
+ * concrete model string is picked by ModelRouter later.
  */
 export function resolvePurposePolicy(
   purpose: Purpose,
@@ -166,21 +160,6 @@ export function resolvePurposePolicy(
 }
 
 /**
- * Resolve the concrete model string an agent prefers for a purpose. Returns
- * undefined when the agent has no opinion and the router should pick. Returns
- * `"auto"` when the agent has explicitly deferred to the router.
- */
-export function resolveAgentModelString(
-  purpose: Purpose,
-  agent?: AgentModelPolicy,
-): string | undefined {
-  if (!agent) return undefined;
-  const perPurpose = agent.purposes?.[purpose];
-  if (perPurpose) return perPurpose;
-  return agent.default;
-}
-
-/**
  * Read the AgentModelPolicy from an agent config blob (parsed JSON). Returns
  * undefined when the blob is missing or malformed. This is the single choke
  * point for "what model policy does this agent carry" — do not reach into
@@ -194,18 +173,8 @@ export function getAgentModelPolicy(
   const cfg = agentConfig as { model_policy?: unknown };
   const raw = cfg.model_policy;
   if (!raw || typeof raw !== 'object') return undefined;
-  return raw as AgentModelPolicy;
-}
-
-/**
- * Convenience: the default model string an agent prefers across purposes.
- * Returns undefined when no policy exists or the default is "auto"/missing.
- * Use this in legacy call sites that still need a single string — it reads
- * from `model_policy.default` and never from the deprecated `config.model`.
- */
-export function getAgentDefaultModel(agentConfig: unknown): string | undefined {
-  const policy = getAgentModelPolicy(agentConfig);
-  if (!policy?.default) return undefined;
-  if (policy.default === 'auto') return undefined;
-  return policy.default;
+  // Strip any legacy `default` / `purposes` pins that may still be in old
+  // rows — per-agent pinning is gone, the router owns the choice.
+  const { localOnly, maxCostCents, escalate } = raw as AgentModelPolicy;
+  return { localOnly, maxCostCents, escalate };
 }

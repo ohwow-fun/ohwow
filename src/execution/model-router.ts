@@ -11,7 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getWorkingNumCtx } from '../lib/ollama-models.js';
 import { CLAUDE_CONTEXT_LIMITS } from './ai-types.js';
 import type { AgentModelPolicy, OperationType, Purpose } from './execution-policy.js';
-import { resolveAgentModelString, resolvePolicy, resolvePurposePolicy, shouldPreferLocal } from './execution-policy.js';
+import { resolvePolicy, resolvePurposePolicy, shouldPreferLocal } from './execution-policy.js';
 import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import { MLXProvider } from './providers/mlx-provider.js';
@@ -1985,9 +1985,10 @@ export class ModelRouter {
     const policy = resolvePurposePolicy(purpose, agent);
 
     // Concrete model string preference (may be undefined, meaning "router picks").
-    const preferredModel =
-      constraints?.preferModel ?? resolveAgentModelString(purpose, agent);
-    const modelHint = preferredModel && preferredModel !== 'auto' ? preferredModel : undefined;
+    // Agents never pin a model — only call-site constraints express a preference.
+    const modelHint = constraints?.preferModel && constraints.preferModel !== 'auto'
+      ? constraints.preferModel
+      : undefined;
 
     // Hard constraint: localOnly from either the agent or the call site clamps
     // the modelSource for this selection without mutating router state.
