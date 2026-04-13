@@ -1706,10 +1706,11 @@ export class LocalOrchestrator {
     // Flush brain experience stream for cross-session persistence
     await this.brain?.flush();
 
-    // Fire-and-forget: track skill usage (Anthropic path)
-    if (executedToolCalls.size >= 3) {
-      this.trackSkillUsage(executedToolCalls).catch(() => {});
-    }
+    // NOTE: trackSkillUsage() removed — code skills have their own
+    // success_count/fail_count metrics path in runtime-skill-metrics.ts,
+    // driven by tool-executor on every dispatch. The deleted method
+    // was specific to procedure skills' EMA rolling-average
+    // success_rate, which is no longer a concept in the runtime.
 
     yield {
       type: 'done',
@@ -2627,10 +2628,9 @@ export class LocalOrchestrator {
       extractGoalCheckpoints(goalDeps, conversationId, userMessage, fullContent, this.exchangeCount).catch(() => {});
     }
 
-    // Fire-and-forget: track skill success/failure based on executed tool sequence
-    if (executedToolCalls.size >= 3) {
-      this.trackSkillUsage(executedToolCalls).catch(() => {});
-    }
+    // NOTE: trackSkillUsage() removed — see the comment further up
+    // at the Anthropic-path call site. Code skills track success/fail
+    // via runtime-skill-metrics.ts on every tool dispatch.
 
     await this.brain?.flush();
 
@@ -2642,43 +2642,15 @@ export class LocalOrchestrator {
     };
   }
 
-  /** Match executed tools against known procedure skills and update success_rate */
-  private async trackSkillUsage(executedToolCalls: Map<string, ToolResult>): Promise<void> {
-    const executedNames = [...executedToolCalls.keys()];
-    const allSucceeded = [...executedToolCalls.values()].every(r => r.success);
-
-    const { data: procedureSkills } = await this.db.from('agent_workforce_skills')
-      .select('id, definition, skill_type')
-      .eq('workspace_id', this.workspaceId)
-      .eq('is_active', 1)
-      .eq('skill_type', 'procedure');
-
-    if (!procedureSkills) return;
-
-    for (const skill of procedureSkills as Array<{ id: string; definition: string; skill_type: string }>) {
-      try {
-        const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition) : skill.definition;
-        if (!def.tool_sequence || !Array.isArray(def.tool_sequence)) continue;
-        const skillTools = def.tool_sequence.map((s: string | { tool: string }) => typeof s === 'string' ? s : s.tool);
-        // Subsequence match: all skill tools must appear in executed tools
-        if (skillTools.length < 3) continue;
-        const isMatch = skillTools.every((t: string) => executedNames.includes(t));
-        if (!isMatch) continue;
-
-        // EMA update (alpha=0.1) — same formula as cloud's recordUsage
-        const { data: current } = await this.db.from('agent_workforce_skills')
-          .select('success_rate').eq('id', skill.id).single();
-        const prevRate = (current as Record<string, unknown>)?.success_rate as number ?? (allSucceeded ? 1 : 0);
-        const newRate = prevRate * 0.9 + (allSucceeded ? 1 : 0) * 0.1;
-        await this.db.from('agent_workforce_skills').update({
-          success_rate: Math.round(newRate * 10000) / 10000,
-          last_used_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }).eq('id', skill.id);
-        logger.debug({ skillId: skill.id, success: allSucceeded, newRate: newRate.toFixed(4) }, '[sops] Skill usage tracked');
-      } catch { /* malformed definition or DB error */ }
-    }
-  }
+  // trackSkillUsage() removed in the skill-unification refactor —
+  // see /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
+  // Used to update an EMA rolling-average success_rate on
+  // `skill_type='procedure'` rows whenever the executed tool list
+  // happened to contain a procedure's full tool_sequence. Never ran
+  // for any non-degenerate skill (all active procedure skills had
+  // single-tool tool_sequences, and the threshold was `length >= 3`,
+  // so the hot path was actually unreachable in practice). Code
+  // skills use runtime-skill-metrics.ts on every tool dispatch.
 
   private async *runOllamaToolLoop(
     userMessage: string,
