@@ -368,6 +368,18 @@ export async function buildTargetedPrompt(
     dynamicPart = buildDynamicContext(args) + buildOnboardingAddendum(agents.length);
   }
 
+  // Team-member awareness safety net. When someone introduces themselves
+  // in a fresh chat ("Hi, I'm Mario"), the orchestrator should check
+  // whether they're a registered team_member with a guide agent and
+  // activate that guide's persona on the session. The cloud chat route
+  // already forwards personaAgentId directly when a cloud-authenticated
+  // team member opens chat, so this rule is a fallback for cases where
+  // the persona pre-activation path didn't fire (local TUI, channel
+  // chat, or a first turn that skipped the cloud proxy).
+  staticPart += `\n\n## Team member self-introduction
+
+If the user introduces themselves with a name on the first turn of a new conversation, call list_team_members. If exactly one matches by name and has an assigned_guide_agent_id, call activate_guide_persona with that team_member_id BEFORE continuing the reply. From that point on the conversation runs as that member's Chief of Staff agent. If the match is ambiguous (multiple candidates) ask them to confirm their full name before activating. If there is no match, continue as the orchestrator without pressure — they may simply be a visitor.`;
+
   return { staticPart, dynamicPart };
 }
 

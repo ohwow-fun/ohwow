@@ -28,6 +28,60 @@ import { logger } from '../../lib/logger.js';
 import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
 import { activateConversationPersona } from '../conversation-persona.js';
 
+/**
+ * Fire-and-forget sync of a team_member row to cloud Supabase. Cloud has
+ * its own agent_workforce_team_members table; for a member to use their
+ * own cloud account (invite → accept → chat with their guide agent) the
+ * cloud side needs to know their id, email, and assigned_guide_agent_id.
+ * Never throws — upstream failure does not break the local write.
+ */
+async function syncTeamMemberUpstream(
+  ctx: LocalToolContext,
+  action: 'upsert' | 'delete',
+  payload: Record<string, unknown> & { id: string },
+): Promise<void> {
+  if (!ctx.controlPlane) return;
+  try {
+    const result = await ctx.controlPlane.reportResource('team_member', action, payload);
+    if (!result.ok) {
+      logger.debug({ action, id: payload.id, error: result.error }, '[team] team_member sync deferred');
+    }
+  } catch (err) {
+    logger.warn({ err, action, id: payload.id }, '[team] team_member sync threw');
+  }
+}
+
+/** Convert a local team_members row into the payload shape the cloud expects. */
+function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unknown> & { id: string } {
+  const id = row.id as string;
+  let skills: unknown = [];
+  if (typeof row.skills === 'string') {
+    try {
+      skills = JSON.parse(row.skills);
+    } catch {
+      skills = [];
+    }
+  } else if (Array.isArray(row.skills)) {
+    skills = row.skills;
+  }
+  return {
+    id,
+    name: row.name,
+    email: row.email ?? null,
+    role: row.role ?? null,
+    skills,
+    capacity: row.capacity_hours ?? null,
+    timezone: row.timezone ?? null,
+    phone: row.phone ?? null,
+    group_label: row.group_label ?? null,
+    avatar_url: row.avatar_url ?? null,
+    assigned_guide_agent_id: row.assigned_guide_agent_id ?? null,
+    cloud_invite_token: row.cloud_invite_token ?? null,
+    cloud_invite_status: row.cloud_invite_status ?? null,
+    onboarding_status: row.onboarding_status ?? 'not_started',
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -158,6 +212,9 @@ export async function createTeamMember(
   }
 
   const loaded = await loadTeamMember(ctx, id);
+  if (loaded) {
+    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(loaded));
+  }
   return {
     success: true,
     data: {
@@ -223,6 +280,9 @@ export async function updateTeamMember(
   if (error) return { success: false, error: error.message };
 
   const refreshed = await loadTeamMember(ctx, teamMemberId);
+  if (refreshed) {
+    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshed));
+  }
   return {
     success: true,
     data: {
@@ -342,6 +402,13 @@ export async function assignGuideAgent(
     .eq('id', teamMemberId)
     .eq('workspace_id', ctx.workspaceId);
 
+  // Sync the refreshed row upstream so the cloud chat route can see
+  // assigned_guide_agent_id when the member next opens their chat.
+  const refreshedForSync = await loadTeamMember(ctx, teamMemberId);
+  if (refreshedForSync) {
+    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshedForSync));
+  }
+
   // Auto-install this agent as the active persona for the current chat
   // session so the very next reply comes back in the guide's voice. Callers
   // that don't want the takeover can pass `activate_for_session: false`.
@@ -431,6 +498,14 @@ export async function sendCloudInvite(
     })
     .eq('id', teamMemberId)
     .eq('workspace_id', ctx.workspaceId);
+
+  // Reflect the new invite state upstream so the cloud team_member row
+  // is aware of the pending invitation. (Independent of the
+  // workspace_invites row the cloud route already created.)
+  const refreshedAfterInvite = await loadTeamMember(ctx, teamMemberId);
+  if (refreshedAfterInvite) {
+    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshedAfterInvite));
+  }
 
   try {
     await ctx.db.rpc('create_agent_activity', {

@@ -183,12 +183,24 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
   // Chat with SSE streaming
   router.post('/api/chat', async (req, res) => {
     try {
-      const { message, sessionId, model, modelSource, messages } = req.body as {
+      const {
+        message,
+        sessionId,
+        model,
+        modelSource,
+        messages,
+        personaAgentId,
+        chatUserEmail,
+        chatUserName,
+      } = req.body as {
         message?: string;
         sessionId?: string;
         model?: string;
         modelSource?: 'local' | 'cloud';
         messages?: { role: 'user' | 'assistant'; content: string }[];
+        personaAgentId?: string | null;
+        chatUserEmail?: string | null;
+        chatUserName?: string | null;
       };
 
       if (!message) {
@@ -197,6 +209,32 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       }
 
       const session = sessionId || crypto.randomUUID();
+
+      // Persona hint from the cloud chat proxy. When a team member is the
+      // authenticated user on the cloud side, the cloud route resolves
+      // their assigned guide agent and forwards the id here. We install
+      // the persona on the conversation metadata BEFORE runChat so the
+      // Layer B persona loader sees it on the very first turn — no
+      // round-trip through tool calls required, no orchestrator drift
+      // risk on turn zero.
+      if (personaAgentId && typeof personaAgentId === 'string') {
+        try {
+          const { activateConversationPersona } = await import('../../orchestrator/conversation-persona.js');
+          await activateConversationPersona(getDb(), session, personaAgentId);
+        } catch (err) {
+          // Persona activation failure is non-fatal — the chat still runs
+          // under the generic orchestrator if for any reason we can't
+          // install the persona (agent deleted, db error, etc.).
+          // eslint-disable-next-line no-console
+          console.warn('[api/chat] persona pre-activation failed', err);
+        }
+      }
+      // chatUserEmail and chatUserName are currently unused on the local
+      // side — they're threaded through the API for future use (e.g.
+      // orchestrator system prompt personalization, audit log) but do
+      // not affect routing today.
+      void chatUserEmail;
+      void chatUserName;
 
       // Set model override if provided
       if (model) {

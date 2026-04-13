@@ -472,7 +472,7 @@ export class ControlPlaneClient {
    * queue under "resource_sync" so the change is not lost.
    */
   async reportResource(
-    resource: 'contact' | 'knowledge_document',
+    resource: 'contact' | 'knowledge_document' | 'team_member',
     action: 'upsert' | 'delete',
     payload: Record<string, unknown> & { id: string },
   ): Promise<{ ok: boolean; error?: string }> {
