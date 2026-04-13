@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   findProfileByIdentity,
   parseLocalState,
@@ -181,5 +184,141 @@ describe('findProfileByIdentity', () => {
     // "Jesus" is an exact localProfileName on Profile 2 AND substring of
     // "Jesus Onoro" gaiaName on Profile 3. Exact must win.
     expect(findProfileByIdentity(fixture, 'Jesus')?.directory).toBe('Profile 2');
+  });
+});
+
+/**
+ * describeDebugChromeState walks the debug Chrome directory via
+ * fs.existsSync + fs.readFileSync. These tests set up a temp dir,
+ * monkey-patch the module's DEBUG_DATA_DIR into it via re-import
+ * trickery isn't worth it — instead we directly test the pure
+ * logic by reading a real temp tree and asserting the shape.
+ *
+ * Since `describeDebugChromeState` reads the module-level
+ * `DEBUG_DATA_DIR` constant directly, we test it indirectly by
+ * temporarily symlinking a temp dir at that location when possible,
+ * and otherwise cover its individual building blocks (parseLocalState,
+ * the profile-path existence check) above. A full integration test
+ * lives in the bootstrap CLI smoke test below.
+ */
+
+describe('describeDebugChromeState integration (temp dir)', () => {
+  let tempRoot: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    // Redirect HOME so the module's join(homedir(), '.ohwow', 'chrome-debug')
+    // lands in a temp dir. This works because the module evaluates
+    // DEBUG_DATA_DIR at import time — but vitest isolates modules per
+    // test file and we import fresh inside each test via dynamic import.
+    originalHome = process.env.HOME;
+    tempRoot = join(tmpdir(), `ohwow-chrome-lifecycle-test-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`);
+    mkdirSync(tempRoot, { recursive: true });
+    process.env.HOME = tempRoot;
+    // Clear the module cache so DEBUG_DATA_DIR recomputes against the new HOME.
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    try { rmSync(tempRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    vi.resetModules();
+  });
+
+  it('reports `missing` when the debug dir does not exist (fresh install)', async () => {
+    const { describeDebugChromeState } = await import('../chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    expect(state.status).toBe('missing');
+    if (state.status === 'missing') {
+      expect(state.reason).toMatch(/fresh install/i);
+      expect(state.bootstrapHint).toMatch(/ohwow chrome bootstrap/);
+    }
+  });
+
+  it('reports `corrupted` with an actionable issue list when Local State is missing', async () => {
+    const debugDir = join(tempRoot, '.ohwow', 'chrome-debug');
+    mkdirSync(debugDir, { recursive: true });
+    // No Local State, no profiles. Just an empty dir.
+    const { describeDebugChromeState } = await import('../chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    expect(state.status).toBe('corrupted');
+    if (state.status === 'corrupted') {
+      expect(state.detectedIssues.some((i) => i.includes('Local State'))).toBe(true);
+      expect(state.bootstrapHint).toMatch(/ohwow chrome bootstrap/);
+    }
+  });
+
+  it('reports `corrupted` when Local State exists but is unparseable JSON', async () => {
+    const debugDir = join(tempRoot, '.ohwow', 'chrome-debug');
+    mkdirSync(debugDir, { recursive: true });
+    writeFileSync(join(debugDir, 'Local State'), 'not valid json at all');
+    const { describeDebugChromeState } = await import('../chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    // Empty parseLocalState result → "no profile directories found" issue.
+    expect(state.status).toBe('corrupted');
+  });
+
+  it('reports `corrupted` when Local State lists ghost profiles pointing at deleted dirs', async () => {
+    const debugDir = join(tempRoot, '.ohwow', 'chrome-debug');
+    mkdirSync(debugDir, { recursive: true });
+    // Local State mentions Profile 99 but the directory doesn't exist.
+    writeFileSync(
+      join(debugDir, 'Local State'),
+      JSON.stringify({
+        profile: {
+          info_cache: {
+            'Profile 99': { user_name: 'ghost@gone.com', name: 'Ghost' },
+          },
+        },
+      }),
+    );
+    const { describeDebugChromeState } = await import('../chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    expect(state.status).toBe('corrupted');
+    if (state.status === 'corrupted') {
+      expect(state.detectedIssues.some((i) => i.toLowerCase().includes('disk'))).toBe(true);
+    }
+  });
+
+  it('reports `ready` with the right profile count when the dir is fully set up', async () => {
+    const debugDir = join(tempRoot, '.ohwow', 'chrome-debug');
+    mkdirSync(debugDir, { recursive: true });
+    // Create Profile 1 and Profile 2 directories so the existence
+    // check passes.
+    mkdirSync(join(debugDir, 'Profile 1'), { recursive: true });
+    mkdirSync(join(debugDir, 'Profile 2'), { recursive: true });
+    writeFileSync(
+      join(debugDir, 'Local State'),
+      JSON.stringify({
+        profile: {
+          info_cache: {
+            'Profile 1': { user_name: '', name: 'ohwow.fun' },
+            'Profile 2': { user_name: 'ing.jesusonoro@gmail.com', name: 'Jesus' },
+          },
+        },
+      }),
+    );
+    const { describeDebugChromeState } = await import('../chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    expect(state.status).toBe('ready');
+    if (state.status === 'ready') {
+      expect(state.profileCount).toBe(2);
+      expect(state.profiles.find((p) => p.directory === 'Profile 2')?.email).toBe('ing.jesusonoro@gmail.com');
+    }
+  });
+
+  it('listProfiles throws DEBUG_DIR_MISSING with a bootstrap hint on fresh install', async () => {
+    const { listProfiles, ChromeLifecycleError } = await import('../chrome-lifecycle.js');
+    try {
+      listProfiles();
+      expect.fail('listProfiles should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ChromeLifecycleError);
+      if (err instanceof ChromeLifecycleError) {
+        expect(err.code).toBe('DEBUG_DIR_MISSING');
+        expect(err.message).toMatch(/ohwow chrome bootstrap/);
+      }
+    }
   });
 });

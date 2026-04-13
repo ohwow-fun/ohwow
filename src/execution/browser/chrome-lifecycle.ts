@@ -102,6 +102,7 @@ const CHROME_BIN_LINUX = 'google-chrome';
 
 export type ChromeLifecycleErrorCode =
   | 'DEBUG_DIR_MISSING'
+  | 'DEBUG_DIR_CORRUPTED'
   | 'DEBUG_CHROME_SPAWN_FAILED'
   | 'DEBUG_CHROME_CDP_TIMEOUT'
   | 'DEBUG_CHROME_WRONG_DATA_DIR'
@@ -143,6 +144,30 @@ export interface DebugChromeHandle {
   pid: number;
   profileDirAtLaunch: string;
 }
+
+/**
+ * Diagnostic snapshot of the debug Chrome setup. Returned by
+ * `describeDebugChromeState()` for fallback-message generation in the
+ * orchestrator and for the bootstrap CLI's pre-flight check. Pure
+ * filesystem inspection — does not spawn or query CDP.
+ */
+export type DebugChromeState =
+  | {
+      status: 'missing';
+      reason: string;
+      bootstrapHint: string;
+    }
+  | {
+      status: 'corrupted';
+      reason: string;
+      bootstrapHint: string;
+      detectedIssues: string[];
+    }
+  | {
+      status: 'ready';
+      profileCount: number;
+      profiles: ProfileInfo[];
+    };
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-testable)
@@ -371,36 +396,102 @@ export async function listPageTargets(port: number): Promise<CdpPageTarget[]> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Shared actionable hint embedded in every DEBUG_DIR_MISSING /
+ * DEBUG_DIR_CORRUPTED error message. Tells the user exactly how to
+ * recover without forcing them to search the docs.
+ */
+const BOOTSTRAP_HINT =
+  "Run `ohwow chrome bootstrap` once to import your real Chrome profiles into ohwow's debug Chrome. " +
+  'The command quits your real Chrome (with confirmation), clonefile-copies the user-data-dir into ' +
+  `${DEBUG_DATA_DIR}, and verifies the result. Until then, browser tools fall back to an isolated bundled ` +
+  'Chromium with no logged-in sessions.';
+
+/**
+ * Pure filesystem inspection of the debug Chrome dir. Runtime callers
+ * use this to build actionable fallback messages without trying to
+ * spawn Chrome first. Returns a discriminated union the caller can
+ * switch on:
+ *
+ *   - `missing`: `~/.ohwow/chrome-debug/` doesn't exist at all. Fresh
+ *     install. Expected state on first boot.
+ *   - `corrupted`: dir exists but at least one critical file is
+ *     missing or unreadable (Local State, or zero profile directories
+ *     underneath). Needs re-bootstrap.
+ *   - `ready`: dir exists, Local State parses, at least one profile
+ *     directory is present. Runtime can spawn debug Chrome here.
+ */
+export function describeDebugChromeState(): DebugChromeState {
+  if (!existsSync(DEBUG_DATA_DIR)) {
+    return {
+      status: 'missing',
+      reason: `No debug Chrome dir at ${DEBUG_DATA_DIR} yet (fresh install).`,
+      bootstrapHint: BOOTSTRAP_HINT,
+    };
+  }
+
+  const issues: string[] = [];
+  const localStatePath = join(DEBUG_DATA_DIR, 'Local State');
+  if (!existsSync(localStatePath)) {
+    issues.push(`Missing Local State file at ${localStatePath}.`);
+  }
+
+  let profiles: ProfileInfo[] = [];
+  if (issues.length === 0) {
+    try {
+      const raw = readFileSync(localStatePath, 'utf8');
+      profiles = parseLocalState(raw, DEBUG_DATA_DIR);
+    } catch (err) {
+      issues.push(`Local State is unreadable or malformed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Verify at least one profile directory physically exists on disk
+  // (Local State can list ghost entries pointing at deleted dirs).
+  const livingProfiles = profiles.filter((p) => existsSync(p.path));
+  if (profiles.length > 0 && livingProfiles.length === 0) {
+    issues.push('Local State lists profiles but none of the referenced directories exist on disk.');
+  }
+
+  if (livingProfiles.length === 0 && issues.length === 0) {
+    issues.push(`No profile directories found under ${DEBUG_DATA_DIR}.`);
+  }
+
+  if (issues.length > 0) {
+    return {
+      status: 'corrupted',
+      reason: `Debug Chrome dir at ${DEBUG_DATA_DIR} is present but broken.`,
+      bootstrapHint: BOOTSTRAP_HINT,
+      detectedIssues: issues,
+    };
+  }
+
+  return { status: 'ready', profileCount: livingProfiles.length, profiles: livingProfiles };
+}
+
+/**
  * List every profile in the debug Chrome data dir, from the Local
  * State `profile.info_cache` map. This is the authoritative source
  * Chrome's own profile picker uses. Throws DEBUG_DIR_MISSING if the
- * debug dir doesn't exist — runtime never auto-creates it.
+ * debug dir doesn't exist, or DEBUG_DIR_CORRUPTED if it exists but
+ * is broken — runtime never auto-creates it.
  */
 export function listProfiles(): ProfileInfo[] {
-  if (!existsSync(DEBUG_DATA_DIR)) {
+  const state = describeDebugChromeState();
+  if (state.status === 'missing') {
     throw new ChromeLifecycleError(
       'DEBUG_DIR_MISSING',
-      `Debug Chrome dir not found at ${DEBUG_DATA_DIR}. Bootstrap it once before running ohwow browser tools. ` +
-      `(A CLI command for this is on the roadmap; for now, copy or symlink the profiles you want from your real ` +
-      `Chrome user-data-dir into ${DEBUG_DATA_DIR} while real Chrome is quit.)`,
+      `${state.reason} ${state.bootstrapHint}`,
       { debugDataDir: DEBUG_DATA_DIR },
     );
   }
-  const localStatePath = join(DEBUG_DATA_DIR, 'Local State');
-  if (!existsSync(localStatePath)) {
-    logger.warn({ path: localStatePath }, '[chrome-lifecycle] Local State missing, returning empty profile list');
-    return [];
-  }
-  try {
-    const raw = readFileSync(localStatePath, 'utf8');
-    return parseLocalState(raw, DEBUG_DATA_DIR);
-  } catch (err) {
-    logger.warn(
-      { err: err instanceof Error ? err.message : err },
-      '[chrome-lifecycle] Failed to parse Local State',
+  if (state.status === 'corrupted') {
+    throw new ChromeLifecycleError(
+      'DEBUG_DIR_CORRUPTED',
+      `${state.reason} Issues: ${state.detectedIssues.join('; ')}. ${state.bootstrapHint}`,
+      { debugDataDir: DEBUG_DATA_DIR, issues: state.detectedIssues },
     );
-    return [];
   }
+  return state.profiles;
 }
 
 /**
@@ -478,11 +569,19 @@ async function spawnDebugChrome(opts: {
   port: number;
   preferredProfile: string;
 }): Promise<DebugChromeHandle> {
-  if (!existsSync(DEBUG_DATA_DIR)) {
+  const state = describeDebugChromeState();
+  if (state.status === 'missing') {
     throw new ChromeLifecycleError(
       'DEBUG_DIR_MISSING',
-      `Debug Chrome dir not found at ${DEBUG_DATA_DIR}. Bootstrap it once before running ohwow browser tools.`,
+      `${state.reason} ${state.bootstrapHint}`,
       { debugDataDir: DEBUG_DATA_DIR },
+    );
+  }
+  if (state.status === 'corrupted') {
+    throw new ChromeLifecycleError(
+      'DEBUG_DIR_CORRUPTED',
+      `${state.reason} Issues: ${state.detectedIssues.join('; ')}. ${state.bootstrapHint}`,
+      { debugDataDir: DEBUG_DATA_DIR, issues: state.detectedIssues },
     );
   }
 

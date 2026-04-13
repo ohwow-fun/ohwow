@@ -717,6 +717,61 @@ if (subcommand === 'logs') {
   console.error('  stop  [<name>] [--all]                        Stop daemon for one workspace (or all)');
   console.error('  restart [<name>]                              Stop+start one workspace daemon');
   process.exit(1);
+} else if (subcommand === 'chrome') {
+  // `ohwow chrome bootstrap` — one-time import of the user's real
+  // Chrome profiles into ohwow's debug Chrome dir. Runtime never
+  // touches profile files; this CLI is the ONLY place that does.
+  const chromeSub = process.argv[3];
+  if (chromeSub === 'bootstrap') {
+    const { runChromeBootstrap } = await import('./execution/browser/chrome-bootstrap.js');
+    const yes = process.argv.includes('--yes') || process.argv.includes('-y');
+    const dryRun = process.argv.includes('--dry-run');
+    const result = await runChromeBootstrap({ yes, dryRun });
+    if (!result.ok) {
+      if (result.failedBackupPath) {
+        console.error(`\nFailed clone preserved at: ${result.failedBackupPath}`);
+      }
+      process.exit(1);
+    }
+    process.exit(0);
+  } else if (chromeSub === 'status') {
+    const { describeDebugChromeState, DEBUG_DATA_DIR } = await import('./execution/browser/chrome-lifecycle.js');
+    const state = describeDebugChromeState();
+    console.log('');
+    console.log(`ohwow debug Chrome dir: ${DEBUG_DATA_DIR}`);
+    console.log(`status: ${state.status}`);
+    if (state.status === 'missing') {
+      console.log(`reason: ${state.reason}`);
+      console.log(`hint:   ${state.bootstrapHint}`);
+    } else if (state.status === 'corrupted') {
+      console.log(`reason: ${state.reason}`);
+      for (const issue of state.detectedIssues) {
+        console.log(`  - ${issue}`);
+      }
+      console.log(`hint:   ${state.bootstrapHint}`);
+    } else {
+      console.log(`profiles: ${state.profileCount}`);
+      for (const p of state.profiles) {
+        const email = p.email ?? '(no Google sign-in)';
+        const label = p.localProfileName ?? p.directory;
+        console.log(`  - ${p.directory.padEnd(12)} ${label.padEnd(16)} ${email}`);
+      }
+    }
+    console.log('');
+    process.exit(0);
+  } else {
+    console.log('Usage: ohwow chrome <bootstrap|status> [--yes] [--dry-run]');
+    console.log('');
+    console.log('  bootstrap   Quit real Chrome and clone its data dir into ohwow debug Chrome.');
+    console.log('              Explicit, one-time, user-consented. Runtime never does this.');
+    console.log('  status      Print the current debug Chrome state (profiles, issues, hints).');
+    console.log('');
+    console.log('Options:');
+    console.log('  --yes       Skip confirmation prompts (scripted use).');
+    console.log('  --dry-run   Show what would happen without doing anything destructive.');
+    console.log('');
+    process.exit(chromeSub ? 1 : 0);
+  }
 } else if (subcommand === 'mcp-server') {
   const { startMcpServer } = await import('./mcp-server/index.js');
   await startMcpServer();

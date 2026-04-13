@@ -257,13 +257,29 @@ export class LocalOrchestrator {
           this._browserDegradedReason = null;
           logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
         } else {
-          // CDP setup failed (Chrome wouldn't quit, port busy, profile missing, etc).
-          // Fall back to bundled Chromium so the orchestrator still has SOME
-          // browser capability, but surface the degradation LOUDLY: tool
-          // responses will prefix a warning and the LLM will stop
+          // CDP setup failed. Fall back to bundled Chromium so the
+          // orchestrator still has SOME browser capability, but
+          // surface the degradation LOUDLY so the LLM stops
           // pretending it's in the user's real logged-in session.
+          // Build the reason from a pure filesystem probe so
+          // fresh-install users get "run ohwow chrome bootstrap"
+          // instead of the misleading "Chrome CDP unavailable".
+          const { describeDebugChromeState } = await import('../execution/browser/chrome-lifecycle.js');
+          const state = describeDebugChromeState();
           this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          this._browserDegradedReason = `Chrome CDP unavailable on :${this.chromeCdpPort}${profileDir ? ` (requested profile: ${profileDir})` : ''} — running in isolated Chromium with no real profile, no cookies, no logged-in sessions`;
+          if (state.status === 'missing') {
+            this._browserDegradedReason =
+              `${state.reason} Running in isolated Chromium (no logged-in sessions). ${state.bootstrapHint}`;
+          } else if (state.status === 'corrupted') {
+            this._browserDegradedReason =
+              `${state.reason} Running in isolated Chromium. Issues: ${state.detectedIssues.join('; ')}. ${state.bootstrapHint}`;
+          } else {
+            // Debug dir is fine but CDP still didn't come up. Real
+            // transient failure — port busy, Chrome crashed on boot,
+            // timeout waiting for devtools, etc.
+            this._browserDegradedReason =
+              `Debug Chrome is installed but CDP did not come up on :${this.chromeCdpPort}${profileDir ? ` (requested profile: ${profileDir})` : ''}. Running in isolated Chromium. Check daemon.log for spawn errors, or run \`ohwow chrome status\` to inspect the debug dir.`;
+          }
           logger.warn(`[orchestrator] ${this._browserDegradedReason}`);
         }
       } catch (err) {
