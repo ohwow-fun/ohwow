@@ -15,6 +15,7 @@
  * degraded quality for LLM-dependent steps.
  */
 
+import type { EventEmitter } from 'node:events';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ModelRouter } from '../../execution/model-router.js';
 import type { ImprovementCycleResult } from './types.js';
@@ -49,6 +50,13 @@ export async function runImprovementCycle(
     agentId?: string;
     /** Skip LLM-dependent steps (compression, synthesis, etc.) */
     skipLLM?: boolean;
+    /**
+     * Event bus shared with the synthesis autolearner. When provided,
+     * mined tool-call patterns are emitted as `synthesis:candidate`
+     * events with `kind: 'pattern'` so the autolearner can freeze
+     * them into code-skill rows. Phase C of the unified-skill plan.
+     */
+    synthesisBus?: EventEmitter;
   }
 ): Promise<ImprovementCycleResult> {
   const startTime = Date.now();
@@ -121,7 +129,9 @@ export async function runImprovementCycle(
   if (!skipLLM) {
     for (const [agentId, patterns] of Object.entries(allPatterns)) {
       try {
-        const synthesis = await synthesizeSkills(db, router, workspaceId, agentId, patterns);
+        const synthesis = await synthesizeSkills(db, router, workspaceId, agentId, patterns, {
+          bus: options?.synthesisBus,
+        });
         if (!result.skillSynthesis) {
           result.skillSynthesis = synthesis;
         } else {

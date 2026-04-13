@@ -51,11 +51,15 @@ import type { LocalToolContext } from '../orchestrator/local-tool-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import { probeSurface } from '../orchestrator/tools/synthesis-probe.js';
 import { generateCodeSkill } from '../orchestrator/tools/synthesis-generator.js';
+import { generateCodeSkillFromPattern } from '../orchestrator/tools/synthesis-pattern-generator.js';
 import { testSynthesizedSkill } from '../orchestrator/tools/synthesis-tester.js';
 import { resolveActiveWorkspace } from '../config.js';
 import type {
+  PatternSynthesisCandidate,
   SynthesisCandidate,
+  SynthesisCandidateAny,
 } from './synthesis-failure-detector.js';
+import { isFailureCandidate, isPatternCandidate } from './synthesis-failure-detector.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -93,9 +97,9 @@ export function isAutoLearningEnabled(): boolean {
 
 export class SynthesisAutoLearner {
   private readonly opts: SynthesisAutoLearnerOptions;
-  private readonly queue: SynthesisCandidate[] = [];
+  private readonly queue: SynthesisCandidateAny[] = [];
   private processing = false;
-  private listener: ((candidate: SynthesisCandidate) => void) | null = null;
+  private listener: ((candidate: SynthesisCandidateAny) => void) | null = null;
   private started = false;
 
   constructor(opts: SynthesisAutoLearnerOptions) {
@@ -111,7 +115,7 @@ export class SynthesisAutoLearner {
       return;
     }
     this.started = true;
-    this.listener = (candidate: SynthesisCandidate) => {
+    this.listener = (candidate: SynthesisCandidateAny) => {
       this.enqueue(candidate);
     };
     this.opts.bus.on('synthesis:candidate', this.listener);
@@ -129,19 +133,40 @@ export class SynthesisAutoLearner {
   }
 
   /** Exposed for tests so they don't need a real EventEmitter. */
-  enqueue(candidate: SynthesisCandidate): void {
+  enqueue(candidate: SynthesisCandidateAny): void {
     this.queue.push(candidate);
     if (!this.processing) {
       void this.drain();
     }
   }
 
-  /** Exposed for tests: process a single candidate without the queue loop. */
-  async processCandidate(candidate: SynthesisCandidate): Promise<{
-    outcome: 'skipped_no_url' | 'probe_failed' | 'generate_failed' | 'test_failed' | 'registered';
+  /**
+   * Process a single candidate. Branches on the candidate `kind`:
+   * failure-mined candidates (the default) run through the full
+   * probe → generate → test pipeline; pattern-mined candidates skip
+   * straight to a DB row insert via the pattern generator.
+   *
+   * Exposed for tests — the queue loop just defers here.
+   */
+  async processCandidate(candidate: SynthesisCandidateAny): Promise<{
+    outcome:
+      | 'skipped_no_url'
+      | 'probe_failed'
+      | 'generate_failed'
+      | 'test_failed'
+      | 'registered'
+      | 'pattern_insert_failed';
     reason?: string;
     skillName?: string;
   }> {
+    if (isPatternCandidate(candidate)) {
+      return this.processPatternCandidate(candidate);
+    }
+    // After the narrow above, TypeScript knows this is the
+    // failure-mined variant (`kind` undefined or 'failure').
+    if (!isFailureCandidate(candidate)) {
+      return { outcome: 'skipped_no_url', reason: 'unknown candidate kind' };
+    }
     if (!candidate.targetUrlGuess) {
       logger.info(
         { taskId: candidate.taskId },
@@ -222,6 +247,54 @@ export class SynthesisAutoLearner {
     return { outcome: 'registered', skillName: genResult.name };
   }
 
+  /**
+   * Pattern-mined branch. Takes a PatternSynthesisCandidate produced
+   * by the skill-synthesizer bridge and persists it as a code-skill
+   * row via the deterministic pattern generator. No probe, no LLM,
+   * no tester — pattern candidates already come with evidence of
+   * success, and row creation is idempotent on the pattern hash.
+   */
+  private async processPatternCandidate(
+    candidate: PatternSynthesisCandidate,
+  ): Promise<{
+    outcome: 'registered' | 'pattern_insert_failed';
+    reason?: string;
+    skillName?: string;
+  }> {
+    logger.info(
+      {
+        patternId: candidate.patternId,
+        sequenceLength: candidate.toolSequence.length,
+        support: candidate.support,
+      },
+      '[SynthesisAutoLearner] processing pattern-mined candidate',
+    );
+    const result = await generateCodeSkillFromPattern({
+      db: this.opts.db,
+      workspaceId: this.opts.workspaceId,
+      candidate,
+    });
+    if (!result.ok) {
+      logger.warn(
+        { patternId: candidate.patternId, stage: result.stage, error: result.error },
+        '[SynthesisAutoLearner] pattern generator failed',
+      );
+      return { outcome: 'pattern_insert_failed', reason: `${result.stage}: ${result.error}` };
+    }
+    if (result.reused) {
+      logger.info(
+        { patternId: candidate.patternId, skillName: result.name },
+        '[SynthesisAutoLearner] pattern already persisted, no new row',
+      );
+    } else {
+      logger.info(
+        { patternId: candidate.patternId, skillName: result.name, skillId: result.skillId },
+        '[SynthesisAutoLearner] pattern-mined skill row created',
+      );
+    }
+    return { outcome: 'registered', skillName: result.name };
+  }
+
   private async drain(): Promise<void> {
     if (this.processing) return;
     this.processing = true;
@@ -229,11 +302,14 @@ export class SynthesisAutoLearner {
       while (this.queue.length > 0) {
         const candidate = this.queue.shift();
         if (!candidate) break;
+        const candidateId = isPatternCandidate(candidate)
+          ? `pattern:${candidate.patternId}`
+          : `task:${candidate.taskId}`;
         try {
           await this.processCandidate(candidate);
         } catch (err) {
           logger.warn(
-            { err: err instanceof Error ? err.message : err, taskId: candidate.taskId },
+            { err: err instanceof Error ? err.message : err, candidateId },
             '[SynthesisAutoLearner] processCandidate threw',
           );
         }

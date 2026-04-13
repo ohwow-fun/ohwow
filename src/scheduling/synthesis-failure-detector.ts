@@ -66,6 +66,13 @@ export interface ReactTraceIteration {
 }
 
 export interface SynthesisCandidate {
+  /**
+   * Discriminant that lets the autolearner tell failure-mined candidates
+   * from pattern-mined candidates on the same event bus. Absent on
+   * legacy candidates produced by the detector — treated as 'failure'
+   * by every consumer, so old call sites don't need edits.
+   */
+  kind?: 'failure';
   taskId: string;
   title: string;
   description: string | null;
@@ -80,6 +87,62 @@ export interface SynthesisCandidate {
   targetUrlGuess: string | null;
   reactTrace: ReactTraceIteration[];
   createdAt: string;
+}
+
+/**
+ * Pattern-mined synthesis candidate (phase C of the unified-skill plan).
+ *
+ * The pattern miner on the 24h improvement cycle walks successful task
+ * traces and emits frequent tool-call subsequences — e.g. "navigate,
+ * click, type" seen across three or more tasks with a high success
+ * rate. Those are evidence of a latent deterministic skill the runtime
+ * could freeze into a code-skill row, same destination as the failure-
+ * mined pipeline but sourced from wins rather than flails.
+ *
+ * Pattern candidates share the `synthesis:candidate` bus with failure
+ * candidates but carry different payloads: no react trace, no target
+ * URL, no token burn — instead a tool sequence, its support count, and
+ * its avg success rate. The autolearner's `processCandidate` branches
+ * on `kind` and routes pattern candidates through a deterministic
+ * generator that builds a skill row from the sequence rather than
+ * calling the CDP probe + LLM generator stack.
+ */
+export interface PatternSynthesisCandidate {
+  kind: 'pattern';
+  /**
+   * Stable identifier for the tool sequence (hex hash of joined tool
+   * names). Re-mining the same sequence produces the same patternId so
+   * the autolearner can deduplicate without DB round trips.
+   */
+  patternId: string;
+  /** Ordered tool names the miner observed as a recurring block. */
+  toolSequence: string[];
+  /** Number of source tasks the pattern was mined from. */
+  support: number;
+  /** Mean success rate of the sequence across its source tasks. */
+  avgSuccessRate: number;
+  /** Task IDs the sequence was observed in (for audit / lineage). */
+  sourceTaskIds: string[];
+  /** The agent whose traces produced the pattern. */
+  agentId: string | null;
+  createdAt: string;
+}
+
+/** Either side of the synthesis:candidate bus. Consumers branch on `kind`. */
+export type SynthesisCandidateAny = SynthesisCandidate | PatternSynthesisCandidate;
+
+/** Narrow a bus payload to the failure-mined variant. */
+export function isFailureCandidate(
+  c: SynthesisCandidateAny,
+): c is SynthesisCandidate {
+  return c.kind === undefined || c.kind === 'failure';
+}
+
+/** Narrow a bus payload to the pattern-mined variant. */
+export function isPatternCandidate(
+  c: SynthesisCandidateAny,
+): c is PatternSynthesisCandidate {
+  return c.kind === 'pattern';
 }
 
 export interface SynthesisFailureDetectorOptions {
