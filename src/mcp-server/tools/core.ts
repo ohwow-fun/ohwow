@@ -8,15 +8,44 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DaemonApiClient } from '../api-client.js';
 
 export function registerCoreTools(server: McpServer, client: DaemonApiClient): void {
-  // ohwow_chat — Primary tool: send message to orchestrator
+  // ohwow_chat — Primary tool: send message to orchestrator (async).
+  // Returns conversationId immediately. Poll with ohwow_get_chat until
+  // status flips out of 'running'. Long turns survive client disconnects
+  // and become inspectable from the dashboard.
   server.tool(
     'ohwow_chat',
-    '[Orchestrator] Send a message to the OHWOW orchestrator (88+ internal tools). Use this for: desktop control, automation creation, agent scheduling, approval management, agent state persistence, A2A protocol, PDF forms, media generation, and any multi-step request not covered by the direct tools. Do NOT use for simple listing or CRUD operations that have dedicated tools.',
-    { message: z.string().describe('The message or instruction to send to the orchestrator') },
-    async ({ message }) => {
+    '[Orchestrator] Send a message to the OHWOW orchestrator (88+ internal tools). Returns conversationId immediately and dispatches the turn in the background. Poll ohwow_get_chat until status !== "running" to read the final assistant message. Use this for: desktop control, automation creation, agent scheduling, approval management, agent state persistence, A2A protocol, PDF forms, media generation, and any multi-step request not covered by the direct tools. Do NOT use for simple listing or CRUD operations that have dedicated tools.',
+    {
+      message: z.string().describe('The message or instruction to send to the orchestrator'),
+      sessionId: z.string().optional().describe('Optional conversation id to continue an existing session. Omit for a new conversation.'),
+    },
+    async ({ message, sessionId }) => {
       try {
-        const text = await client.postSSE('/api/chat', { message });
-        return { content: [{ type: 'text' as const, text: text || 'No response from orchestrator' }] };
+        // ?async=1 routes to the new background-dispatch path: the daemon
+        // creates a conversation row, returns conversationId immediately,
+        // and runs the orchestrator turn off-thread. Caller polls
+        // ohwow_get_chat until status flips out of 'running'.
+        const result = await client.post('/api/chat?async=1', { message, sessionId });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
+
+  // ohwow_get_chat — Poll a conversation by id until the orchestrator turn
+  // finishes. Returns { status, messages, last_error, ... }. Status values:
+  // 'running' (still in flight), 'done' (ready), 'error' (look at last_error).
+  server.tool(
+    'ohwow_get_chat',
+    '[Orchestrator] Poll an in-flight or completed orchestrator conversation by id. Returns { status, messages, last_error, ... }. Status: "running" = still in flight, keep polling. "done" = final assistant message is in messages[]. "error" = look at last_error. Use after ohwow_chat to wait for the turn to complete.',
+    {
+      conversationId: z.string().describe('The conversation id returned by ohwow_chat'),
+    },
+    async ({ conversationId }) => {
+      try {
+        const result = await client.get(`/api/chat/${conversationId}`);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
       }

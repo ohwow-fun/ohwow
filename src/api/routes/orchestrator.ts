@@ -179,6 +179,83 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
   });
 
   // ── Chat ──────────────────────────────────────────────────────────
+  //
+  // /api/chat has two modes:
+  //
+  //   POST /api/chat            — sync SSE streaming (default, unchanged).
+  //                               Used by the browser dashboard, TUI, cloud
+  //                               proxy, and internal MCP tools that delegate
+  //                               to the orchestrator via postSSE. Streams
+  //                               events in real time.
+  //
+  //   POST /api/chat?async=1    — async dispatch. Creates a conversation row,
+  //                               dispatches the orchestrator turn in the
+  //                               background, returns 202 { conversationId,
+  //                               status: 'running' } immediately. Long turns
+  //                               survive client disconnects and become
+  //                               inspectable from the dashboard. MCP clients
+  //                               poll GET /api/chat/:conversationId until
+  //                               status flips out of 'running'.
+  //
+  // The async path mirrors ohwow_run_agent + ohwow_get_task so MCP clients
+  // (Claude Code) get a familiar contract. Streaming stays the default to
+  // avoid breaking external cloud-side callers that read the SSE stream.
+
+  // Set the status of an in-flight orchestrator conversation.
+  async function setConversationStatus(
+    conversationId: string,
+    status: 'running' | 'done' | 'error',
+    lastError?: string,
+  ): Promise<void> {
+    try {
+      await getDb()
+        .from('orchestrator_conversations')
+        .update({
+          status,
+          last_error: lastError ?? null,
+          last_message_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId);
+    } catch (err) {
+      // Status updates are non-fatal — the conversation row still exists with
+      // its previous state and the actual messages are persisted by the
+      // orchestrator's normal persistExchange call.
+      // eslint-disable-next-line no-console
+      console.warn('[api/chat] setConversationStatus failed', err);
+    }
+  }
+
+  // GET a conversation + its messages. Returns status so MCP clients can poll.
+  router.get('/api/chat/:conversationId', async (req, res) => {
+    try {
+      const db = getDb();
+      const conversationId = req.params.conversationId;
+
+      const { data: convRow, error: convErr } = await db
+        .from('orchestrator_conversations')
+        .select('id, workspace_id, title, status, last_error, message_count, started_at, last_message_at, created_at')
+        .eq('id', conversationId)
+        .maybeSingle();
+
+      if (convErr) { res.status(500).json({ error: convErr.message }); return; }
+      if (!convRow) { res.status(404).json({ error: 'Conversation not found' }); return; }
+
+      const { data: msgRows, error: msgErr } = await db
+        .from('orchestrator_messages')
+        .select('id, role, content, model, created_at')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
+
+      if (msgErr) { res.status(500).json({ error: msgErr.message }); return; }
+
+      res.json({
+        ...(convRow as Record<string, unknown>),
+        messages: msgRows || [],
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
 
   // Chat with SSE streaming
   router.post('/api/chat', async (req, res) => {
@@ -209,6 +286,83 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       }
 
       const session = sessionId || crypto.randomUUID();
+      const wantsAsync = req.query.async === '1' || req.query.async === 'true';
+
+      // ── Async path ──────────────────────────────────────────────────
+      // Opt-in via ?async=1. Create the conversation row immediately,
+      // dispatch the orchestrator turn in the background, return 202 so the
+      // caller can poll GET /api/chat/:id for completion.
+      if (wantsAsync) {
+        const db = getDb();
+        const now = new Date().toISOString();
+
+        // Upsert conversation row with status='running'. The orchestrator's
+        // own persistExchange call (inside chat()) will handle inserting the
+        // user + assistant messages on completion, so we don't need to insert
+        // any messages here — just claim the row and mark it running.
+        const { data: existing } = await db
+          .from('orchestrator_conversations')
+          .select('id')
+          .eq('id', session)
+          .maybeSingle();
+
+        if (existing) {
+          await db
+            .from('orchestrator_conversations')
+            .update({ status: 'running', last_error: null, last_message_at: now })
+            .eq('id', session);
+        } else {
+          await db
+            .from('orchestrator_conversations')
+            .insert({
+              id: session,
+              workspace_id: getWorkspaceId(),
+              title: message.slice(0, 60),
+              source: 'mcp',
+              channel: 'mcp',
+              message_count: 0,
+              is_archived: 0,
+              extraction_count: 0,
+              metadata: '{}',
+              status: 'running',
+            });
+        }
+
+        // Set model overrides up-front (same as the streaming path).
+        if (model) orchestrator.setOrchestratorModel(model);
+        if (modelSource) orchestrator.setModelSource(modelSource);
+
+        // Dispatch the orchestrator turn in the background. Drain the
+        // iterator so its side effects (persistExchange, brain updates,
+        // etc.) all run, but discard the events themselves — clients
+        // poll the messages table instead of consuming the stream.
+        const seedMessagesAsync = messages && messages.length > 0
+          ? messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+          : undefined;
+
+        void (async () => {
+          try {
+            for await (const _event of orchestrator.chat(message, session, seedMessagesAsync)) {
+              void _event;
+            }
+            await setConversationStatus(session, 'done');
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : 'Internal error';
+            // eslint-disable-next-line no-console
+            console.warn('[api/chat async] turn failed', errMsg);
+            await setConversationStatus(session, 'error', errMsg);
+          } finally {
+            try { orchestrator.setChatActor(null); } catch { /* noop */ }
+          }
+        })();
+
+        res.status(202).json({
+          conversationId: session,
+          status: 'running',
+          createdAt: now,
+        });
+        return;
+      }
 
       // Persona hint from the cloud chat proxy. When a team member is the
       // authenticated user on the cloud side, the cloud route resolves
