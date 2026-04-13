@@ -8,10 +8,23 @@
  * when reading files. One canonical source of truth prevents all of it.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const DAEMON_INFO_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_daemon_info',
+    description: 'Return canonical paths, database location, and key table names for the running ohwow daemon. Call this BEFORE guessing file paths or sqlite commands — it gives you the absolute runtime.db path, auth token path, screenshots dir, repo locations, and an example sqlite3 command. Always available regardless of intent. Use it whenever an agent task involves local filesystem reads, sqlite queries, or anything that depends on where the daemon keeps its state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
 
 export async function getDaemonInfo(
   ctx: LocalToolContext,

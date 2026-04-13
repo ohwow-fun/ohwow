@@ -3,7 +3,33 @@
  * (Removed get_credits and get_integration_status — not applicable to local runtime)
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const WORKSPACE_PULSE_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_workspace_stats',
+    description:
+      'Get workspace statistics: total tasks, completed this week, failed, agent count, costs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_activity_feed',
+    description:
+      'Get recent activity entries from the workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'number', description: 'Max entries (default 10)' },
+      },
+      required: [],
+    },
+  },
+];
 
 export async function getWorkspaceStats(ctx: LocalToolContext): Promise<ToolResult> {
   const { count: totalTasks } = await ctx.db
