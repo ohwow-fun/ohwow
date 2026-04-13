@@ -35,23 +35,37 @@ interface DbState {
 function checkDbOnboardingState(rawDb: Database.Database): { hasBusinessData: boolean; hasAgents: boolean } {
   let hasBusinessData = false;
   let hasAgents = false;
+  let workspaceId: string | null = null;
 
+  // Each workspace DB holds exactly one row in agent_workforce_workspaces:
+  // the id starts as 'local' (seeded in migration 018) and gets rewritten
+  // to the cloud workspace UUID by the daemon's consolidation step at boot
+  // when a license key is configured. Read it positionally instead of
+  // hardcoding 'local' so cloud-connected workspaces aren't reported as
+  // empty post-consolidation.
   try {
     const row = rawDb.prepare(
-      "SELECT business_name FROM agent_workforce_workspaces WHERE id = 'local'"
-    ).get() as { business_name: string } | undefined;
-    hasBusinessData = !!row?.business_name;
+      'SELECT id, business_name FROM agent_workforce_workspaces LIMIT 1'
+    ).get() as { id: string; business_name: string } | undefined;
+    if (row?.business_name) {
+      hasBusinessData = true;
+      workspaceId = row.id;
+    } else if (row?.id) {
+      workspaceId = row.id;
+    }
   } catch {
     // Table may not exist yet
   }
 
-  try {
-    const row = rawDb.prepare(
-      "SELECT COUNT(*) as n FROM agent_workforce_agents WHERE workspace_id = 'local'"
-    ).get() as { n: number } | undefined;
-    hasAgents = (row?.n ?? 0) > 0;
-  } catch {
-    // Table may not exist yet
+  if (workspaceId) {
+    try {
+      const row = rawDb.prepare(
+        'SELECT COUNT(*) as n FROM agent_workforce_agents WHERE workspace_id = ?'
+      ).get(workspaceId) as { n: number } | undefined;
+      hasAgents = (row?.n ?? 0) > 0;
+    } catch {
+      // Table may not exist yet
+    }
   }
 
   return { hasBusinessData, hasAgents };
@@ -66,21 +80,22 @@ function loadExistingState(rawDb: Database.Database, config: RuntimeConfig | nul
   if (!hasBusinessData || !hasAgents) return undefined;
 
   try {
-    // Workspace info
+    // Workspace info — the table is per-DB-singleton, so LIMIT 1 picks up
+    // whatever id consolidation rewrote it to (cloud UUID or 'local').
     const workspace = rawDb.prepare(
-      "SELECT business_name, business_type FROM agent_workforce_workspaces WHERE id = 'local'"
-    ).get() as { business_name: string; business_type: string } | undefined;
+      'SELECT id, business_name, business_type FROM agent_workforce_workspaces LIMIT 1'
+    ).get() as { id: string; business_name: string; business_type: string } | undefined;
     if (!workspace?.business_name) return undefined;
 
-    // Agent list with status and stats
+    // Agent list with status and stats — scope by the resolved workspace id
     const agents = rawDb.prepare(
-      "SELECT name, role, status, stats FROM agent_workforce_agents WHERE workspace_id = 'local'"
-    ).all() as Array<{ name: string; role: string; status: string; stats: string }>;
+      'SELECT name, role, status, stats FROM agent_workforce_agents WHERE workspace_id = ?'
+    ).all(workspace.id) as Array<{ name: string; role: string; status: string; stats: string }>;
 
-    // Task count
+    // Task count — same scope
     const taskRow = rawDb.prepare(
-      "SELECT COUNT(*) as n FROM agent_workforce_tasks WHERE workspace_id = 'local'"
-    ).get() as { n: number } | undefined;
+      'SELECT COUNT(*) as n FROM agent_workforce_tasks WHERE workspace_id = ?'
+    ).get(workspace.id) as { n: number } | undefined;
 
     // Model info from config
     const modelTag = config?.ollamaModel || null;
