@@ -1,6 +1,17 @@
 /**
  * State management orchestrator tools (local runtime):
- * get_agent_state, set_agent_state, list_agent_state, delete_agent_state
+ * get_agent_state, set_agent_state, list_agent_state, delete_agent_state,
+ * clear_agent_state.
+ *
+ * TTL semantics:
+ *   - Persistent state (no expires_at) is the default for keys the orchestrator
+ *     wants to remember across runs (counters, progress, etc.).
+ *   - Ephemeral state — keys matching incident_*, *_health_*, temp_*, scratch_* —
+ *     defaults to a 24h expiry so an agent that wrote a flag during an old
+ *     incident can't poison reasoning forever. Callers can override either
+ *     direction by passing ttl_seconds (positive = expiry, 0/null = persistent).
+ *   - Reads filter expired rows in app code and lazy-delete them so the next
+ *     reader doesn't trip the same row.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -15,6 +26,37 @@ interface StateRow {
   scope_id: string | null;
   agent_id: string;
   updated_at: string;
+  expires_at: string | null;
+}
+
+const EPHEMERAL_KEY_PATTERNS: RegExp[] = [
+  /^incident_/i,
+  /_health_/i,
+  /^temp_/i,
+  /^scratch_/i,
+];
+
+const DEFAULT_EPHEMERAL_TTL_SECONDS = 24 * 60 * 60;
+
+/** Decide a default expiry for a write based on the key shape. */
+function defaultTtlSeconds(key: string): number | null {
+  for (const pattern of EPHEMERAL_KEY_PATTERNS) {
+    if (pattern.test(key)) return DEFAULT_EPHEMERAL_TTL_SECONDS;
+  }
+  return null;
+}
+
+/** ISO timestamp in the same format `Date.toISOString()` produces, N seconds from now. */
+function isoFromNow(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function isExpired(row: { expires_at: string | null }): boolean {
+  return !!row.expires_at && row.expires_at < nowIso();
 }
 
 function parseStoredValue(raw: string, valueType: string): unknown {
@@ -47,7 +89,7 @@ export async function getAgentState(
 
   let query = ctx.db
     .from<StateRow>('agent_workforce_task_state')
-    .select('value, value_type')
+    .select('id, value, value_type, expires_at')
     .eq('workspace_id', ctx.workspaceId)
     .eq('agent_id', agentId)
     .eq('scope', scope)
@@ -64,6 +106,16 @@ export async function getAgentState(
   if (!data) return { success: true, data: { key, value: null, exists: false } };
 
   const row = data as unknown as StateRow;
+  if (isExpired(row)) {
+    // Lazy cleanup: delete the expired row so the next caller doesn't pay the
+    // round-trip again, then report it as missing.
+    await ctx.db
+      .from('agent_workforce_task_state')
+      .delete()
+      .eq('id', row.id);
+    return { success: true, data: { key, value: null, exists: false } };
+  }
+
   return { success: true, data: { key, value: parseStoredValue(row.value, row.value_type), exists: true } };
 }
 
@@ -81,7 +133,20 @@ export async function setAgentState(
   const scope = (input.scope as string) || 'agent';
   const scopeId = (input.scope_id as string) || null;
   const { serialized, valueType } = serializeValue(value);
-  const now = new Date().toISOString();
+  const now = nowIso();
+
+  // ttl_seconds resolution:
+  //   number > 0  → explicit expiry from caller
+  //   number <= 0 → explicit persistent (no expiry)
+  //   undefined   → fall back to key-based heuristic
+  let ttlSeconds: number | null;
+  const rawTtl = input.ttl_seconds;
+  if (typeof rawTtl === 'number') {
+    ttlSeconds = rawTtl > 0 ? rawTtl : null;
+  } else {
+    ttlSeconds = defaultTtlSeconds(key);
+  }
+  const expiresAt = ttlSeconds ? isoFromNow(ttlSeconds) : null;
 
   let existsQuery = ctx.db
     .from<StateRow>('agent_workforce_task_state')
@@ -103,7 +168,7 @@ export async function setAgentState(
     const row = existing as unknown as StateRow;
     const { error } = await ctx.db
       .from('agent_workforce_task_state')
-      .update({ value: serialized, value_type: valueType, updated_at: now })
+      .update({ value: serialized, value_type: valueType, updated_at: now, expires_at: expiresAt })
       .eq('id', row.id);
     if (error) return { success: false, error: error.message };
   } else {
@@ -120,11 +185,18 @@ export async function setAgentState(
         value_type: valueType,
         created_at: now,
         updated_at: now,
+        expires_at: expiresAt,
       });
     if (error) return { success: false, error: error.message };
   }
 
-  return { success: true, data: { message: `State "${key}" saved for agent.` } };
+  return {
+    success: true,
+    data: {
+      message: `State "${key}" saved for agent.`,
+      expires_at: expiresAt,
+    },
+  };
 }
 
 export async function listAgentState(
@@ -136,7 +208,7 @@ export async function listAgentState(
 
   let query = ctx.db
     .from<StateRow>('agent_workforce_task_state')
-    .select('key, value, value_type, scope, scope_id, updated_at')
+    .select('id, key, value, value_type, scope, scope_id, updated_at, expires_at')
     .eq('workspace_id', ctx.workspaceId)
     .eq('agent_id', agentId)
     .order('updated_at', { ascending: false })
@@ -148,12 +220,29 @@ export async function listAgentState(
   const { data, error } = await query;
   if (error) return { success: false, error: error.message };
 
-  const entries = ((data || []) as unknown as StateRow[]).map(row => ({
+  const rows = (data || []) as unknown as StateRow[];
+  const expiredIds: string[] = [];
+  const live: StateRow[] = [];
+  for (const row of rows) {
+    if (isExpired(row)) expiredIds.push(row.id);
+    else live.push(row);
+  }
+
+  // Lazy-delete expired rows surfaced by the list call.
+  if (expiredIds.length > 0) {
+    await ctx.db
+      .from('agent_workforce_task_state')
+      .delete()
+      .in('id', expiredIds);
+  }
+
+  const entries = live.map(row => ({
     key: row.key,
     value: parseStoredValue(row.value, row.value_type),
     scope: row.scope,
     scopeId: row.scope_id,
     updatedAt: row.updated_at,
+    expiresAt: row.expires_at,
   }));
 
   return { success: true, data: entries };
@@ -189,4 +278,66 @@ export async function deleteAgentState(
   if (error) return { success: false, error: error.message };
 
   return { success: true, data: { message: `State "${key}" deleted.` } };
+}
+
+/**
+ * Bulk purge by key prefix. Used to clear pollution like "drop every
+ * incident_* row for this agent" without listing + deleting one at a time.
+ *
+ * If agent_id is omitted, purges across every agent in the workspace —
+ * useful for the orchestrator to clear workspace-wide flags. If key_prefix
+ * is omitted, the call is rejected to prevent accidental "clear everything."
+ */
+export async function clearAgentState(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const keyPrefix = input.key_prefix as string;
+  if (!keyPrefix || typeof keyPrefix !== 'string') {
+    return { success: false, error: 'key_prefix is required and must be a non-empty string' };
+  }
+
+  const agentId = (input.agent_id as string) || null;
+  const scope = (input.scope as string) || null;
+  const scopeId = (input.scope_id as string) || null;
+
+  // Find matching rows first so we can report a count and respect the
+  // SQL-level filters via the same query builder.
+  let findQuery = ctx.db
+    .from<StateRow>('agent_workforce_task_state')
+    .select('id')
+    .eq('workspace_id', ctx.workspaceId);
+
+  if (agentId) findQuery = findQuery.eq('agent_id', agentId);
+  if (scope) findQuery = findQuery.eq('scope', scope);
+  if (scopeId) findQuery = findQuery.eq('scope_id', scopeId);
+
+  // Use a `like` filter for prefix match. The adapter exposes this via
+  // .or() with a single filter expression — it's the only way to express
+  // LIKE against the Supabase-style builder without adding a new method.
+  findQuery = findQuery.or(`key.like.${keyPrefix}%`);
+
+  const { data: matches, error: findError } = await findQuery;
+  if (findError) return { success: false, error: findError.message };
+
+  const ids = ((matches || []) as Array<{ id: string }>).map((row) => row.id);
+  if (ids.length === 0) {
+    return { success: true, data: { cleared: 0, key_prefix: keyPrefix } };
+  }
+
+  const { error: deleteError } = await ctx.db
+    .from('agent_workforce_task_state')
+    .delete()
+    .in('id', ids);
+
+  if (deleteError) return { success: false, error: deleteError.message };
+
+  return {
+    success: true,
+    data: {
+      cleared: ids.length,
+      key_prefix: keyPrefix,
+      message: `Cleared ${ids.length} state ${ids.length === 1 ? 'row' : 'rows'} matching "${keyPrefix}*".`,
+    },
+  };
 }

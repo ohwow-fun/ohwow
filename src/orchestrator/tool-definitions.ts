@@ -664,7 +664,8 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'set_agent_state',
     description:
-      'Save a persistent state value for an agent. The value will be available in future task runs. Use for counters, progress tracking, structured data, etc.',
+      'Save a persistent state value for an agent. The value will be available in future task runs. Use for counters, progress tracking, structured data, etc. ' +
+      'Pass ttl_seconds to expire the value automatically (e.g. 3600 for one hour). Keys matching incident_*, *_health_*, temp_*, scratch_* expire after 24h by default.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -673,6 +674,7 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
         value: { description: 'The value to store (string, number, boolean, array, or object)' },
         scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'State scope. Default: "agent"' },
         scope_id: { type: 'string', description: 'Scope ID (goal or schedule ID) when scope is not "agent"' },
+        ttl_seconds: { type: 'number', description: 'Optional expiry. Positive integer = expire after N seconds. 0 or negative = persistent (no expiry). Omit to use the key-shape default.' },
       },
       required: ['agent_id', 'key', 'value'],
     },
@@ -704,6 +706,24 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
         scope_id: { type: 'string', description: 'Scope ID (goal or schedule ID) when scope is not "agent"' },
       },
       required: ['agent_id', 'key'],
+    },
+  },
+  {
+    name: 'clear_agent_state',
+    description:
+      'Bulk-delete state rows by key prefix. Use to purge polluted or stale state ' +
+      '(e.g. clear every incident_* row when an incident is resolved). If agent_id is ' +
+      'omitted, clears across every agent in the workspace. key_prefix is required to ' +
+      'prevent accidental "delete everything."',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key_prefix: { type: 'string', description: 'Required. Match keys starting with this prefix.' },
+        agent_id: { type: 'string', description: 'Optional. Limit purge to one agent. Omit for workspace-wide.' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'Optional scope filter.' },
+        scope_id: { type: 'string', description: 'Optional scope ID filter.' },
+      },
+      required: ['key_prefix'],
     },
   },
   // A2A tools
@@ -2868,6 +2888,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   set_agent_state: ['agents'],
   list_agent_state: ['agents'],
   delete_agent_state: ['agents'],
+  clear_agent_state: ['agents'],
 
   // A2A / Peers → 'agents'
   list_a2a_connections: ['agents'],
@@ -3099,7 +3120,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   get_agent_schedules: 3, update_agent_schedule: 3,
   update_project: 3, get_project_board: 3, move_task_column: 3,
   update_goal: 3, link_task_to_goal: 3, link_project_to_goal: 3,
-  get_agent_state: 3, set_agent_state: 3, list_agent_state: 3, delete_agent_state: 3,
+  get_agent_state: 3, set_agent_state: 3, list_agent_state: 3, delete_agent_state: 3, clear_agent_state: 3,
   list_a2a_connections: 3, send_a2a_task: 3, test_a2a_connection: 3,
   list_peers: 3, delegate_to_peer: 3, ask_peer: 3, list_peer_agents: 3,
   scrape_bulk: 3, upload_knowledge: 3, add_knowledge_from_url: 3,

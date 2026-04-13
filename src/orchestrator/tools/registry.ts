@@ -35,7 +35,7 @@ import { discoverCapabilities, proposeAutomation, createAutomation } from './aut
 import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo, generateVoice } from './media.js';
 import { evolveTask } from './co-evolution.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
-import { getAgentState, setAgentState, listAgentState, deleteAgentState } from './state.js';
+import { getAgentState, setAgentState, listAgentState, deleteAgentState, clearAgentState } from './state.js';
 import { listConnectors, addConnector, removeConnector, syncConnector, testConnector } from './connectors.js';
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
@@ -263,6 +263,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['set_agent_state', (ctx, input) => setAgentState(ctx, input)],
   ['list_agent_state', (ctx, input) => listAgentState(ctx, input)],
   ['delete_agent_state', (ctx, input) => deleteAgentState(ctx, input)],
+  ['clear_agent_state', (ctx, input) => clearAgentState(ctx, input)],
 
   // Internet tools (zero-cost, zero-config)
   ['youtube_transcript', (ctx, input) => youtubeTranscript(ctx, input)],
