@@ -1324,8 +1324,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
       logger.warn(`[daemon] Heartbeat coordinator failed: ${err instanceof Error ? err.message : err}`);
     });
 
-    // Self-improvement scheduler: runs daily, gates LLM phases on task volume
+    // Self-improvement scheduler: runs daily, gates LLM phases on task volume.
+    // Phase C: hand the shared synthesis bus in BEFORE start() so mined tool
+    // patterns emit `synthesis:candidate` events with `kind: 'pattern'`,
+    // which the SynthesisAutoLearner (wired further down) picks up and
+    // persists as code-skill rows. Before this wire, the pattern miner
+    // produced data but the bridge in skill-synthesizer.ts had no bus to
+    // emit on — it ran as a no-op and patterns were dropped.
     const improvementScheduler = new ImprovementScheduler(db, modelRouter, workspaceId);
+    improvementScheduler.setSynthesisBus(bus);
     improvementScheduler.start().catch(err => {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });

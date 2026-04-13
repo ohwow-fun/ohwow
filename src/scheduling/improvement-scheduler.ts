@@ -15,6 +15,7 @@
  * require sufficient new task data to justify the cost.
  */
 
+import type { EventEmitter } from 'node:events';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import type { HomeostasisController } from '../homeostasis/homeostasis-controller.js';
@@ -40,6 +41,7 @@ export class ImprovementScheduler {
   private executing = false;
   private sleepCycle: SleepCycle | null = null;
   private homeostasis: HomeostasisController | null = null;
+  private synthesisBus: EventEmitter | null = null;
   private lastIdleCheck = Date.now();
 
   constructor(
@@ -48,6 +50,22 @@ export class ImprovementScheduler {
     private workspaceId: string,
     private intervalMs: number = DEFAULT_INTERVAL_MS,
   ) {}
+
+  /**
+   * Wire the synthesis event bus (phase C of the unified-skill plan).
+   *
+   * When set, mined tool-call patterns found during the pattern-mining
+   * phase of the improvement cycle are emitted on this bus as
+   * `synthesis:candidate` events with `kind: 'pattern'`. The
+   * `SynthesisAutoLearner` listening on the same bus picks them up and
+   * persists them as code-skill rows. Without this wire the patterns
+   * are mined but discarded — that was the phase-C gap before this
+   * commit. Safe to call before `start()`.
+   */
+  setSynthesisBus(bus: EventEmitter): void {
+    this.synthesisBus = bus;
+    logger.info('[ImprovementScheduler] synthesis bus wired — mined patterns will flow to autolearner');
+  }
 
   /**
    * Wire a SleepCycle for phase-aware improvement scheduling.
@@ -160,7 +178,13 @@ export class ImprovementScheduler {
         this.db,
         this.modelRouter,
         this.workspaceId,
-        { skipLLM },
+        {
+          skipLLM,
+          // Phase C: mined patterns flow to the autolearner via this
+          // bus when wired. Null is fine — skill-synthesizer treats a
+          // missing bus as a no-op and drops patterns silently.
+          synthesisBus: this.synthesisBus ?? undefined,
+        },
       );
 
       // Persist run metadata
