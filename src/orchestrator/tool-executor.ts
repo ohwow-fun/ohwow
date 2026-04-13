@@ -461,6 +461,53 @@ export async function* executeToolCall(
     return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !subResult.success), isError: !subResult.success };
   }
 
+  // --- Wiki curate: janitorial cleanup pass in an isolated sub-orch ---
+  // Special-cased here (rather than wired through the registry) for the
+  // same reason as delegate_subtask: it needs ctx.delegateSubtask, which
+  // is on ToolExecutionContext, not on the LocalToolContext that normal
+  // tool handlers receive. The tool wraps a hardcoded janitorial prompt
+  // around the user-supplied intent so the sub-orch always knows the
+  // expected shape: lint → fix → re-lint → summarize.
+  if (request.name === 'wiki_curate') {
+    if (!ctx.delegateSubtask) {
+      const errorResult: ToolResult = { success: false, error: 'Sub-orchestrator not available — wiki_curate cannot run.' };
+      yield { type: 'tool_done', name: request.name, result: errorResult };
+      return { toolName: request.name, result: errorResult, resultContent: 'Error: Sub-orchestrator not available.', isError: true };
+    }
+    const intent = (toolInput.intent as string | undefined)?.trim() || 'general lint pass — fix everything you reasonably can';
+    yield { type: 'status', message: `Curating wiki (${intent.slice(0, 60)})...` };
+    const cleanupPrompt = `You are running an isolated wiki cleanup pass. The parent chat does not see your intermediate tool results — only your final summary. Be efficient.
+
+Intent: ${intent}
+
+Procedure:
+1. Call wiki_lint to get the current findings.
+2. Walk the findings and fix what you can:
+   - missing_summary: read the page with wiki_read_page, then call wiki_write_page with the same body but a one-line summary added (≤ 100 chars, captures the gist).
+   - orphan: pick a related existing page from wiki_list_pages, read it, append a sentence with a [[backlink]] to the orphan in a sensible section, and write it back.
+   - stub: only create the page if the concept is clearly worth having; otherwise note it as "intentionally not created" in your summary.
+   - thin: skip these — they need real content, not janitorial work.
+3. Call wiki_lint again to confirm the delta.
+4. Reply with a one-line summary of: pages touched, lint count before → after, anything you intentionally skipped.
+
+Constraints:
+- Do not ask clarifying questions. Work with what you have.
+- Use wiki_list_pages first if you need to discover slugs.
+- Never overwrite a page with less content than it had — always read first, merge, then write.
+- Keep your summary under 200 words. The parent only needs the delta, not the full play-by-play.`;
+
+    const subResult = await ctx.delegateSubtask(cleanupPrompt, 'wiki');
+    const result: ToolResult = subResult.success
+      ? { success: true, data: subResult.summary }
+      : { success: false, error: subResult.summary };
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+    const content = subResult.success
+      ? `Wiki curate complete (${subResult.toolsCalled.length} tools used):\n\n${subResult.summary}`
+      : `Wiki curate failed: ${subResult.summary}`;
+    return { toolName: request.name, result, resultContent: summarizeToolResult(request.name, content, !subResult.success), isError: !subResult.success };
+  }
+
   // --- Sequential multi-agent execution ---
   if (request.name === 'run_sequence') {
     yield { type: 'status', message: 'Planning multi-agent sequence...' };

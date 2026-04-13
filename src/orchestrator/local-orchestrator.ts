@@ -75,6 +75,13 @@ import {
 import { reflectOnWikiOpportunities } from './wiki-reflector.js';
 import { extractGoalCheckpoints, loadActiveGoals, formatGoalsForPrompt, type GoalCheckpointDeps } from './goal-checkpoints.js';
 import {
+  compactStaleToolResults,
+  compactStaleOpenAIToolResults,
+  checkTurnTokenBudget,
+  estimateMessagesTokens,
+  buildBudgetExitMessage,
+} from './turn-context-guard.js';
+import {
   buildTargetedPrompt,
   buildFullPrompt,
   type PromptBuilderDeps,
@@ -1213,6 +1220,41 @@ export class LocalOrchestrator {
     let iterationsSinceSummarize = 2; // allow summarization from the start
 
     for (let iteration = 0; iteration < maxIter; iteration++) {
+      // Compact stale tool results before each model call. This walks
+      // loopMessages once and replaces tool_result blocks older than
+      // KEEP_RECENT_RESULTS with one-line placeholders. The model has
+      // already reasoned about those results in prior iterations; the
+      // verbatim 5kb directory listings are pure waste from here on.
+      compactStaleToolResults(loopMessages as Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: unknown }>);
+
+      // Hard turn-level token budget guard. Project total input tokens
+      // against the working context window. If we're past 75%, break
+      // out gracefully and yield a continuation message instead of
+      // plowing into a 402 / context-limit overflow.
+      const staticTokensEst = estimateTokens(systemBlocks.map(b => b.text).join('')) + estimateToolTokens(convertToolsToOpenAI(tools));
+      const messageTokensEst = estimateMessagesTokens(loopMessages);
+      const verdict = checkTurnTokenBudget({
+        contextLimit: anthropicContextLimit,
+        reserveForOutput: 4096,
+        staticTokens: staticTokensEst,
+        messageTokens: messageTokensEst,
+        iteration,
+        maxIterations: maxIter,
+      });
+      if (verdict.shouldWarn) {
+        logger.warn(`[LocalOrchestrator] Anthropic turn budget at ${Math.round(verdict.utilization * 100)}% (iter ${iteration}/${maxIter}) for session ${sessionId}`);
+      }
+      if (verdict.shouldBreak) {
+        const exitMsg = buildBudgetExitMessage({
+          iteration,
+          toolsExecuted: executedToolCalls.size,
+          reason: verdict.reason,
+        });
+        yield { type: 'text', content: exitMsg };
+        fullContent += exitMsg;
+        break;
+      }
+
       // Non-streaming: get full response then yield text blocks
       const response = await this.anthropic.messages.create({
         model: this.orchestratorModel || MODEL,
@@ -1581,6 +1623,13 @@ export class LocalOrchestrator {
 
   /** Run a sub-orchestrator for delegate_subtask tool calls. */
   private async runDelegateSubtask(prompt: string, focus: string, options?: ChannelChatOptions, depth = 0): Promise<SubOrchestratorResult> {
+    // Per-focus iteration budgets. Janitorial work (wiki cleanup) needs
+    // headroom to walk a backlog of lint findings — one read+write pair
+    // per finding, plus the bracketing lint calls. The default 5 caps
+    // out after fixing 1-2 issues.
+    const focusIterations: Record<string, number> = {
+      wiki: 18,
+    };
     return runSubOrchestrator({
       prompt,
       sections: getFocusSections(focus),
@@ -1593,6 +1642,7 @@ export class LocalOrchestrator {
       toolCache: this.toolCache,
       options,
       depth,
+      maxIterations: focusIterations[focus],
     });
   }
 
@@ -2054,6 +2104,39 @@ export class LocalOrchestrator {
               }
             }
           }
+        }
+      }
+
+      // Compact stale tool results before each model call. OpenAI-shape
+      // messages put tool results in top-level role:'tool' messages.
+      compactStaleOpenAIToolResults(loopMessages as Array<{ role: string; content: unknown }>);
+
+      // Hard turn-level token budget guard. OpenRouter contexts vary
+      // by model — use the same ceiling we passed to the budget, so
+      // the guard fires before the budget shim does.
+      {
+        const staticTokensEst = estimateTokens(systemPrompt) + toolTokenCount;
+        const messageTokensEst = estimateMessagesTokens(loopMessages);
+        const verdict = checkTurnTokenBudget({
+          contextLimit,
+          reserveForOutput: 4096,
+          staticTokens: staticTokensEst,
+          messageTokens: messageTokensEst,
+          iteration,
+          maxIterations: maxIter,
+        });
+        if (verdict.shouldWarn) {
+          logger.warn(`[orchestrator] OpenRouter turn budget at ${Math.round(verdict.utilization * 100)}% (iter ${iteration}/${maxIter}) for session ${sessionId}`);
+        }
+        if (verdict.shouldBreak) {
+          const exitMsg = buildBudgetExitMessage({
+            iteration,
+            toolsExecuted: executedToolCalls.size,
+            reason: verdict.reason,
+          });
+          yield { type: 'text', content: exitMsg };
+          fullContent += exitMsg;
+          break;
         }
       }
 
@@ -2669,6 +2752,38 @@ export class LocalOrchestrator {
               loopMessages[i].content = remaining[0].text || '';
             }
           }
+        }
+      }
+
+      // Compact stale tool results before each model call.
+      compactStaleOpenAIToolResults(loopMessages as Array<{ role: string; content: unknown }>);
+
+      // Hard turn-level token budget guard. For Ollama, numCtx is the
+      // hard ceiling (model-specific); reserve 4096 for output and
+      // break early if projected input exceeds 75% of usable budget.
+      {
+        const staticTokensEst = estimateTokens(systemPrompt) + toolTokenCount;
+        const messageTokensEst = estimateMessagesTokens(loopMessages);
+        const verdict = checkTurnTokenBudget({
+          contextLimit: numCtx,
+          reserveForOutput: 4096,
+          staticTokens: staticTokensEst,
+          messageTokens: messageTokensEst,
+          iteration,
+          maxIterations: ollamaMaxIter,
+        });
+        if (verdict.shouldWarn) {
+          logger.warn(`[orchestrator] Ollama turn budget at ${Math.round(verdict.utilization * 100)}% (iter ${iteration}/${ollamaMaxIter}) for session ${sessionId}`);
+        }
+        if (verdict.shouldBreak) {
+          const exitMsg = buildBudgetExitMessage({
+            iteration,
+            toolsExecuted: executedToolCallsOllama.size,
+            reason: verdict.reason,
+          });
+          yield { type: 'text', content: exitMsg };
+          fullContent += exitMsg;
+          break;
         }
       }
 

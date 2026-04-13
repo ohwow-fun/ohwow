@@ -152,6 +152,10 @@ const FOCUS_SECTIONS: Record<string, IntentSection[]> = {
   crm: ['business'],
   projects: ['projects', 'agents'],
   data: ['pulse', 'business', 'agents'],
+  // Wiki focus: only the markdown synthesis layer. Used by wiki_curate
+  // and any future janitorial wiki work that should run in isolation
+  // from the parent chat's context.
+  wiki: ['rag'],
 };
 
 /** Max recursive fold depth for nested sub-orchestrators */

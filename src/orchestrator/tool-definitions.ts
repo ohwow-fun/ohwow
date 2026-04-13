@@ -1832,6 +1832,20 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
       required: ['slug'],
     },
   },
+  {
+    name: 'wiki_curate',
+    description: 'Run a wiki cleanup pass in an isolated sub-orchestrator. Use this for janitorial work like fixing lint findings, backfilling missing summaries, adding backlinks to orphans, or merging duplicates. The sub-orchestrator gets a fresh context, the cheapest model tier, and only the wiki tools — so cleanup never bloats the parent chat\'s context. Returns a one-line summary of what changed (pages touched, lint delta). Prefer this over manually chaining wiki_lint + wiki_read_page + wiki_write_page when the task is "clean up the wiki" or similar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        intent: {
+          type: 'string',
+          description: 'Optional natural-language description of the cleanup focus. Examples: "fix all missing summaries", "add backlinks to orphans", "general lint pass", "merge duplicates of [[foo]] and [[bar]]". Defaults to a general cleanup.',
+        },
+      },
+      required: [],
+    },
+  },
 
   // =========================================================================
   // DATA SOURCE CONNECTOR TOOLS
@@ -2722,6 +2736,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   wiki_read_index: ['rag'],
   wiki_lint: ['rag'],
   wiki_page_history: ['rag'],
+  wiki_curate: ['rag'],
 
   // PDF → 'vision' (document processing)
   pdf_inspect_fields: ['vision'],
@@ -2804,6 +2819,10 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // every session needs them.
   wiki_list_pages: 1, wiki_read_page: 1, wiki_write_page: 1,
   wiki_read_index: 2, wiki_read_log: 2, wiki_lint: 2, wiki_page_history: 2,
+  // wiki_curate is P1 — when the user says "clean up the wiki" the COS
+  // needs the tool advertised at the top of its catalog so it picks
+  // delegation over chained reads/writes that would bloat the parent.
+  wiki_curate: 1,
   lsp_diagnostics: 1,
 
   // P2: Common extensions (default for unlisted tools)
