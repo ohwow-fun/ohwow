@@ -140,14 +140,23 @@ export function startDaemonBackground(execPath: string, port: number, dataDir: s
     ? ['--import', 'tsx', execPath, '--daemon']
     : [execPath, '--daemon'];
 
+  // Forward OHWOW_WORKSPACE if set so the detached child binds to the same
+  // workspace as the parent. (process.env spread above already covers this in
+  // most cases, but we set it explicitly to be defensive against tools that
+  // strip env vars when spawning subprocesses.)
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    OHWOW_PORT: String(port),
+  };
+  if (process.env.OHWOW_WORKSPACE) {
+    childEnv.OHWOW_WORKSPACE = process.env.OHWOW_WORKSPACE;
+  }
+
   const child = spawn(process.execPath, args, {
     detached: true,
     windowsHide: true,
     stdio: ['ignore', logFd, logFd],
-    env: {
-      ...process.env,
-      OHWOW_PORT: String(port),
-    },
+    env: childEnv,
   });
 
   child.unref();

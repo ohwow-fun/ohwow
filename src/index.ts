@@ -19,6 +19,13 @@ import { checkForUpdate } from './update-check.js';
 import { startTui } from './tui/render.js';
 import { VERSION } from './version.js';
 
+// Parse --workspace=<name> early so all downstream code (subcommands, the
+// daemon, dynamically loaded config) honors it uniformly through the resolver
+// in src/config.ts. The env var is the single source of truth at runtime.
+const workspaceFlag = process.argv.find((a) => a.startsWith('--workspace='))?.split('=')[1];
+if (workspaceFlag) {
+  process.env.OHWOW_WORKSPACE = workspaceFlag;
+}
 
 await checkForUpdate(VERSION);
 
@@ -27,13 +34,13 @@ const isDaemon = process.argv.includes('--daemon') || process.env.OHWOW_HEADLESS
 
 if (subcommand === 'logs') {
   const { dirname } = await import('path');
-  const { loadConfig, DEFAULT_DB_PATH } = await import('./config.js');
+  const { loadConfig, resolveActiveWorkspace } = await import('./config.js');
   let dataDir: string;
   try {
     const config = loadConfig();
     dataDir = dirname(config.dbPath);
   } catch {
-    dataDir = dirname(DEFAULT_DB_PATH);
+    dataDir = resolveActiveWorkspace().dataDir;
   }
   const { getLogPath } = await import('./daemon/lifecycle.js');
   const logPath = getLogPath(dataDir);
@@ -51,13 +58,13 @@ if (subcommand === 'logs') {
   process.on('SIGINT', () => { tail.kill(); process.exit(0); });
 } else if (subcommand === 'stop') {
   const { dirname } = await import('path');
-  const { loadConfig, DEFAULT_DB_PATH } = await import('./config.js');
+  const { loadConfig, resolveActiveWorkspace } = await import('./config.js');
   let dataDir: string;
   try {
     const config = loadConfig();
     dataDir = dirname(config.dbPath);
   } catch {
-    dataDir = dirname(DEFAULT_DB_PATH);
+    dataDir = resolveActiveWorkspace().dataDir;
   }
   const { stopDaemon } = await import('./daemon/lifecycle.js');
   const stopped = await stopDaemon(dataDir);
@@ -65,7 +72,7 @@ if (subcommand === 'logs') {
   process.exit(0);
 } else if (subcommand === 'restart') {
   const { dirname } = await import('path');
-  const { loadConfig, DEFAULT_DB_PATH, DEFAULT_PORT } = await import('./config.js');
+  const { loadConfig, resolveActiveWorkspace, DEFAULT_PORT } = await import('./config.js');
   let dataDir: string;
   let port: number;
   try {
@@ -73,7 +80,7 @@ if (subcommand === 'logs') {
     dataDir = dirname(config.dbPath);
     port = config.port;
   } catch {
-    dataDir = dirname(DEFAULT_DB_PATH);
+    dataDir = resolveActiveWorkspace().dataDir;
     port = DEFAULT_PORT;
   }
   const { stopDaemon, waitForDaemonStop, startDaemonBackground, waitForDaemon } = await import('./daemon/lifecycle.js');
@@ -92,25 +99,163 @@ if (subcommand === 'logs') {
   process.exit(0);
 } else if (subcommand === 'status') {
   const { dirname } = await import('path');
-  const { loadConfig, DEFAULT_DB_PATH, DEFAULT_PORT } = await import('./config.js');
+  const { loadConfig, resolveActiveWorkspace, DEFAULT_PORT } = await import('./config.js');
   let dataDir: string;
   let port: number;
+  const active = resolveActiveWorkspace();
   try {
     const config = loadConfig();
     dataDir = dirname(config.dbPath);
     port = config.port;
   } catch {
-    dataDir = dirname(DEFAULT_DB_PATH);
+    dataDir = active.dataDir;
     port = DEFAULT_PORT;
   }
   const { isDaemonRunning } = await import('./daemon/lifecycle.js');
   const result = await isDaemonRunning(dataDir, port);
   if (result.running) {
-    console.log(`Daemon running (PID ${result.pid}) on port ${port}`);
+    console.log(`Daemon running (PID ${result.pid}) on port ${port} — workspace "${active.name}"`);
   } else {
-    console.log('No daemon running.');
+    console.log(`No daemon running. (workspace "${active.name}")`);
   }
   process.exit(0);
+} else if (subcommand === 'workspace') {
+  const action = process.argv[3];
+  const {
+    resolveActiveWorkspace,
+    listWorkspaces,
+    workspaceLayoutFor,
+    writeWorkspacePointer,
+    isValidWorkspaceName,
+    loadConfig,
+    DEFAULT_PORT,
+  } = await import('./config.js');
+
+  if (!action || action === 'list') {
+    const active = resolveActiveWorkspace();
+    const all = new Set(listWorkspaces());
+    // The active workspace may not have a directory yet (legacy install or
+    // fresh install before first daemon boot). Show it anyway.
+    all.add(active.name);
+    const sorted = Array.from(all).sort();
+    for (const name of sorted) {
+      const marker = name === active.name ? '*' : ' ';
+      console.log(`${marker} ${name}`);
+    }
+    if (sorted.length === 1) {
+      console.log('');
+      console.log('Run "ohwow workspace create <name>" to add another workspace.');
+    }
+    process.exit(0);
+  }
+
+  if (action === 'current') {
+    console.log(resolveActiveWorkspace().name);
+    process.exit(0);
+  }
+
+  if (action === 'create') {
+    const name = process.argv[4];
+    if (!name) {
+      console.error('Usage: ohwow workspace create <name>');
+      process.exit(1);
+    }
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore (no leading dot/dash).');
+      process.exit(1);
+    }
+    const { mkdirSync, existsSync } = await import('fs');
+    const layout = workspaceLayoutFor(name);
+    if (existsSync(layout.dataDir)) {
+      console.log(`Workspace "${name}" already exists at ${layout.dataDir}`);
+      process.exit(0);
+    }
+    mkdirSync(layout.dataDir, { recursive: true });
+    console.log(`Created workspace "${name}" at ${layout.dataDir}`);
+    console.log(`Run "ohwow workspace use ${name}" to switch.`);
+    process.exit(0);
+  }
+
+  if (action === 'use') {
+    const name = process.argv[4];
+    const force = process.argv.includes('--restart');
+    if (!name) {
+      console.error('Usage: ohwow workspace use <name> [--restart]');
+      process.exit(1);
+    }
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+
+    const current = resolveActiveWorkspace();
+    if (current.name === name && !force) {
+      console.log(`Already on workspace "${name}". Pass --restart to force a daemon restart.`);
+      process.exit(0);
+    }
+
+    const {
+      stopDaemon,
+      waitForDaemonStop,
+      startDaemonBackground,
+      waitForDaemon,
+      isDaemonRunning,
+    } = await import('./daemon/lifecycle.js');
+
+    let port: number;
+    try {
+      port = loadConfig().port;
+    } catch {
+      port = DEFAULT_PORT;
+    }
+
+    // Was the daemon running on the current workspace?
+    const status = await isDaemonRunning(current.dataDir, port);
+    const wasRunning = status.running;
+
+    if (wasRunning) {
+      console.log(`Stopping daemon on workspace "${current.name}"...`);
+      const stopped = await stopDaemon(current.dataDir);
+      if (stopped) await waitForDaemonStop(current.dataDir, 5000);
+    }
+
+    // Ensure the target workspace dir exists, then update the pointer.
+    const targetLayout = workspaceLayoutFor(name);
+    const { mkdirSync, existsSync } = await import('fs');
+    if (!existsSync(targetLayout.dataDir)) {
+      mkdirSync(targetLayout.dataDir, { recursive: true });
+    }
+    writeWorkspacePointer(name);
+    console.log(`Switched to workspace "${name}".`);
+
+    // Restart the daemon only if one was running, or if --restart was passed.
+    if (wasRunning || force) {
+      // Make the resolver in the spawned child see the new workspace
+      // immediately (writeWorkspacePointer + env both work, env is faster).
+      process.env.OHWOW_WORKSPACE = name;
+
+      const { fileURLToPath } = await import('url');
+      // When running via tsx (dev), import.meta.url points to .ts — resolve to
+      // .ts so lifecycle uses the tsx loader.
+      const selfPath = fileURLToPath(import.meta.url);
+      const entryPath = selfPath.endsWith('.ts')
+        ? selfPath
+        : fileURLToPath(new URL('./index.js', import.meta.url));
+      startDaemonBackground(entryPath, port, targetLayout.dataDir);
+      const ready = await waitForDaemon(port, 15000);
+      console.log(
+        ready
+          ? `Daemon started on workspace "${name}".`
+          : `Daemon start timed out. Check "ohwow logs" for details.`,
+      );
+    }
+
+    process.exit(0);
+  }
+
+  console.error(`Unknown workspace action: ${action}`);
+  console.error('Usage: ohwow workspace [list|current|create <name>|use <name> [--restart]]');
+  process.exit(1);
 } else if (subcommand === 'mcp-server') {
   const { startMcpServer } = await import('./mcp-server/index.js');
   await startMcpServer();
@@ -201,7 +346,11 @@ if (subcommand === 'logs') {
   console.log('  ohwow logs              Tail daemon logs');
   console.log('  ohwow restart           Restart the daemon');
   console.log('  ohwow improve           Run self-improvement cycle');
+  console.log('  ohwow workspace         Manage workspaces (list|current|create|use)');
   console.log('  ohwow mcp-server        Start MCP server for Claude Code');
   console.log('  ohwow setup-claude-code Enable Claude Code integration');
+  console.log('');
+  console.log('Global flags:');
+  console.log('  --workspace=<name>      Run against a specific workspace (overrides pointer)');
   process.exit(1);
 }

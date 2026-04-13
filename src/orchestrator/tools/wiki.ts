@@ -38,21 +38,22 @@
  */
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
+import { resolveActiveWorkspace } from '../../config.js';
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 function dataDir(): string {
-  // Same convention as the daemon's runtime.db location. OHWOW_DB_PATH
-  // wins if set; otherwise default to ~/.ohwow/data.
+  // OHWOW_DB_PATH wins (test/migration escape hatch); otherwise resolve the
+  // active workspace's data dir so wiki pages follow workspace switching
+  // automatically.
   const dbPath = process.env.OHWOW_DB_PATH;
   if (dbPath) return dbPath.replace(/\/runtime\.db$/, '');
-  return join(homedir(), '.ohwow', 'data');
+  return resolveActiveWorkspace().dataDir;
 }
 
 function wikiDir(workspaceId: string): string {

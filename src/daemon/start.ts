@@ -61,6 +61,7 @@ import { OllamaMonitor } from '../lib/ollama-monitor.js';
 import { ProcessMonitor } from '../lib/process-monitor.js';
 import { acquireLock, releaseLock } from '../lib/instance-lock.js';
 import { getPidPath, clearReplacedMarker } from './lifecycle.js';
+import { migrateLegacyDataDirIfNeeded } from './migrate-legacy.js';
 import { VERSION } from '../version.js';
 import type { TunnelResult } from '../tunnel/tunnel.js';
 import { logger } from '../lib/logger.js';
@@ -77,6 +78,11 @@ export interface DaemonHandle {
  */
 export async function startDaemon(): Promise<DaemonHandle> {
   const sessionToken = randomUUID();
+
+  // 0. One-shot legacy data dir migration. Must run before loadConfig() so
+  // the resolver returns the post-migration paths. Throws if a stray daemon
+  // is still alive on the legacy PID file.
+  migrateLegacyDataDirIfNeeded();
 
   // 1. Load config
   let config: RuntimeConfig;
@@ -133,14 +139,19 @@ export async function startDaemon(): Promise<DaemonHandle> {
     logger.warn(`[daemon] Orphan cleanup failed: ${err instanceof Error ? err.message : err}`);
   }
 
-  // 4. Read business context from DB
+  // 4. Read business context from DB.
+  // The agent_workforce_workspaces table holds exactly one row per DB file
+  // (seeded as 'local' by migration 018, later rewritten to the cloud
+  // workspace UUID by the consolidation step below). LIMIT 1 reads the
+  // current row regardless of which identity it carries — necessary now that
+  // each on-disk workspace has its own DB file.
   let businessContext: BusinessContext = {
     businessName: 'My Business',
     businessType: 'saas_startup',
   };
   try {
     const row = rawDb.prepare(
-      "SELECT business_name, business_type FROM agent_workforce_workspaces WHERE id = 'local'"
+      'SELECT business_name, business_type FROM agent_workforce_workspaces LIMIT 1'
     ).get() as { business_name: string; business_type: string } | undefined;
     if (row?.business_name) {
       businessContext = {

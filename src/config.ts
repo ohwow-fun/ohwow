@@ -5,7 +5,7 @@
  * Plan-specific enforcement happens on the cloud side, not in the runtime.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { McpServerConfig } from './mcp/types.js';
@@ -240,6 +240,116 @@ export const DEFAULT_DB_PATH = join(DEFAULT_CONFIG_DIR, 'data', 'runtime.db');
 export const DEFAULT_PORT = 7700;
 export const DEFAULT_CLOUD_URL = 'https://ohwow.fun';
 
+// ---------------------------------------------------------------------------
+// Workspaces
+//
+// One daemon at a time, but data is sharded into per-workspace directories so
+// you can keep the ohwow.fun GTM brain isolated from (e.g.) an AvenueD ops
+// brain. The active workspace is resolved with this precedence:
+//
+//   1. OHWOW_WORKSPACE env var (set by --workspace=<name> CLI flag too)
+//   2. ~/.ohwow/current-workspace pointer file (written by `ohwow workspace use`)
+//   3. The literal name 'default'
+//
+// On legacy installs (~/.ohwow/data/runtime.db with no ~/.ohwow/workspaces),
+// the resolver returns the legacy paths so subcommands keep working against
+// pre-migration daemons. The daemon then migrates the legacy directory into
+// ~/.ohwow/workspaces/default the next time it starts cleanly.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_WORKSPACE = 'default';
+export const WORKSPACES_DIR = join(DEFAULT_CONFIG_DIR, 'workspaces');
+export const WORKSPACE_POINTER_FILE = join(DEFAULT_CONFIG_DIR, 'current-workspace');
+export const LEGACY_DATA_DIR = join(DEFAULT_CONFIG_DIR, 'data');
+
+export interface WorkspaceLayout {
+  /** Workspace short name (slug) */
+  name: string;
+  /** Absolute path to the workspace's data directory */
+  dataDir: string;
+  /** Absolute path to runtime.db inside dataDir */
+  dbPath: string;
+}
+
+/** Workspace names must be filesystem-safe (no slashes, no leading dot). */
+export function isValidWorkspaceName(name: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name);
+}
+
+/** Compute the on-disk layout for a workspace by name (does not create dirs). */
+export function workspaceLayoutFor(name: string): WorkspaceLayout {
+  const dataDir = join(WORKSPACES_DIR, name);
+  return {
+    name,
+    dataDir,
+    dbPath: join(dataDir, 'runtime.db'),
+  };
+}
+
+/** Read the active workspace pointer file, or null if missing/empty. */
+export function readWorkspacePointer(): string | null {
+  if (!existsSync(WORKSPACE_POINTER_FILE)) return null;
+  try {
+    const value = readFileSync(WORKSPACE_POINTER_FILE, 'utf-8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write the active workspace pointer file. Creates ~/.ohwow if needed. */
+export function writeWorkspacePointer(name: string): void {
+  if (!existsSync(DEFAULT_CONFIG_DIR)) {
+    mkdirSync(DEFAULT_CONFIG_DIR, { recursive: true });
+  }
+  writeFileSync(WORKSPACE_POINTER_FILE, name);
+}
+
+/** List workspace directories under ~/.ohwow/workspaces (sorted, may be empty). */
+export function listWorkspaces(): string[] {
+  if (!existsSync(WORKSPACES_DIR)) return [];
+  try {
+    return readdirSync(WORKSPACES_DIR, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolve the active workspace layout. See the section comment above for
+ * precedence rules. When the resolver falls back to the literal 'default'
+ * name and no workspaces dir exists yet, it checks for a legacy
+ * ~/.ohwow/data/runtime.db and returns those paths so we don't strand
+ * pre-migration installs.
+ */
+export function resolveActiveWorkspace(): WorkspaceLayout {
+  const fromEnv = process.env.OHWOW_WORKSPACE?.trim();
+  if (fromEnv && isValidWorkspaceName(fromEnv)) {
+    return workspaceLayoutFor(fromEnv);
+  }
+
+  const fromPointer = readWorkspacePointer();
+  if (fromPointer && isValidWorkspaceName(fromPointer)) {
+    return workspaceLayoutFor(fromPointer);
+  }
+
+  const defaultLayout = workspaceLayoutFor(DEFAULT_WORKSPACE);
+  // Legacy fallback: if the new layout has no default workspace yet but the
+  // old single-workspace install exists, point at it. The daemon will migrate
+  // it the next time it boots cleanly.
+  if (!existsSync(defaultLayout.dataDir) && existsSync(join(LEGACY_DATA_DIR, 'runtime.db'))) {
+    return {
+      name: DEFAULT_WORKSPACE,
+      dataDir: LEGACY_DATA_DIR,
+      dbPath: join(LEGACY_DATA_DIR, 'runtime.db'),
+    };
+  }
+  return defaultLayout;
+}
+
 /**
  * Load runtime config from file + env vars (env vars override file values).
  * Free tier: no license key or API key required.
@@ -278,7 +388,9 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     cloudModel: process.env.OHWOW_CLOUD_MODEL || fileConfig.cloudModel || 'claude-haiku-4-5-20251001',
     anthropicOAuthToken: process.env.ANTHROPIC_OAUTH_TOKEN || fileConfig.anthropicOAuthToken || '',
     port: parseInt(process.env.OHWOW_PORT || '', 10) || fileConfig.port || DEFAULT_PORT,
-    dbPath: process.env.OHWOW_DB_PATH || fileConfig.dbPath || DEFAULT_DB_PATH,
+    // dbPath: explicit OHWOW_DB_PATH wins (test/migration escape hatch),
+    // then a per-install override in config.json, then the active workspace.
+    dbPath: process.env.OHWOW_DB_PATH || fileConfig.dbPath || resolveActiveWorkspace().dbPath,
     jwtSecret: process.env.ENTERPRISE_JWT_SECRET || fileConfig.jwtSecret || '',
     localUrl: process.env.OHWOW_LOCAL_URL || fileConfig.localUrl || `http://localhost:${fileConfig.port || DEFAULT_PORT}`,
     browserHeadless: process.env.OHWOW_BROWSER_HEADLESS === 'true' ? true : (fileConfig.browserHeadless === true),
