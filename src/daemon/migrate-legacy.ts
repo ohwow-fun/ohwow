@@ -21,9 +21,10 @@
  * resolver fallback in src/config.ts.
  */
 
-import { existsSync, mkdirSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
+  DEFAULT_CONFIG_PATH,
   DEFAULT_WORKSPACE,
   LEGACY_DATA_DIR,
   WORKSPACES_DIR,
@@ -32,6 +33,53 @@ import {
 } from '../config.js';
 import { readLock, isProcessAlive } from '../lib/instance-lock.js';
 import { logger } from '../lib/logger.js';
+
+/**
+ * Pre-workspace installs sometimes have an explicit `dbPath` field in
+ * ~/.ohwow/config.json pinning the legacy runtime.db. After the migration,
+ * that path no longer exists — but loadConfig's precedence (env > fileConfig
+ * > resolver) would still return the dead path, causing initDatabase to
+ * silently create a fresh empty DB at the legacy location. We rewrite the
+ * config to drop the stale field so the resolver takes over.
+ *
+ * Only touches dbPath when it exactly matches the legacy runtime.db path. Any
+ * other custom value is left alone (the user clearly wants it).
+ */
+function stripStaleLegacyDbPathFromConfig(): void {
+  if (!existsSync(DEFAULT_CONFIG_PATH)) return;
+  const legacyDbPath = join(LEGACY_DATA_DIR, 'runtime.db');
+  let raw: string;
+  try {
+    raw = readFileSync(DEFAULT_CONFIG_PATH, 'utf-8');
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err },
+      '[migration] Could not read config.json to clear stale dbPath',
+    );
+    return;
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err },
+      '[migration] config.json is malformed; leaving dbPath alone',
+    );
+    return;
+  }
+  if (parsed.dbPath !== legacyDbPath) return;
+  delete parsed.dbPath;
+  try {
+    writeFileSync(DEFAULT_CONFIG_PATH, JSON.stringify(parsed, null, 2));
+    logger.info('[migration] Removed stale legacy dbPath from config.json');
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err },
+      '[migration] Failed to rewrite config.json',
+    );
+  }
+}
 
 /**
  * Move ~/.ohwow/data/ → ~/.ohwow/workspaces/default/ if needed.
@@ -71,5 +119,12 @@ export function migrateLegacyDataDirIfNeeded(): boolean {
     { from: LEGACY_DATA_DIR, to: targetLayout.dataDir },
     '[migration] Moved legacy data dir into workspaces/default',
   );
+
+  // Also strip an obsolete pinned dbPath from config.json so the resolver
+  // takes over for the next loadConfig() call. Without this, loadConfig's
+  // fileConfig.dbPath fallback would return the now-vanished legacy path and
+  // initDatabase would silently create a fresh empty DB there.
+  stripStaleLegacyDbPathFromConfig();
+
   return true;
 }

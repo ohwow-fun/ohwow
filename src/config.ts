@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { homedir } from 'os';
 import type { McpServerConfig } from './mcp/types.js';
 import { logger } from './lib/logger.js';
@@ -390,7 +390,15 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     port: parseInt(process.env.OHWOW_PORT || '', 10) || fileConfig.port || DEFAULT_PORT,
     // dbPath: explicit OHWOW_DB_PATH wins (test/migration escape hatch),
     // then a per-install override in config.json, then the active workspace.
-    dbPath: process.env.OHWOW_DB_PATH || fileConfig.dbPath || resolveActiveWorkspace().dbPath,
+    // A pinned fileConfig.dbPath is ignored when its parent directory no
+    // longer exists — this happens after the legacy data dir migration if
+    // the pre-workspace install had a hardcoded dbPath, and we don't want to
+    // silently create a fresh DB at the dead path.
+    dbPath:
+      process.env.OHWOW_DB_PATH ||
+      (fileConfig.dbPath && existsSync(dirname(fileConfig.dbPath))
+        ? fileConfig.dbPath
+        : resolveActiveWorkspace().dbPath),
     jwtSecret: process.env.ENTERPRISE_JWT_SECRET || fileConfig.jwtSecret || '',
     localUrl: process.env.OHWOW_LOCAL_URL || fileConfig.localUrl || `http://localhost:${fileConfig.port || DEFAULT_PORT}`,
     browserHeadless: process.env.OHWOW_BROWSER_HEADLESS === 'true' ? true : (fileConfig.browserHeadless === true),
