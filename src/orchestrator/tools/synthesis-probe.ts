@@ -150,21 +150,102 @@ async function getPlaywright(): Promise<typeof import('playwright-core')> {
 const CDP_URL = 'http://localhost:9222';
 const DEFAULT_HYDRATION_WAIT_MS = 2500;
 
-async function getCdpPageForProbe(urlHint?: string): Promise<ProbePage | null> {
+/**
+ * Hosts whose URLs are "sensitive" — navigating a tab away from them
+ * would destroy user work we can't get back. The probe refuses to
+ * hijack these tabs; it opens a fresh page instead. The list is the
+ * set of live-editor surfaces ohwow's own synthesized + x-posting
+ * tools already touch. Extend this set as more editor surfaces land.
+ */
+const SENSITIVE_URL_PATTERNS = [
+  '/compose/post',
+  '/compose/articles',
+  '/compose/tweet',
+  '/i/chat/',
+  '/edit/',
+  '/editor',
+];
+
+function isSensitiveUrl(url: string): boolean {
+  return SENSITIVE_URL_PATTERNS.some((p) => url.includes(p));
+}
+
+function safeHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pick or open a CDP page suitable for probing `targetUrl`. The
+ * heuristic, in priority order:
+ *
+ *   1. If an existing tab is already on the SAME hostname as the
+ *      target AND is not parked in a sensitive editor URL, reuse it.
+ *      This avoids opening a new tab every probe call for the same
+ *      host — one probe per site over a synthesis run.
+ *
+ *   2. Otherwise open a brand new tab via `context.newPage()` so
+ *      the probe never navigates the user's existing tabs away from
+ *      their work. This was the launch-eve bug: the probe would
+ *      hijack an open `x.com/compose/post` tab, triggering a
+ *      beforeunload dialog and looking on-screen like a profile
+ *      switch.
+ *
+ *   3. If `newPage` is not available on the resolved context
+ *      (stagehand-wrapped contexts sometimes hide it), fall back to
+ *      the first non-sensitive page as a last resort. This is the
+ *      old behavior.
+ *
+ * The goto to the target URL happens in `probeSurface`, not here —
+ * this function just hands back a safe Page to drive.
+ */
+async function getCdpPageForProbe(targetUrl: string): Promise<ProbePage | null> {
   try {
     const pw = await getPlaywright();
     const browser = await pw.chromium.connectOverCDP(CDP_URL);
     const contexts = browser.contexts();
     if (contexts.length === 0) return null;
-    const pages = contexts[0].pages();
-    if (pages.length === 0) return null;
+    const context = contexts[0];
+    const pages = context.pages();
+
+    const targetHost = safeHostname(targetUrl);
 
     let page: ProbePage | undefined;
-    if (urlHint) page = pages.find((p) => p.url().includes(urlHint));
-    if (!page) page = pages[0];
 
-    // Suppress beforeunload dialogs so navigation is deterministic —
-    // the probe doesn't care about existing compose drafts.
+    // Preference 1: reuse an existing tab already on the target
+    // host, as long as it isn't parked in a sensitive editor URL.
+    if (targetHost) {
+      page = pages.find((p) => {
+        const pu = p.url();
+        return pu.includes(targetHost) && !isSensitiveUrl(pu);
+      });
+    }
+
+    // Preference 2: open a fresh tab so we never hijack existing work.
+    if (!page) {
+      try {
+        const fresh = await context.newPage();
+        page = fresh;
+        logger.info({ targetUrl }, '[synthesis-probe] opened a new tab for probe');
+      } catch (err) {
+        logger.warn(
+          { err: err instanceof Error ? err.message : err },
+          '[synthesis-probe] context.newPage failed, falling back to safe existing tab',
+        );
+      }
+    }
+
+    // Preference 3 (fallback): first non-sensitive existing tab.
+    if (!page) {
+      page = pages.find((p) => !isSensitiveUrl(p.url())) ?? pages[0];
+    }
+
+    if (!page) return null;
+
+    // Suppress beforeunload dialogs on whichever page we landed on.
     page.on('dialog', (d: unknown) => {
       (d as { accept: () => Promise<void> }).accept().catch(() => {});
     });
@@ -354,7 +435,7 @@ export async function probeSurface(input: ProbeSurfaceInput): Promise<ProbeSurfa
   }
   const waitMs = typeof input.waitMs === 'number' && input.waitMs >= 0 ? input.waitMs : DEFAULT_HYDRATION_WAIT_MS;
 
-  const page = await getCdpPageForProbe('x.com');
+  const page = await getCdpPageForProbe(url);
   if (!page) {
     return { success: false, message: 'Could not attach to Chrome CDP at :9222. Is the debug Chrome running?' };
   }
