@@ -50,6 +50,8 @@ export interface SubOrchestratorOptions {
   circuitBreaker: CircuitBreaker;
   toolCache?: ToolCache;
   maxIterations?: number;
+  /** Hard wall-clock timeout for the entire sub-orchestrator run. Defaults to 60s. */
+  timeoutMs?: number;
   options?: ChannelChatOptions;
 }
 
@@ -158,6 +160,26 @@ const FOCUS_SECTIONS: Record<string, IntentSection[]> = {
   wiki: ['rag'],
 };
 
+/**
+ * Per-focus wall-clock timeouts. Janitorial focuses that walk a
+ * backlog (e.g., wiki lint-fix loops across 14+ pages) legitimately
+ * need several minutes on cloud-tier Haiku. Research-shaped focuses
+ * should fail fast because a stuck RAG loop is usually a model
+ * confusion loop, not real work.
+ */
+const FOCUS_TIMEOUTS_MS: Record<string, number> = {
+  wiki: 420_000,     // 7 min — 18 iters × ~20s worst case
+  research: 180_000, // 3 min
+  agents: 180_000,
+  crm: 180_000,
+  projects: 240_000,
+  data: 240_000,
+};
+
+export function getTimeoutForFocus(focus: string): number {
+  return FOCUS_TIMEOUTS_MS[focus] ?? DEFAULT_SUB_ORCHESTRATOR_TIMEOUT_MS;
+}
+
 /** Max recursive fold depth for nested sub-orchestrators */
 const MAX_FOLD_DEPTH = 3;
 
@@ -181,7 +203,14 @@ function getExcludedTools(depth: number): Set<string> {
   return excluded;
 }
 
-const SUB_ORCHESTRATOR_TIMEOUT_MS = 60_000;
+/**
+ * Default wall-clock timeout for a sub-orchestrator run. Individual
+ * callers override via SubOrchestratorOptions.timeoutMs when the work
+ * is known to be longer (e.g., wiki janitorial passes walking a backlog
+ * of lint findings). 180s is long enough for 5 default iterations even
+ * on a slow cloud provider, short enough that a stuck loop fails fast.
+ */
+const DEFAULT_SUB_ORCHESTRATOR_TIMEOUT_MS = 180_000;
 const DEFAULT_MAX_ITERATIONS = 5;
 
 // ============================================================================
@@ -221,6 +250,7 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
     toolCache,
     options,
     maxIterations = DEFAULT_MAX_ITERATIONS,
+    timeoutMs = DEFAULT_SUB_ORCHESTRATOR_TIMEOUT_MS,
     depth = 0,
   } = opts;
 
@@ -236,7 +266,7 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
 
   // Create a timeout promise
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Sub-orchestrator timed out')), SUB_ORCHESTRATOR_TIMEOUT_MS);
+    setTimeout(() => reject(new Error(`Sub-orchestrator timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
   });
 
   // Build execution context (no browser, shared circuit breaker)
@@ -265,6 +295,7 @@ export async function runSubOrchestrator(opts: SubOrchestratorOptions): Promise<
           toolCache,
           options,
           depth: depth + 1,
+          timeoutMs: getTimeoutForFocus(focus),
         })
       : undefined,
   };

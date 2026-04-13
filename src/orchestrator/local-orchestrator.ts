@@ -96,7 +96,7 @@ import {
 import { executeToolCallsBatch } from './batch-executor.js';
 import { CircuitBreaker } from './error-recovery.js';
 import { ToolCache } from './tool-cache.js';
-import { runSubOrchestrator, getFocusSections, type SubOrchestratorResult } from './sub-orchestrator.js';
+import { runSubOrchestrator, getFocusSections, getTimeoutForFocus, type SubOrchestratorResult } from './sub-orchestrator.js';
 import { logger } from '../lib/logger.js';
 import { hashToolCall } from '../lib/stagnation.js';
 import { Brain } from '../brain/brain.js';
@@ -1643,6 +1643,7 @@ export class LocalOrchestrator {
       options,
       depth,
       maxIterations: focusIterations[focus],
+      timeoutMs: getTimeoutForFocus(focus),
     });
   }
 
