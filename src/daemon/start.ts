@@ -746,6 +746,35 @@ export async function startDaemon(): Promise<DaemonHandle> {
         `[daemon] Workspace consolidation: unified ${totalMigrated} row(s) across ${Object.keys(perTable).length} table(s) to canonical workspace id`,
       );
     }
+
+    // Rename the parent workspaces row too. The child-table pass above
+    // rewrites workspace_id on every dependent row to the canonical id,
+    // but the agent_workforce_workspaces primary key itself is untouched.
+    // When child tables have FK constraints like
+    //   workspace_id REFERENCES agent_workforce_workspaces(id)
+    // inserts fail because the canonical id has no parent row. This is
+    // exactly what blocked start_person_ingestion — team_members rows
+    // were already on canonical, but the workspaces row still said
+    // "local", so a fresh person_models insert hit FOREIGN KEY
+    // constraint failed. Fix by renaming the parent in place.
+    try {
+      const parentCount = (rawDb
+        .prepare('SELECT COUNT(*) AS c FROM agent_workforce_workspaces WHERE id = ?')
+        .get(workspaceId) as { c: number } | undefined)?.c ?? 0;
+      if (parentCount === 0) {
+        const renameResult = rawDb
+          .prepare('UPDATE agent_workforce_workspaces SET id = ? WHERE id != ?')
+          .run(workspaceId, workspaceId);
+        if (renameResult.changes > 0) {
+          logger.info(
+            { canonical: workspaceId, renamed: renameResult.changes },
+            '[daemon] Workspace consolidation: renamed parent workspaces row to canonical id',
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, '[daemon] Workspace parent-row rename skipped');
+    }
   }
 
   const channelRegistry = new ChannelRegistry();
