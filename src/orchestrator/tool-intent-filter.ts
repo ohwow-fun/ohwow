@@ -139,11 +139,11 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   ocr_extract_text: ['vision'],
   analyze_image: ['vision'],
 
-  // Doc mounts → 'rag'
-  mount_docs: ['rag'],
-  unmount_docs: ['rag'],
-  list_doc_mounts: ['rag'],
-  search_mounted_docs: ['rag'],
+  // Doc mount tools (mount_docs/unmount_docs/list_doc_mounts/search_mounted_docs)
+  // are NOT mapped here. They live in src/execution/doc-mounts/doc-mount-tools.ts
+  // and only get injected into the runtime tool list by engine.ts:executeTask
+  // (phase G), which uses filterToolsByPolicy — never filterToolsByIntent.
+  // Adding them to this map would have no effect on any execution path.
 
   // Knowledge base → 'rag'
   list_knowledge: ['rag'],
@@ -268,7 +268,10 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   get_workspace_stats: 1, get_activity_feed: 1,
   cloud_get_analytics: 1, cloud_list_contacts: 2, cloud_list_schedules: 2, cloud_list_agents: 2, cloud_list_tasks: 2, cloud_list_members: 3,
   request_file_access: 1, request_browser: 1, request_desktop: 1,
-  scrape_url: 1, deep_research: 1, mount_docs: 1, list_doc_mounts: 1, unmount_docs: 1, search_mounted_docs: 1,
+  scrape_url: 1, deep_research: 1,
+  // Doc mount tools — see TOOL_SECTION_MAP comment above. They never reach
+  // filterToolsByIntent because the engine uses filterToolsByPolicy on its
+  // own tool list. Priority entries here would be dead data.
   send_whatsapp_message: 1, list_whatsapp_chats: 1, connect_whatsapp: 1,
   send_telegram_message: 1, list_telegram_chats: 1,
   ocr_extract_text: 1, analyze_image: 1,
