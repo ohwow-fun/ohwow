@@ -47,6 +47,7 @@ import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } fr
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
 import { createTeamMember, listTeamMembers, updateTeamMember, assignGuideAgent, draftCloudInvite, listMemberTasks } from './team.js';
 import { activateGuidePersona, activatePersona, deactivatePersona, getActivePersona } from './persona.js';
+import { proposeFirstMonthPlan, acceptOnboardingPlan, getOnboardingPlan, listOnboardingPlans } from './onboarding-plan.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
@@ -290,6 +291,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['activate_persona', (ctx, input) => activatePersona(ctx, input)],
   ['deactivate_persona', (ctx, input) => deactivatePersona(ctx, input)],
   ['get_active_persona', (ctx, input) => getActivePersona(ctx, input)],
+
+  // Onboarding plan — propose + persist + accept 4-week ramp plans for new hires
+  ['propose_first_month_plan', (ctx, input) => proposeFirstMonthPlan(ctx, input)],
+  ['accept_onboarding_plan', (ctx, input) => acceptOnboardingPlan(ctx, input)],
+  ['get_onboarding_plan', (ctx, input) => getOnboardingPlan(ctx, input)],
+  ['list_onboarding_plans', (ctx, input) => listOnboardingPlans(ctx, input)],
 
   // Transition engine tools
   ['get_transition_status', (ctx, input) => getTransitionStatus(ctx, input)],

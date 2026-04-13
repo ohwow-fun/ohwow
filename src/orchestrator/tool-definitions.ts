@@ -2188,6 +2188,47 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     input_schema: { type: 'object' as const, properties: {}, required: [] },
   },
 
+  // --- Onboarding plan (first-month ramp) ---
+  {
+    name: 'propose_first_month_plan',
+    description: 'CRITICAL: when a new human team member has gone through enough intake (at least 3 populated person_model dimensions), STOP asking interview questions and call this tool. It synthesizes a grounded 4-week ramp plan from what you already know about them and returns a markdown draft you should present in the chat. Do not ask the member "what do you want to accomplish in your first month" — new hires are the least-qualified to answer that. Propose, then invite pushback.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member to generate the plan for' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'accept_onboarding_plan',
+    description: 'Materialize a draft onboarding plan into real tasks + goals. Only call this AFTER the member has actually agreed to the plan shown in chat. Creates one goal per week and one task per week task, routes human-owned tasks to the member via work_routing_decisions, and emits an activity feed event.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string', description: 'Plan id returned from propose_first_month_plan' },
+      },
+      required: ['plan_id'],
+    },
+  },
+  {
+    name: 'get_onboarding_plan',
+    description: 'Fetch an onboarding plan by plan_id, or the most recent plan for a team_member_id. Returns status, rationale, weeks, and materialization state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string' },
+        team_member_id: { type: 'string' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_onboarding_plans',
+    description: 'List onboarding plans in the workspace, newest first.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+
   // --- Transition Engine ---
   {
     name: 'get_transition_status',
@@ -2647,6 +2688,8 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // activate_guide_persona during onboarding chats, which is how an
   // assigned guide actually takes over the thread.
   activate_guide_persona: 1, activate_persona: 1, deactivate_persona: 1, get_active_persona: 1,
+  // Onboarding plan — P1 so the COS can always reach it during ingestion
+  propose_first_month_plan: 1, accept_onboarding_plan: 1, get_onboarding_plan: 1, list_onboarding_plans: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
   cloud_get_analytics: 1, cloud_list_contacts: 2, cloud_list_schedules: 2, cloud_list_agents: 2, cloud_list_tasks: 2, cloud_list_members: 3,
   request_file_access: 1, request_browser: 1, request_desktop: 1,
