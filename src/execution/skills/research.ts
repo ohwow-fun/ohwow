@@ -71,17 +71,25 @@ export interface ResearchResult {
 
 /**
  * Execute a deep research task.
- * Uses Anthropic's web search tool to gather information,
- * then synthesizes findings into a structured report.
+ *
+ * When an Anthropic API key is available we use Anthropic's native web_search
+ * tool to gather live sources. When it is not, we gracefully degrade to a
+ * local-knowledge-only report synthesized via the model router — the caller
+ * still gets a structured answer, just without fresh web citations. Requiring
+ * either the key or a model router means the tool is usable in local-first
+ * deployments that never set an Anthropic key at all.
  */
 export async function executeResearch(
   question: string,
   depth: ResearchDepth,
-  anthropicApiKey: string,
+  anthropicApiKey: string | null,
   modelRouter?: ModelRouter | null,
   localKnowledge?: LocalKnowledgeOptions,
 ): Promise<ResearchResult> {
-  const client = new Anthropic({ apiKey: anthropicApiKey });
+  if (!anthropicApiKey && !modelRouter) {
+    throw new Error('deep_research needs either an Anthropic API key or a model router');
+  }
+  const client = anthropicApiKey ? new Anthropic({ apiKey: anthropicApiKey }) : null;
   let totalTokens = 0;
   let localSourceCount = 0;
 
@@ -104,7 +112,7 @@ export async function executeResearch(
     } catch {
       queries = [question];
     }
-  } else {
+  } else if (client) {
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
@@ -123,6 +131,8 @@ export async function executeResearch(
     } catch {
       queries = [question];
     }
+  } else {
+    queries = [question];
   }
 
   // Step 1.5: Retrieve local knowledge if available
@@ -157,9 +167,13 @@ export async function executeResearch(
     }
   }
 
-  // Step 2: Execute searches using Claude with web search tool
-  // We make a single call with all queries to let Claude search efficiently
-  const searchPrompt = `Research the following question thoroughly by searching for information:
+  // Step 2: Execute searches. Web search requires Anthropic's native tool, so
+  // when no Anthropic key is configured we skip this step and synthesize from
+  // local knowledge alone. Callers get a clearly-labeled local-only report.
+  let rawFindings: string;
+  let sourceCount = 0;
+  if (client) {
+    const searchPrompt = `Research the following question thoroughly by searching for information:
 
 Question: ${question}
 ${localKnowledgeContext}
@@ -168,26 +182,30 @@ ${queries.map((q, i) => `${i + 1}. ${q}`).join('\n')}
 
 Search for each aspect, then compile ALL the information you find. Include URLs and sources.`;
 
-  const searchSystemPrompt = 'You are a thorough research assistant. Search for information and compile detailed findings with sources.'
-    + (localKnowledgeContext ? ' The user has provided local knowledge documents. Incorporate relevant information from those documents alongside your web search findings.' : '');
+    const searchSystemPrompt = 'You are a thorough research assistant. Search for information and compile detailed findings with sources.'
+      + (localKnowledgeContext ? ' The user has provided local knowledge documents. Incorporate relevant information from those documents alongside your web search findings.' : '');
 
-  const searchResponse = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 4096,
-    system: searchSystemPrompt,
-    messages: [{ role: 'user', content: searchPrompt }],
-    tools: [WEB_SEARCH_TOOL],
-  });
+    const searchResponse = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4096,
+      system: searchSystemPrompt,
+      messages: [{ role: 'user', content: searchPrompt }],
+      tools: [WEB_SEARCH_TOOL],
+    });
 
-  totalTokens += searchResponse.usage.input_tokens + searchResponse.usage.output_tokens;
+    totalTokens += searchResponse.usage.input_tokens + searchResponse.usage.output_tokens;
 
-  const rawFindings = searchResponse.content
-    .filter((b): b is TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
+    rawFindings = searchResponse.content
+      .filter((b): b is TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
 
-  // Count sources (rough heuristic: count URLs)
-  const sourceCount = (rawFindings.match(/https?:\/\//g) || []).length;
+    sourceCount = (rawFindings.match(/https?:\/\//g) || []).length;
+  } else {
+    rawFindings = localKnowledgeContext
+      ? `[Web search unavailable — synthesizing from local knowledge only]\n${localKnowledgeContext}`
+      : '[Web search unavailable and no local knowledge matched — answer from model prior knowledge only]';
+  }
 
   // Step 3: Synthesize into a report
   let report: string;
@@ -201,7 +219,7 @@ Search for each aspect, then compile ALL the information you find. Include URLs 
     });
     totalTokens += response.inputTokens + response.outputTokens;
     report = response.content;
-  } else {
+  } else if (client) {
     const synthResponse = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 2048,
@@ -214,6 +232,8 @@ Search for each aspect, then compile ALL the information you find. Include URLs 
       .filter((b): b is TextBlock => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
+  } else {
+    report = rawFindings;
   }
 
   return {

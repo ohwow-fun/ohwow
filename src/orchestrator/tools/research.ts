@@ -20,20 +20,11 @@ export async function deepResearch(
   }
 
   try {
-    // We need the Anthropic API key — get it from the engine config
-    // For now, access it through a workaround: the context doesn't expose it directly,
-    // but we can use the control plane or a config reference
-    // The simplest approach: the tool context should have the API key
-    // Since it doesn't, we'll need to pass it through. For now, we'll return an error
-    // if the engine doesn't support it.
+    const engineConfig = (ctx.engine as unknown as { config?: { anthropicApiKey?: string } }).config;
+    const apiKey = engineConfig?.anthropicApiKey || null;
 
-    // Access the API key through the engine's internal state
-    // This is a pragmatic solution — the engine has the key already
-    const engineConfig = (ctx.engine as unknown as { config?: { anthropicApiKey: string } }).config;
-    const apiKey = engineConfig?.anthropicApiKey;
-
-    if (!apiKey) {
-      return { success: false, error: 'Anthropic API key not available for research' };
+    if (!apiKey && !ctx.modelRouter) {
+      return { success: false, error: 'deep_research needs either an Anthropic API key or a model router' };
     }
 
     const localKnowledge: LocalKnowledgeOptions | undefined = ctx.db ? {
