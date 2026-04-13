@@ -269,6 +269,20 @@ export interface WorkspaceLayout {
   dataDir: string;
   /** Absolute path to runtime.db inside dataDir */
   dbPath: string;
+  /**
+   * Directory holding synthesized code-skill source files (`*.ts`).
+   * The runtime skill loader watches this path for changes and
+   * hot-loads any file that matches an active agent_workforce_skills
+   * row with skill_type='code'.
+   */
+  skillsDir: string;
+  /**
+   * Where the runtime writes esbuild-compiled `.js` output for code
+   * skills. Kept separate from the source dir so file watchers only
+   * trigger on human- or LLM-authored source changes, not compiler
+   * output, and so nuking the cache is a single `rm -rf`.
+   */
+  compiledSkillsDir: string;
 }
 
 /** Workspace names must be filesystem-safe (no slashes, no leading dot). */
@@ -279,10 +293,13 @@ export function isValidWorkspaceName(name: string): boolean {
 /** Compute the on-disk layout for a workspace by name (does not create dirs). */
 export function workspaceLayoutFor(name: string): WorkspaceLayout {
   const dataDir = join(WORKSPACES_DIR, name);
+  const skillsDir = join(dataDir, 'skills');
   return {
     name,
     dataDir,
     dbPath: join(dataDir, 'runtime.db'),
+    skillsDir,
+    compiledSkillsDir: join(skillsDir, '.compiled'),
   };
 }
 
@@ -341,10 +358,13 @@ export function resolveActiveWorkspace(): WorkspaceLayout {
   // old single-workspace install exists, point at it. The daemon will migrate
   // it the next time it boots cleanly.
   if (!existsSync(defaultLayout.dataDir) && existsSync(join(LEGACY_DATA_DIR, 'runtime.db'))) {
+    const legacySkillsDir = join(LEGACY_DATA_DIR, 'skills');
     return {
       name: DEFAULT_WORKSPACE,
       dataDir: LEGACY_DATA_DIR,
       dbPath: join(LEGACY_DATA_DIR, 'runtime.db'),
+      skillsDir: legacySkillsDir,
+      compiledSkillsDir: join(legacySkillsDir, '.compiled'),
     };
   }
   return defaultLayout;

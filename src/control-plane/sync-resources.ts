@@ -52,7 +52,8 @@ export type SyncResource =
   | 'goal'
   | 'onboarding_plan'
   | 'deliverable'
-  | 'content_calendar';
+  | 'content_calendar'
+  | 'code_skill';
 
 export type SyncAction = 'upsert' | 'delete';
 
@@ -110,6 +111,7 @@ export async function resyncWorkspaceToCloud(
     onboarding_plan: { attempted: 0, failed: 0 },
     deliverable: { attempted: 0, failed: 0 },
     content_calendar: { attempted: 0, failed: 0 },
+    code_skill: { attempted: 0, failed: 0 },
   };
 
   // Lazy-import payload builders so the tool registry doesn't pull
