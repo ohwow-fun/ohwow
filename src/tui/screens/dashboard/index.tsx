@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import type { RuntimeConfig } from '../../../config.js';
-import { updateConfigFile } from '../../../config.js';
+import { updateConfigFile, resolveActiveWorkspace } from '../../../config.js';
 import type { DatabaseAdapter } from '../../../db/adapter-types.js';
 import type Database from 'better-sqlite3';
 import { Screen, getGridScreens } from '../../types.js';
@@ -22,7 +22,7 @@ import type { SlashCommand } from '../../components/slash-command-menu.js';
 import { ShortcutPalette, getFilteredPaletteCommands } from '../../components/shortcut-palette.js';
 import { ResourcesTab } from '../settings/resources-tab.js';
 import { VERSION } from '../../../version.js';
-import { stopDaemon, waitForDaemonStop, startDaemonBackground, waitForDaemon, getDaemonSessionToken } from '../../../daemon/lifecycle.js';
+import { stopDaemon, waitForDaemonStop, startDaemonBackground, waitForDaemon, getDaemonSessionToken, isDaemonRunning } from '../../../daemon/lifecycle.js';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -72,6 +72,16 @@ import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { GridMenuPanel } from './grid-menu.js';
 import { ChatPanel } from './chat-panel.js';
 import { ModelPicker } from './model-picker.js';
+import { WorkspacePicker } from './workspace-picker.js';
+import {
+  writeWorkspacePointer,
+  workspaceLayoutFor,
+  portForWorkspace,
+  allocateWorkspacePort,
+  readWorkspaceConfig,
+  writeWorkspaceConfig,
+} from '../../../config.js';
+import { spawn } from 'child_process';
 
 type FocusZone = 'chat' | 'grid' | 'screen';
 
@@ -87,6 +97,9 @@ interface DashboardProps {
 
 export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, onStartOnboarding, onConfigChange }: DashboardProps) {
   const { exit } = useApp();
+  // The TUI process is bound to whichever workspace was active at boot.
+  // Read it once — it can't change mid-process, switching requires re-launch.
+  const workspaceName = useMemo(() => resolveActiveWorkspace().name, []);
   const runtime = useRuntime({ config, db, rawDb });
   const nav = useNavigation();
   const agents = useAgents(runtime.db);
@@ -113,6 +126,12 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
 
   // Model picker state
   const [showModelPicker, setShowModelPicker] = useState(false);
+
+  // Workspace picker state — opens via the /workspace slash command. On
+  // selecting a different workspace, we write the pointer file, ensure that
+  // workspace's daemon is running, then re-launch the TUI as a child process
+  // (handing the terminal off) and exit ourselves.
+  const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
 
   // Shortcut palette state
   const [showPalette, setShowPalette] = useState(false);
@@ -238,6 +257,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       { command: '/settings', label: 'Open Settings', action: () => openScreen(Screen.Settings) },
       { command: '/media', label: 'Open Media Gallery', action: () => openScreen(Screen.MediaGallery) },
       { command: '/model', label: 'Switch model', action: () => setShowModelPicker(true) },
+      { command: '/workspace', label: 'Switch workspace', action: () => setShowWorkspacePicker(true) },
       { command: '/sessions', label: 'Browse past conversations', action: () => openScreen(Screen.Sessions) },
       { command: '/rename', label: 'Rename current session', action: () => { setRenaming(true); setRenameValue(orchestrator.sessionTitle); } },
       { command: '/new', label: 'New chat session', action: () => orchestrator.newSession() },
@@ -327,6 +347,103 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       orchestrator.addSystemMessage('Daemon restarted.');
     }
   }, [config.dbPath, config.port, orchestrator, runtime]);
+
+  const switchWorkspace = useCallback(async (newName: string) => {
+    if (newName === workspaceName) {
+      orchestrator.addSystemMessage(`Already on workspace "${newName}".`);
+      setShowWorkspacePicker(false);
+      return;
+    }
+
+    setShowWorkspacePicker(false);
+    orchestrator.addSystemMessage(`Switching focus to workspace "${newName}"...`);
+
+    // 1. Write pointer file so future TUI/MCP launches default to this workspace.
+    try {
+      writeWorkspacePointer(newName);
+    } catch (err) {
+      orchestrator.addSystemMessage(`Couldn't update workspace pointer: ${err instanceof Error ? err.message : err}`);
+      return;
+    }
+
+    // 2. Ensure target workspace's daemon is running. Allocate + persist
+    //    a port if this is the workspace's first start.
+    const targetLayout = workspaceLayoutFor(newName);
+    let targetPort = portForWorkspace(newName);
+    if (targetPort === null) {
+      try {
+        targetPort = allocateWorkspacePort();
+        const cfg = readWorkspaceConfig(newName);
+        writeWorkspaceConfig(newName, cfg
+          ? { ...cfg, port: targetPort }
+          : { schemaVersion: 1, mode: 'local-only', port: targetPort });
+      } catch (err) {
+        orchestrator.addSystemMessage(`Couldn't allocate port: ${err instanceof Error ? err.message : err}`);
+        return;
+      }
+    }
+
+    const status = await isDaemonRunning(targetLayout.dataDir, targetPort);
+    if (!status.running) {
+      orchestrator.addSystemMessage(`Starting daemon for "${newName}" on :${targetPort}...`);
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const candidates = [
+        join(thisDir, 'index.js'),
+        join(thisDir, '..', '..', '..', 'index.js'),
+        join(thisDir, '..', '..', '..', 'index.ts'),
+      ];
+      const entryPath = candidates.find(p => existsSync(p));
+      if (!entryPath) {
+        orchestrator.addSystemMessage("Couldn't find daemon entry point — switch aborted.");
+        return;
+      }
+      // The lifecycle's startDaemonBackground reads OHWOW_WORKSPACE from the
+      // parent env, so set it before spawning the child.
+      const previousWsEnv = process.env.OHWOW_WORKSPACE;
+      process.env.OHWOW_WORKSPACE = newName;
+      try {
+        startDaemonBackground(entryPath, targetPort, targetLayout.dataDir);
+      } finally {
+        // Restore so this still-living TUI keeps its identity until exit.
+        if (previousWsEnv === undefined) delete process.env.OHWOW_WORKSPACE;
+        else process.env.OHWOW_WORKSPACE = previousWsEnv;
+      }
+      const ready = await waitForDaemon(targetPort, 15000);
+      if (!ready) {
+        orchestrator.addSystemMessage(`Daemon for "${newName}" didn't come up in time — switch aborted.`);
+        return;
+      }
+    }
+
+    // 3. Re-launch the TUI as a detached child pointing at the new
+    //    workspace, then exit ourselves. The child takes over the terminal
+    //    on exit() — same trick the existing daemon spawner uses.
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const entryCandidates = [
+      join(thisDir, '..', '..', '..', 'index.js'),
+      join(thisDir, '..', '..', '..', '..', 'bin', 'ohwow.js'),
+    ];
+    const entryPath = entryCandidates.find(p => existsSync(p));
+    if (!entryPath) {
+      orchestrator.addSystemMessage(
+        `Switched focus to "${newName}". Run \`ohwow\` to enter the new workspace's TUI.`,
+      );
+      setTimeout(() => exit(), 500);
+      return;
+    }
+
+    orchestrator.addSystemMessage(`Handing off TUI to "${newName}"...`);
+    // Give Ink a moment to flush the message before we tear the screen down.
+    setTimeout(() => {
+      const child = spawn(process.execPath, [entryPath], {
+        stdio: 'inherit',
+        detached: true,
+        env: { ...process.env, OHWOW_WORKSPACE: newName },
+      });
+      child.unref();
+      exit();
+    }, 300);
+  }, [workspaceName, orchestrator, exit]);
 
   const stopRuntime = useCallback(async () => {
     const dataDir = dirname(config.dbPath);
@@ -468,6 +585,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
 
     // Model picker handles its own input via its useInput hook
     if (showModelPicker) return;
+    if (showWorkspacePicker) return;
 
     // Shortcut palette intercepts all input when open
     if (showPalette) {
@@ -1187,6 +1305,31 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }).catch(() => {});
   }, [config, onConfigChange, runtime.sessionToken]);
 
+  // Workspace picker overlay (triggered by /workspace slash command)
+  if (showWorkspacePicker) {
+    return (
+      <Box flexDirection="column" width="100%">
+        <Header
+          version={VERSION}
+          cloudConnected={runtime.cloudConnected}
+          tier={config.tier}
+          whatsappStatus={runtime.whatsappStatus}
+          daemonPid={runtime.daemonPid}
+          daemonUptime={runtime.daemonUptime}
+          daemonPort={config.port}
+          daemonConnectedAt={runtime.daemonConnectedAt}
+          initializing={runtime.initializing}
+          workspaceName={workspaceName}
+        />
+        <WorkspacePicker
+          onSelect={switchWorkspace}
+          onClose={() => setShowWorkspacePicker(false)}
+          isActive={showWorkspacePicker}
+        />
+      </Box>
+    );
+  }
+
   // Cost confirmation dialog overlay
   if (orchestrator.costConfirmation) {
     const { toolName, estimatedCredits, description } = orchestrator.costConfirmation;
@@ -1202,6 +1345,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
           initializing={runtime.initializing}
+          workspaceName={workspaceName}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1244,6 +1388,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
           initializing={runtime.initializing}
+          workspaceName={workspaceName}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1284,6 +1429,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           daemonPort={config.port}
           daemonConnectedAt={runtime.daemonConnectedAt}
           initializing={runtime.initializing}
+          workspaceName={workspaceName}
         />
         <Box flexDirection="column" alignItems="center" justifyContent="center" flexGrow={1}>
           <Box
@@ -1357,6 +1503,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
         daemonUptime={runtime.daemonUptime}
         daemonPort={config.port}
         daemonConnectedAt={runtime.daemonConnectedAt}
+        workspaceName={workspaceName}
       />
       {runtime.error && (
         <Box paddingX={1} marginTop={1}>

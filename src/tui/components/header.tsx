@@ -17,9 +17,11 @@ interface HeaderProps {
   daemonPort?: number;
   daemonConnectedAt?: number | null;
   initializing?: boolean;
+  /** Active workspace name. Always shown so users always know which brain they're driving. */
+  workspaceName?: string;
 }
 
-export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt, initializing }: HeaderProps) {
+export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt, initializing, workspaceName }: HeaderProps) {
   const [clock, setClock] = useState(() => ({ time: formatTime(), now: Date.now() }));
 
   useEffect(() => {
@@ -39,12 +41,18 @@ export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPi
   return (
     <Box borderStyle="single" borderColor="cyan" paddingX={1} justifyContent="space-between">
       <Box>
-        <Text bold color="cyan">OHWOW Workspace v{version}</Text>
+        <Text bold color="cyan">OHWOW v{version}</Text>
+        {workspaceName && (
+          <>
+            <Text color="gray">  │  </Text>
+            <Text bold color="magenta">⌂ {workspaceName}</Text>
+          </>
+        )}
         {daemonPid && (
           <Text color="gray">  │  PID {daemonPid}</Text>
         )}
         {daemonPort && (
-          <Text color="gray">  Port {daemonPort}</Text>
+          <Text color="gray">  :{daemonPort}</Text>
         )}
         {liveUptime > 0 && (
           <Text color="gray">  Up {formatUptime(liveUptime)}</Text>
