@@ -1758,7 +1758,7 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   },
 
   // =========================================================================
-  // WIKI — Karpathy-style markdown synthesis layer
+  // WIKI — markdown synthesis layer above the raw KB
   // =========================================================================
   //
   // The wiki is a set of curated markdown pages stored next to the runtime
@@ -2711,7 +2711,7 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   search_knowledge: ['rag'],
   get_knowledge_document: ['rag'],
 
-  // Wiki — Karpathy-style synthesis layer. Tagged under 'rag' so any
+  // Wiki — markdown synthesis layer above the raw KB. Tagged 'rag' so any
   // session that gets the knowledge-base toolset also gets the wiki
   // tools — reading + writing synthesized notes is part of the same
   // workflow as searching raw KB chunks.

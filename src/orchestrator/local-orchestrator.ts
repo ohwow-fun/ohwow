@@ -72,6 +72,7 @@ import {
   type SessionDeps,
   type MemoryExtractionDeps,
 } from './session-store.js';
+import { reflectOnWikiOpportunities } from './wiki-reflector.js';
 import { extractGoalCheckpoints, loadActiveGoals, formatGoalsForPrompt, type GoalCheckpointDeps } from './goal-checkpoints.js';
 import {
   buildTargetedPrompt,
@@ -1542,6 +1543,22 @@ export class LocalOrchestrator {
       });
     }
 
+    // Ambient wiki curation: every turn, reflect on whether the
+    // exchange contained durable info worth saving to the wiki. Skipped
+    // automatically when the COS already called wiki_write_page in-turn,
+    // since the system-prompt nudge handled it.
+    if (fullContent) {
+      const curatedInTurn = executedToolCalls.has('wiki_write_page');
+      reflectOnWikiOpportunities(
+        { modelRouter: this.modelRouter, toolCtx: this.buildToolCtx(sessionId) },
+        userMessage,
+        fullContent,
+        { skipIfCuratedInTurn: curatedInTurn },
+      ).catch((err) => {
+        logger.warn(`[LocalOrchestrator] Wiki reflection failed: ${err}`);
+      });
+    }
+
     // Flush brain experience stream for cross-session persistence
     await this.brain?.flush();
 
@@ -2393,6 +2410,19 @@ export class LocalOrchestrator {
       });
     }
 
+    // Ambient wiki curation (fire-and-forget, every turn)
+    if (fullContent) {
+      const curatedInTurn = executedToolCalls.has('wiki_write_page');
+      reflectOnWikiOpportunities(
+        { modelRouter: this.modelRouter, toolCtx: this.buildToolCtx(sessionId) },
+        userMessage,
+        fullContent,
+        { skipIfCuratedInTurn: curatedInTurn },
+      ).catch((err) => {
+        logger.warn(`[orchestrator] OpenRouter wiki reflection failed: ${err}`);
+      });
+    }
+
     // Goal checkpoint extraction (fire-and-forget, every exchange)
     if (fullContent) {
       const goalDeps: GoalCheckpointDeps = { db: this.db, workspaceId: this.workspaceId, modelRouter: this.modelRouter };
@@ -2969,6 +2999,19 @@ export class LocalOrchestrator {
     if (this.exchangeCount % 3 === 0 && fullContent) {
       extractOrchestratorMemory(this.memoryDeps, sessionId, userMessage, fullContent).catch((err) => {
         logger.error(`[LocalOrchestrator] Memory extraction failed: ${err}`);
+      });
+    }
+
+    // Ambient wiki curation (fire-and-forget, parity with Claude/OpenRouter paths)
+    if (fullContent) {
+      const curatedInTurn = executedToolCallsOllama.has('wiki_write_page');
+      reflectOnWikiOpportunities(
+        { modelRouter: this.modelRouter, toolCtx: this.buildToolCtx(sessionId) },
+        userMessage,
+        fullContent,
+        { skipIfCuratedInTurn: curatedInTurn },
+      ).catch((err) => {
+        logger.warn(`[LocalOrchestrator] Wiki reflection failed: ${err}`);
       });
     }
 
