@@ -414,7 +414,13 @@ export async function proposeFirstMonthPlan(
       purpose: 'planning',
       system,
       prompt: user,
-      max_tokens: 2048,
+      // Prefer sonnet for planning — gemini-flash on openrouter caps
+      // output at 2048 tokens which truncates 4-week structured JSON
+      // mid-response. Sonnet handles long grounded JSON synthesis
+      // cleanly and the plan is infrequent enough (once per new
+      // hire) that the cost is irrelevant.
+      prefer_model: 'anthropic/claude-sonnet-4.6',
+      max_tokens: 8192,
       temperature: 0.4,
     } as Record<string, unknown>,
   );
