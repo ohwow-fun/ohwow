@@ -1969,6 +1969,32 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'synthesize_skill_for_goal',
+    description: 'Autonomously synthesize a new deterministic TypeScript skill from a goal + target URL. Runs the real generator LLM (no canned fallback) against the strict template, probes the live surface via CDP, writes the file + inserts the skill row, and dry-run-tests the handler with a stub vision verdict. Always dry-run — no live side effects. Use this to teach ohwow a new read-only web skill on its own initiative.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        goal: {
+          type: 'string',
+          description: 'One-sentence description of what the skill should do. Gets copied into the generator prompt as the goal.',
+        },
+        target_url: {
+          type: 'string',
+          description: 'Absolute http(s) URL the generated tool will drive. The probe navigates here first.',
+        },
+        name_hint: {
+          type: 'string',
+          description: 'Optional human-readable naming hint. The generator LLM is still free to pick its own snake_case name.',
+        },
+        use_canned_llm: {
+          type: 'boolean',
+          description: 'Leave false for real-LLM generation. True is not supported by this tool — it has no canned fallback.',
+        },
+      },
+      required: ['goal', 'target_url'],
+    },
+  },
+  {
     name: 'synthesis_run_acceptance',
     description: 'Skills-as-code pipeline end-to-end acceptance run. Given a failed agent_workforce_tasks row id, probes the target URL via CDP, generates a deterministic TypeScript tool with the generator, writes + registers it through the runtime skill loader, runs the dry-run tester (stub vision verdict), and optionally publishes + deletes a real test post to prove the full flow. Opt-in live side effects via publish_live=true + delete_after_publish defaults to true. Deliberately NOT in any intent section — call by explicit name only.',
     input_schema: {
@@ -2992,6 +3018,10 @@ const ALWAYS_INCLUDED_TOOLS = new Set([
   // for it. Hoisted here because intent classification won't catch
   // "synthesis_run_acceptance" under any section.
   'synthesis_run_acceptance',
+  // Autonomous learning entry: orchestrator proposes a new skill
+  // from a goal + target URL. Always visible so the LLM can pick
+  // up a "learn this" prompt without intent routing quirks.
+  'synthesize_skill_for_goal',
 ]);
 
 /**

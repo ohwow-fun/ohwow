@@ -58,6 +58,7 @@ import { getDaemonInfo } from './daemon-info.js';
 import { resyncWorkspaceToCloudTool } from './resync.js';
 import { listWikiPages, readWikiPage, writeWikiPage, readWikiLog, readWikiIndex, lintWiki, readWikiPageHistory } from './wiki.js';
 import { runSynthesisAcceptance } from './synthesis-acceptance.js';
+import { synthesizeSkillForGoal } from './synthesize-for-goal.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
@@ -74,6 +75,13 @@ export const toolRegistry = new Map<string, ToolHandler>([
   // works on a real failed task. Deliberately not in any intent
   // section — callers must name it explicitly.
   ['synthesis_run_acceptance', (ctx, input) => runSynthesisAcceptance(ctx, input)],
+
+  // Autonomous learning: synthesize a new deterministic skill from
+  // a goal + target URL the orchestrator proposes on its own. Always
+  // dry-run. The generator runs against the real cheap-tier LLM so
+  // this tool doubles as the stress test for the model's ability to
+  // follow the strict output template on surfaces it has never seen.
+  ['synthesize_skill_for_goal', (ctx, input) => synthesizeSkillForGoal(ctx, input)],
 
   // Wiki — Karpathy-style markdown synthesis layer above raw KB chunks
   ['wiki_list_pages', (ctx, input) => listWikiPages(ctx, input)],
