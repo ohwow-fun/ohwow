@@ -4,6 +4,7 @@
  * Uses pdf-lib (pure JS, works in both cloud and local runtimes).
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import {
   PDFDocument,
@@ -13,6 +14,39 @@ import {
   PDFRadioGroup,
   PDFSignature,
 } from 'pdf-lib';
+
+export const PDF_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'pdf_inspect_fields',
+    description: 'Inspect an AcroForm PDF to list all fillable fields, their types, current values, and available options. Use this before filling a PDF form to understand its structure.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pdf_base64: { type: 'string', description: 'Base64-encoded PDF file to inspect.' },
+      },
+      required: ['pdf_base64'],
+    },
+  },
+  {
+    name: 'pdf_fill_form',
+    description: 'Fill out an AcroForm PDF by setting field values. Returns the filled PDF as base64. Use pdf_inspect_fields first to discover field names and types.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pdf_base64: { type: 'string', description: 'Base64-encoded PDF file to fill.' },
+        fields: {
+          type: 'object',
+          description: 'Map of field names to values. For text fields, provide a string. For checkboxes, provide "true" or "false". For dropdowns/radio groups, provide the option value.',
+        },
+        flatten: {
+          type: 'boolean',
+          description: 'If true, flatten the form after filling (fields become non-editable). Default: false.',
+        },
+      },
+      required: ['pdf_base64', 'fields'],
+    },
+  },
+];
 
 /**
  * Inspect an AcroForm PDF to list all fillable fields.

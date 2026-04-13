@@ -5,6 +5,9 @@
  */
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
+import { PDF_TOOL_DEFINITIONS } from './tools/pdf.js';
+import { CONNECTORS_TOOL_DEFINITIONS } from './tools/connectors.js';
+import { CLOUD_TOOL_DEFINITIONS } from './tools/cloud-data.js';
 
 export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   {
@@ -2080,132 +2083,9 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
-  // =========================================================================
-  // DATA SOURCE CONNECTOR TOOLS
-  // =========================================================================
-
-  {
-    name: 'list_connectors',
-    description: 'List all configured data source connectors and their sync status. Data source connectors automatically import documents from external systems (GitHub, Google Drive, etc.) into the knowledge base.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-    },
-  },
-  {
-    name: 'add_connector',
-    description: 'Add a new data source connector to import documents into the knowledge base. Supported types: github, local-files, google-drive, notion, slack, confluence, imap.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        type: { type: 'string', description: 'Connector type (e.g. "github", "local-files")' },
-        name: { type: 'string', description: 'Human-readable name for this connector' },
-        settings: { type: 'object', description: 'Connector-specific settings (e.g. { "repo": "owner/repo", "token": "..." })' },
-        sync_interval_minutes: { type: 'number', description: 'How often to sync (default: 30 minutes)' },
-      },
-      required: ['type', 'name'],
-    },
-  },
-  {
-    name: 'remove_connector',
-    description: 'Remove a data source connector by ID.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        connector_id: { type: 'string', description: 'ID of the connector to remove' },
-      },
-      required: ['connector_id'],
-    },
-  },
-  {
-    name: 'sync_connector',
-    description: 'Trigger an immediate sync for a data source connector, importing new or updated documents into the knowledge base.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        connector_id: { type: 'string', description: 'ID of the connector to sync' },
-      },
-      required: ['connector_id'],
-    },
-  },
-  {
-    name: 'test_connector',
-    description: 'Test connectivity for a data source connector to verify it can reach the external system.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        connector_id: { type: 'string', description: 'ID of the connector to test' },
-      },
-      required: ['connector_id'],
-    },
-  },
-
-  // =========================================================================
-  // PDF FORM TOOLS
-  // =========================================================================
-
-  {
-    name: 'pdf_inspect_fields',
-    description: 'Inspect an AcroForm PDF to list all fillable fields, their types, current values, and available options. Use this before filling a PDF form to understand its structure.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        pdf_base64: { type: 'string', description: 'Base64-encoded PDF file to inspect.' },
-      },
-      required: ['pdf_base64'],
-    },
-  },
-  {
-    name: 'pdf_fill_form',
-    description: 'Fill out an AcroForm PDF by setting field values. Returns the filled PDF as base64. Use pdf_inspect_fields first to discover field names and types.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        pdf_base64: { type: 'string', description: 'Base64-encoded PDF file to fill.' },
-        fields: {
-          type: 'object',
-          description: 'Map of field names to values. For text fields, provide a string. For checkboxes, provide "true" or "false". For dropdowns/radio groups, provide the option value.',
-        },
-        flatten: {
-          type: 'boolean',
-          description: 'If true, flatten the form after filling (fields become non-editable). Default: false.',
-        },
-      },
-      required: ['pdf_base64', 'fields'],
-    },
-  },
-
-  // Cloud data query tools (proxy to cloud DB via control plane)
-  {
-    name: 'cloud_list_contacts',
-    description: 'List contacts from the CLOUD CRM database (not local). Use this when you need the full customer/lead list from the web dashboard.',
-    input_schema: { type: 'object' as const, properties: { contact_type: { type: 'string', description: 'Filter: lead, customer, partner' }, search: { type: 'string', description: 'Search by name or email' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
-  },
-  {
-    name: 'cloud_list_schedules',
-    description: 'List agent schedules from the CLOUD database with cron expressions and last/next run times.',
-    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, enabled: { type: 'boolean', description: 'Filter by enabled status' } }, required: [] },
-  },
-  {
-    name: 'cloud_list_agents',
-    description: 'List all agents from the CLOUD database with full config, stats, and departments.',
-    input_schema: { type: 'object' as const, properties: {}, required: [] },
-  },
-  {
-    name: 'cloud_list_tasks',
-    description: 'List tasks from the CLOUD database with output, truth scores, and metadata.',
-    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, status: { type: 'string', description: 'Filter: pending, completed, failed, needs_approval' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
-  },
-  {
-    name: 'cloud_get_analytics',
-    description: 'Get workspace analytics from the CLOUD: total tasks, agents, contacts, credits, weekly stats.',
-    input_schema: { type: 'object' as const, properties: {}, required: [] },
-  },
-  {
-    name: 'cloud_list_members',
-    description: 'List workspace members from the CLOUD with roles and profile info.',
-    input_schema: { type: 'object' as const, properties: {}, required: [] },
-  },
+  ...CONNECTORS_TOOL_DEFINITIONS,
+  ...PDF_TOOL_DEFINITIONS,
+  ...CLOUD_TOOL_DEFINITIONS,
 ];
 
 // =========================================================================

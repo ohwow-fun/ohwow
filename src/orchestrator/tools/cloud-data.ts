@@ -4,6 +4,7 @@
  * which returns data from the cloud Supabase database.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext } from '../local-tool-types.js';
 
 interface ToolResult {
@@ -11,6 +12,39 @@ interface ToolResult {
   data?: unknown;
   error?: string;
 }
+
+export const CLOUD_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'cloud_list_contacts',
+    description: 'List contacts from the CLOUD CRM database (not local). Use this when you need the full customer/lead list from the web dashboard.',
+    input_schema: { type: 'object' as const, properties: { contact_type: { type: 'string', description: 'Filter: lead, customer, partner' }, search: { type: 'string', description: 'Search by name or email' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
+  },
+  {
+    name: 'cloud_list_schedules',
+    description: 'List agent schedules from the CLOUD database with cron expressions and last/next run times.',
+    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, enabled: { type: 'boolean', description: 'Filter by enabled status' } }, required: [] },
+  },
+  {
+    name: 'cloud_list_agents',
+    description: 'List all agents from the CLOUD database with full config, stats, and departments.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_tasks',
+    description: 'List tasks from the CLOUD database with output, truth scores, and metadata.',
+    input_schema: { type: 'object' as const, properties: { agent_id: { type: 'string', description: 'Filter by agent ID' }, status: { type: 'string', description: 'Filter: pending, completed, failed, needs_approval' }, limit: { type: 'number', description: 'Max results (default 50)' } }, required: [] },
+  },
+  {
+    name: 'cloud_get_analytics',
+    description: 'Get workspace analytics from the CLOUD: total tasks, agents, contacts, credits, weekly stats.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'cloud_list_members',
+    description: 'List workspace members from the CLOUD with roles and profile info.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+];
 
 async function queryCloud(
   ctx: LocalToolContext,
