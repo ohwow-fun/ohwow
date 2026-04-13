@@ -1969,6 +1969,44 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'synthesis_run_acceptance',
+    description: 'Skills-as-code pipeline end-to-end acceptance run. Given a failed agent_workforce_tasks row id, probes the target URL via CDP, generates a deterministic TypeScript tool with the generator, writes + registers it through the runtime skill loader, runs the dry-run tester (stub vision verdict), and optionally publishes + deletes a real test post to prove the full flow. Opt-in live side effects via publish_live=true + delete_after_publish defaults to true. Deliberately NOT in any intent section — call by explicit name only.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: {
+          type: 'string',
+          description: 'Row id in agent_workforce_tasks to rebuild the SynthesisCandidate from. Defaults to 580b8cc3e404e5beff83550db3d1cf77 (the launch-eve 408k-token tweet failure).',
+        },
+        target_url: {
+          type: 'string',
+          description: 'Absolute URL the generated tool will drive. Probe navigates here first. Defaults to https://x.com/compose/post.',
+        },
+        test_tweet_text: {
+          type: 'string',
+          description: 'Body text to type in the composer. Keep under 260 chars so there is room for a trailing unique marker used to clean up after publish.',
+        },
+        publish_live: {
+          type: 'boolean',
+          description: 'When true, invokes the synthesized skill with dry_run=false to actually publish a post. Defaults to false (dry-run only).',
+        },
+        delete_after_publish: {
+          type: 'boolean',
+          description: 'When publish_live is true, whether to delete the posted tweet via x_delete_tweet after a short settle. Defaults to true for safe acceptance runs that leave no visible footprint.',
+        },
+        use_canned_llm: {
+          type: 'boolean',
+          description: 'When true, bypass the real generator LLM and use a pre-baked canned response that mirrors the generator unit test fixture. Useful when the LLM is unavailable or producing unparseable output and you still need to exercise the runtime path.',
+        },
+        handle: {
+          type: 'string',
+          description: 'X handle (without @) used for the delete step. Defaults to ohwow_fun.',
+        },
+      },
+      required: ['test_tweet_text'],
+    },
+  },
+  {
     name: 'x_delete_tweet',
     description: 'Delete the user\'s most recent tweet matching a text marker. Used for cleanup after test posts. Opens the profile, finds an article whose text contains the marker, opens its menu, clicks Delete, and confirms. DEFAULTS TO DRY RUN.',
     input_schema: {
@@ -2949,6 +2987,11 @@ const ALWAYS_INCLUDED_TOOLS = new Set([
   // the LLM can pick them directly.
   'x_compose_tweet', 'x_compose_thread', 'x_compose_article',
   'x_send_dm', 'x_list_dms', 'x_delete_tweet',
+  // Skills-as-code acceptance runner — callable only by explicit
+  // name, but must be visible in the prompt whenever a caller asks
+  // for it. Hoisted here because intent classification won't catch
+  // "synthesis_run_acceptance" under any section.
+  'synthesis_run_acceptance',
 ]);
 
 /**

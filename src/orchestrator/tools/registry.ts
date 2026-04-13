@@ -57,6 +57,7 @@ import { llmTool } from './llm.js';
 import { getDaemonInfo } from './daemon-info.js';
 import { resyncWorkspaceToCloudTool } from './resync.js';
 import { listWikiPages, readWikiPage, writeWikiPage, readWikiLog, readWikiIndex, lintWiki, readWikiPageHistory } from './wiki.js';
+import { runSynthesisAcceptance } from './synthesis-acceptance.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
@@ -67,6 +68,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Maintenance — re-fire every synced row through the cloud sync path
   ['resync_workspace_to_cloud', (ctx, input) => resyncWorkspaceToCloudTool(ctx, input)],
+
+  // Skills-as-code acceptance: end-to-end probe → generate → test →
+  // optionally publish → delete, used to prove the synthesis pipeline
+  // works on a real failed task. Deliberately not in any intent
+  // section — callers must name it explicitly.
+  ['synthesis_run_acceptance', (ctx, input) => runSynthesisAcceptance(ctx, input)],
 
   // Wiki — Karpathy-style markdown synthesis layer above raw KB chunks
   ['wiki_list_pages', (ctx, input) => listWikiPages(ctx, input)],

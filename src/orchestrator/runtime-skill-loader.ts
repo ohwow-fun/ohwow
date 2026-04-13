@@ -32,9 +32,10 @@
  */
 
 import { build as esbuildBuild } from 'esbuild';
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, type FSWatcher, existsSync, symlinkSync } from 'node:fs';
 import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
-import { basename, extname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
@@ -44,6 +45,53 @@ import {
   type RuntimeToolDefinition,
 } from './runtime-tool-registry.js';
 import type { ToolHandler } from './local-tool-types.js';
+
+/**
+ * Ensure a `node_modules` symlink exists inside the compiled-skills
+ * directory so Node's ESM resolver can find `playwright-core` (and
+ * anything else the ohwow runtime bundles) from the compiled `.mjs`
+ * files. Without this, `import 'playwright-core'` inside a skill
+ * resolves relative to the .compiled/ dir, walks upward looking for
+ * `node_modules`, and fails with ERR_MODULE_NOT_FOUND because the
+ * workspace data dir never contained one.
+ *
+ * We find the ohwow runtime's node_modules by asking createRequire
+ * to resolve a known dep (`playwright-core`) from the loader module
+ * itself, then walking the resolved path upward to the nearest
+ * `node_modules` ancestor. That directory is the target of the
+ * symlink. No hardcoded paths — works from both `src/` during dev
+ * and `dist/` in a published install.
+ */
+function ensureNodeModulesSymlink(compiledDir: string): void {
+  const linkPath = join(compiledDir, 'node_modules');
+  if (existsSync(linkPath)) return;
+  try {
+    const require = createRequire(import.meta.url);
+    const resolved = require.resolve('playwright-core');
+    // Walk up until we hit a path segment named 'node_modules'.
+    let cursor = dirname(resolved);
+    while (cursor !== dirname(cursor)) {
+      if (basename(cursor) === 'node_modules') {
+        symlinkSync(cursor, linkPath, 'dir');
+        logger.info(
+          { linkPath, target: cursor },
+          '[runtime-skill-loader] created node_modules symlink for skill imports',
+        );
+        return;
+      }
+      cursor = dirname(cursor);
+    }
+    logger.warn(
+      { resolved, compiledDir },
+      '[runtime-skill-loader] could not find node_modules ancestor of playwright-core — skill imports may fail',
+    );
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, compiledDir },
+      '[runtime-skill-loader] failed to create node_modules symlink',
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -228,6 +276,7 @@ export class RuntimeSkillLoader {
 
     await mkdir(this.opts.skillsDir, { recursive: true });
     await mkdir(this.opts.compiledDir, { recursive: true });
+    ensureNodeModulesSymlink(this.opts.compiledDir);
 
     // Initial scan: load every .ts file that already exists.
     try {
