@@ -58,8 +58,15 @@ export interface BuildLocalSystemPromptArgs {
   platform?: ChannelType;
   /** Learned principles from self-improvement cycle (top 5 by utility) */
   learnedPrinciples?: { id: string; rule: string; category: string }[];
-  /** Learned skills/procedures from self-improvement cycle */
-  learnedSkills?: { id: string; name: string; description: string; definition?: string; skill_type?: string; success_rate?: number | null; times_used?: number }[];
+  /**
+   * Deprecated. Skills are no longer surfaced via the system prompt.
+   * Code skills reach the LLM through the runtime tool registry as
+   * regular tools the model picks by description. Preserved as a
+   * field so callers that still set `learnedSkills: []` continue to
+   * compile; the rendering block has been removed. Safe to drop the
+   * field entirely in a follow-up.
+   */
+  learnedSkills?: never[];
   /** Auto-discovered workflows from process mining */
   knownWorkflows?: { id: string; name: string; description: string | null; steps: string; frequency: number; status: string }[];
   /** Git context for the working directory */
@@ -631,29 +638,14 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     ? `\n## Learned Principles\nStrategic guidelines distilled from past experience. Follow these when relevant:\n${args.learnedPrinciples.map(p => `- [${p.category}] ${p.rule}`).join('\n')}`
     : '';
 
-  const skillsSection = args.learnedSkills && args.learnedSkills.length > 0
-    ? `\n## Learned Procedures\nKnown procedures from past successes. When delegating a task to an agent via run_agent, mention the relevant procedure so the agent follows it.\n\n${args.learnedSkills.map(s => {
-        const successLabel = s.success_rate != null ? `, ${Math.round(s.success_rate * 100)}% success` : '';
-        const usedLabel = s.times_used ? `, used ${s.times_used}x` : '';
-        const header = `- **${s.name}** (${s.skill_type || 'general'}${successLabel}${usedLabel}): ${s.description || ''}`;
-
-        // For procedure-type skills, render the tool sequence as numbered steps
-        if (s.skill_type === 'procedure' && s.definition) {
-          try {
-            const def = typeof s.definition === 'string' ? JSON.parse(s.definition) : s.definition;
-            if (def.tool_sequence && Array.isArray(def.tool_sequence)) {
-              const steps = def.tool_sequence.slice(0, 8).map((step: string | { tool: string; args?: Record<string, unknown> }, i: number) => {
-                if (typeof step === 'string') return `  ${i + 1}. ${step}`;
-                const argsStr = step.args ? `(${Object.entries(step.args).map(([, v]) => JSON.stringify(v)).join(', ')})` : '';
-                return `  ${i + 1}. ${step.tool}${argsStr}`;
-              }).join('\n');
-              return `${header}\n${steps}`;
-            }
-          } catch { /* malformed definition */ }
-        }
-        return header;
-      }).join('\n')}`
-    : '';
+  // "Learned Procedures" section removed. Skills reach the LLM via
+  // the runtime tool registry, surfaced through getTools() as regular
+  // entries in the tool list the model picks from. Rendering them
+  // twice (once as tools, once as a prompt section) was redundant
+  // and their discovery via keyword match on the task title was the
+  // source of the launch-eve regression. See
+  // /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
+  const skillsSection = '';
 
   // Auto-discovered workflows from process mining
   const workflowsSection = args.knownWorkflows && args.knownWorkflows.length > 0
