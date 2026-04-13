@@ -565,23 +565,89 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
     };
   }
 
-  const clicked = await clickByText(page, 'Publish');
-  if (!clicked) {
+  // X Articles uses a two-step publish:
+  //   1. Click the header "Publish" button — opens a "Publish Article"
+  //      confirmation dialog with audience / reply settings.
+  //   2. Click the second "Publish" button inside that dialog — the
+  //      real publish trigger.
+  // The dialog's button has no data-testid; we find it by aria-label
+  // scoped inside div[role="dialog"] so we don't re-click the header
+  // Publish we just clicked.
+  const headerClicked = await clickByText(page, 'Publish');
+  if (!headerClicked) {
     return {
       success: false,
-      message: 'Could not click Publish button (button text match failed).',
+      message: 'Could not click header Publish button.',
       screenshotBase64,
       currentUrl: draftUrl,
     };
   }
-  await wait(POST_SETTLE_MS);
-  logger.info(`[x-posting] Article published: ${title.slice(0, 80)}`);
+
+  // Wait for the confirmation dialog to mount.
+  try {
+    await page.waitForSelector('div[role="dialog"]', { state: 'attached', timeout: 8000 });
+  } catch {
+    return {
+      success: false,
+      message: 'Publish confirmation dialog did not appear within 8s.',
+      screenshotBase64: await captureScreenshot(page),
+      currentUrl: page.url(),
+    };
+  }
+  await wait(400);
+
+  // Click the Publish button inside the dialog. The button has
+  // aria-label="Publish" and sits at div[role="dialog"] > ... > button.
+  const dialogPublished = await page.evaluate(`(() => {
+    const dialog = document.querySelector('div[role="dialog"]');
+    if (!dialog) return false;
+    const btns = Array.from(dialog.querySelectorAll('button, [role="button"]'));
+    const publish = btns.find((b) => {
+      const label = b.getAttribute('aria-label') || '';
+      const text = (b.textContent || '').trim();
+      return label === 'Publish' || text === 'Publish';
+    });
+    if (!(publish instanceof HTMLElement)) return false;
+    publish.setAttribute('data-x-click-target', '1');
+    return true;
+  })()`);
+  if (!dialogPublished) {
+    return {
+      success: false,
+      message: 'Publish button not found inside confirmation dialog.',
+      screenshotBase64: await captureScreenshot(page),
+      currentUrl: page.url(),
+    };
+  }
+  try {
+    await page.click('[data-x-click-target="1"]', { timeout: 5000 });
+  } catch (err) {
+    return {
+      success: false,
+      message: `Dialog Publish click failed: ${err instanceof Error ? err.message : String(err)}`,
+      screenshotBase64: await captureScreenshot(page),
+    };
+  }
+
+  // Wait for X to redirect to the published article (/<handle>/status/<id>).
+  // The redirect is the ground-truth signal that publish succeeded —
+  // otherwise we'd falsely report success on a stalled confirmation.
+  const redirectDeadline = Date.now() + POST_SETTLE_MS + 3000;
+  while (Date.now() < redirectDeadline) {
+    await wait(400);
+    if (/\/status\/\d+/.test(page.url())) break;
+  }
+  const finalUrl = page.url();
+  const publishedOk = /\/status\/\d+/.test(finalUrl);
+  logger.info(`[x-posting] Article publish ${publishedOk ? 'succeeded' : 'uncertain'}: ${title.slice(0, 80)}`);
   return {
-    success: true,
-    message: `Article published: "${title.slice(0, 80)}".`,
+    success: publishedOk,
+    message: publishedOk
+      ? `Article published: "${title.slice(0, 80)}". Live at ${finalUrl}`
+      : `Article publish click sent but no redirect to /status/ detected within budget. Check manually: ${finalUrl}`,
     screenshotBase64: await captureScreenshot(page) || screenshotBase64,
-    currentUrl: page.url(),
-    landedAt: page.url(),
+    currentUrl: finalUrl,
+    landedAt: finalUrl,
   };
 }
 

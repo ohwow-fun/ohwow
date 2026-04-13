@@ -637,6 +637,67 @@ Constraints:
       }
     }
 
+    // Content calendar sync: every successful, non-dry-run X write tool
+    // lands a row in agent_workforce_content_calendar so the dashboard's
+    // content calendar shows what the agents have actually posted.
+    // Fire-and-forget — sync failures shouldn't mask a successful post.
+    if (opResult.success && !dryRun && request.name !== 'x_list_dms' && request.name !== 'x_delete_tweet') {
+      try {
+        const { syncResource } = await import('../control-plane/sync-resources.js');
+        const nowIso = new Date().toISOString();
+        const calId = crypto.randomUUID();
+
+        let calendarPayload: Record<string, unknown> | null = null;
+        if (request.name === 'x_compose_tweet') {
+          calendarPayload = {
+            id: calId,
+            platform: 'twitter',
+            content: String(toolInput.text || ''),
+            content_type: 'social_post',
+            status: 'published',
+            published_at: nowIso,
+            published_url: opResult.currentUrl || null,
+            metadata: { posted_via: 'x_compose_tweet' },
+          };
+        } else if (request.name === 'x_compose_thread') {
+          const tweets = Array.isArray(toolInput.tweets) ? (toolInput.tweets as string[]) : [];
+          calendarPayload = {
+            id: calId,
+            platform: 'twitter',
+            content: tweets.join('\n\n'),
+            content_type: 'social_post',
+            status: 'published',
+            published_at: nowIso,
+            published_url: opResult.currentUrl || null,
+            metadata: { posted_via: 'x_compose_thread', tweet_count: tweets.length },
+          };
+        } else if (request.name === 'x_compose_article') {
+          calendarPayload = {
+            id: calId,
+            platform: 'twitter',
+            title: String(toolInput.title || ''),
+            content: String(toolInput.body || ''),
+            content_type: 'blog_article',
+            status: 'published',
+            published_at: nowIso,
+            published_url: opResult.currentUrl || opResult.landedAt || null,
+            metadata: { posted_via: 'x_compose_article' },
+          };
+        } else if (request.name === 'x_send_dm') {
+          // DMs are private, not "content" in the calendar sense. Skip.
+          calendarPayload = null;
+        }
+
+        if (calendarPayload) {
+          await syncResource(ctx.toolCtx, 'content_calendar', 'upsert', calendarPayload as Record<string, unknown> & { id: string });
+          dataEnvelope.calendarSynced = true;
+          dataEnvelope.calendarId = calId;
+        }
+      } catch (err) {
+        logger.warn({ err, tool: request.name }, '[x-posting] content_calendar sync failed');
+      }
+    }
+
     const result: ToolResult = opResult.success
       ? { success: true, data: dataEnvelope }
       : { success: false, error: opResult.message, data: dataEnvelope };
