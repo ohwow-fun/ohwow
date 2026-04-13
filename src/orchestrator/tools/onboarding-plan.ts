@@ -42,6 +42,15 @@ interface PlanTask {
   description: string;
   owner: string; // "member", "guide", or a named agent
   success_criteria: string;
+  /**
+   * Which ohwow capabilities the member or guide will use to execute this
+   * task. Every task MUST name at least one. This is how the plan teaches
+   * a new hire what ohwow does — by having them do their actual first-
+   * month work through the product, not around it.
+   */
+  ohwow_tools?: string[];
+  /** One-sentence rationale: "why this task uses ohwow vs. generic work" */
+  ohwow_leverage?: string;
 }
 
 interface PlanWeek {
@@ -193,25 +202,91 @@ function buildSynthesisPrompt(args: {
 
   const system = `You are synthesizing a 4-week onboarding plan for a new human team member at OHWOW. You are the member's Chief of Staff agent and the plan will be shown to them directly in the chat.
 
-Rules for the plan:
+## Core philosophy — teach them ohwow BY using ohwow
 
-1. It must be a 4-week structure (week 1 through week 4). Week 1 is "land + observe", week 4 should include a concrete small experiment or ownership moment the member can present.
-2. Each week has: theme (2-5 words), 2-4 concrete tasks, each task with a title, a short description (1-2 sentences), an owner ("member" for things only the human can do, "guide" for agent-assisted work, or a named existing agent / teammate), and a success criterion the member and guide can both see.
-3. EVERY task must be grounded in something specific the member told us about themselves during intake. Do not invent expertise, tools, or ambitions they didn't mention.
-4. Match the member's stated learning style, energy patterns, and communication preferences when proposing cadence, check-ins, and task size.
-5. Lean into their ambition — this is a ramp, not a test. Make them feel the plan reflects what they actually want to grow into.
-6. Keep task descriptions action-oriented, not corporate. Write the way a warm founder would explain the plan to a new hire in person.
+OHWOW is not something the new hire learns ABOUT in week 1 and uses in week 4. The whole point of their first month is that every piece of work happens *through* ohwow. If a task could equally well be done in a Google Doc on a personal laptop, you have failed. Rewrite it so the same outcome is reached by driving one or more ohwow tools. The member should finish week 1 and already feel like a power user because they've been *using* the product to do their actual job, not reading docs about it.
 
-Return ONLY a JSON object with this exact shape, no prose before or after:
+Every single task in the plan MUST name at least one ohwow capability it uses, via the ohwow_tools field on the task.
+
+## The ohwow capability cheat sheet (use these liberally)
+
+**Research + content intake**
+- \`deep_research(question, depth)\` — multi-step web research with citations, saves retrievable report
+- \`scrape_url(url)\` — pull any webpage with readability mode
+- \`scrape_search(query)\` — SERP search
+- \`read_rss_feed(url)\`, \`youtube_transcript(url)\`, \`github_search(query)\` — targeted intel
+
+**Knowledge base (persistent memory)**
+- \`upload_knowledge(path_or_text, title)\` — add markdown/notes to the KB, gets chunked + embedded
+- \`search_knowledge(query)\` — semantic + BM25 hybrid search over everything the team has uploaded
+- \`get_knowledge_document(query)\` — fetch a specific doc by semantic match
+
+**CRM + contacts**
+- \`create_contact(name, email, company, tags)\` — add a lead / prospect / partner
+- \`list_contacts(contact_type, status)\`, \`search_contacts(query)\`, \`update_contact\`, \`log_contact_event\`
+- \`get_contact_pipeline\` — the current sales funnel view
+
+**Agents + delegation**
+- \`list_agents\` — see the current roster of AI agents in the workspace
+- \`run_agent(agent_id, prompt)\` — delegate a specific task to an existing agent (e.g. a copywriter, researcher)
+- \`spawn_agents(preset_ids)\` — instantiate new agents from presets (e.g. "enterprise SDR", "content drafter")
+- \`get_agent_suggestions\` — ohwow recommends which agents to spin up for a given goal
+
+**LLM organ (direct model routing)**
+- \`llm(purpose, prompt)\` — direct Shape C call; purpose picks the right model (generation, critique, reasoning, planning)
+
+**Workspace intelligence**
+- \`get_workspace_stats\`, \`get_activity_feed\`, \`get_business_pulse\`, \`get_daily_reps_status\`
+- \`assess_operations\` — gap analysis against where the business should be at its growth stage
+- \`get_operational_pillars\` — setup pillars like lead gen, content pipeline, outbound outreach
+
+**Automation**
+- \`discover_capabilities\`, \`propose_automation\`, \`create_automation\` — build repeatable workflows
+- \`create_workflow_trigger\` — schedule or event-trigger a workflow
+- \`get_transition_status\` — track which tasks are moving toward full automation
+
+**Tasks + goals**
+- \`list_tasks\`, \`list_goals\`, \`create_goal\`, \`list_projects\`
+
+**Filesystem + bash (local-first work)**
+- \`local_write_file\`, \`local_read_file\`, \`local_edit_file\`, \`local_search_content\`, \`run_bash\`
+
+**Team member profile memory (about the member themselves)**
+- \`get_person_model\`, \`update_person_model\`, \`list_team_members\`, \`update_team_member\`
+
+## Rules for the plan
+
+1. 4-week structure, week 1 through week 4. Week 1 is "land + observe + first actual use of ohwow". Week 4 includes a concrete experiment or ownership moment the member can present.
+2. Each week has a theme (2-5 words) and 2-4 tasks.
+3. Every task fields:
+   - title
+   - description (1-2 sentences, action-oriented, names the specific ohwow capabilities involved)
+   - owner ("member" for things only the human can do, "guide" for agent-assisted, or a specific named existing agent)
+   - success_criteria (concrete, observable)
+   - ohwow_tools: array of 1-3 ohwow capability names from the cheat sheet — REQUIRED, never empty
+   - ohwow_leverage: one-sentence explanation of why using these ohwow tools is better than doing it manually
+4. EVERY task must be grounded in something the member told us about themselves AND leverage at least one ohwow capability. If you can't see how an ohwow tool fits a task, cut or rewrite the task.
+5. Week 1 should include at least one task that has the MEMBER personally run an ohwow tool through the chat so they experience the product immediately. Examples: scrape_url on a competitor's site, deep_research on their own industry, search_knowledge on an existing team doc.
+6. Lean into their ambition and learning style. The plan is a ramp, not a test.
+7. Keep task descriptions short and warm. No corporate language. No em dashes.
+
+## Output shape (return ONLY this JSON, no prose before or after)
 
 {
-  "rationale": "2-3 sentences explaining why this shape fits this specific member, citing 2-3 things they literally said",
+  "rationale": "2-3 sentences explaining why this shape fits this specific member, citing 2-3 things they literally said AND how ohwow's capabilities match their ambition",
   "weeks": [
     {
       "week": 1,
       "theme": "...",
       "tasks": [
-        { "title": "...", "description": "...", "owner": "...", "success_criteria": "..." }
+        {
+          "title": "...",
+          "description": "...",
+          "owner": "member|guide|<agent name>",
+          "success_criteria": "...",
+          "ohwow_tools": ["tool_name_1", "tool_name_2"],
+          "ohwow_leverage": "one sentence"
+        }
       ]
     }
     // weeks 2-4 same shape
@@ -272,14 +347,22 @@ function renderPlanMarkdown(memberName: string, plan: ParsedPlan): string {
       const taskLines = w.tasks
         .map((t) => {
           const owner = t.owner ? ` _(${t.owner})_` : '';
-          return `- **${t.title}**${owner} — ${t.description}\n  _Success:_ ${t.success_criteria}`;
+          // Show the ohwow capabilities inline so the member sees which
+          // product surface each task uses. This is the "teach ohwow by
+          // using ohwow" principle made visible in the chat.
+          const toolHint =
+            t.ohwow_tools && t.ohwow_tools.length > 0
+              ? `\n  _via ohwow:_ \`${t.ohwow_tools.join('`, `')}\``
+              : '';
+          const leverageHint = t.ohwow_leverage ? `\n  _why:_ ${t.ohwow_leverage}` : '';
+          return `- **${t.title}**${owner}\n  ${t.description}${toolHint}${leverageHint}\n  _Success:_ ${t.success_criteria}`;
         })
         .join('\n');
       return `### Week ${w.week}: ${w.theme}\n${taskLines}`;
     })
     .join('\n\n');
 
-  return `${firstName}, here's what I think your first month at OHWOW should look like. This is a draft, grounded in what you've told me. Push back on anything.
+  return `${firstName}, here's what I think your first month at OHWOW should look like. Every task uses real ohwow capabilities, so you'll be learning the product by using it to do your actual job. Push back on anything.
 
 _${plan.rationale}_
 
@@ -433,7 +516,7 @@ interface PersistedPlanRow {
   status: string;
   rationale: string | null;
   closing_question: string | null;
-  weeks: string;
+  weeks: unknown;
   model_used: string | null;
   provider: string | null;
   accepted_at: string | null;
@@ -455,12 +538,23 @@ async function loadPlanRow(
   return (data as PersistedPlanRow | null) ?? null;
 }
 
-function parseWeeks(rawWeeks: string): Array<PlanWeek & { tasks: Array<PlanTask & { materialized_task_id?: string | null }> }> {
-  try {
-    const parsed = JSON.parse(rawWeeks);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {
-    // fall through
+function parseWeeks(
+  rawWeeks: unknown,
+): Array<PlanWeek & { tasks: Array<PlanTask & { materialized_task_id?: string | null }> }> {
+  // The database adapter may return the weeks column as either a raw string
+  // (SQLite JSON column) or as an already-parsed array (some adapter paths
+  // auto-deserialize JSON). Accept both — the caller doesn't care which
+  // layer did the parsing, only that the result is a usable array.
+  if (Array.isArray(rawWeeks)) {
+    return rawWeeks as Array<PlanWeek & { tasks: Array<PlanTask & { materialized_task_id?: string | null }> }>;
+  }
+  if (typeof rawWeeks === 'string' && rawWeeks.length > 0) {
+    try {
+      const parsed = JSON.parse(rawWeeks);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // fall through
+    }
   }
   return [];
 }

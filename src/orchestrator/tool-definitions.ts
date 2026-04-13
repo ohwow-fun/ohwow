@@ -2132,7 +2132,19 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
   },
   {
     name: 'draft_cloud_invite',
-    description: 'Draft (do NOT send yet) a cloud dashboard invite email for a team member. Returns a preview email body the founder can review before calling send_cloud_invite. During launch week the actual send step is manual.',
+    description: 'Draft (do NOT send yet) a cloud dashboard invite email for a team member. Returns a preview email body the founder can review before calling send_cloud_invite. Use this when the founder wants to review before sending.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        role: { type: 'string', description: 'Cloud role: admin, member, viewer. Default: member.' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'send_cloud_invite',
+    description: 'Actually send a cloud dashboard invite to a team member via email. Creates a workspace_invites row on the cloud, sends the invite email, and stores the token on the local team_members row so we can track acceptance. The member will receive a real email with a 7-day invite link. Use this when the founder says something like "send the invite", "invite them", or "send mario the link" — it replaces the draft-only flow.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -2682,7 +2694,7 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // Team management — chief-of-staff pattern. P1 so onboarding prompts always
   // load them regardless of model size or context budget.
   create_team_member: 1, list_team_members: 1, update_team_member: 1,
-  assign_guide_agent: 1, draft_cloud_invite: 1, list_member_tasks: 1,
+  assign_guide_agent: 1, draft_cloud_invite: 1, send_cloud_invite: 1, list_member_tasks: 1,
   start_person_ingestion: 1, update_person_model: 1, get_person_model: 1, list_person_models: 1,
   // Conversation persona — also P1 so the orchestrator can always reach
   // activate_guide_persona during onboarding chats, which is how an

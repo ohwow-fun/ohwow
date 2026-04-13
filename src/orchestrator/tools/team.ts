@@ -374,6 +374,95 @@ export async function assignGuideAgent(
 // draft_cloud_invite — stores a pending invite without actually sending yet
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// send_cloud_invite — actually POST the invite to the cloud
+// ---------------------------------------------------------------------------
+
+export async function sendCloudInvite(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const teamMemberId = input.team_member_id as string | undefined;
+  if (!teamMemberId) return { success: false, error: 'team_member_id is required' };
+  if (!ctx.controlPlane) {
+    return {
+      success: false,
+      error: 'No control plane connection. The local daemon is not connected to the cloud.',
+    };
+  }
+
+  const member = await loadTeamMember(ctx, teamMemberId);
+  if (!member) return { success: false, error: 'Team member not found in this workspace' };
+  if (!member.email) {
+    return {
+      success: false,
+      error: 'Team member has no email on file. Update the member first with update_team_member.',
+    };
+  }
+
+  const role = (input.role as string | undefined) || 'member';
+  if (!['admin', 'member', 'viewer'].includes(role)) {
+    return { success: false, error: 'role must be one of: admin, member, viewer' };
+  }
+
+  const result = await ctx.controlPlane.proxyCloudPost('/api/local-runtime/invite-team-member', {
+    email: member.email,
+    role,
+    memberName: member.name,
+  });
+
+  if (!result.ok) {
+    return {
+      success: false,
+      error: `Cloud invite failed: ${result.error ?? 'unknown error'}. The local record is unchanged.`,
+    };
+  }
+
+  const cloudData = (result.data as { invite?: { token?: string }; inviteAcceptUrl?: string } | undefined) ?? {};
+  const inviteToken = cloudData.invite?.token ?? null;
+  const acceptUrl = cloudData.inviteAcceptUrl ?? null;
+
+  await ctx.db
+    .from('agent_workforce_team_members')
+    .update({
+      cloud_invite_status: 'sent',
+      cloud_invite_token: inviteToken,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', teamMemberId)
+    .eq('workspace_id', ctx.workspaceId);
+
+  try {
+    await ctx.db.rpc('create_agent_activity', {
+      p_workspace_id: ctx.workspaceId,
+      p_activity_type: 'team_member_invited',
+      p_title: `Invited ${member.name} to the workspace`,
+      p_description: `Role: ${role}. Invite email sent to ${member.email}.`,
+    });
+  } catch (err) {
+    logger.debug({ err }, '[team] activity log failed (non-fatal)');
+  }
+
+  return {
+    success: true,
+    data: {
+      message: `Invite sent to ${member.email}. They'll get an email with a link to join the workspace as ${role}.`,
+      teamMemberId,
+      email: member.email,
+      role,
+      inviteToken,
+      acceptUrl,
+      expiresInDays: 7,
+      nextStep:
+        'Once they accept and log in, their chat session on the cloud dashboard will auto-scope to their assigned guide agent. You can mention this to the founder so they know what to expect.',
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// draft_cloud_invite — preview-only, no actual send
+// ---------------------------------------------------------------------------
+
 export async function draftCloudInvite(
   ctx: LocalToolContext,
   input: Record<string, unknown>,

@@ -45,7 +45,7 @@ import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompleti
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
-import { createTeamMember, listTeamMembers, updateTeamMember, assignGuideAgent, draftCloudInvite, listMemberTasks } from './team.js';
+import { createTeamMember, listTeamMembers, updateTeamMember, assignGuideAgent, draftCloudInvite, sendCloudInvite, listMemberTasks } from './team.js';
 import { activateGuidePersona, activatePersona, deactivatePersona, getActivePersona } from './persona.js';
 import { proposeFirstMonthPlan, acceptOnboardingPlan, getOnboardingPlan, listOnboardingPlans } from './onboarding-plan.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
@@ -284,6 +284,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['update_team_member', (ctx, input) => updateTeamMember(ctx, input)],
   ['assign_guide_agent', (ctx, input) => assignGuideAgent(ctx, input)],
   ['draft_cloud_invite', (ctx, input) => draftCloudInvite(ctx, input)],
+  ['send_cloud_invite', (ctx, input) => sendCloudInvite(ctx, input)],
   ['list_member_tasks', (ctx, input) => listMemberTasks(ctx, input)],
 
   // Conversation persona — install an agent as the driver of this chat
