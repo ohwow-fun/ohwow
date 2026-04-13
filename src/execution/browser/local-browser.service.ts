@@ -5,6 +5,9 @@
  * agent_task) but runs on the user's machine with their residential IP.
  */
 
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type {
   BrowserAction,
   BrowserActionResult,
@@ -44,8 +47,94 @@ export interface LocalBrowserServiceOptions {
   modelName?: string;
   /** API key for the model provider. */
   modelApiKey?: string;
+  /**
+   * Optional custom base URL for the model provider. Used to route the
+   * OpenAI-compatible provider at OpenRouter when that is the only key
+   * the user has configured. When set, passed through to
+   * `modelClientOptions.baseURL` on Stagehand init.
+   */
+  modelBaseURL?: string;
   /** CDP WebSocket URL to connect to an existing browser (e.g. real Chrome). When set, Stagehand connects via CDP instead of launching Chromium. */
   cdpUrl?: string;
+}
+
+/**
+ * Synchronously read a minimal slice of `~/.ohwow/config.json` so the
+ * Stagehand default-model resolver can see the user's runtime config
+ * without forcing every caller to plumb credentials in by hand. The
+ * full `loadConfig()` in `../../config.js` is async and layers
+ * workspace overrides — for the browser default-resolver we just need
+ * the top-level `anthropicApiKey` / `openRouterApiKey` / `openaiApiKey`
+ * fields. Returns `{}` on any error (missing file, parse failure).
+ *
+ * This mirrors how `config.ts` resolves file config: same path, same
+ * field names. It runs exactly once per LocalBrowserService instance.
+ */
+interface StagehandFileConfigSlice {
+  anthropicApiKey?: string;
+  openRouterApiKey?: string;
+  openaiApiKey?: string;
+  googleApiKey?: string;
+}
+function readRuntimeConfigSlice(): StagehandFileConfigSlice {
+  try {
+    const configPath = join(homedir(), '.ohwow', 'config.json');
+    const raw = readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const pick = (k: string): string | undefined => {
+      const v = parsed[k];
+      return typeof v === 'string' && v.length > 0 ? v : undefined;
+    };
+    return {
+      anthropicApiKey: pick('anthropicApiKey'),
+      openRouterApiKey: pick('openRouterApiKey'),
+      openaiApiKey: pick('openaiApiKey'),
+      googleApiKey: pick('googleApiKey'),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolve a Stagehand-compatible model + apiKey + baseURL from the
+ * credentials the user actually has. Stagehand v3's Vercel aiSDK
+ * integration only accepts specific provider names (openai, anthropic,
+ * google, etc.) — it does NOT accept 'openrouter'. When the only key
+ * we have is an OpenRouter key, we route through the OpenAI provider
+ * with `baseURL: https://openrouter.ai/api/v1`, which is OpenAI
+ * wire-compatible and unblocks AI-driven browser tools.
+ *
+ * Exported for unit testing and for the runtime orchestrator which
+ * can reuse the same resolution when constructing LocalBrowserService.
+ */
+export function resolveStagehandCredentials(
+  env: NodeJS.ProcessEnv,
+  fileConfig: StagehandFileConfigSlice,
+): { model: string; apiKey: string; baseURL?: string } {
+  const anthropicKey = env.ANTHROPIC_API_KEY || fileConfig.anthropicApiKey;
+  if (anthropicKey) {
+    return { model: 'anthropic/claude-sonnet-4-5', apiKey: anthropicKey };
+  }
+  const openaiKey = env.OPENAI_API_KEY || fileConfig.openaiApiKey;
+  if (openaiKey) {
+    return { model: 'openai/gpt-4o-mini', apiKey: openaiKey };
+  }
+  const googleKey = env.GOOGLE_API_KEY || env.GOOGLE_GENERATIVE_AI_API_KEY || fileConfig.googleApiKey;
+  if (googleKey) {
+    return { model: 'google/gemini-2.0-flash-exp', apiKey: googleKey };
+  }
+  const openRouterKey = env.OPENROUTER_API_KEY || fileConfig.openRouterApiKey;
+  if (openRouterKey) {
+    // Route the OpenAI provider at OpenRouter's OpenAI-compatible API.
+    // Model id format is OpenRouter-style ("vendor/model").
+    return {
+      model: 'openai/gpt-4o-mini',
+      apiKey: openRouterKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+    };
+  }
+  return { model: 'openai/gpt-4o-mini', apiKey: '' };
 }
 
 // ============================================================================
@@ -59,42 +148,25 @@ export class LocalBrowserService {
   private headless: boolean;
   private modelName: string;
   private modelApiKey: string;
+  private modelBaseURL: string | undefined;
   private cdpUrl: string | undefined;
   private initPromise: Promise<StagehandPage> | null = null;
 
   constructor(opts?: LocalBrowserServiceOptions) {
     this.headless = opts?.headless !== false; // default headless
-    // Order: explicit opts → Anthropic → OpenAI → OpenRouter.
-    // Stagehand AI tools (act, extract, observe, agent) need a real
-    // LLM backend — they call a model under the hood. If no key is
-    // available, AI tools will fail at runtime but Playwright-direct
-    // tools (navigate, click, type, snapshot, screenshot) still work.
-    const resolved = this.resolveDefaultModel();
+    // Resolution order is: explicit opts → process.env → runtime config
+    // file at ~/.ohwow/config.json. Reading the config file slice is
+    // synchronous and cheap (one JSON parse at construction time), and
+    // lets the daemon pick up credentials the user has in their config
+    // without also exporting them to process.env. Before this change,
+    // LocalBrowserService only looked at process.env and initialized
+    // Stagehand with apiKey: '' on every daemon boot because the user
+    // had OpenRouter configured in config.json but nothing in env.
+    const resolved = resolveStagehandCredentials(process.env, readRuntimeConfigSlice());
     this.modelName = opts?.modelName || resolved.model;
     this.modelApiKey = opts?.modelApiKey || resolved.apiKey || '';
+    this.modelBaseURL = opts?.modelBaseURL || resolved.baseURL;
     this.cdpUrl = opts?.cdpUrl;
-  }
-
-  private resolveDefaultModel(): { model: string; apiKey: string } {
-    // Stagehand's Vercel aiSDK integration only accepts specific provider
-    // names. Supported: openai, anthropic, google, bedrock, xai, azure,
-    // groq, cerebras, togetherai, mistral, deepseek, perplexity, ollama,
-    // vertex, gateway. It does NOT accept 'openrouter' — attempting to use
-    // it throws "openrouter is not currently supported for aiSDK" and
-    // breaks every browser tool call, not just AI ones.
-    if (process.env.ANTHROPIC_API_KEY) {
-      return { model: 'anthropic/claude-sonnet-4-5', apiKey: process.env.ANTHROPIC_API_KEY };
-    }
-    if (process.env.OPENAI_API_KEY) {
-      return { model: 'openai/gpt-4o-mini', apiKey: process.env.OPENAI_API_KEY };
-    }
-    if (process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-      return { model: 'google/gemini-2.0-flash-exp', apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY || '' };
-    }
-    // No supported key available. Stagehand AI tools (act/extract/observe/
-    // agent) will fail at call time, but Playwright-direct tools (navigate/
-    // click/type/snapshot/screenshot/evaluate) still work.
-    return { model: 'openai/gpt-4o-mini', apiKey: '' };
   }
 
   // ==========================================================================
@@ -120,12 +192,15 @@ export class LocalBrowserService {
       const launchOpts: Record<string, unknown> = this.cdpUrl
         ? { cdpUrl: this.cdpUrl }
         : { headless: this.headless };
-      logger.debug(`[browser] Stagehand.init — ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}, apiKey: ${this.modelApiKey ? 'set' : 'MISSING — extract/act/agent will fail'}`);
+      logger.debug(`[browser] Stagehand.init. ${this.cdpUrl ? `cdp: ${this.cdpUrl}` : `headless: ${this.headless}`}, model: ${this.modelName}, apiKey: ${this.modelApiKey ? 'set' : 'MISSING. extract/act/agent will fail'}${this.modelBaseURL ? `, baseURL: ${this.modelBaseURL}` : ''}`);
       // Stagehand v3 expects the API key via modelClientOptions (not
       // process.env) so we can honour whatever credential resolution the
-      // rest of the daemon does.
+      // rest of the daemon does. modelBaseURL is set when we're routing
+      // an OpenRouter key through the openai provider (Stagehand's aiSDK
+      // doesn't recognize 'openrouter' as a first-class provider).
       const modelClientOptions: Record<string, unknown> = {};
       if (this.modelApiKey) modelClientOptions.apiKey = this.modelApiKey;
+      if (this.modelBaseURL) modelClientOptions.baseURL = this.modelBaseURL;
       this.stagehand = new Stagehand({
         env: 'LOCAL',
         localBrowserLaunchOptions: launchOpts,
