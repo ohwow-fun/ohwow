@@ -47,6 +47,7 @@ import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
 import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { PresenceEngine } from '../presence/presence-engine.js';
@@ -1351,6 +1352,19 @@ export async function startDaemon(): Promise<DaemonHandle> {
       });
       bus.once('shutdown', () => runtimeSkillLoader.stop());
       logger.info(`[daemon] Runtime skill loader started (skillsDir=${layout.skillsDir})`);
+
+      // Failure detector: scans for high-token zero-output tasks and
+      // emits synthesis:candidate events on the bus. M5's generator
+      // subscribes; the detector itself is intentionally dumb.
+      const failureDetector = new SynthesisFailureDetector({
+        db,
+        workspaceId,
+        bus,
+      });
+      failureDetector.start().catch(err => {
+        logger.warn(`[daemon] Synthesis failure detector failed: ${err instanceof Error ? err.message : err}`);
+      });
+      bus.once('shutdown', () => failureDetector.stop());
     } else {
       logger.info(`[daemon] Runtime skill loader disabled for workspace "${activeWsName}"`);
     }
