@@ -2937,6 +2937,18 @@ const ALWAYS_INCLUDED_TOOLS = new Set([
   // Daemon introspection: always available so agents can discover paths
   // and key tables without relying on intent classification.
   'get_daemon_info',
+  // X posting family — these drive the user's real Chrome via CDP and
+  // must ALWAYS be the preferred path for anything touching @handle,
+  // tweets, threads, articles, or DMs. They used to be gated on the
+  // 'browser' intent, but "post a tweet" doesn't trigger any browser
+  // keywords in the classifier (no url/navigate/scrape), so the tools
+  // were invisible at chat time and the LLM fell back to run_agent +
+  // a stale desktop-automation SOP that burned hundreds of thousands
+  // of tokens without ever posting anything. Hoisting them into
+  // ALWAYS_INCLUDED guarantees they show up in every chat context so
+  // the LLM can pick them directly.
+  'x_compose_tweet', 'x_compose_thread', 'x_compose_article',
+  'x_send_dm', 'x_list_dms', 'x_delete_tweet',
 ]);
 
 /**

@@ -107,7 +107,14 @@ const INTENT_SIGNALS: IntentSignals[] = [
     ],
   },
 
-  // ── Browser: web navigation and scraping ──
+  // ── Browser: web navigation and scraping, plus X/Twitter writes ──
+  // X posting flows (tweets, threads, articles, DMs) live on 'browser'
+  // because they drive the user's real Chrome via CDP. Adding tweet/
+  // twitter/x.com keywords here makes the orchestrator see the
+  // x_compose_* tools when the user says things like "post this
+  // tweet" or "DM James on X". Without this, "post a tweet" scored
+  // zero on every intent and fell through to the 'general' bucket,
+  // where the LLM would dispatch to run_agent + a stale desktop SOP.
   {
     intent: 'browser',
     sections: new Set<IntentSection>(['browser', 'memory']),
@@ -123,11 +130,21 @@ const INTENT_SIGNALS: IntentSignals[] = [
       /\bwww\.\w/,
       /\bscrape\b/,
       /\bgo\s+to\s+\S+\.\w{2,}/,  // "go to example.com"
+      // X / Twitter write surfaces
+      /\btweet\b/,
+      /\btwitter\b/,
+      /\bx\.com\b/,
+      /\b(?:post|publish|share)\s+(?:this\s+|a\s+|an\s+|the\s+)?(?:tweet|thread|article|post)\b/i,
+      /\b(?:post|publish|share)\s+(?:this\s+|that\s+)?(?:to|on)\s+x\b/i,
+      /\b(?:post|publish|share)\s+(?:to|on)\s+twitter\b/i,
+      /\bx\s*article\b/i,
     ],
     medium: [
       /\bopen\s+.*page\b/,
       /\bnavigate\s+to\b/,
       /\bopen\s+.*browser\b/,
+      /\bdm\s+\w+\s+on\s+(?:x|twitter)\b/i,
+      /\b@\w+\s+on\s+(?:x|twitter)\b/i,
     ],
     weak: [
       /\bscreenshot\b/,
