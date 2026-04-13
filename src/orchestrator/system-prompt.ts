@@ -10,6 +10,7 @@
 
 import type { ChannelType } from '../integrations/channel-types.js';
 import { wrapUserData } from '../lib/prompt-injection.js';
+import { COPYWRITING_RULES, COPYWRITING_RULES_COMPACT } from '../lib/copywriting-rules.js';
 
 export interface BuildLocalSystemPromptArgs {
   agents: {
@@ -865,6 +866,8 @@ ${principlesSection}
 ${skillsSection}
 ${workflowsSection}
 
+${COPYWRITING_RULES}
+
 ## Available Agents
 ${agentList || 'No agents created yet. The user can create agents from the web UI.'}
 
@@ -956,6 +959,9 @@ export function buildCompactDynamicContext(args: BuildLocalSystemPromptArgs): st
 
   return `${lines.join('\n')}
 ${memorySection}${ragSection}${projectInstructionsSection}${compactPrinciples}
+
+${COPYWRITING_RULES_COMPACT}
+
 ## Agents
 ${agentList || 'No agents yet.'}
 ${projectSection}${buildLocalPlatformAddendum(args.platform)}`;

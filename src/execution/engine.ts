@@ -82,6 +82,7 @@ import {
   BASH_SYSTEM_PROMPT,
 } from './bash/index.js';
 import { DEVOPS_SYSTEM_PROMPT } from './devops/devops-prompts.js';
+import { COPYWRITING_RULES } from '../lib/copywriting-rules.js';
 import {
   DocMountManager,
   DOC_MOUNT_TOOL_DEFINITIONS,
@@ -3198,6 +3199,8 @@ You have web search capability. Use it whenever you need current or factual info
 ## Business Context
 ${wrappedBusinessDesc}
 ${opts.goalContext ? `\n${opts.goalContext}\n` : ''}${memorySection}${knowledgeSection}${skillsSection}${toolChoiceGuide}${classificationSection}${webSearchSection}${browserSection}${scraplingSection}${docMountSection}${filesystemSection}${bashSection}${devopsSection}
+${COPYWRITING_RULES}
+
 ## Guidelines
 - Always maintain a professional and helpful tone
 - Focus on quality and accuracy in your work

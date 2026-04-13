@@ -61,6 +61,28 @@ describe('buildLocalSystemPrompt', () => {
     expect(prompt).not.toContain('## Your Memory');
   });
 
+  it('injects copywriting rules unconditionally for the root orchestrator', () => {
+    const prompt = buildLocalSystemPrompt(baseArgs());
+    expect(prompt).toContain('## Copywriting Rules');
+    expect(prompt).toContain('No dashes as sentence connectors');
+    expect(prompt).toContain('No development-time claims');
+  });
+
+  it('compact dynamic context carries the terse copywriting rules variant', () => {
+    const compact = buildCompactDynamicContext(baseArgs());
+    expect(compact).toContain('## Copywriting');
+    expect(compact).toContain('No dashes as sentence connectors');
+  });
+
+  it('the COPYWRITING_RULES block itself contains no em-dashes or en-dashes', () => {
+    const prompt = buildLocalSystemPrompt(baseArgs());
+    const startIdx = prompt.indexOf('## Copywriting Rules');
+    expect(startIdx).toBeGreaterThan(-1);
+    const rulesBlock = prompt.slice(startIdx, startIdx + 2500);
+    expect(rulesBlock).not.toMatch(/\u2014/);
+    expect(rulesBlock).not.toMatch(/\u2013/);
+  });
+
   it('renders business context with growth stage label', () => {
     const prompt = buildLocalSystemPrompt(baseArgs({
       business: { name: 'GrowthCo', type: 'Agency', growthStage: 5 },
