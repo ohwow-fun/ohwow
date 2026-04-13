@@ -45,6 +45,18 @@ export interface SynthesizeForGoalInput {
   name_hint?: string;
   /** Stub out the generator's model call with a canned response. Off by default for autonomous runs. */
   use_canned_llm?: boolean;
+  /**
+   * Input object handed to the dry-run tester when it invokes the
+   * generated skill. Defaults to `{}`, which only works for skills
+   * that have no required parameters. Skills with required string
+   * params (e.g. a `description` field on an edit form) fail at
+   * `page.fill(sel, undefined)` with an empty stub; passing a real
+   * placeholder here gives the tester something to type so the dry
+   * run can complete and the skill can land in the registry.
+   * Always combined with `dry_run: true` downstream, so values
+   * here never leave the browser.
+   */
+  test_input?: Record<string, unknown>;
 }
 
 export interface SynthesizeForGoalReport {
@@ -113,6 +125,10 @@ export async function synthesizeSkillForGoal(
   const targetUrl = (input.target_url || '').trim();
   const nameHint = (input.name_hint || '').trim();
   const useCanned = input.use_canned_llm === true;
+  const testInput: Record<string, unknown> = {
+    ...(input.test_input ?? {}),
+    dry_run: true,
+  };
 
   if (!goal) {
     return { success: false, error: 'goal is required (one-sentence description of the skill)' };
@@ -182,7 +198,7 @@ export async function synthesizeSkillForGoal(
     modelRouter: ctx.modelRouter,
     ctx,
     skillName: genResult.name,
-    testInput: {},
+    testInput,
     goal: effectiveGoal,
     _visionEvalForTest: async () => ({
       ok: true,

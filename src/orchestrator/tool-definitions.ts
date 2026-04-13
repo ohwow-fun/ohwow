@@ -1990,6 +1990,10 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
           type: 'boolean',
           description: 'Leave false for real-LLM generation. True is not supported by this tool — it has no canned fallback.',
         },
+        test_input: {
+          type: 'object',
+          description: 'Optional input object the dry-run tester hands to the generated skill. Defaults to {} (always combined with dry_run: true). Supply this when the skill has required string parameters that would otherwise break with undefined — e.g. a description field the skill will fill in. Values never leave the browser because the tester always runs in dry-run mode.',
+        },
       },
       required: ['goal', 'target_url'],
     },
