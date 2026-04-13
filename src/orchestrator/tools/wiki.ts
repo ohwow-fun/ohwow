@@ -372,9 +372,11 @@ export async function writeWikiPage(
   const path = join(dir, `${slug}.md`);
 
   let prevVersion = 0;
+  let prevRawForSnapshot: string | null = null;
   if (existsSync(path)) {
     try {
       const prevRaw = readFileSync(path, 'utf-8');
+      prevRawForSnapshot = prevRaw;
       const prev = parseWikiPage(slug, path, prevRaw);
       prevVersion = prev.frontmatter.version ?? 0;
     } catch { /* noop */ }
@@ -392,6 +394,22 @@ export async function writeWikiPage(
     version: prevVersion + 1,
   };
   const fileContent = serializeWikiPage(frontmatter, body);
+
+  // Snapshot the previous version under .versions/<slug>/v<N>.md so
+  // the dashboard can render a history timeline + diffs without
+  // depending on git. Karpathy's wiki uses git directly; we snapshot
+  // here because the daemon doesn't assume git is present.
+  if (prevRawForSnapshot && prevVersion > 0) {
+    try {
+      const versionsDir = join(dir, '.versions', slug);
+      if (!existsSync(versionsDir)) mkdirSync(versionsDir, { recursive: true });
+      const snapshotPath = join(versionsDir, `v${prevVersion}.md`);
+      writeFileSync(snapshotPath, prevRawForSnapshot, 'utf-8');
+    } catch (err) {
+      logger.warn({ err, slug, prevVersion }, '[wiki] failed to snapshot previous version');
+    }
+  }
+
   writeFileSync(path, fileContent, 'utf-8');
 
   // Append a log entry. log.md is the wiki's auditable history.
@@ -441,6 +459,203 @@ export async function readWikiLog(
   const lines = raw.split('\n').filter((l) => l.startsWith('- '));
   const entries = lines.slice(-limit).reverse().map((l) => l.replace(/^- /, ''));
   return { success: true, data: { entries } };
+}
+
+/**
+ * wiki_page_history — return the list of snapshot versions stored
+ * under .versions/<slug>/ alongside the current live page. Each
+ * snapshot is the page's full markdown content from a previous
+ * version, captured at the moment a new version was about to be
+ * written. The dashboard uses this to render a per-page timeline
+ * with diffs.
+ */
+export async function readWikiPageHistory(
+  ctx: LocalToolContext,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const slug = (input.slug as string | undefined)?.trim();
+  if (!slug) return { success: false, error: 'slug is required' };
+  const dir = wikiDir(ctx.workspaceId);
+  const versionsDir = join(dir, '.versions', slug);
+  const livePath = join(dir, `${slug}.md`);
+
+  type Snapshot = { version: number; updated_at: string; body: string; frontmatter: WikiPageFrontmatter };
+  const snapshots: Snapshot[] = [];
+
+  // Past versions
+  if (existsSync(versionsDir)) {
+    for (const file of readdirSync(versionsDir)) {
+      const m = file.match(/^v(\d+)\.md$/);
+      if (!m) continue;
+      try {
+        const raw = readFileSync(join(versionsDir, file), 'utf-8');
+        const page = parseWikiPage(slug, join(versionsDir, file), raw);
+        snapshots.push({
+          version: parseInt(m[1], 10),
+          updated_at: page.frontmatter.last_synthesized ?? new Date().toISOString(),
+          body: page.body,
+          frontmatter: page.frontmatter,
+        });
+      } catch (err) {
+        logger.warn({ err, file }, '[wiki] failed to read snapshot');
+      }
+    }
+  }
+
+  // Current live version
+  if (existsSync(livePath)) {
+    try {
+      const raw = readFileSync(livePath, 'utf-8');
+      const page = parseWikiPage(slug, livePath, raw);
+      snapshots.push({
+        version: page.frontmatter.version ?? snapshots.length + 1,
+        updated_at: page.frontmatter.last_synthesized ?? page.updated_at,
+        body: page.body,
+        frontmatter: page.frontmatter,
+      });
+    } catch (err) {
+      logger.warn({ err, slug }, '[wiki] failed to read live page for history');
+    }
+  }
+
+  snapshots.sort((a, b) => b.version - a.version);
+  return { success: true, data: { slug, versions: snapshots.map((s) => ({
+    version: s.version,
+    updated_at: s.updated_at,
+    body: s.body,
+    title: s.frontmatter.title,
+    summary: s.frontmatter.summary ?? null,
+    synthesized_by: s.frontmatter.synthesized_by ?? null,
+  })) } };
+}
+
+/**
+ * wiki_lint — walk every page in the workspace wiki and emit a
+ * structured report of issues a curator (human or LLM) should fix.
+ * The four categories below match Karpathy's lint pass concept from
+ * the llm-wiki gist:
+ *
+ *   - orphans: pages with no incoming backlinks. Karpathy's framing:
+ *     "orphan pages with no inbound links" — they're either dead
+ *     branches or evidence that an entity reference somewhere is
+ *     missing.
+ *
+ *   - stubs: `[[other-slug]]` references that point at pages that
+ *     don't exist yet. These are concrete synthesis opportunities.
+ *
+ *   - thin: pages whose body is suspiciously short (under ~200 chars)
+ *     — usually placeholder pages someone meant to fill in.
+ *
+ *   - missing_summary: pages without a frontmatter summary, which
+ *     makes them invisible in the index catalog.
+ *
+ * Returns ALL findings so the dashboard can render counts at a
+ * glance and let the user click through. Future: an LLM contradiction
+ * pass that compares overlapping claims across pages.
+ */
+export interface WikiLintFinding {
+  type: 'orphan' | 'stub' | 'thin' | 'missing_summary';
+  slug: string;
+  title: string;
+  message: string;
+  /** For 'stub', the page that references the missing slug. */
+  referenced_by?: string;
+}
+
+export async function lintWiki(
+  ctx: LocalToolContext,
+  _input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const dir = wikiDir(ctx.workspaceId);
+  if (!existsSync(dir)) {
+    return { success: true, data: { findings: [], summary: 'Wiki is empty.' } };
+  }
+
+  // Walk every page once, collect (slug, title, body, backlinks_to)
+  const pages: Array<{ slug: string; title: string; summary: string | null; body: string; backlinks_to: string[] }> = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith('.md') || file === 'index.md' || file === 'log.md') continue;
+    try {
+      const slug = file.replace(/\.md$/, '');
+      const path = join(dir, file);
+      const raw = readFileSync(path, 'utf-8');
+      const page = parseWikiPage(slug, path, raw);
+      pages.push({
+        slug: page.slug,
+        title: page.frontmatter.title,
+        summary: page.frontmatter.summary ?? null,
+        body: page.body,
+        backlinks_to: page.backlinks_to,
+      });
+    } catch (err) {
+      logger.warn({ err, file }, '[wiki] lint: failed to parse page');
+    }
+  }
+
+  const knownSlugs = new Set(pages.map((p) => p.slug));
+  const incomingCounts = new Map<string, number>();
+  for (const page of pages) {
+    for (const target of page.backlinks_to) {
+      incomingCounts.set(target, (incomingCounts.get(target) ?? 0) + 1);
+    }
+  }
+
+  const findings: WikiLintFinding[] = [];
+
+  for (const page of pages) {
+    // Orphan: no incoming backlinks
+    if ((incomingCounts.get(page.slug) ?? 0) === 0) {
+      findings.push({
+        type: 'orphan',
+        slug: page.slug,
+        title: page.title,
+        message: 'No other page links to this one. Add a backlink or remove if dead.',
+      });
+    }
+    // Thin: under ~200 chars of body
+    if (page.body.length < 200) {
+      findings.push({
+        type: 'thin',
+        slug: page.slug,
+        title: page.title,
+        message: `Only ${page.body.length} chars of body. Probably a placeholder.`,
+      });
+    }
+    // Missing summary
+    if (!page.summary || page.summary.trim().length === 0) {
+      findings.push({
+        type: 'missing_summary',
+        slug: page.slug,
+        title: page.title,
+        message: 'No frontmatter summary — invisible in the index catalog.',
+      });
+    }
+    // Stubs: references to slugs that don't exist
+    for (const ref of page.backlinks_to) {
+      if (!knownSlugs.has(ref)) {
+        findings.push({
+          type: 'stub',
+          slug: ref,
+          title: ref,
+          message: `Referenced by [[${page.slug}]] but the page doesn't exist yet.`,
+          referenced_by: page.slug,
+        });
+      }
+    }
+  }
+
+  const counts = {
+    orphan: findings.filter((f) => f.type === 'orphan').length,
+    stub: findings.filter((f) => f.type === 'stub').length,
+    thin: findings.filter((f) => f.type === 'thin').length,
+    missing_summary: findings.filter((f) => f.type === 'missing_summary').length,
+  };
+  const total = counts.orphan + counts.stub + counts.thin + counts.missing_summary;
+  const summary = total === 0
+    ? `Lint clean. ${pages.length} ${pages.length === 1 ? 'page' : 'pages'} checked.`
+    : `${total} issue${total === 1 ? '' : 's'} across ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}.`;
+
+  return { success: true, data: { findings, counts, total, pageCount: pages.length, summary } };
 }
 
 /**

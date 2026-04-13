@@ -1758,6 +1758,82 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   },
 
   // =========================================================================
+  // WIKI — Karpathy-style markdown synthesis layer
+  // =========================================================================
+  //
+  // The wiki is a set of curated markdown pages stored next to the runtime
+  // under wiki/<workspace_id>/<slug>.md. Each page has YAML frontmatter,
+  // a human-readable body, and [[other-slug]] backlinks. Writes snapshot
+  // the previous version and append to wiki/log.md for auditability.
+  // Use this layer (not the raw KB) when you want a stable, compressed
+  // summary of a topic that you and other agents will come back to.
+
+  {
+    name: 'wiki_list_pages',
+    description: 'List all wiki pages with title, slug, summary, backlink counts, and version. Use this to get the lay of the land before deciding whether to read, update, or create a page.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_read_page',
+    description: 'Read a single wiki page by slug. Returns the full markdown body, frontmatter (title, summary, related, source_doc_ids), and computed backlinks (pages that link in, pages this one links to).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'The page slug, e.g. "competitive-cheat-sheet". Use wiki_list_pages first if you need to discover slugs.' },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'wiki_write_page',
+    description: 'Create or update a wiki page. Writes wiki/<workspace_id>/<slug>.md with YAML frontmatter and markdown body. If the page already exists the previous version is snapshotted to .versions/<slug>/v<N>.md and the version number is bumped. Appends an entry to wiki/log.md automatically. Use this to synthesize durable notes above the raw KB: competitive cheat sheets, playbooks, key-people pages, decision logs. Body should be rich markdown with [[other-slug]] backlinks where relevant.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'Kebab-case slug, e.g. "relevance-ai" or "q2-growth-plan". Used as the filename.' },
+        title: { type: 'string', description: 'Human-readable title for the page.' },
+        body: { type: 'string', description: 'Markdown body. Use [[other-slug]] to link to other wiki pages — those links are resolved to real backlinks on render.' },
+        summary: { type: 'string', description: 'Optional one-line summary shown in the index catalog.' },
+        related: { type: 'array', items: { type: 'string' }, description: 'Optional list of related page slugs for the frontmatter.' },
+        source_doc_ids: { type: 'array', items: { type: 'string' }, description: 'Optional list of KB document ids this page was synthesized from, for traceability.' },
+      },
+      required: ['slug', 'title', 'body'],
+    },
+  },
+  {
+    name: 'wiki_read_log',
+    description: "Read recent entries from the wiki's append-only log. Each entry notes when a page was created or updated, by whom (version number), and the title. Use this to see what has changed on the wiki without re-scanning every page.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'number', description: 'Max entries to return (default 50, max 200).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'wiki_read_index',
+    description: 'Read the wiki index.md catalog: one line per page with title + summary + backlink count. Cheaper than wiki_list_pages when you only need a quick survey.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_lint',
+    description: 'Run a lint pass over the wiki and return structured findings: orphans (pages with no backlinks), stubs (referenced but not yet created), thin pages (very short bodies), and missing summaries. Use this to decide what to curate next — ideal before a "clean up the wiki" session.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_page_history',
+    description: 'Return the full version history for a wiki page: every snapshot under .versions/<slug>/ plus the live file, ordered newest-first. Each entry has the body, frontmatter, version number, and timestamp — use it when you need to compare versions or restore content.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'The page slug whose history you want.' },
+      },
+      required: ['slug'],
+    },
+  },
+
+  // =========================================================================
   // DATA SOURCE CONNECTOR TOOLS
   // =========================================================================
 
@@ -2635,6 +2711,18 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   search_knowledge: ['rag'],
   get_knowledge_document: ['rag'],
 
+  // Wiki — Karpathy-style synthesis layer. Tagged under 'rag' so any
+  // session that gets the knowledge-base toolset also gets the wiki
+  // tools — reading + writing synthesized notes is part of the same
+  // workflow as searching raw KB chunks.
+  wiki_list_pages: ['rag'],
+  wiki_read_page: ['rag'],
+  wiki_write_page: ['rag'],
+  wiki_read_log: ['rag'],
+  wiki_read_index: ['rag'],
+  wiki_lint: ['rag'],
+  wiki_page_history: ['rag'],
+
   // PDF → 'vision' (document processing)
   pdf_inspect_fields: ['vision'],
   pdf_fill_form: ['vision'],
@@ -2710,6 +2798,12 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   send_telegram_message: 1, list_telegram_chats: 1,
   ocr_extract_text: 1, analyze_image: 1,
   search_knowledge: 1,
+  // Wiki — read/write/list are P1 so the COS always gets them in
+  // ingestion contexts (synthesizing a new page is a common next
+  // step after KB upload). Lint/history/log are P2 — useful but not
+  // every session needs them.
+  wiki_list_pages: 1, wiki_read_page: 1, wiki_write_page: 1,
+  wiki_read_index: 2, wiki_read_log: 2, wiki_lint: 2, wiki_page_history: 2,
   lsp_diagnostics: 1,
 
   // P2: Common extensions (default for unlisted tools)

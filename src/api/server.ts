@@ -297,6 +297,74 @@ export function createServer(deps: ServerDeps): {
     }
   });
 
+  // Lint pass over the entire wiki — the dashboard "Lint Wiki" button
+  // calls this and renders the structured findings. Same fire-and-forget
+  // shape as the read endpoints; no auth beyond the existing tunnel JWT.
+  app.post('/api/wiki/lint', async (_req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { lintWiki } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof lintWiki>[0];
+      const result = await lintWiki(ctx, {});
+      if (!result.success) {
+        res.status(500).json({ error: result.error });
+        return;
+      }
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Write/upsert a wiki page — used by the dashboard editor and by
+  // the orchestrator when synthesizing pages from KB content. Bumps
+  // version + snapshots the previous body under .versions/<slug>/.
+  app.post('/api/wiki/pages/:slug', async (req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { writeWikiPage } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof writeWikiPage>[0];
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      // Allow the URL slug to override any body slug so the route is
+      // canonical. Title may come from the body or fall back to the slug.
+      const result = await writeWikiPage(ctx, { ...body, slug: req.params.slug });
+      if (!result.success) {
+        res.status(400).json({ error: result.error });
+        return;
+      }
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Per-page version history (snapshots + the live version), used by
+  // the dashboard's wiki history panel.
+  app.get('/api/wiki/pages/:slug/history', async (req, res) => {
+    if (!workspaceId) {
+      res.status(503).json({ error: 'No workspace bound to this runtime' });
+      return;
+    }
+    try {
+      const { readWikiPageHistory } = await import('../orchestrator/tools/wiki.js');
+      const ctx = { db, workspaceId, engine: engine!, channels: channelRegistry!, controlPlane } as Parameters<typeof readWikiPageHistory>[0];
+      const result = await readWikiPageHistory(ctx, { slug: req.params.slug });
+      if (!result.success) {
+        res.status(404).json({ error: result.error });
+        return;
+      }
+      res.json(result.data);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   // Public tier endpoint (used by web UI Layout for feature gating + model status)
   app.get('/api/runtime/tier', async (_req, res) => {
     const tierValue = config.tier || 'free';

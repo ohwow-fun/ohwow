@@ -56,7 +56,7 @@ import { getCrossPollination, scheduleTeamCouncil, getCollectiveBriefing, rebala
 import { llmTool } from './llm.js';
 import { getDaemonInfo } from './daemon-info.js';
 import { resyncWorkspaceToCloudTool } from './resync.js';
-import { listWikiPages, readWikiPage, writeWikiPage, readWikiLog, readWikiIndex } from './wiki.js';
+import { listWikiPages, readWikiPage, writeWikiPage, readWikiLog, readWikiIndex, lintWiki, readWikiPageHistory } from './wiki.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
   // LLM organ — per-sub-task model routing via ModelRouter.selectForPurpose.
@@ -74,6 +74,8 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['wiki_write_page', (ctx, input) => writeWikiPage(ctx, input)],
   ['wiki_read_log', (ctx, input) => readWikiLog(ctx, input)],
   ['wiki_read_index', (ctx, input) => readWikiIndex(ctx, input)],
+  ['wiki_lint', (ctx, input) => lintWiki(ctx, input)],
+  ['wiki_page_history', (ctx, input) => readWikiPageHistory(ctx, input)],
 
   // Agent tools
   ['list_agents', (ctx) => listAgents(ctx)],
