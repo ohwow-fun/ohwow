@@ -4,14 +4,49 @@ import { parseVisionVerdict, testSynthesizedSkill } from '../synthesis-tester.js
 import { runtimeToolRegistry } from '../../runtime-tool-registry.js';
 import type { DatabaseAdapter } from '../../../db/adapter-types.js';
 import type { ModelRouter } from '../../../execution/model-router.js';
+import type { LocalToolContext } from '../../local-tool-types.js';
+import { makeCtx } from '../../../__tests__/helpers/mock-db.js';
 
 vi.mock('../../../lib/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-// A minimal mock db that:
-//   - records update() patches by row id
-//   - returns a configurable fail_count on select().eq().maybeSingle()
+/**
+ * A minimal mock db for the tester's three DB interactions:
+ *   - `select('fail_count').eq('id', ...).maybeSingle()` to read
+ *     the current counter before incrementing
+ *   - `update({fail_count | promoted_at | ...}).eq('id', ...)` to
+ *     write back
+ *   - nothing else (no insert/delete/rpc)
+ *
+ * Every method on the chain has a concrete narrow type. The final
+ * cross-type bridge to the full `DatabaseAdapter` surface is a single
+ * `as unknown as DatabaseAdapter` at the return — everything the
+ * tests reach for is typed before that boundary.
+ */
+interface TesterDbChain {
+  select: () => TesterDbChain;
+  eq: (col: string, val: unknown) => TesterDbChain;
+  neq: (col: string, val: unknown) => TesterDbChain;
+  gt: (col: string, val: unknown) => TesterDbChain;
+  gte: (col: string, val: unknown) => TesterDbChain;
+  in: (col: string, vals: unknown[]) => TesterDbChain;
+  order: (col: string) => TesterDbChain;
+  limit: (n: number) => TesterDbChain;
+  maybeSingle: () => Promise<{ data: { fail_count: number }; error: null }>;
+  single: () => Promise<{ data: null; error: null }>;
+  then: (resolve: (v: { data: []; error: null }) => void) => void;
+}
+
+interface TesterDbUpdateChain {
+  eq: (col: string, id: unknown) => Promise<{ data: null; error: null }>;
+}
+
+interface TesterDbTable {
+  select: () => TesterDbChain;
+  update: (patch: Record<string, unknown>) => TesterDbUpdateChain;
+}
+
 function makeMockDb(initialFailCount = 0): {
   db: DatabaseAdapter;
   updates: Array<{ id: string; patch: Record<string, unknown> }>;
@@ -19,54 +54,63 @@ function makeMockDb(initialFailCount = 0): {
   const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
   let currentFail = initialFailCount;
 
-  const makeChain = () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chain: any = {};
-    for (const method of ['select', 'eq', 'neq', 'gt', 'gte', 'in', 'order', 'limit']) {
-      chain[method] = vi.fn(() => chain);
-    }
-    chain.maybeSingle = vi.fn(() => Promise.resolve({ data: { fail_count: currentFail }, error: null }));
-    chain.single = vi.fn(() => Promise.resolve({ data: null, error: null }));
-    chain.then = vi.fn((resolve: (v: unknown) => void) =>
-      resolve({ data: [], error: null }),
-    );
+  const makeChain = (): TesterDbChain => {
+    const chain: TesterDbChain = {
+      select: () => chain,
+      eq: () => chain,
+      neq: () => chain,
+      gt: () => chain,
+      gte: () => chain,
+      in: () => chain,
+      order: () => chain,
+      limit: () => chain,
+      maybeSingle: () =>
+        Promise.resolve({ data: { fail_count: currentFail }, error: null }),
+      single: () => Promise.resolve({ data: null, error: null }),
+      then: (resolve) => resolve({ data: [], error: null }),
+    };
     return chain;
   };
 
-  const db = {
-    from: vi.fn(() => ({
+  const mock = {
+    from: (): TesterDbTable => ({
       select: () => makeChain(),
-      update: vi.fn((patch: Record<string, unknown>) => ({
-        eq: vi.fn((_col: string, id: unknown) => {
+      update: (patch: Record<string, unknown>): TesterDbUpdateChain => ({
+        eq: (_col, id) => {
           updates.push({ id: String(id), patch });
           if (typeof patch.fail_count === 'number') {
             currentFail = patch.fail_count;
           }
           return Promise.resolve({ data: null, error: null });
-        }),
-      })),
-    })),
-  } as unknown as DatabaseAdapter;
+        },
+      }),
+    }),
+  };
 
-  return { db, updates };
+  return { db: mock as unknown as DatabaseAdapter, updates };
 }
+
+type FakeHandlerReturn =
+  | { success: true; message?: string; screenshotBase64?: string; currentUrl?: string }
+  | { success: false; message?: string; error?: string };
 
 function registerFakeSkill(options: {
   name?: string;
   skillId?: string;
-  handler: (ctx: unknown, input: Record<string, unknown>) => Promise<unknown>;
+  handler: (ctx: LocalToolContext, input: Record<string, unknown>) => Promise<FakeHandlerReturn>;
 }) {
   runtimeToolRegistry.register({
     name: options.name ?? 'fake_skill',
     description: 'fake',
     input_schema: { type: 'object', properties: {}, required: [] },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    handler: options.handler as any,
+    handler: options.handler,
     skillId: options.skillId ?? 'sk-fake',
     scriptPath: '/tmp/fake.ts',
     probation: true,
   });
 }
+
+const baseCtx: LocalToolContext = makeCtx();
 
 describe('parseVisionVerdict', () => {
   it('accepts a bare JSON verdict', () => {
@@ -109,6 +153,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'missing_skill',
       testInput: {},
       goal: 'Do the thing',
@@ -132,6 +177,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'promote_me',
       testInput: {},
       goal: 'Compose a tweet',
@@ -161,6 +207,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'will_throw',
       testInput: {},
       goal: 'Do the thing',
@@ -183,6 +230,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'reports_fail',
       testInput: {},
       goal: 'Do the thing',
@@ -202,6 +250,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'no_shot',
       testInput: {},
       goal: 'Do the thing',
@@ -225,6 +274,7 @@ describe('testSynthesizedSkill', () => {
     const result = await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'vision_fail',
       testInput: {},
       goal: 'Compose a tweet',
@@ -256,6 +306,7 @@ describe('testSynthesizedSkill', () => {
     await testSynthesizedSkill({
       db,
       modelRouter: {} as ModelRouter,
+      ctx: baseCtx,
       skillName: 'check_dryrun',
       testInput: { text: 'hi', dry_run: false },
       goal: 'Compose a tweet',

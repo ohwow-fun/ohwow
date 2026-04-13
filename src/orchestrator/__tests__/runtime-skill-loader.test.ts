@@ -6,21 +6,44 @@ import { join } from 'node:path';
 import { RuntimeSkillLoader } from '../runtime-skill-loader.js';
 import { runtimeToolRegistry } from '../runtime-tool-registry.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { makeCtx } from '../../__tests__/helpers/mock-db.js';
 
-// A minimal chainable mock just for the loader's sql_select path.
-// The loader calls:
-//   db.from('agent_workforce_skills').select(...).eq(...).eq(...).eq(...).eq(...).limit(1)
-// and awaits the result. We return a promise-like from limit().
-function makeDbWithSkills(rows: Array<{ id: string; promoted_at: string | null; script_path: string }>): DatabaseAdapter {
-  const makeChain = (table: string) => {
+/**
+ * Minimal chainable mock for the single query the loader issues:
+ *
+ *   db.from('agent_workforce_skills')
+ *     .select(...)
+ *     .eq(...).eq(...).eq(...).eq(...)
+ *     .limit(1)
+ *
+ * We return a promise-like from .limit() so the awaited call resolves
+ * with the matching row. The full `DatabaseAdapter` surface is huge
+ * (insert/update/delete/rpc/range/order etc.), so we widen to it once
+ * at the factory boundary via a single `as unknown as DatabaseAdapter`
+ * cast — every in-file reference stays typed as the narrower shape.
+ */
+interface LoaderSkillRow {
+  id: string;
+  promoted_at: string | null;
+  script_path: string;
+}
+
+type LoaderDbChain = {
+  select: () => LoaderDbChain;
+  eq: (col: string, val: unknown) => LoaderDbChain;
+  limit: (n: number) => Promise<{ data: LoaderSkillRow[]; error: null }>;
+};
+
+function makeDbWithSkills(rows: LoaderSkillRow[]): DatabaseAdapter {
+  const makeChain = (table: string): LoaderDbChain => {
     const filters: Record<string, unknown> = {};
-    const chain = {
+    const chain: LoaderDbChain = {
       select: () => chain,
       eq: (col: string, val: unknown) => {
         filters[col] = val;
         return chain;
       },
-      limit: (_n: number) => {
+      limit: () => {
         if (table !== 'agent_workforce_skills') {
           return Promise.resolve({ data: [], error: null });
         }
@@ -30,10 +53,12 @@ function makeDbWithSkills(rows: Array<{ id: string; promoted_at: string | null; 
     };
     return chain;
   };
-  return {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    from: (table: string) => makeChain(table) as any,
-  } as unknown as DatabaseAdapter;
+  const mock = {
+    from: (table: string): { select: () => LoaderDbChain } => ({
+      select: () => makeChain(table),
+    }),
+  };
+  return mock as unknown as DatabaseAdapter;
 }
 
 const VALID_SKILL_TS = `
@@ -108,9 +133,10 @@ describe('RuntimeSkillLoader', () => {
     expect(def?.probation).toBe(true); // null promoted_at → probation
     expect(def?.description).toBe('echoes input back');
 
-    // Handler is runnable.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await def!.handler({} as any, { message: 'hello' });
+    // Handler is runnable. Use the shared makeCtx() helper so we
+    // hand the handler a real LocalToolContext-shaped value rather
+    // than a blind `{} as any` cast.
+    const result = await def!.handler(makeCtx(), { message: 'hello' });
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ echoed: 'hello' });
   });

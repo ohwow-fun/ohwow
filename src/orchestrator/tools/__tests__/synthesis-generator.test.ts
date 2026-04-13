@@ -15,49 +15,95 @@ vi.mock('../../../lib/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+/**
+ * A narrowly-typed chain that covers the select-chain methods the
+ * generator and the loader actually call (`select`, `eq`, `limit`,
+ * `single`, `maybeSingle`, `then`). Everything is `vi.fn()`-backed
+ * so assertions can reach into call counts if needed.
+ */
+interface GenDbChain {
+  select: () => GenDbChain;
+  eq: (...args: unknown[]) => GenDbChain;
+  neq: (...args: unknown[]) => GenDbChain;
+  gt: (...args: unknown[]) => GenDbChain;
+  gte: (...args: unknown[]) => GenDbChain;
+  lt: (...args: unknown[]) => GenDbChain;
+  lte: (...args: unknown[]) => GenDbChain;
+  in: (...args: unknown[]) => GenDbChain;
+  is: (...args: unknown[]) => GenDbChain;
+  or: (...args: unknown[]) => GenDbChain;
+  not: (...args: unknown[]) => GenDbChain;
+  order: (...args: unknown[]) => GenDbChain;
+  range: (...args: unknown[]) => GenDbChain;
+  limit: (n?: number) => Promise<{ data: Array<Record<string, unknown>>; error: null }>;
+  single: () => Promise<{ data: null; error: null }>;
+  maybeSingle: () => Promise<{ data: null; error: null }>;
+  then: (resolve: (v: { data: []; error: null }) => void) => void;
+}
+
+interface GenDbTable {
+  select: () => GenDbChain;
+  insert: (row: Record<string, unknown>) => Promise<{ data: null; error: null }>;
+}
+
 // A mock adapter that tracks inserts and returns canned select
-// responses keyed by { table, filters }.
-function makeMockDb(): { db: DatabaseAdapter; inserts: Array<{ table: string; row: Record<string, unknown> }>; setSkillRow: (row: Record<string, unknown>) => void } {
+// responses keyed on the skill table.
+function makeMockDb(): {
+  db: DatabaseAdapter;
+  inserts: Array<{ table: string; row: Record<string, unknown> }>;
+} {
   const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
   let pendingSkillRow: Record<string, unknown> | null = null;
-  const setSkillRow = (row: Record<string, unknown>) => {
-    pendingSkillRow = row;
-  };
 
-  const makeSelectChain = (table: string) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const chain: any = {};
-    for (const method of ['select', 'eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'in', 'is', 'or', 'not', 'order', 'range']) {
-      chain[method] = vi.fn(() => chain);
-    }
-    chain.limit = vi.fn(() => {
-      if (table === 'agent_workforce_skills' && pendingSkillRow) {
-        return Promise.resolve({ data: [pendingSkillRow], error: null });
-      }
-      return Promise.resolve({ data: [], error: null });
-    });
-    chain.single = vi.fn(() => Promise.resolve({ data: null, error: null }));
-    chain.maybeSingle = vi.fn(() => Promise.resolve({ data: null, error: null }));
-    chain.then = vi.fn((resolve: (v: unknown) => void) => resolve({ data: [], error: null }));
+  const makeSelectChain = (table: string): GenDbChain => {
+    const chain: GenDbChain = {
+      select: () => chain,
+      eq: () => chain,
+      neq: () => chain,
+      gt: () => chain,
+      gte: () => chain,
+      lt: () => chain,
+      lte: () => chain,
+      in: () => chain,
+      is: () => chain,
+      or: () => chain,
+      not: () => chain,
+      order: () => chain,
+      range: () => chain,
+      limit: () => {
+        if (table === 'agent_workforce_skills' && pendingSkillRow) {
+          return Promise.resolve({ data: [pendingSkillRow], error: null });
+        }
+        return Promise.resolve({ data: [], error: null });
+      },
+      single: () => Promise.resolve({ data: null, error: null }),
+      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+      then: (resolve) => resolve({ data: [], error: null }),
+    };
     return chain;
   };
 
-  const db = {
-    from: vi.fn((table: string) => ({
-      select: () => makeSelectChain(table),
-      insert: vi.fn((row: Record<string, unknown>) => {
-        inserts.push({ table, row });
-        // Also make the row available to subsequent selects so the
-        // loader's findSkillRow call succeeds right after insert.
-        if (table === 'agent_workforce_skills') {
-          pendingSkillRow = row;
-        }
-        return Promise.resolve({ data: null, error: null });
+  const mock = {
+    from: vi.fn(
+      (table: string): GenDbTable => ({
+        select: () => makeSelectChain(table),
+        insert: (row: Record<string, unknown>) => {
+          inserts.push({ table, row });
+          // Make the row visible to subsequent selects so the
+          // loader's findSkillRow call succeeds right after insert.
+          if (table === 'agent_workforce_skills') {
+            pendingSkillRow = row;
+          }
+          return Promise.resolve({ data: null, error: null });
+        },
       }),
-    })),
-  } as unknown as DatabaseAdapter;
+    ),
+  };
 
-  return { db, inserts, setSkillRow };
+  // One localized bridge from the narrow in-file mock shape to the
+  // full DatabaseAdapter the generator expects. Everything above
+  // this point is strictly typed.
+  return { db: mock as unknown as DatabaseAdapter, inserts };
 }
 
 const CANDIDATE: SynthesisCandidate = {

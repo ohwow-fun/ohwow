@@ -193,11 +193,24 @@ export function lintSkillSource(
  * after writing a new `.ts` file without waiting for the fs.watch
  * debounce — the generator imports `getActiveRuntimeSkillLoader()`
  * and calls `.loadFile(path)` synchronously in line.
+ *
+ * The setter is a free function (not a `const self = this` pattern
+ * inside the class) so the @typescript-eslint/no-this-alias rule
+ * stays quiet without disable comments. The class's `start`/`stop`
+ * forward `this` as a call argument, which is idiomatic.
  */
 let activeLoader: RuntimeSkillLoader | null = null;
 
 export function getActiveRuntimeSkillLoader(): RuntimeSkillLoader | null {
   return activeLoader;
+}
+
+function setActiveLoader(loader: RuntimeSkillLoader | null): void {
+  activeLoader = loader;
+}
+
+function isActiveLoader(loader: RuntimeSkillLoader): boolean {
+  return activeLoader === loader;
 }
 
 export class RuntimeSkillLoader {
@@ -211,8 +224,7 @@ export class RuntimeSkillLoader {
   async start(): Promise<void> {
     if (this.started) return;
     this.started = true;
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    activeLoader = this;
+    setActiveLoader(this);
 
     await mkdir(this.opts.skillsDir, { recursive: true });
     await mkdir(this.opts.compiledDir, { recursive: true });
@@ -278,13 +290,12 @@ export class RuntimeSkillLoader {
     this.watcher?.close();
     this.watcher = null;
     this.started = false;
-    if (activeLoader === this) activeLoader = null;
+    if (isActiveLoader(this)) setActiveLoader(null);
   }
 
   /** Test-only: directly set this instance as the active loader. */
   _setAsActive(): void {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    activeLoader = this;
+    setActiveLoader(this);
   }
 
   private async handleWatcherEvent(eventType: string, tsPath: string): Promise<void> {

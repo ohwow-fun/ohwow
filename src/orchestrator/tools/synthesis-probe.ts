@@ -118,23 +118,29 @@ export interface ProbeSurfaceResult {
 // to install Playwright just to stub a page.
 // ---------------------------------------------------------------------------
 
-export interface ProbePage {
-  goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
-  url: () => string;
-  title: () => Promise<string>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  evaluate: <T>(fn: string | ((...args: any[]) => T)) => Promise<T>;
-  screenshot: (opts?: { type?: 'jpeg' | 'png'; quality?: number }) => Promise<Buffer>;
-  on: (event: string, handler: (arg: unknown) => void) => void;
-}
+/**
+ * Narrow subset of playwright-core's `Page` that captures exactly
+ * the methods the probe (and its tests) need. Deriving it from the
+ * real type with `Pick` means the probe stays compatible with any
+ * playwright-core version that still exposes these methods, and
+ * unit tests can build a mock by implementing just these six
+ * members — no `any`, no structural drift.
+ */
+export type ProbePage = Pick<
+  import('playwright-core').Page,
+  'goto' | 'url' | 'title' | 'evaluate' | 'screenshot' | 'on'
+>;
 
-interface CdpContext { pages: () => ProbePage[] }
-interface CdpBrowser { contexts: () => CdpContext[] }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let cachedPlaywright: any = null;
+/**
+ * Cache the lazy-imported playwright-core module so the dynamic
+ * import is only paid once per daemon process. The import type is
+ * inferred from the package's own declarations, so there's no cast
+ * required here — we just hold a reference to the resolved module.
+ */
+let cachedPlaywright: typeof import('playwright-core') | null = null;
 
-async function getPlaywright(): Promise<{ chromium: { connectOverCDP: (url: string) => Promise<CdpBrowser> } }> {
+async function getPlaywright(): Promise<typeof import('playwright-core')> {
   if (!cachedPlaywright) {
     cachedPlaywright = await import('playwright-core');
   }
@@ -305,17 +311,35 @@ interface CollectPayload {
 }
 
 /**
+ * The narrow `page.evaluate(string)` surface collectManifest depends
+ * on. Returns `unknown` deliberately — the DOM-side script is a
+ * template string we can't statically type through `page.evaluate`,
+ * so we validate the shape field-by-field on the Node side. Kept
+ * separate from `ProbePage` (which pins against the real playwright
+ * Page type) so unit tests can build a stub that implements only
+ * this one method without mocking Page's full 60+ member surface.
+ */
+export interface EvaluateOnlyPage {
+  evaluate: (source: string) => Promise<unknown>;
+}
+
+function isCollectPayloadLike(value: unknown): value is Partial<CollectPayload> {
+  return value !== null && typeof value === 'object';
+}
+
+/**
  * Run the DOM-side script in the given page and unwrap the result.
  * Exposed separately from probeSurface so unit tests can drive it
  * with a mocked page that returns a canned payload from evaluate().
  */
-export async function collectManifest(page: ProbePage): Promise<CollectPayload> {
-  const payload = await page.evaluate<CollectPayload>(COLLECT_SCRIPT);
+export async function collectManifest(page: EvaluateOnlyPage): Promise<CollectPayload> {
+  const raw = await page.evaluate(COLLECT_SCRIPT);
+  const payload = isCollectPayloadLike(raw) ? raw : {};
   return {
-    testidElements: Array.isArray(payload?.testidElements) ? payload.testidElements : [],
-    formElements: Array.isArray(payload?.formElements) ? payload.formElements : [],
-    contentEditables: Array.isArray(payload?.contentEditables) ? payload.contentEditables : [],
-    observations: Array.isArray(payload?.observations) ? payload.observations : [],
+    testidElements: Array.isArray(payload.testidElements) ? payload.testidElements : [],
+    formElements: Array.isArray(payload.formElements) ? payload.formElements : [],
+    contentEditables: Array.isArray(payload.contentEditables) ? payload.contentEditables : [],
+    observations: Array.isArray(payload.observations) ? payload.observations : [],
   };
 }
 

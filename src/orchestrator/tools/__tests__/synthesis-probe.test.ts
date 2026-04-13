@@ -1,19 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
-import { collectManifest, type ProbePage } from '../synthesis-probe.js';
+import { collectManifest, type EvaluateOnlyPage } from '../synthesis-probe.js';
 
 vi.mock('../../../lib/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-function makePage(evaluatePayload: unknown): ProbePage {
+function makePage(evaluatePayload: unknown): EvaluateOnlyPage {
   return {
-    goto: vi.fn(async () => undefined),
-    url: () => 'https://x.com/compose/post',
-    title: async () => 'X compose',
-    evaluate: vi.fn(async () => evaluatePayload),
-    screenshot: vi.fn(async () => Buffer.from('fake-image', 'utf8')),
-    on: vi.fn(),
-  } as unknown as ProbePage;
+    evaluate: async () => evaluatePayload,
+  };
 }
 
 describe('collectManifest', () => {

@@ -56,6 +56,32 @@ import {
 import { getActiveRuntimeSkillLoader } from '../runtime-skill-loader.js';
 
 // ---------------------------------------------------------------------------
+// Handler outcome shape
+// ---------------------------------------------------------------------------
+
+/**
+ * The concrete return shape the synthesis generator instructs skills
+ * to produce. It's a ToolResult plus the extra fields the tester
+ * needs for vision verification (screenshot + url + human-readable
+ * message). Kept as a local type so non-synthesis tools aren't
+ * forced to carry these fields, while the tester has precise types
+ * instead of casting to `unknown`.
+ *
+ * Extends ToolResult so the existing tool-executor dispatch path
+ * treats synthesized skills identically to static ones — anything
+ * that consumes a ToolResult already sees the `success`/`data`/
+ * `error` fields and ignores the extras.
+ */
+export interface SynthesizedSkillOutcome extends ToolResult {
+  /** Human-readable summary the tester can show on failure. */
+  message?: string;
+  /** JPEG base64 from the skill's final `page.screenshot()` call. */
+  screenshotBase64?: string;
+  /** Landed URL after navigation — useful for vision eval context. */
+  currentUrl?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -67,8 +93,14 @@ export interface VisionVerdict {
 export interface TestSynthesizedSkillInput {
   db: DatabaseAdapter;
   modelRouter: ModelRouter;
-  /** LocalToolContext to pass to the handler. Handlers use it or ignore it. */
-  ctx?: LocalToolContext;
+  /**
+   * LocalToolContext to pass to the handler. Synthesized skills
+   * typically ignore ctx (their generator template names it `_ctx`),
+   * but we still need a real value to satisfy the ToolHandler
+   * signature. Callers that don't have a full context may pass a
+   * minimal stub.
+   */
+  ctx: LocalToolContext;
   /** The `name` of a synthesized skill already registered in runtimeToolRegistry. */
   skillName: string;
   /** Input to pass to the handler. `dry_run` is overridden to true regardless. */
@@ -86,7 +118,7 @@ export interface TestSynthesizedSkillResult {
   ok: boolean;
   stage: 'not_found' | 'handler_error' | 'no_screenshot' | 'vision_reject' | 'promoted';
   message: string;
-  handlerResult?: ToolResult | Record<string, unknown>;
+  handlerResult?: SynthesizedSkillOutcome;
   visionVerdict?: VisionVerdict;
   screenshotBase64?: string;
   currentUrl?: string;
@@ -129,22 +161,9 @@ async function defaultVisionEval(
       maxTokens: 256,
       temperature: 0.1,
     });
-    const rawContent = response.content as unknown;
-    let text = '';
-    if (typeof rawContent === 'string') {
-      text = rawContent;
-    } else if (Array.isArray(rawContent)) {
-      text = rawContent
-        .map((p: unknown) => {
-          if (p && typeof p === 'object' && 'text' in p) {
-            const t = (p as { text: unknown }).text;
-            return typeof t === 'string' ? t : '';
-          }
-          return '';
-        })
-        .join(' ');
-    }
-    return parseVisionVerdict(text);
+    // ModelResponse.content is declared as `string` in model-router.ts,
+    // so no array-of-parts unwrapping is needed here.
+    return parseVisionVerdict(response.content);
   } catch (err) {
     return {
       ok: false,
@@ -186,13 +205,28 @@ export function parseVisionVerdict(raw: string): VisionVerdict {
 // Handler invocation
 // ---------------------------------------------------------------------------
 
-interface HandlerResultLoose extends Record<string, unknown> {
-  success?: boolean;
-  message?: string;
-  screenshotBase64?: string;
-  currentUrl?: string;
-  error?: string;
-  data?: unknown;
+/**
+ * Shape we accept when a handler chose to nest the screenshot under
+ * `data`. Declared explicitly so we can reach into `data` without
+ * blanket-casting to `unknown` — we narrow via property checks and
+ * type guards instead.
+ */
+interface NestedScreenshotPayload {
+  screenshotBase64?: unknown;
+  currentUrl?: unknown;
+}
+
+function pickString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function pickNestedScreenshot(data: unknown): { screenshotBase64?: string; currentUrl?: string } {
+  if (!data || typeof data !== 'object') return {};
+  const nested = data as NestedScreenshotPayload;
+  return {
+    screenshotBase64: pickString(nested.screenshotBase64),
+    currentUrl: pickString(nested.currentUrl),
+  };
 }
 
 /**
@@ -202,27 +236,37 @@ interface HandlerResultLoose extends Record<string, unknown> {
  * standard ToolResult shape ({success, data, error}). The tester
  * doesn't care which — as long as we get back a success flag + a
  * screenshot, we can move on to vision verification.
+ *
+ * The cast from `ToolResult` → `SynthesizedSkillOutcome` is valid
+ * because SynthesizedSkillOutcome extends ToolResult with only
+ * optional extra fields; at runtime synthesized skills populate
+ * those extras (the generator template enforces it), but for
+ * handlers that don't, the fields are just undefined.
  */
 async function invokeHandlerDryRun(
   def: RuntimeToolDefinition,
-  ctx: LocalToolContext | undefined,
+  ctx: LocalToolContext,
   input: Record<string, unknown>,
-): Promise<HandlerResultLoose> {
+): Promise<SynthesizedSkillOutcome> {
   const forced = { ...input, dry_run: true };
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw = await def.handler(ctx as any, forced) as unknown;
-    if (!raw || typeof raw !== 'object') return { success: false, message: 'handler returned non-object' };
-    const obj = raw as HandlerResultLoose;
-    // Some handlers nest the screenshot under `data`. Normalize.
-    if (!obj.screenshotBase64 && obj.data && typeof obj.data === 'object') {
-      const nested = obj.data as HandlerResultLoose;
-      if (nested.screenshotBase64) obj.screenshotBase64 = nested.screenshotBase64;
-      if (nested.currentUrl) obj.currentUrl = nested.currentUrl;
+    const raw = await def.handler(ctx, forced);
+    if (!raw || typeof raw !== 'object') {
+      return { success: false, error: 'handler returned non-object', message: 'handler returned non-object' };
     }
-    return obj;
+    const outcome = raw as SynthesizedSkillOutcome;
+    if (!outcome.screenshotBase64) {
+      const nested = pickNestedScreenshot(outcome.data);
+      if (nested.screenshotBase64) outcome.screenshotBase64 = nested.screenshotBase64;
+      if (nested.currentUrl) outcome.currentUrl = nested.currentUrl;
+    }
+    return outcome;
   } catch (err) {
-    return { success: false, message: err instanceof Error ? err.message : String(err) };
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -301,7 +345,7 @@ export async function testSynthesizedSkill(
     return {
       ok: false,
       stage: 'handler_error',
-      message: handlerResult.message || handlerResult.error || 'handler returned success=false',
+      message: handlerResult.message ?? handlerResult.error ?? 'handler returned success=false',
       handlerResult,
     };
   }
