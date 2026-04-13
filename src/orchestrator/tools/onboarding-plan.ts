@@ -95,13 +95,26 @@ export function onboardingPlanSyncPayload(row: {
 interface PlanTask {
   title: string;
   description: string;
-  owner: string; // "member", "guide", or a named agent
+  /**
+   * "guide" by default — the COS or another agent runs the task. "member"
+   * only when the task literally requires human judgment, relationships,
+   * authority, or presence; in that case `human_judgment_reason` must
+   * justify it. May also be a specific named existing agent.
+   */
+  owner: string;
+  /**
+   * Why this task can't be agent-run. REQUIRED when owner === "member".
+   * Forces the synthesis to justify each piece of human-owned work
+   * instead of silently defaulting new hires into busywork that ohwow
+   * could handle for them.
+   */
+  human_judgment_reason?: string;
   success_criteria: string;
   /**
-   * Which ohwow capabilities the member or guide will use to execute this
-   * task. Every task MUST name at least one. This is how the plan teaches
-   * a new hire what ohwow does — by having them do their actual first-
-   * month work through the product, not around it.
+   * Which ohwow capabilities the guide (or member, when owner=member)
+   * will use to execute this task. Every task MUST name at least one.
+   * This is how the plan teaches a new hire what ohwow does — by having
+   * the runtime do their actual first-month work in front of them.
    */
   ohwow_tools?: string[];
   /** One-sentence rationale: "why this task uses ohwow vs. generic work" */
@@ -316,14 +329,36 @@ Every single task in the plan MUST name at least one ohwow capability it uses, v
 3. Every task fields:
    - title
    - description (1-2 sentences, action-oriented, names the specific ohwow capabilities involved)
-   - owner ("member" for things only the human can do, "guide" for agent-assisted, or a specific named existing agent)
+   - owner ("guide" by default — see Rule 4. "member" only for human-judgment work. Or a specific named existing agent.)
+   - human_judgment_reason (REQUIRED only when owner === "member": one short sentence saying why an agent literally cannot do this. If you can't write a real reason, the owner is "guide", not "member".)
    - success_criteria (concrete, observable)
    - ohwow_tools: array of 1-3 ohwow capability names from the cheat sheet — REQUIRED, never empty
    - ohwow_leverage: one-sentence explanation of why using these ohwow tools is better than doing it manually
-4. EVERY task must be grounded in something the member told us about themselves AND leverage at least one ohwow capability. If you can't see how an ohwow tool fits a task, cut or rewrite the task.
-5. Week 1 should include at least one task that has the MEMBER personally run an ohwow tool through the chat so they experience the product immediately. Examples: scrape_url on a competitor's site, deep_research on their own industry, search_knowledge on an existing team doc.
-6. Lean into their ambition and learning style. The plan is a ramp, not a test.
-7. Keep task descriptions short and warm. No corporate language. No em dashes.
+
+4. **Owner default = "guide".** ohwow's whole value prop is that AI runs the work. A new member's ramp should mostly show them what the AI does FOR them, not pile work ON them.
+
+   **Always "guide" (the COS or another agent runs it):**
+   - Research: market research, competitor profiling, industry scans, buyer interviews
+   - Audits + lookups: workspace audits, data pulls, knowledge searches, telemetry checks
+   - Scraping + crawling: any scrape_url, scrape_search, deep_research call
+   - Drafts: first drafts of content, copy, briefs, plans, summaries, reports
+   - Compilation: lead lists from public sources, contact enrichment, knowledge ingestion
+   - Routine setup: spinning up CRM rows, seeding goals, configuring schedules
+   - Anything whose verb is research, audit, scrape, draft, compile, summarize, list, find, enrich, profile, monitor, report
+
+   **Only "member" when ALL of these are true:**
+   - The task literally cannot be performed by an agent right now
+   - It requires human judgment (approval of a draft, strategic decision, voice/tone call), human relationships (intro call, internal pitch), human authority (signing, paying, hiring), or human presence (in-person meeting, phone call)
+   - You can write a one-sentence \`human_judgment_reason\` that names which of those it requires
+
+   Examples of correctly member-owned: "Approve the COS-drafted intro email before it goes out" (judgment), "Pick which of the 3 prospect personas the SDR agent should focus on" (strategic decision), "Have a 15-min intro call with the founder" (human presence), "Sign the partnership agreement once the COS has it ready" (authority).
+
+   Examples that look member-owned but are actually guide-owned: "Audit the workspace state" → guide runs \`get_workspace_stats\` + \`assess_operations\`. "Run deep research on the AI automation market" → guide runs \`deep_research\`. "Profile 3 competitors" → guide runs \`scrape_url\` + \`llm\`. "Draft the first content piece" → guide runs \`llm\` + \`local_write_file\`, member only approves.
+
+5. EVERY task must be grounded in something the member told us about themselves AND leverage at least one ohwow capability. If you can't see how an ohwow tool fits a task, cut or rewrite the task.
+6. Week 1 should still include at least one moment where the MEMBER experiences the product directly — but frame it as "watch the COS run X, then approve" not "do X yourself". The first-touch experience is the agent doing work in front of them, not them doing work.
+7. Lean into their ambition and learning style. The plan is a ramp, not a test.
+8. Keep task descriptions short and warm. No corporate language. No em dashes.
 
 ## Output shape (return ONLY this JSON, no prose before or after)
 
@@ -337,9 +372,18 @@ Every single task in the plan MUST name at least one ohwow capability it uses, v
         {
           "title": "...",
           "description": "...",
-          "owner": "member|guide|<agent name>",
+          "owner": "guide",
           "success_criteria": "...",
           "ohwow_tools": ["tool_name_1", "tool_name_2"],
+          "ohwow_leverage": "one sentence"
+        },
+        {
+          "title": "...",
+          "description": "...",
+          "owner": "member",
+          "human_judgment_reason": "Approving the draft tone before it goes to a real prospect — agent can write but only Mario can decide if it sounds like him.",
+          "success_criteria": "...",
+          "ohwow_tools": ["tool_name_1"],
           "ohwow_leverage": "one sentence"
         }
       ]
@@ -713,8 +757,22 @@ export async function acceptOnboardingPlan(
 
     for (const task of week.tasks) {
       const taskId = newHexId();
-      const ownerLabel = (task.owner || 'guide').toLowerCase();
-      const isHumanOwned = ownerLabel === 'member' || ownerLabel === (member.name || '').toLowerCase();
+      const rawOwner = (task.owner || 'guide').toLowerCase();
+      const looksHumanOwned = rawOwner === 'member' || rawOwner === (member.name || '').toLowerCase();
+      // Defense in depth: if the synthesis flagged a task as member-owned
+      // but didn't justify it with human_judgment_reason, downgrade to
+      // guide-owned. ohwow's value prop is that AI runs the work; new
+      // hires shouldn't be silently piled with busywork that an agent
+      // could handle just because the LLM defaulted that way.
+      const justified = typeof task.human_judgment_reason === 'string' && task.human_judgment_reason.trim().length > 0;
+      const isHumanOwned = looksHumanOwned && justified;
+      if (looksHumanOwned && !justified) {
+        logger.info(
+          { title: task.title },
+          '[accept_onboarding_plan] downgrading unjustified member-owned task to guide-owned',
+        );
+      }
+      const ownerLabel = isHumanOwned ? 'member' : 'guide';
       try {
         await ctx.db.from('agent_workforce_tasks').insert({
           id: taskId,
@@ -733,8 +791,12 @@ export async function acceptOnboardingPlan(
             onboarding_plan_id: planId,
             onboarding_week: week.week,
             onboarding_theme: week.theme,
-            owner_label: task.owner,
+            // Stamp the post-downgrade label so the briefing's owner
+            // detection sees the same shape the task was actually
+            // materialized under, not the raw LLM output.
+            owner_label: ownerLabel,
             success_criteria: task.success_criteria,
+            human_judgment_reason: justified ? task.human_judgment_reason : null,
           }),
           source_type: 'onboarding_plan',
         });
