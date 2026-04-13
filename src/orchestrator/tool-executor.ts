@@ -11,6 +11,7 @@ import type { LocalToolContext, ToolHandler, ToolResult } from './local-tool-typ
 import type { OrchestratorEvent, ChannelChatOptions } from './orchestrator-types.js';
 import { toolRegistry } from './tools/registry.js';
 import { runtimeToolRegistry } from './runtime-tool-registry.js';
+import { recordRuntimeSkillOutcome } from './runtime-skill-metrics.js';
 import type { ToolCache } from './tool-cache.js';
 import {
   BROWSER_ACTIVATION_MESSAGE,
@@ -1085,9 +1086,6 @@ Constraints:
       isError: true,
     };
   }
-  // Silence unused-variable lint until M7 wires success/failure
-  // counters for runtime skills through the success path.
-  void runtimeSkillId;
 
   // Circuit breaker check: skip tools that have failed repeatedly
   const cb = ctx.circuitBreaker;
@@ -1136,6 +1134,17 @@ Constraints:
     // Activity feed: log notable orchestrator tool calls so dashboard shows
     // dogfood work in real time. Best-effort, never blocks tool execution.
     void recordOrchestratorActivity(ctx.toolCtx, request.name, toolInput, result);
+    // Runtime skill accounting: every dispatch through the runtime
+    // registry bumps success_count on success or fail_count on
+    // handler-reported failure. Tester promotion (M6) is unaffected
+    // — counters are for ongoing live usage analytics.
+    if (runtimeSkillId) {
+      void recordRuntimeSkillOutcome(
+        ctx.toolCtx,
+        runtimeSkillId,
+        result.success ? 'success' : 'failure',
+      );
+    }
     yield { type: 'tool_done', name: request.name, result };
 
     if (result.switchTab) {
@@ -1204,6 +1213,13 @@ Constraints:
         const failureDetection = ctx.immuneSystem.scan(errorMsg, request.name);
         ctx.immuneSystem.respond(failureDetection);
       } catch { /* non-fatal */ }
+    }
+
+    // Runtime skill accounting: thrown errors count as a failure for
+    // the backing agent_workforce_skills row. Mirror of the success
+    // path above — the counter update is fire-and-forget.
+    if (runtimeSkillId) {
+      void recordRuntimeSkillOutcome(ctx.toolCtx, runtimeSkillId, 'failure');
     }
 
     // Enrich error message with alternatives
