@@ -505,8 +505,25 @@ export function classifyIntent(message: string, previousIntent?: ClassifiedInten
     };
   }
 
-  // Greetings (exact-match short circuit, not keyword-based)
-  if (/^(hey|hi|hello|morning|good morning|good evening|yo|sup|what'?s up)\b/.test(lower)) {
+  // Greetings (exact-match short circuit, not keyword-based).
+  //
+  // The short-circuit only fires for messages that are ACTUALLY a
+  // greeting — short, no substantial content after the greeting
+  // word. Without the length gate, any prompt that opens with
+  // "Hey look at..." or "Hi, can you..." would classify as a bare
+  // greeting, skip intent scoring entirely, and end up with the
+  // `pulse/memory/agents` section set — stripping filesystem,
+  // browser, and every other intent-specific tool from the LLM's
+  // prompt. Launch-eve regression: "Hey look at the PH copy you
+  // staged earlier..." matched this branch and the filesystem
+  // tools never got added, so the orchestrator literally told
+  // the user "I don't have a direct filesystem read tool available".
+  //
+  // Rule: greeting short-circuit only if the entire message is
+  // ≤ 40 chars. A real 8-word greeting like "Hi there, how's it
+  // going today?" fits; a 200-word task prompt that opens with
+  // "Hey" doesn't.
+  if (lower.length <= 40 && /^(hey|hi|hello|morning|good morning|good evening|yo|sup|what'?s up)\b/.test(lower)) {
     return classify('greeting', new Set<IntentSection>(['pulse', 'memory', 'agents']), 'Checking your pulse...', lower);
   }
 
