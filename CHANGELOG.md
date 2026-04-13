@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.2] — 2026-04-13
+
+### Added
+- **X posting**: `content_calendar` sync and two-step article publish flow
+- **X posting**: Deterministic X browser tools for launch week
+- **MCP**: Switch workspaces from inside Claude Code
+- **TUI**: Workspace name in header plus `/workspace` switcher
+
+### Fixed
+- **TUI**: Read `agent_workforce_workspaces` by row instead of hardcoded id
+
 ## [0.8.1] — 2026-04-13
 
 ### Added
