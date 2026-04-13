@@ -16,7 +16,10 @@ import { loadOrchestratorMemory } from './session-store.js';
 import { logger } from '../lib/logger.js';
 import { getGitContext, isStaleBranch } from '../lib/git-utils.js';
 import { detectProjectStack } from '../lib/project-detector.js';
-import { extractKeywords, matchesTriggers } from '../lib/token-similarity.js';
+// NOTE: extractKeywords/matchesTriggers removed — see the banner
+// comment later in this file. Skill discovery is no longer
+// keyword-based; the LLM picks tools from its tool list surfaced
+// via runtimeToolRegistry through LocalOrchestrator.getTools().
 
 export interface PromptBuilderDeps {
   db: DatabaseAdapter;
@@ -123,9 +126,8 @@ export async function buildTargetedPrompt(
     })();
   }
 
-  // --- Learned principles, skills, and discovered processes from self-improvement ---
+  // --- Learned principles and discovered processes from self-improvement ---
   type PrincipleRow = { id: string; rule: string; category: string };
-  type SkillRow = { id: string; name: string; description: string; definition?: string; skill_type?: string; triggers?: string; success_rate?: number | null; times_used?: number };
   type ProcessRow = { id: string; name: string; description: string | null; steps: string; status: string; frequency: number; trigger_message: string | null };
 
   const principlesPromise = deps.db.from('agent_workforce_principles')
@@ -133,11 +135,12 @@ export async function buildTargetedPrompt(
     .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
     .order('utility_score', { ascending: false }).limit(5);
 
-  // Fetch more skills than needed — filter by trigger match in-app (SQLite has no GIN index)
-  const skillsPromise = deps.db.from('agent_workforce_skills')
-    .select('id, name, description, definition, skill_type, triggers, success_rate, times_used')
-    .eq('workspace_id', deps.workspaceId).eq('is_active', 1)
-    .order('pattern_support', { ascending: false }).limit(20);
+  // Skills are NO LONGER fetched here for prompt-injection purposes.
+  // They reach the LLM through the runtime tool registry, surfaced by
+  // LocalOrchestrator.getTools() as regular tools the model picks by
+  // description. The old "Learned Procedures" section (keyword-
+  // matched, pattern-mined procedure rows) is gone — see the plan at
+  // /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
 
   const processesPromise = deps.db.from('agent_workforce_discovered_processes')
     .select('id, name, description, steps, status, frequency, trigger_message')
@@ -170,8 +173,8 @@ export async function buildTargetedPrompt(
     return {};
   })();
 
-  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag, principlesResult, skillsResult, processesResult] =
-    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise, principlesPromise, skillsPromise, processesPromise]);
+  const [agentsResult, projectsResult, businessResult, visionResult, a2aResult, pulseResult, memoryRag, principlesResult, processesResult] =
+    await Promise.all([agentsPromise, projectsPromise, businessPromise, visionPromise, a2aPromise, pulsePromise, memoryRagPromise, principlesPromise, processesPromise]);
 
   const agents = ((agentsResult.data || []) as AgentRow[]).map((a) => {
     const raw = typeof a.stats === 'string' ? JSON.parse(a.stats as string) : (a.stats || {}) as Record<string, unknown>;
@@ -230,33 +233,19 @@ export async function buildTargetedPrompt(
 
   const activeAgents = agents.filter((a) => a.status === 'working').length;
 
-  // --- Intent-aware skill matching: trigger-matched first, then top generic ---
-  const allSkills = (skillsResult.data || []) as SkillRow[];
-  const messageKeywords = userMessage ? extractKeywords(userMessage) : [];
-  const triggerMatched = messageKeywords.length > 0
-    ? allSkills.filter(s => {
-        const triggers: string[] = (() => { try { return JSON.parse(s.triggers || '[]'); } catch { return []; } })();
-        return matchesTriggers(triggers, messageKeywords);
-      }).sort((a, b) => (b.success_rate ?? 0) - (a.success_rate ?? 0))
-    : [];
-  const triggerIds = new Set(triggerMatched.map(s => s.id));
-  const topGeneric = allSkills.filter(s => !triggerIds.has(s.id)).slice(0, 5);
-  const mergedSkills = [...triggerMatched, ...topGeneric].slice(0, 5);
-
-  // If a matched procedure skill uses desktop tools, activate the desktop section
-  // so the model gets desktop tools + the SOP steps in the same prompt
-  for (const skill of triggerMatched) {
-    try {
-      const def = typeof skill.definition === 'string' ? JSON.parse(skill.definition || '{}') : (skill.definition || {});
-      const seq = def.tool_sequence as string[] | undefined;
-      if (seq && seq.some((t: string) => t.startsWith('desktop_'))) {
-        sections.add('desktop');
-      }
-      if (seq && seq.some((t: string) => t.startsWith('browser_'))) {
-        sections.add('browser');
-      }
-    } catch { /* malformed definition */ }
-  }
+  // NOTE: the keyword-matched skill loader and the desktop-section
+  // auto-activation loop used to live here. Both depended on
+  // extractKeywords(userMessage) + matchesTriggers(skill.triggers),
+  // which was the same over-matching mechanism the runAgent SOP
+  // matcher used. They've been removed — full rationale in
+  // /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
+  //
+  // Skills are now discovered exclusively via the LLM's tool list,
+  // populated by runtimeToolRegistry through LocalOrchestrator.getTools().
+  // The "Learned Procedures" section in system-prompt.ts was deleted
+  // in lockstep; `learnedSkills` below is always an empty array and
+  // serves only to keep the BuildLocalSystemPromptArgs interface
+  // compatible until it's removed in a follow-up.
 
   const args: BuildLocalSystemPromptArgs = {
     agents: need('agents') ? agents : [],
@@ -290,7 +279,7 @@ export async function buildTargetedPrompt(
     hasMcpTools,
     platform,
     learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
-    learnedSkills: mergedSkills,
+    learnedSkills: [],
     knownWorkflows: (processesResult.data || []) as ProcessRow[],
     gitContext: (() => {
       if (!need('filesystem') || !deps.workingDirectory) return undefined;
@@ -336,23 +325,12 @@ export async function buildTargetedPrompt(
     })().catch(err => logger.debug({ err }, 'Failed to increment principle usage'));
   }
 
-  // Fire-and-forget: increment times_used for skills injected into the prompt
-  const injectedSkillIds = ((args.learnedSkills || []) as SkillRow[]).map(s => s.id);
-  if (injectedSkillIds.length > 0) {
-    (async () => {
-      for (const id of injectedSkillIds) {
-        try {
-          const { data } = await deps.db.from('agent_workforce_skills')
-            .select('times_used').eq('id', id).single();
-          if (data) {
-            const current = (data as Record<string, unknown>).times_used as number || 0;
-            await deps.db.from('agent_workforce_skills')
-              .update({ times_used: current + 1 }).eq('id', id);
-          }
-        } catch { /* best-effort tracking */ }
-      }
-    })().catch(err => logger.debug({ err }, 'Failed to increment skill usage'));
-  }
+  // NOTE: the times_used incrementer used to live here and only ran
+  // for skills injected into the system prompt via the old keyword
+  // matcher. `learnedSkills` is always [] now, so there's nothing to
+  // increment from this path. Code-skill usage is tracked in
+  // `runtime-skill-metrics.ts` via success_count/fail_count on the
+  // tool-executor dispatch path.
 
   let staticPart: string;
   let dynamicPart: string;

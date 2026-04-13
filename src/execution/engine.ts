@@ -39,7 +39,9 @@ import {
 } from '../lib/memory-utils.js';
 // MemorySyncPayload moved to ./memory-sync.js
 import { logger } from '../lib/logger.js';
-import { extractKeywords, matchesTriggers } from '../lib/token-similarity.js';
+// NOTE: extractKeywords/matchesTriggers removed — see compileSkills
+// below. Skill discovery is no longer keyword-based; the LLM picks
+// tools from its tool list surfaced via runtimeToolRegistry.
 import {
   executeWithClaudeCodeCli,
   isClaudeCodeCliAvailable,
@@ -3019,73 +3021,29 @@ export class RuntimeEngine {
 
   /**
    * Compile relevant skills/SOPs for an agent's task.
-   * Returns a formatted document for injection into the agent's system prompt.
+   *
+   * DEPRECATED — early-returns an empty string. This method used to
+   * load `agent_workforce_skills` rows, filter them by `agent_ids`,
+   * run `matchesTriggers(skill.triggers, extractKeywords(taskTitle))`
+   * as a keyword match, and inject the top 5 matches into the agent's
+   * system prompt as a "## Matched SOPs" section. That path produced
+   * the launch-eve regression where a file-rewrite task matched the
+   * word "write" and got a desktop-SOP injection.
+   *
+   * Full rationale and removal plan at
+   * /Users/jesus/.claude/plans/idempotent-tumbling-flame.md.
+   *
+   * Skills are now discovered exclusively by the LLM from its tool
+   * list via `runtimeToolRegistry.getToolDefinitions()` merged into
+   * the orchestrator's getTools() output. Keyword matching on the
+   * task title is never used for skill discovery in the runtime.
+   *
+   * The method signature is preserved (returning an empty string) so
+   * `runTask` callers don't need to be edited in this refactor. A
+   * follow-up pass can remove the call site and drop this method.
    */
-  private async compileSkills(agentId: string, workspaceId: string, taskTitle: string): Promise<string> {
-    try {
-      const { data: skills } = await this.db.from('agent_workforce_skills')
-        .select('id, name, description, skill_type, definition, triggers, success_rate, times_used, agent_ids')
-        .eq('workspace_id', workspaceId)
-        .eq('is_active', 1)
-        .order('pattern_support', { ascending: false })
-        .limit(20);
-
-      if (!skills || skills.length === 0) return '';
-
-      // Filter: skills linked to this agent or workspace-wide (empty agent_ids)
-      const agentSkills = (skills as Array<Record<string, unknown>>).filter(s => {
-        try {
-          const raw = s.agent_ids;
-          const ids: string[] = Array.isArray(raw) ? raw : JSON.parse((raw as string) || '[]');
-          return ids.length === 0 || ids.includes(agentId);
-        } catch { return true; }
-      });
-
-      if (agentSkills.length === 0) return '';
-
-      // Further filter by task relevance (keyword match against triggers)
-      const keywords = extractKeywords(taskTitle);
-      const matched = keywords.length > 0
-        ? agentSkills.filter(s => {
-            try {
-              const rawTriggers = s.triggers;
-              const triggers: string[] = Array.isArray(rawTriggers) ? rawTriggers : JSON.parse((rawTriggers as string) || '[]');
-              return triggers.length === 0 || matchesTriggers(triggers, keywords);
-            } catch { return false; }
-          })
-        : agentSkills;
-
-      const top = matched.slice(0, 5);
-      if (top.length === 0) {
-        logger.debug({ agentId, skillCount: skills.length, agentSkillCount: agentSkills.length, keywords }, '[engine] compileSkills: no trigger match');
-        return '';
-      }
-      logger.info({ agentId, matchedCount: top.length, names: top.map(s => s.name) }, '[engine] compileSkills: matched SOPs');
-
-      // Format as procedure instructions
-      return top.map(s => {
-        const successLabel = s.success_rate != null ? ` (${Math.round(s.success_rate as number * 100)}% success)` : '';
-        const header = `### ${s.name}${successLabel}\n${s.description || ''}`;
-
-        if (s.skill_type === 'procedure' && s.definition) {
-          try {
-            const def = typeof s.definition === 'string' ? JSON.parse(s.definition as string) : s.definition;
-            if (def.tool_sequence && Array.isArray(def.tool_sequence)) {
-              const steps = def.tool_sequence.slice(0, 8).map((step: string | { tool: string; args?: Record<string, unknown> }, i: number) => {
-                if (typeof step === 'string') return `${i + 1}. ${step}`;
-                const argsStr = step.args ? `(${Object.entries(step.args).map(([, v]) => JSON.stringify(v)).join(', ')})` : '';
-                return `${i + 1}. ${step.tool}${argsStr}`;
-              }).join('\n');
-              return `${header}\n**Steps:**\n${steps}`;
-            }
-          } catch { /* malformed definition */ }
-        }
-        return header;
-      }).join('\n\n');
-    } catch (err) {
-      logger.debug({ err: err instanceof Error ? err.message : err }, '[engine] compileSkills failed');
-      return '';
-    }
+  private async compileSkills(_agentId: string, _workspaceId: string, _taskTitle: string): Promise<string> {
+    return '';
   }
 
   // ==========================================================================
