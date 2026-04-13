@@ -131,6 +131,13 @@ export class LocalOrchestrator {
   private browserService: LocalBrowserService | null = null;
   private browserActivated = false;
   private browserRequestedProfile: string | undefined;
+  /**
+   * Non-null when the most recent browser activation fell through from
+   * CDP-attached mode to an isolated bundled Chromium. Tool executors
+   * read this via `getBrowserDegradedReason()` and surface it to the
+   * LLM so the next turn stops assuming a logged-in session.
+   */
+  private _browserDegradedReason: string | null = null;
   private desktopService: LocalDesktopService | null = null;
   private desktopActivated = false;
   private filesystemActivated = false;
@@ -247,22 +254,41 @@ export class LocalOrchestrator {
         const cdpUrl = await LocalBrowserService.connectToChrome(this.chromeCdpPort, profileDir);
         if (cdpUrl) {
           this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
+          this._browserDegradedReason = null;
           logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
         } else {
           // CDP setup failed (Chrome wouldn't quit, port busy, profile missing, etc).
-          // Fall back to bundled Chromium so the user still gets browser tools.
+          // Fall back to bundled Chromium so the orchestrator still has SOME
+          // browser capability, but surface the degradation LOUDLY: tool
+          // responses will prefix a warning and the LLM will stop
+          // pretending it's in the user's real logged-in session.
           this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          logger.info('[orchestrator] Chrome CDP unavailable, using bundled Chromium (no real profile)');
+          this._browserDegradedReason = `Chrome CDP unavailable on :${this.chromeCdpPort}${profileDir ? ` (requested profile: ${profileDir})` : ''} — running in isolated Chromium with no real profile, no cookies, no logged-in sessions`;
+          logger.warn(`[orchestrator] ${this._browserDegradedReason}`);
         }
       } catch (err) {
         logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome activation failed, falling back to Chromium');
         this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+        this._browserDegradedReason = `Chrome activation threw: ${err instanceof Error ? err.message : String(err)} — running in isolated Chromium with no real profile`;
       }
     } else {
       this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
+      this._browserDegradedReason = null;
     }
     this.browserActivated = true;
     this.syncOrganToBody();
+  }
+
+  /**
+   * Non-null when the last browser activation fell back from
+   * CDP-attached to isolated Chromium. Tool executors surface this
+   * string in the request_browser response so the LLM can see it
+   * in its next turn's prompt and adjust — most importantly, it
+   * will stop attempting actions that require a logged-in session
+   * (posting to X, editing a Product Hunt draft, etc).
+   */
+  getBrowserDegradedReason(): string | null {
+    return this._browserDegradedReason;
   }
 
   private get desktopState(): DesktopState {
@@ -607,6 +633,68 @@ export class LocalOrchestrator {
   }
 
   /**
+   * Reload the MCP server registry from the per-workspace DB and reconnect.
+   * Called by the typed `ohwow_add_mcp_server` / `ohwow_remove_mcp_server`
+   * tools (via POST /api/mcp/servers) so newly registered servers are live
+   * without a daemon restart.
+   *
+   * Unlike the lazy path in ensureMcpConnected(), this always reads from
+   * runtime_settings and overwrites the in-memory list — the constructor
+   * config (if any) is superseded for the remainder of the process.
+   */
+  async reloadMcpServers(): Promise<void> {
+    let fresh: McpServerConfig[] = [];
+    try {
+      const { data } = await this.db
+        .from('runtime_settings')
+        .select('value')
+        .eq('key', 'global_mcp_servers')
+        .maybeSingle();
+      if (data) {
+        // The SQLite adapter (parseJsonColumns in src/db/sqlite-adapter.ts)
+        // auto-parses JSON-shaped string columns on read, so `value` is
+        // already an array by the time we get it. Calling JSON.parse() on an
+        // array coerces it to "[object Object]" and throws. Accept either
+        // shape so we tolerate adapter behavior changes and historical rows.
+        const raw = (data as { value: unknown }).value;
+        if (Array.isArray(raw)) {
+          fresh = raw as McpServerConfig[];
+        } else if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse(raw);
+            fresh = Array.isArray(parsed) ? (parsed as McpServerConfig[]) : [];
+          } catch (parseErr) {
+            // Corrupted row — log and treat as empty rather than poisoning
+            // the in-memory state. The row is left in place so a future
+            // recovery tool can inspect it.
+            logger.warn(
+              { err: parseErr },
+              '[mcp] reloadMcpServers: runtime_settings.global_mcp_servers is corrupted; treating as empty',
+            );
+            fresh = [];
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, '[mcp] reloadMcpServers: failed to read runtime_settings');
+      return;
+    }
+    this.mcpServers = fresh;
+    // Tear down existing clients and reconnect immediately so the next
+    // orchestrator turn sees the updated tool surface.
+    if (this.mcpClients) {
+      await this.mcpClients.close().catch(() => {});
+      this.mcpClients = null;
+    }
+    if (fresh.length > 0) {
+      await this.ensureMcpConnected(true);
+    } else {
+      // Empty list — sync organ state so consumers see no MCP tools.
+      this.syncOrganToBody();
+    }
+  }
+
+  /**
    * Ensure MCP clients are connected. Lazy-initializes on first use.
    * When force=true, closes existing connections and reconnects (for crash recovery).
    */
@@ -623,7 +711,19 @@ export class LocalOrchestrator {
           .eq('key', 'global_mcp_servers')
           .maybeSingle();
         if (data) {
-          servers = JSON.parse((data as { value: string }).value) as McpServerConfig[];
+          // SQLite adapter auto-parses JSON columns on read. Accept either
+          // an already-parsed array or (defensively) a raw JSON string.
+          const raw = (data as { value: unknown }).value;
+          if (Array.isArray(raw)) {
+            servers = raw as McpServerConfig[];
+          } else if (typeof raw === 'string') {
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) servers = parsed as McpServerConfig[];
+            } catch {
+              // Corrupted row — leave servers as []
+            }
+          }
         }
       } catch {
         // DB not available, skip

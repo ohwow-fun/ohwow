@@ -176,9 +176,35 @@ export class LocalBrowserService {
     return this.page;
   }
 
+  /**
+   * Close the Stagehand wrapper.
+   *
+   * Two distinct cases matter here:
+   *
+   *   1. We spawned our own bundled Chromium (no cdpUrl). Calling
+   *      stagehand.close() terminates that process cleanly — correct.
+   *
+   *   2. We attached to a pre-existing Chrome via CDP (cdpUrl set).
+   *      Calling stagehand.close() would also terminate the underlying
+   *      Chrome, which is the user's REAL logged-in browser with all
+   *      their sessions, tabs, and cookies. That is never what we want
+   *      on daemon shutdown or orchestrator teardown. Detach by
+   *      nulling our references and let the CDP WebSocket close when
+   *      the stagehand object is garbage-collected.
+   *
+   * This was the root cause of a launch-eve incident: every daemon
+   * restart was killing the user's Chrome (and their Product Hunt
+   * login). Now the restart is safe.
+   */
   async close(): Promise<void> {
     try {
-      if (this.stagehand) await this.stagehand.close().catch(() => {});
+      if (this.stagehand) {
+        if (this.cdpUrl) {
+          logger.debug('[browser] close() detected CDP-attached mode — leaving Chrome alive for the user');
+        } else {
+          await this.stagehand.close().catch(() => {});
+        }
+      }
     } finally {
       this.stagehand = null;
       this.page = null;

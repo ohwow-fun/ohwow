@@ -800,6 +800,26 @@ Constraints:
       // Non-fatal: fall through to MCP or error path
     }
   }
+  // Fix #5: browser_navigate must refuse file:// URLs. The correct
+  // primitive for reading local files is local_read_file. Without this
+  // guard the orchestrator sometimes tries to "verify" a file it just
+  // wrote by opening it in Chrome, which (a) is a category error and
+  // (b) has caused path-mangling bugs like doubled "/ohwow/ohwow/"
+  // segments to silently land as ERR_FILE_NOT_FOUND loops.
+  if (request.name === 'browser_navigate' && typeof toolInput.url === 'string' && toolInput.url.startsWith('file://')) {
+    const errorResult: ToolResult = {
+      success: false,
+      error: `browser_navigate refuses file:// URLs. Use local_read_file with the filesystem path instead. You passed: ${toolInput.url}`,
+    };
+    ctx.executedToolCalls.set(toolKey, errorResult);
+    yield { type: 'tool_done', name: request.name, result: errorResult };
+    return {
+      toolName: request.name,
+      result: errorResult,
+      resultContent: errorResult.error ?? 'browser_navigate refused a file:// URL',
+      isError: true,
+    };
+  }
   if (isBrowserTool(request.name) && ctx.browserState.service) {
     const browserResult = await executeBrowserTool(ctx.browserState.service, request.name, toolInput);
     let screenshotPath: string | undefined;
@@ -830,6 +850,20 @@ Constraints:
         ? `Screenshot saved to ${screenshotPath}. The image shows the current browser viewport at ${browserResult.currentUrl || 'the current page'}.`
         : '[image]')))
       .join('\n');
+
+    // Fix #2: if the browser is running in degraded mode (CDP
+    // attachment failed, fell back to bundled Chromium), prefix every
+    // browser tool response with a loud warning. The LLM has no other
+    // way of knowing its browser session is NOT the user's real
+    // logged-in Chrome, and without this prefix it will happily try
+    // to post tweets, edit PH drafts, and click login buttons in an
+    // isolated profile that has none of the user's cookies.
+    const degradedReason = ctx.browserState.service.getBackend?.() === 'chromium'
+      ? '⚠️ Browser is running in ISOLATED BUNDLED CHROMIUM, not the user\'s real Chrome. No cookies, no logged-in sessions, no profile. Do NOT attempt actions that require authentication (posting to X, editing Product Hunt, sending DMs, etc). If the task needs a real session, STOP and tell the user the Chrome CDP connection failed.'
+      : null;
+    if (degradedReason) {
+      ollamaContent = `${degradedReason}\n\n${ollamaContent}`;
+    }
 
     // Hint: suggest desktop tools when browser hits a native boundary
     if (browserResult.error && ctx.desktopState) {
