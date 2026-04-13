@@ -2,6 +2,7 @@
  * Media Tools — slide generation, music generation, video generation, and other media helpers.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { readFile } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -11,6 +12,79 @@ import { LocalBrowserService } from '../../execution/browser/local-browser.servi
 import { LyriaOpenRouterBridge } from '../../media/lyria-openrouter-bridge.js';
 import { KokoroBridge } from '../../media/kokoro-mcp-bridge.js';
 import { logger } from '../../lib/logger.js';
+
+export const MEDIA_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'generate_slides',
+    description:
+      'Generate an HTML slide presentation with a given topic and style. Produces a self-contained HTML file with navigation. Each slide has an image placeholder with a data-prompt attribute. After generating, you can create images for each placeholder to enhance the presentation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        topic: { type: 'string', description: 'Presentation topic or brief' },
+        slide_count: { type: 'number', description: 'Number of slides (default 8, max 20)' },
+        style: { type: 'string', enum: ['modern', 'minimal', 'corporate', 'creative'], description: 'Visual style theme' },
+      },
+      required: ['topic'],
+    },
+  },
+  {
+    name: 'export_slides_pdf',
+    description:
+      'Export an HTML slide presentation to PDF. Requires the path to an HTML slides file (from generate_slides). Renders one slide per page in landscape orientation with full styling preserved.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        html_path: { type: 'string', description: 'Absolute path to the HTML slides file' },
+      },
+      required: ['html_path'],
+    },
+  },
+  {
+    name: 'generate_music',
+    description:
+      'Generate music or sound effects from a text description using Google Lyria via OpenRouter. Produces an audio file saved to the media library. Great for background music, jingles, sound effects, ambient soundscapes, and instrumental tracks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'Description of the music to generate (e.g. "upbeat lo-fi hip hop beat with soft piano and vinyl crackle")' },
+        duration_seconds: { type: 'number', description: 'Duration in seconds (5-30, default 15)' },
+        genre: { type: 'string', enum: ['ambient', 'electronic', 'orchestral', 'jazz', 'rock', 'pop', 'lo-fi', 'cinematic', 'folk', 'hip-hop'], description: 'Genre hint' },
+        mood: { type: 'string', enum: ['calm', 'energetic', 'dark', 'uplifting', 'melancholic', 'playful', 'dramatic', 'mysterious'], description: 'Mood hint' },
+        bpm: { type: 'number', description: 'Tempo in BPM (60-180, optional)' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'generate_video',
+    description:
+      'Generate a short video from a text description using video generation models via OpenRouter. Produces an MP4 file saved to the media library. Good for social media clips, product demos, visual concepts, and short animations.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'Description of the video to generate (e.g. "a golden retriever running through a field of wildflowers at sunset, cinematic, slow motion")' },
+        duration_seconds: { type: 'number', description: 'Duration in seconds (2-10, default 4)' },
+        aspect_ratio: { type: 'string', enum: ['16:9', '9:16', '1:1'], description: 'Aspect ratio (default 16:9)' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'generate_voice',
+    description:
+      'Convert text to speech audio. Uses local Kokoro TTS when available (free, fast), otherwise falls back to cloud TTS via OpenRouter. Produces an MP3 file saved to the media library. Great for voiceovers, narration, audio content, and accessibility.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        text: { type: 'string', description: 'The text to convert to speech' },
+        voice: { type: 'string', description: 'Voice name (e.g. "af_heart", "alloy"). Available voices depend on the provider.' },
+        speed: { type: 'number', description: 'Speech speed multiplier (0.5-2.0, default 1.0)' },
+      },
+      required: ['text'],
+    },
+  },
+];
 
 const SLIDE_STYLES: Record<string, { bg: string; text: string; accent: string; font: string }> = {
   modern: { bg: '#1a1a2e', text: '#eaeaea', accent: '#e94560', font: "'Inter', system-ui, sans-serif" },

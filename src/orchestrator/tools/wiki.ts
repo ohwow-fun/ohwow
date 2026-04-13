@@ -1,6 +1,9 @@
 /**
  * Wiki Tools — Karpathy-style markdown knowledge base layer
  *
+ * Tool schema definitions live in WIKI_TOOL_DEFINITIONS at the top, runtime
+ * handlers below.
+ *
  * Implements the "synthesis above raw chunks" pattern from Karpathy's
  * llm-wiki gist: an LLM-maintained set of markdown pages, encyclopedia-
  * style, that sit between raw KB documents and retrieval. Each page is
@@ -37,11 +40,93 @@
  * key used in URLs and `[[backlinks]]`.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
 import { resolveActiveWorkspace } from '../../config.js';
+
+export const WIKI_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'wiki_list_pages',
+    description: 'List all wiki pages with title, slug, summary, backlink counts, and version. Use this to get the lay of the land before deciding whether to read, update, or create a page.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_read_page',
+    description: 'Read a single wiki page by slug. Returns the full markdown body, frontmatter (title, summary, related, source_doc_ids), and computed backlinks (pages that link in, pages this one links to).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'The page slug, e.g. "competitive-cheat-sheet". Use wiki_list_pages first if you need to discover slugs.' },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'wiki_write_page',
+    description: 'Create or update a wiki page. Writes wiki/<workspace_id>/<slug>.md with YAML frontmatter and markdown body. If the page already exists the previous version is snapshotted to .versions/<slug>/v<N>.md and the version number is bumped. Appends an entry to wiki/log.md automatically. Use this to synthesize durable notes above the raw KB: competitive cheat sheets, playbooks, key-people pages, decision logs. Body should be rich markdown with [[other-slug]] backlinks where relevant.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'Kebab-case slug, e.g. "relevance-ai" or "q2-growth-plan". Used as the filename.' },
+        title: { type: 'string', description: 'Human-readable title for the page.' },
+        body: { type: 'string', description: 'Markdown body. Use [[other-slug]] to link to other wiki pages — those links are resolved to real backlinks on render.' },
+        summary: { type: 'string', description: 'Optional one-line summary shown in the index catalog.' },
+        related: { type: 'array', items: { type: 'string' }, description: 'Optional list of related page slugs for the frontmatter.' },
+        source_doc_ids: { type: 'array', items: { type: 'string' }, description: 'Optional list of KB document ids this page was synthesized from, for traceability.' },
+      },
+      required: ['slug', 'title', 'body'],
+    },
+  },
+  {
+    name: 'wiki_read_log',
+    description: "Read recent entries from the wiki's append-only log. Each entry notes when a page was created or updated, by whom (version number), and the title. Use this to see what has changed on the wiki without re-scanning every page.",
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        limit: { type: 'number', description: 'Max entries to return (default 50, max 200).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'wiki_read_index',
+    description: 'Read the wiki index.md catalog: one line per page with title + summary + backlink count. Cheaper than wiki_list_pages when you only need a quick survey.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_lint',
+    description: 'Run a lint pass over the wiki and return structured findings: orphans (pages with no backlinks), stubs (referenced but not yet created), thin pages (very short bodies), and missing summaries. Use this to decide what to curate next — ideal before a "clean up the wiki" session.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'wiki_page_history',
+    description: 'Return the full version history for a wiki page: every snapshot under .versions/<slug>/ plus the live file, ordered newest-first. Each entry has the body, frontmatter, version number, and timestamp — use it when you need to compare versions or restore content.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slug: { type: 'string', description: 'The page slug whose history you want.' },
+      },
+      required: ['slug'],
+    },
+  },
+  {
+    name: 'wiki_curate',
+    description: 'Run a wiki cleanup pass in an isolated sub-orchestrator. Use this for janitorial work like fixing lint findings, backfilling missing summaries, adding backlinks to orphans, or merging duplicates. The sub-orchestrator gets a fresh context, the cheapest model tier, and only the wiki tools — so cleanup never bloats the parent chat\'s context. Returns a one-line summary of what changed (pages touched, lint delta). Prefer this over manually chaining wiki_lint + wiki_read_page + wiki_write_page when the task is "clean up the wiki" or similar.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        intent: {
+          type: 'string',
+          description: 'Optional natural-language description of the cleanup focus. Examples: "fix all missing summaries", "add backlinks to orphans", "general lint pass", "merge duplicates of [[foo]] and [[bar]]". Defaults to a general cleanup.',
+        },
+      },
+      required: [],
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Paths

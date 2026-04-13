@@ -7,12 +7,108 @@
  * never block the local write.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
+
+export const KNOWLEDGE_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_knowledge',
+    description:
+      'List all knowledge base documents. Shows title, file type, processing status, and size.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'Optional: filter by agent ID' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'upload_knowledge',
+    description:
+      'Add a local file to the knowledge base by its absolute file path. Supports TXT, MD, CSV, PDF, DOCX, XLSX, JSON, HTML, XML.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        file_path: { type: 'string', description: 'Absolute path to the file on disk' },
+        title: { type: 'string', description: 'Optional title for the document' },
+        agent_id: { type: 'string', description: 'Optional: assign to a specific agent (null = workspace-wide)' },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'add_knowledge_from_url',
+    description:
+      'Scrape a URL and add the extracted text to the knowledge base.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'URL to scrape' },
+        title: { type: 'string', description: 'Optional title for the document' },
+        agent_id: { type: 'string', description: 'Optional: assign to a specific agent' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'assign_knowledge',
+    description:
+      'Configure how a knowledge document is used by a specific agent. Can opt an agent out of a workspace-wide doc, or change the injection mode.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        document_id: { type: 'string', description: 'Knowledge document ID' },
+        agent_id: { type: 'string', description: 'Agent ID' },
+        opted_out: { type: 'boolean', description: 'If true, agent will not receive this workspace-wide doc' },
+        injection_mode: { type: 'string', enum: ['always', 'auto', 'on_demand'], description: 'How the doc is injected into the agent prompt' },
+      },
+      required: ['document_id', 'agent_id'],
+    },
+  },
+  {
+    name: 'delete_knowledge',
+    description:
+      'Delete a knowledge base document and all its chunks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        document_id: { type: 'string', description: 'Knowledge document ID to delete' },
+      },
+      required: ['document_id'],
+    },
+  },
+  {
+    name: 'search_knowledge',
+    description: 'Search the knowledge base for content relevant to a query. Uses BM25 retrieval with an exact-title boost: if the query exactly matches a document title, that document\'s chunks are surfaced first. Returns similarity-ranked CHUNKS, not whole documents — when you need the full text of a specific document (to follow a procedure, playbook, or reference end-to-end), use `get_knowledge_document` instead.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'What to search for (natural language works). Quoting an exact document title will boost that doc in the results.' },
+        max_results: { type: 'number', description: 'Max chunks to return (default 5, max 10)' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_knowledge_document',
+    description: 'Fetch a single knowledge document end-to-end with a cascading resolver — returns full compiled text plus match metadata. Use this (not search_knowledge) when an agent needs to follow a playbook, procedure, or reference document without guessing. Resolution order: (1) document_id exact, (2) title exact, (3) title substring, (4) semantic via embeddings — a natural-language `query` like "ops playbook" finds "Ops Monitoring Playbook" without needing the exact title. Returns `matchType` so you know if the match was exact or fuzzy, `confidence` so you can detect ambiguous matches, and `alternatives` listing runner-up docs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        document_id: { type: 'string', description: 'Exact document id. Highest confidence. Get ids from list_knowledge or search_knowledge.' },
+        title: { type: 'string', description: 'Document title. Tried exact (case-insensitive) first, then substring. Example: "Ops Monitoring Playbook".' },
+        query: { type: 'string', description: 'Natural-language query for semantic matching via embeddings. Use when you do not know the exact id or title. Example: "how to check vercel deploys", "monitoring procedure", "ops runbook".' },
+      },
+      required: [],
+    },
+  },
+];
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 import { chunkText } from '../../lib/rag/chunker.js';
 import { logger } from '../../lib/logger.js';
