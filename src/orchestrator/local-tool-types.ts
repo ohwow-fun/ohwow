@@ -48,6 +48,14 @@ export interface LocalToolContext {
    * per-agent model policy (see AgentModelPolicy in execution-policy.ts).
    */
   currentAgentId?: string;
+  /**
+   * The active chat session id (1:1 with orchestrator_conversations.id).
+   * Set by runChat so tools can read or mutate conversation-scoped state —
+   * e.g. activate_guide_persona writes the active persona into
+   * orchestrator_conversations.metadata so subsequent turns run under the
+   * assigned guide agent's prompt + model. Undefined during agent tasks.
+   */
+  sessionId?: string;
 }
 
 export interface ToolResult {

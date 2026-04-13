@@ -26,6 +26,7 @@
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
 import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
+import { activateConversationPersona } from '../conversation-persona.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -341,15 +342,30 @@ export async function assignGuideAgent(
     .eq('id', teamMemberId)
     .eq('workspace_id', ctx.workspaceId);
 
+  // Auto-install this agent as the active persona for the current chat
+  // session so the very next reply comes back in the guide's voice. Callers
+  // that don't want the takeover can pass `activate_for_session: false`.
+  const activateForSession = input.activate_for_session !== false;
+  let personaActivated = false;
+  if (activateForSession && ctx.sessionId) {
+    try {
+      await activateConversationPersona(ctx.db, ctx.sessionId, agentId);
+      personaActivated = true;
+    } catch (err) {
+      logger.warn({ err }, '[team] persona auto-activation failed (non-fatal)');
+    }
+  }
+
   return {
     success: true,
     data: {
       message: spawned
-        ? `Spawned a new Chief of Staff agent for ${member.name} and assigned them as guide.`
-        : `Assigned guide agent to ${member.name}.`,
+        ? `Spawned a new Chief of Staff agent for ${member.name} and assigned them as guide.${personaActivated ? ' They are now driving this conversation.' : ''}`
+        : `Assigned guide agent to ${member.name}.${personaActivated ? ' They are now driving this conversation.' : ''}`,
       teamMemberId,
       guideAgentId: agentId,
       spawned,
+      personaActivated,
     },
   };
 }

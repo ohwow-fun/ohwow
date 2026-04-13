@@ -18,6 +18,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
 import { ORCHESTRATOR_TOOL_DEFINITIONS, LSP_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { loadConversationPersona } from './conversation-persona.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { invalidateBashAccessCache } from './tools/bash.js';
 import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
@@ -258,7 +259,7 @@ export class LocalOrchestrator {
     return { service: this.desktopService, activated: this.desktopActivated, dataDir: this.dataDir };
   }
 
-  private buildToolCtx(): LocalToolContext {
+  private buildToolCtx(sessionId?: string): LocalToolContext {
     return {
       db: this.db,
       workspaceId: this.workspaceId,
@@ -279,12 +280,13 @@ export class LocalOrchestrator {
       connectorRegistry: this._connectorRegistry || undefined,
       lspManager: this._lspManager,
       meetingSession: this._meetingSession,
+      sessionId,
     };
   }
 
-  private buildToolExecCtx(executedToolCalls: Map<string, ToolResult>, options?: ChannelChatOptions): ToolExecutionContext {
+  private buildToolExecCtx(executedToolCalls: Map<string, ToolResult>, options?: ChannelChatOptions, sessionId?: string): ToolExecutionContext {
     return {
-      toolCtx: this.buildToolCtx(),
+      toolCtx: this.buildToolCtx(sessionId),
       executedToolCalls,
       browserState: this.browserState,
       desktopState: this.desktopState,
@@ -1252,7 +1254,7 @@ export class LocalOrchestrator {
           const toolResults: ToolResultBlockParam[] = [];
           for (const toolUse of synthesized) {
             const req: ToolCallRequest = { id: toolUse.id, name: toolUse.name, input: toolUse.input as Record<string, unknown> };
-            const execCtx = this.buildToolExecCtx(executedToolCalls, options);
+            const execCtx = this.buildToolExecCtx(executedToolCalls, options, sessionId);
             const gen = executeToolCall(req, execCtx);
             let outcome;
             for (;;) {
@@ -1285,7 +1287,7 @@ export class LocalOrchestrator {
       // browser state is updated before any browser tools in the same batch.
       const toolResults: ToolResultBlockParam[] = [];
       const requests = toolUseBlocks.map(t => ({ id: t.id, name: t.name, input: t.input as Record<string, unknown> }));
-      const execCtx = this.buildToolExecCtx(executedToolCalls, options);
+      const execCtx = this.buildToolExecCtx(executedToolCalls, options, sessionId);
       const batchGen = executeToolCallsBatch(requests, execCtx);
       let outcomes: import('./tool-executor.js').ToolCallOutcome[];
       for (;;) {
@@ -1760,6 +1762,19 @@ export class LocalOrchestrator {
       this.syncOrganToBody();
     }
 
+    // Load active persona for this conversation. If a team member's guide
+    // agent (or any other agent) has been installed as the persona, we use
+    // THAT agent's system_prompt + model_policy + temperature instead of the
+    // generic orchestrator build. This is how assigned guide agents
+    // actually drive a thread. Absent persona = orchestrator as usual.
+    const activePersona = await loadConversationPersona(this.db, this.workspaceId, sessionId);
+    if (activePersona) {
+      logger.info(
+        { sessionId, agentId: activePersona.agentId, name: activePersona.name, model: activePersona.modelDefault },
+        '[orchestrator] active persona is driving this turn',
+      );
+    }
+
     // Build system prompt as plain string (no TextBlockParam arrays, no cache_control)
     const displayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
     const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
@@ -1768,7 +1783,9 @@ export class LocalOrchestrator {
       browserPreActivated || this.browserActivated, options?.platform,
       desktopPreActivated || this.desktopActivated, undefined, displayLayout, hasMcpTools,
     );
-    let systemPrompt = staticPart + '\n\n' + dynamicPart;
+    let systemPrompt = activePersona
+      ? `${activePersona.systemPrompt}\n\n## Runtime footer\nYou are speaking inside an OHWOW chat thread. You still have the full orchestrator tool catalog — use it freely (create_team_member, update_person_model, get_knowledge_document, run_bash, etc.). Stay in character as ${activePersona.name}${activePersona.role ? ` (${activePersona.role})` : ''} for every reply. To hand control back to the generic orchestrator, call deactivate_persona.`
+      : staticPart + '\n\n' + dynamicPart;
 
     // Active goal checkpoints (cross-session continuity)
     const goalDeps: GoalCheckpointDeps = { db: this.db, workspaceId: this.workspaceId, modelRouter: this.modelRouter };
@@ -2000,9 +2017,14 @@ export class LocalOrchestrator {
       }
 
       // Per-iteration model selection: cheapest model that can handle this step
-      const iterModel = this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
+      // Persona override: when an agent is driving the thread, respect its
+      // model_policy.default. The orchestrator's iteration-tier routing
+      // assumes a single-model orchestrator voice — a persona's own policy
+      // is the source of truth while it's in control.
+      const iterModel = activePersona?.modelDefault
+        ?? this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
       if (iteration === 0 || iterModel !== (this.orchestratorModel || 'x-ai/grok-4.1-fast')) {
-        logger.debug({ iteration, model: iterModel }, '[orchestrator] iteration model selected');
+        logger.debug({ iteration, model: iterModel, persona: activePersona?.name }, '[orchestrator] iteration model selected');
       }
       iterHadErrors = false;
 
@@ -2019,7 +2041,7 @@ export class LocalOrchestrator {
             ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
           })),
           maxTokens: 4096,
-          temperature: 0.5,
+          temperature: activePersona?.temperature ?? 0.5,
           tools: openaiTools,
         });
         let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponseWithTools>;
@@ -2114,7 +2136,7 @@ export class LocalOrchestrator {
 
       // Execute tool calls
       if (validRequests.length > 0) {
-        const execCtx = this.buildToolExecCtx(executedToolCalls, options);
+        const execCtx = this.buildToolExecCtx(executedToolCalls, options, sessionId);
         const batchGen = executeToolCallsBatch(validRequests.map(v => v.req), execCtx);
         let outcomes: import('./tool-executor.js').ToolCallOutcome[];
         for (;;) {
@@ -2791,7 +2813,7 @@ export class LocalOrchestrator {
 
       // Execute valid tool calls in parallel
       if (validRequests.length > 0) {
-        const execCtx = this.buildToolExecCtx(executedToolCallsOllama, options);
+        const execCtx = this.buildToolExecCtx(executedToolCallsOllama, options, sessionId);
         const batchGen = executeToolCallsBatch(validRequests.map(v => v.req), execCtx);
         let outcomes: import('./tool-executor.js').ToolCallOutcome[];
         for (;;) {

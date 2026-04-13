@@ -2154,6 +2154,40 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // --- Conversation persona ---
+  {
+    name: 'activate_guide_persona',
+    description: 'Install a team member\'s assigned guide agent (Chief of Staff) as the driver of this chat session. From the next turn on, replies use the agent\'s system prompt, model_policy, and voice instead of the generic orchestrator. Call this the moment a human team member starts being onboarded or asks to talk to their guide directly.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member whose assigned guide should take over' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'activate_persona',
+    description: 'Install any agent in the workspace as the driver of this chat session, without requiring a team_member. Useful when a sales, support, or specialist agent should take over a thread directly.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'Agent id to install as persona' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'deactivate_persona',
+    description: 'Clear the active persona for this chat session and return control to the orchestrator voice.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_active_persona',
+    description: 'Check whether this chat session currently has an agent persona active, and if so which one.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+
   // --- Transition Engine ---
   {
     name: 'get_transition_status',
@@ -2609,6 +2643,10 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   create_team_member: 1, list_team_members: 1, update_team_member: 1,
   assign_guide_agent: 1, draft_cloud_invite: 1, list_member_tasks: 1,
   start_person_ingestion: 1, update_person_model: 1, get_person_model: 1, list_person_models: 1,
+  // Conversation persona — also P1 so the orchestrator can always reach
+  // activate_guide_persona during onboarding chats, which is how an
+  // assigned guide actually takes over the thread.
+  activate_guide_persona: 1, activate_persona: 1, deactivate_persona: 1, get_active_persona: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
   cloud_get_analytics: 1, cloud_list_contacts: 2, cloud_list_schedules: 2, cloud_list_agents: 2, cloud_list_tasks: 2, cloud_list_members: 3,
   request_file_access: 1, request_browser: 1, request_desktop: 1,

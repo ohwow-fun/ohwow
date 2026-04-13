@@ -46,6 +46,7 @@ import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks,
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
 import { createTeamMember, listTeamMembers, updateTeamMember, assignGuideAgent, draftCloudInvite, listMemberTasks } from './team.js';
+import { activateGuidePersona, activatePersona, deactivatePersona, getActivePersona } from './persona.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
@@ -283,6 +284,12 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['assign_guide_agent', (ctx, input) => assignGuideAgent(ctx, input)],
   ['draft_cloud_invite', (ctx, input) => draftCloudInvite(ctx, input)],
   ['list_member_tasks', (ctx, input) => listMemberTasks(ctx, input)],
+
+  // Conversation persona — install an agent as the driver of this chat
+  ['activate_guide_persona', (ctx, input) => activateGuidePersona(ctx, input)],
+  ['activate_persona', (ctx, input) => activatePersona(ctx, input)],
+  ['deactivate_persona', (ctx, input) => deactivatePersona(ctx, input)],
+  ['get_active_persona', (ctx, input) => getActivePersona(ctx, input)],
 
   // Transition engine tools
   ['get_transition_status', (ctx, input) => getTransitionStatus(ctx, input)],
