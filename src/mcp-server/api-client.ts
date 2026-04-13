@@ -1,12 +1,18 @@
 /**
  * Daemon API Client
  * HTTP bridge between the MCP server process and the ohwow daemon.
- * Reads session token from ~/.ohwow/data/daemon.token for auth.
+ *
+ * Resolves the FOCUSED workspace (via the same resolver the CLI uses) and
+ * connects to that workspace's daemon. Under the parallel-daemon model,
+ * multiple daemons can be running simultaneously on different ports — the
+ * MCP follows whichever workspace ~/.ohwow/current-workspace points at.
+ * To talk to a different workspace, switch focus with `ohwow workspace use
+ * <name>` and re-launch the MCP (or restart Claude Code).
  */
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { resolveActiveWorkspace, portForWorkspace, DEFAULT_PORT, LEGACY_DATA_DIR } from '../config.js';
 
 export class DaemonApiClient {
   private baseUrl: string;
@@ -20,47 +26,44 @@ export class DaemonApiClient {
   }
 
   /**
-   * Create a client by reading config and daemon token from disk.
-   * Throws if token file is missing or daemon is not reachable.
+   * Create a client by resolving the focused workspace and reading its
+   * daemon token. Throws if the daemon for that workspace isn't running.
    */
   static async create(): Promise<DaemonApiClient> {
-    const configDir = join(homedir(), '.ohwow');
-    const configPath = join(configDir, 'config.json');
-    const tokenPath = join(configDir, 'data', 'daemon.token');
+    const active = resolveActiveWorkspace();
+    const port = portForWorkspace(active.name) ?? DEFAULT_PORT;
+    let tokenPath = join(active.dataDir, 'daemon.token');
 
-    // Read port from config
-    let port = 7700;
-    if (existsSync(configPath)) {
-      try {
-        const raw = readFileSync(configPath, 'utf-8');
-        const config = JSON.parse(raw);
-        if (config.port) port = config.port;
-      } catch {
-        // Use default port
-      }
-    }
-
-    // Read daemon token
+    // Backward compat: pre-migration installs may still have the token at
+    // the legacy ~/.ohwow/data/daemon.token path. Fall through to it if the
+    // workspace dir doesn't have one yet (and the legacy one does).
     if (!existsSync(tokenPath)) {
-      throw new Error(
-        'OHWOW daemon is not running. Start it with: ohwow'
-      );
+      const legacyToken = join(LEGACY_DATA_DIR, 'daemon.token');
+      if (existsSync(legacyToken)) {
+        tokenPath = legacyToken;
+      } else {
+        throw new Error(
+          `OHWOW daemon is not running for workspace "${active.name}". ` +
+            `Start it with: ohwow workspace start ${active.name}`,
+        );
+      }
     }
 
     const token = readFileSync(tokenPath, 'utf-8').trim();
     if (!token) {
       throw new Error(
-        "Couldn't authenticate with OHWOW daemon. Try: ohwow restart"
+        `Couldn't read daemon token for workspace "${active.name}". Try: ohwow workspace restart ${active.name}`,
       );
     }
 
-    // Health check
+    // Health check against the resolved port.
     const client = new DaemonApiClient(port, token, tokenPath);
     try {
       await client.get('/health');
     } catch {
       throw new Error(
-        'OHWOW daemon is not running. Start it with: ohwow'
+        `OHWOW daemon for workspace "${active.name}" is not reachable on port ${port}. ` +
+          `Start it with: ohwow workspace start ${active.name}`,
       );
     }
 

@@ -57,18 +57,18 @@ if (subcommand === 'logs') {
   tail.on('exit', (code) => process.exit(code ?? 0));
   process.on('SIGINT', () => { tail.kill(); process.exit(0); });
 } else if (subcommand === 'stop') {
-  const { dirname } = await import('path');
-  const { loadConfig, resolveActiveWorkspace } = await import('./config.js');
-  let dataDir: string;
-  try {
-    const config = loadConfig();
-    dataDir = dirname(config.dbPath);
-  } catch {
-    dataDir = resolveActiveWorkspace().dataDir;
-  }
+  // Stops the FOCUSED workspace's daemon. Other workspace daemons (if
+  // running in parallel) are unaffected. Use `ohwow workspace stop --all`
+  // to stop everything.
+  const { resolveActiveWorkspace } = await import('./config.js');
+  const active = resolveActiveWorkspace();
   const { stopDaemon } = await import('./daemon/lifecycle.js');
-  const stopped = await stopDaemon(dataDir);
-  console.log(stopped ? 'Daemon stopped.' : 'No daemon running.');
+  const stopped = await stopDaemon(active.dataDir);
+  console.log(
+    stopped
+      ? `Stopped daemon for focused workspace "${active.name}".`
+      : `No daemon running for focused workspace "${active.name}".`,
+  );
   process.exit(0);
 } else if (subcommand === 'restart') {
   const { dirname } = await import('path');
@@ -98,25 +98,27 @@ if (subcommand === 'logs') {
   console.log(ready ? 'Daemon restarted.' : 'Daemon restart timed out. Check "ohwow logs" for details.');
   process.exit(0);
 } else if (subcommand === 'status') {
+  // Reports the FOCUSED workspace's daemon status. For all workspaces use
+  // `ohwow workspace list`.
   const { dirname } = await import('path');
-  const { loadConfig, resolveActiveWorkspace, DEFAULT_PORT } = await import('./config.js');
+  const { loadConfig, resolveActiveWorkspace, portForWorkspace, DEFAULT_PORT } = await import('./config.js');
+  const active = resolveActiveWorkspace();
   let dataDir: string;
   let port: number;
-  const active = resolveActiveWorkspace();
   try {
     const config = loadConfig();
     dataDir = dirname(config.dbPath);
     port = config.port;
   } catch {
     dataDir = active.dataDir;
-    port = DEFAULT_PORT;
+    port = portForWorkspace(active.name) ?? DEFAULT_PORT;
   }
   const { isDaemonRunning } = await import('./daemon/lifecycle.js');
   const result = await isDaemonRunning(dataDir, port);
   if (result.running) {
-    console.log(`Daemon running (PID ${result.pid}) on port ${port} — workspace "${active.name}"`);
+    console.log(`Daemon running (PID ${result.pid}) on port ${port} — focused workspace "${active.name}"`);
   } else {
-    console.log(`No daemon running. (workspace "${active.name}")`);
+    console.log(`No daemon running for focused workspace "${active.name}". (\`ohwow workspace list\` shows all)`);
   }
   process.exit(0);
 } else if (subcommand === 'workspace') {
@@ -130,28 +132,157 @@ if (subcommand === 'logs') {
     readWorkspaceConfig,
     writeWorkspaceConfig,
     findWorkspaceByLicenseKey,
+    portForWorkspace,
+    allocateWorkspacePort,
     loadConfig,
     DEFAULT_WORKSPACE,
     DEFAULT_PORT,
   } = await import('./config.js');
 
-  // Format a workspace config as a compact marker for `list`:
-  //   default        → (no marker, legacy)
-  //   ws-a           → (local-only)
-  //   ws-b           → (cloud: AvenueD Ops)
-  const formatMarker = (name: string): string => {
+  // ──────────────────────────────────────────────────────────────────
+  // Per-workspace daemon lifecycle helpers (parallel mode)
+  //
+  // Each workspace gets its own daemon process bound to its own port. The
+  // pointer file at ~/.ohwow/current-workspace tracks "focus" — which
+  // workspace local commands target by default — but it does NOT mean the
+  // others are stopped. workspace start / stop are the lifecycle commands.
+  // ──────────────────────────────────────────────────────────────────
+
+  /** Resolve the daemon port for a workspace, allocating + persisting on first run. */
+  const resolvePortFor = async (name: string): Promise<number> => {
+    const existing = portForWorkspace(name);
+    if (existing !== null) return existing;
+    // No port assigned yet — pick a free one and persist.
+    const allocated = allocateWorkspacePort();
     const cfg = readWorkspaceConfig(name);
-    if (!cfg) return '';
-    if (cfg.mode === 'local-only') return '  (local-only)';
-    if (cfg.mode === 'cloud') {
-      const label = cfg.displayName
-        ? `: ${cfg.displayName}`
-        : cfg.licenseKey
-          ? `: ${cfg.licenseKey.slice(0, 7)}***`
-          : '';
-      return `  (cloud${label})`;
+    writeWorkspaceConfig(name, cfg
+      ? { ...cfg, port: allocated }
+      : { schemaVersion: 1, mode: 'local-only', port: allocated });
+    return allocated;
+  };
+
+  /** Spawn a daemon for a workspace if it isn't already running. */
+  const startWorkspaceDaemon = async (name: string): Promise<void> => {
+    const layout = workspaceLayoutFor(name);
+    const { existsSync, mkdirSync } = await import('fs');
+    if (!existsSync(layout.dataDir)) {
+      mkdirSync(layout.dataDir, { recursive: true });
     }
-    return '';
+
+    const port = await resolvePortFor(name);
+
+    const {
+      isDaemonRunning,
+      startDaemonBackground,
+      waitForDaemon,
+      getPidPath,
+    } = await import('./daemon/lifecycle.js');
+    const { readLock, isProcessAlive } = await import('./lib/instance-lock.js');
+
+    // Already running on its own port? Done.
+    const status = await isDaemonRunning(layout.dataDir, port);
+    if (status.running) {
+      console.log(`Workspace "${name}" already running on port ${port} (PID ${status.pid}).`);
+      return;
+    }
+
+    // Port collision check: another workspace's daemon may already hold
+    // this port (rare — only happens if the user manually edited a
+    // workspace.json or if the port allocator races).
+    const allWorkspaces = Array.from(new Set([...listWorkspaces(), DEFAULT_WORKSPACE]));
+    for (const other of allWorkspaces) {
+      if (other === name) continue;
+      const otherLayout = workspaceLayoutFor(other);
+      const otherLock = readLock(getPidPath(otherLayout.dataDir));
+      if (otherLock && isProcessAlive(otherLock.pid) && otherLock.port === port) {
+        console.error(
+          `Cannot start "${name}" on port ${port}: workspace "${other}" is already running on it (PID ${otherLock.pid}).\n` +
+            `Stop the conflicting workspace or change the port in ${workspaceConfigPathFor(name)}.`,
+        );
+        process.exit(1);
+      }
+    }
+
+    // Spawn the detached daemon. We force OHWOW_WORKSPACE in the child so
+    // its loadConfig resolves to this workspace, and OHWOW_PORT (set by
+    // startDaemonBackground from our `port` arg) overrides any global one.
+    process.env.OHWOW_WORKSPACE = name;
+    const { fileURLToPath } = await import('url');
+    const selfPath = fileURLToPath(import.meta.url);
+    const entryPath = selfPath.endsWith('.ts')
+      ? selfPath
+      : fileURLToPath(new URL('./index.js', import.meta.url));
+    startDaemonBackground(entryPath, port, layout.dataDir);
+    console.log(`Starting workspace "${name}" on port ${port}...`);
+    const ready = await waitForDaemon(port, 20000);
+    console.log(
+      ready
+        ? `Daemon up for workspace "${name}" on port ${port}.`
+        : `Daemon start for workspace "${name}" timed out. Check log: tail -f ${layout.dataDir}/daemon.log`,
+    );
+  };
+
+  /** Stop a workspace's daemon if running. Returns true on success. */
+  const stopWorkspaceDaemon = async (name: string): Promise<boolean> => {
+    const layout = workspaceLayoutFor(name);
+    const { stopDaemon, waitForDaemonStop } = await import('./daemon/lifecycle.js');
+    const stopped = await stopDaemon(layout.dataDir);
+    if (stopped) {
+      await waitForDaemonStop(layout.dataDir, 5000);
+      console.log(`Stopped workspace "${name}".`);
+    } else {
+      console.log(`Workspace "${name}" was not running.`);
+    }
+    return stopped;
+  };
+
+  /** Inline path helper just for the error message above. */
+  const workspaceConfigPathFor = (name: string): string => {
+    return workspaceLayoutFor(name).dataDir + '/workspace.json';
+  };
+
+  /** Probe a workspace's daemon and return a one-line status string. */
+  const probeWorkspaceStatus = async (name: string): Promise<{ running: boolean; pid?: number; port: number | null }> => {
+    const layout = workspaceLayoutFor(name);
+    const port = portForWorkspace(name);
+    if (port === null) return { running: false, port: null };
+    const { isDaemonRunning } = await import('./daemon/lifecycle.js');
+    const status = await isDaemonRunning(layout.dataDir, port);
+    return { running: status.running, pid: status.pid, port };
+  };
+
+  // Format a workspace as a compact line for `list`:
+  //   * default      (cloud: GTM, running on :7700, PID 12345)
+  //     avenued      (local-only, idle)
+  //     test         (local-only, running on :7701, PID 99887)
+  const formatListLine = async (name: string, isActive: boolean): Promise<string> => {
+    const pointer = isActive ? '*' : ' ';
+    const cfg = readWorkspaceConfig(name);
+    const status = await probeWorkspaceStatus(name);
+
+    const modePart = (() => {
+      if (!cfg) return null;
+      if (cfg.mode === 'local-only') return 'local-only';
+      if (cfg.mode === 'cloud') {
+        const label = cfg.displayName
+          ? `: ${cfg.displayName}`
+          : cfg.licenseKey
+            ? `: ${cfg.licenseKey.slice(0, 7)}***`
+            : '';
+        return `cloud${label}`;
+      }
+      return null;
+    })();
+
+    const runPart = status.running
+      ? `running on :${status.port}, PID ${status.pid}`
+      : status.port !== null
+        ? 'idle'
+        : 'no port assigned';
+
+    const parts = [modePart, runPart].filter(Boolean);
+    const suffix = parts.length > 0 ? `  (${parts.join(', ')})` : '';
+    return `${pointer} ${name}${suffix}`;
   };
 
   if (!action || action === 'list') {
@@ -160,8 +291,7 @@ if (subcommand === 'logs') {
     all.add(active.name);
     const sorted = Array.from(all).sort();
     for (const name of sorted) {
-      const pointer = name === active.name ? '*' : ' ';
-      console.log(`${pointer} ${name}${formatMarker(name)}`);
+      console.log(await formatListLine(name, name === active.name));
     }
     if (sorted.length === 1) {
       console.log('');
@@ -353,23 +483,18 @@ if (subcommand === 'logs') {
     const { existsSync } = await import('fs');
     const dirExists = existsSync(layout.dataDir);
     const dbExists = existsSync(layout.dbPath);
-    const isActive = resolveActiveWorkspace().name === name;
+    const isFocused = resolveActiveWorkspace().name === name;
 
-    // Check daemon status against this workspace's data dir.
-    let daemonStatus = 'not running';
-    let daemonPort: number | null = null;
-    try {
-      daemonPort = loadConfig().port;
-    } catch {
-      daemonPort = DEFAULT_PORT;
-    }
-    if (dirExists && daemonPort) {
-      const { isDaemonRunning } = await import('./daemon/lifecycle.js');
-      const status = await isDaemonRunning(layout.dataDir, daemonPort);
-      if (status.running) daemonStatus = `running (PID ${status.pid}, port ${daemonPort})`;
-    }
+    // Use the per-workspace port resolver instead of loadConfig (which
+    // resolves the FOCUSED workspace's port, not necessarily this one's).
+    const status = await probeWorkspaceStatus(name);
+    const daemonStatus = status.running
+      ? `running (PID ${status.pid}, port ${status.port})`
+      : status.port !== null
+        ? `not running (port ${status.port} reserved)`
+        : 'not running (no port assigned yet)';
 
-    console.log(`Workspace "${name}"${isActive ? '  [active]' : ''}`);
+    console.log(`Workspace "${name}"${isFocused ? '  [focused]' : ''}`);
     console.log(`  Directory: ${layout.dataDir}${dirExists ? '' : ' (missing)'}`);
     console.log(`  Database:  ${layout.dbPath}${dbExists ? '' : ' (not yet created)'}`);
     console.log(`  Daemon:    ${daemonStatus}`);
@@ -487,9 +612,9 @@ if (subcommand === 'logs') {
 
   if (action === 'use') {
     const name = process.argv[4];
-    const force = process.argv.includes('--restart');
+    const noStart = process.argv.includes('--no-start');
     if (!name) {
-      console.error('Usage: ohwow workspace use <name> [--restart]');
+      console.error('Usage: ohwow workspace use <name> [--no-start]');
       process.exit(1);
     }
     if (!isValidWorkspaceName(name)) {
@@ -497,82 +622,100 @@ if (subcommand === 'logs') {
       process.exit(1);
     }
 
-    const current = resolveActiveWorkspace();
-    if (current.name === name && !force) {
-      console.log(`Already on workspace "${name}". Pass --restart to force a daemon restart.`);
-      process.exit(0);
-    }
-
-    const {
-      stopDaemon,
-      waitForDaemonStop,
-      startDaemonBackground,
-      waitForDaemon,
-      isDaemonRunning,
-    } = await import('./daemon/lifecycle.js');
-
-    let port: number;
-    try {
-      port = loadConfig().port;
-    } catch {
-      port = DEFAULT_PORT;
-    }
-
-    // Was the daemon running on the current workspace?
-    const status = await isDaemonRunning(current.dataDir, port);
-    const wasRunning = status.running;
-
-    if (wasRunning) {
-      console.log(`Stopping daemon on workspace "${current.name}"...`);
-      const stopped = await stopDaemon(current.dataDir);
-      if (stopped) await waitForDaemonStop(current.dataDir, 5000);
-    }
-
-    // Ensure the target workspace dir exists, then update the pointer.
+    // Ensure the target workspace dir exists.
     const targetLayout = workspaceLayoutFor(name);
     const { mkdirSync, existsSync } = await import('fs');
     if (!existsSync(targetLayout.dataDir)) {
       mkdirSync(targetLayout.dataDir, { recursive: true });
     }
+
+    // Set focus. This does NOT stop any other workspace's daemon — under the
+    // parallel-daemon model, every started workspace keeps running until you
+    // explicitly stop it. The pointer file just tells local commands and the
+    // MCP server which daemon to default to.
+    const previous = resolveActiveWorkspace().name;
     writeWorkspacePointer(name);
-    console.log(`Switched to workspace "${name}".`);
-
-    // Restart the daemon only if one was running, or if --restart was passed.
-    if (wasRunning || force) {
-      // Make the resolver in the spawned child see the new workspace
-      // immediately (writeWorkspacePointer + env both work, env is faster).
-      process.env.OHWOW_WORKSPACE = name;
-
-      const { fileURLToPath } = await import('url');
-      // When running via tsx (dev), import.meta.url points to .ts — resolve to
-      // .ts so lifecycle uses the tsx loader.
-      const selfPath = fileURLToPath(import.meta.url);
-      const entryPath = selfPath.endsWith('.ts')
-        ? selfPath
-        : fileURLToPath(new URL('./index.js', import.meta.url));
-      startDaemonBackground(entryPath, port, targetLayout.dataDir);
-      const ready = await waitForDaemon(port, 15000);
-      console.log(
-        ready
-          ? `Daemon started on workspace "${name}".`
-          : `Daemon start timed out. Check "ohwow logs" for details.`,
-      );
+    if (previous === name) {
+      console.log(`Focus is already on "${name}".`);
+    } else {
+      console.log(`Focus moved from "${previous}" → "${name}". Other workspaces (if running) keep running.`);
     }
 
+    // Auto-start the target's daemon if it isn't already running.
+    if (!noStart) {
+      await startWorkspaceDaemon(name);
+    }
+    process.exit(0);
+  }
+
+  if (action === 'start') {
+    const all = process.argv.includes('--all');
+    const explicitName = process.argv[4]?.startsWith('--') ? undefined : process.argv[4];
+
+    if (all) {
+      const allNames = Array.from(new Set([...listWorkspaces(), DEFAULT_WORKSPACE])).sort();
+      for (const n of allNames) {
+        await startWorkspaceDaemon(n);
+      }
+      process.exit(0);
+    }
+
+    const name = explicitName || resolveActiveWorkspace().name;
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    await startWorkspaceDaemon(name);
+    process.exit(0);
+  }
+
+  if (action === 'stop') {
+    const all = process.argv.includes('--all');
+    const explicitName = process.argv[4]?.startsWith('--') ? undefined : process.argv[4];
+
+    if (all) {
+      const allNames = Array.from(new Set([...listWorkspaces(), DEFAULT_WORKSPACE])).sort();
+      for (const n of allNames) {
+        await stopWorkspaceDaemon(n);
+      }
+      process.exit(0);
+    }
+
+    const name = explicitName || resolveActiveWorkspace().name;
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    await stopWorkspaceDaemon(name);
+    process.exit(0);
+  }
+
+  if (action === 'restart') {
+    const explicitName = process.argv[4]?.startsWith('--') ? undefined : process.argv[4];
+    const name = explicitName || resolveActiveWorkspace().name;
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    await stopWorkspaceDaemon(name);
+    await startWorkspaceDaemon(name);
     process.exit(0);
   }
 
   console.error(`Unknown workspace action: ${action}`);
   console.error('Usage: ohwow workspace <action> [args]');
-  console.error('  list                                          List workspaces');
-  console.error('  current                                       Print the active workspace name');
-  console.error('  info [<name>]                                 Show mode/tier/status for a workspace');
+  console.error('  list                                          List workspaces (with running status)');
+  console.error('  current                                       Print the focused workspace name');
+  console.error('  info [<name>]                                 Show mode/tier/port/daemon status');
   console.error('  create <name> --local-only [--name="Label"]   Create a disconnected local workspace');
-  console.error('  create <name> --cloud [--name="Label"]        Mint a new cloud workspace (uses current license as auth)');
+  console.error('  create <name> --cloud [--name="Label"]        Mint a new cloud workspace');
   console.error('  create <name> --license-key=<k> [--name=...]  Create a cloud workspace bound to an existing license');
   console.error('  link <name> --license-key=<k> [--name=...]    Promote local-only → cloud');
   console.error('  unlink <name>                                 Demote cloud → local-only (keeps data)');
-  console.error('  use <name> [--restart]                        Switch active workspace (restarts daemon)');
+  console.error('  use <name> [--no-start]                       Set focus (auto-starts target unless --no-start)');
+  console.error('  start [<name>] [--all]                        Spawn daemon for one workspace (or all)');
+  console.error('  stop  [<name>] [--all]                        Stop daemon for one workspace (or all)');
+  console.error('  restart [<name>]                              Stop+start one workspace daemon');
   process.exit(1);
 } else if (subcommand === 'mcp-server') {
   const { startMcpServer } = await import('./mcp-server/index.js');

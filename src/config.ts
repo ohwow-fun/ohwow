@@ -383,6 +383,13 @@ export interface WorkspaceConfig {
   /** Human label, shown in `workspace list`/`workspace info`. */
   displayName?: string;
   /**
+   * The HTTP port this workspace's daemon binds to. Auto-allocated by
+   * `workspace start` on first run (default keeps 7700 from global config;
+   * subsequent workspaces get 7701, 7702, …). Persisted so the same
+   * workspace always uses the same port across daemon restarts.
+   */
+  port?: number;
+  /**
    * Forward-compat slot for multi-workspace-per-license cloud feature.
    * When set, forwarded as ConnectRequest.requestedWorkspaceId. Safe to
    * include today — cloud backends that don't know about it ignore it.
@@ -485,13 +492,71 @@ export function findWorkspaceByCloudId(cloudWorkspaceId: string): string | null 
  */
 function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | null): ConfigFile {
   if (!ws) return fileConfig;
+  const next: ConfigFile = { ...fileConfig };
   if (ws.mode === 'local-only') {
-    return { ...fileConfig, licenseKey: '', tier: 'free' };
+    next.licenseKey = '';
+    next.tier = 'free';
+  } else if (ws.mode === 'cloud') {
+    next.licenseKey = ws.licenseKey ?? '';
+    next.tier = 'connected';
   }
-  if (ws.mode === 'cloud') {
-    return { ...fileConfig, licenseKey: ws.licenseKey ?? '', tier: 'connected' };
+  // Per-workspace port overrides global config.json port. Critical for
+  // running multiple workspaces in parallel — each daemon binds to its own
+  // port so they don't fight for 7700.
+  if (typeof ws.port === 'number' && ws.port > 0) {
+    next.port = ws.port;
   }
-  return fileConfig;
+  return next;
+}
+
+/**
+ * Resolve the HTTP port a given workspace's daemon should bind to.
+ *
+ *   - The default workspace inherits the global config.json port (7700 by
+ *     default), preserving pre-multi-workspace behavior for users who never
+ *     created a second workspace.
+ *   - Non-default workspaces use whatever port is persisted in their
+ *     workspace.json. If they don't have one yet, the caller should
+ *     allocate one with allocateWorkspacePort and persist it via
+ *     writeWorkspaceConfig before starting the daemon.
+ */
+export function portForWorkspace(name: string): number | null {
+  if (name === DEFAULT_WORKSPACE) {
+    try {
+      const raw = readFileSync(DEFAULT_CONFIG_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as { port?: number };
+      return parsed.port ?? DEFAULT_PORT;
+    } catch {
+      return DEFAULT_PORT;
+    }
+  }
+  const cfg = readWorkspaceConfig(name);
+  return cfg?.port ?? null;
+}
+
+/**
+ * Pick a free port for a brand-new workspace daemon. Walks 7701..8700,
+ * skipping any port already assigned to another local workspace (whether
+ * the corresponding daemon is currently running or not — port assignments
+ * are sticky so the same workspace keeps the same port).
+ *
+ * Throws if no port in that range is free, which would only happen with
+ * 1000+ workspaces (unrealistic).
+ */
+export function allocateWorkspacePort(): number {
+  const used = new Set<number>();
+  // Default workspace permanently holds whatever the global config says.
+  used.add(portForWorkspace(DEFAULT_WORKSPACE) ?? DEFAULT_PORT);
+  // Plus every other workspace that's already been assigned a port.
+  for (const name of listWorkspaces()) {
+    if (name === DEFAULT_WORKSPACE) continue;
+    const p = portForWorkspace(name);
+    if (p !== null) used.add(p);
+  }
+  for (let p = DEFAULT_PORT + 1; p < DEFAULT_PORT + 1000; p++) {
+    if (!used.has(p)) return p;
+  }
+  throw new Error(`No free workspace port in range ${DEFAULT_PORT + 1}-${DEFAULT_PORT + 999}`);
 }
 
 /**

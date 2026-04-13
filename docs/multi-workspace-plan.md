@@ -1,11 +1,14 @@
 # Multi-Workspace Plan
 
 **Status** (updated 2026-04-13):
-- ✅ Switchable single-workspace support (atomic rename migration, directory-based layout) — shipped in `daf534e` and `b967112`.
-- 🚧 Phase 1: local-only workspaces — in progress.
-- 🚧 Phase 2: cloud-integrated workspaces with per-workspace license keys — in progress.
-- ⏸ Phase 3: automated cloud provisioning (requires new cloud endpoint) — deferred.
-- ⏸ Future: multi-workspace-per-license cloud feature (requires cloud-side API change) — forward-compat hook shipped in Phase 2.
+- ✅ Switchable single-workspace support (atomic rename migration, directory-based layout) — shipped in `daf534e`, `b967112`, `ffd980a`.
+- ✅ Phase 1: local-only workspaces — shipped.
+- ✅ Phase 2: cloud-integrated workspaces with per-workspace license keys — shipped.
+- ✅ Cloud provisioning endpoint + CLI `--cloud` flag — shipped (cloud `9c047bce`, local `851290a`).
+- ✅ Cloud workspace cap (1 per non-superadmin, ogsus bypass) — shipped (cloud `c192eca5`).
+- ✅ **Parallel mode**: every workspace runs its own daemon on its own port simultaneously — `workspace use` is now focus-only, not stop+start. CLI gains `workspace start/stop/restart [--all]`. MCP api-client follows the focused workspace.
+- ⏸ Phase 3: automated cloud provisioning via parent-license child-mint — deferred (requires new cloud endpoint).
+- ⏸ Future: multi-workspace-per-license cloud feature — forward-compat hook shipped in Phase 2.
 
 This doc captures the design decisions behind multi-workspace support for the ohwow daemon. It's the source of truth after the audit that found creating a second local workspace today would silently mirror the first via cloud sync.
 
