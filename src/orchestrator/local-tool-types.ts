@@ -56,6 +56,30 @@ export interface LocalToolContext {
    * assigned guide agent's prompt + model. Undefined during agent tasks.
    */
   sessionId?: string;
+  /**
+   * The team_member id this chat turn is running on behalf of, when the
+   * caller is a managed member (e.g. Mario, not the workspace owner).
+   * Set by runChat from the chatUserName/personaAgentId hint passed by
+   * the cloud chat bridge. Used by the deliverables recorder to stamp
+   * `for_team_member_id` on every artifact produced during the turn.
+   */
+  currentTeamMemberId?: string;
+  /**
+   * The team_member's assigned guide agent id, when the chat turn is
+   * running on behalf of a member. Used by the deliverables recorder
+   * to attribute artifacts produced during a member-impersonated chat
+   * to the COS that produced them. Distinct from currentAgentId, which
+   * is only set when running inside an executed agent task.
+   */
+  currentGuideAgentId?: string;
+  /**
+   * The currently-executing onboarding/ramp task id, when the chat turn
+   * is working on a specific task. Stamped onto deliverables so the
+   * activity timeline can group artifacts under the task that spawned
+   * them. Optional — chat turns that don't reference a task leave it
+   * unset and the recorder falls back to session_id.
+   */
+  currentTaskId?: string;
 }
 
 export interface ToolResult {

@@ -17,6 +17,7 @@ import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings
 import { chunkText } from '../../lib/rag/chunker.js';
 import { logger } from '../../lib/logger.js';
 import { syncResource } from '../../control-plane/sync-resources.js';
+import { recordDeliverable } from '../deliverables-recorder.js';
 
 // ============================================================================
 // ENQUEUE DOCUMENT FOR BACKGROUND PROCESSING
@@ -522,6 +523,23 @@ export async function uploadKnowledge(
       compiled_text: text,
       agent_id: agentId,
       is_active: 1,
+    });
+
+    // Auto-record a deliverable so the activity timeline + per-actor
+    // tracking surfaces this artifact. The dashboard shows KB uploads
+    // as 'document' type with a one-click "open in KB" action via the
+    // documentId stamped in content.
+    void recordDeliverable(ctx, {
+      title,
+      type: 'document',
+      content: {
+        document_id: docId,
+        filename,
+        chunk_count: chunks.length,
+        token_count: Math.ceil(text.length / 4),
+        preview: text.slice(0, 2000),
+      },
+      provider: 'knowledge-base',
     });
 
     return {

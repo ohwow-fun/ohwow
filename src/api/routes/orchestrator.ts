@@ -229,11 +229,36 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
           console.warn('[api/chat] persona pre-activation failed', err);
         }
       }
-      // chatUserEmail and chatUserName are currently unused on the local
-      // side — they're threaded through the API for future use (e.g.
-      // orchestrator system prompt personalization, audit log) but do
-      // not affect routing today.
-      void chatUserEmail;
+      // Resolve the chat actor (team_member id + guide agent id) and
+      // stash it on the orchestrator for the duration of this turn.
+      // The deliverables recorder reads ctx.currentTeamMemberId /
+      // currentGuideAgentId to attribute every artifact produced
+      // during the turn to "this team member" and "this guide agent",
+      // so the dashboard activity timeline can answer "what did the
+      // COS produce for Mario?" with a single column query.
+      let chatActor: { teamMemberId: string | null; guideAgentId: string | null } | null = null;
+      if (chatUserEmail || personaAgentId) {
+        try {
+          const db = getDb();
+          let tmRow: { id: string; assigned_guide_agent_id: string | null } | null = null;
+          if (chatUserEmail) {
+            const { data } = await db
+              .from('agent_workforce_team_members')
+              .select('id, assigned_guide_agent_id')
+              .eq('email', chatUserEmail)
+              .maybeSingle();
+            tmRow = (data as { id: string; assigned_guide_agent_id: string | null } | null) ?? null;
+          }
+          chatActor = {
+            teamMemberId: tmRow?.id ?? null,
+            guideAgentId: tmRow?.assigned_guide_agent_id ?? (personaAgentId || null),
+          };
+          orchestrator.setChatActor(chatActor);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[api/chat] chat actor resolution failed', err);
+        }
+      }
       void chatUserName;
 
       // Set model override if provided
@@ -316,6 +341,10 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       } else {
         res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
       }
+    } finally {
+      // Clear the chat actor stash so the next turn (which may be the
+      // workspace owner, not a member) doesn't inherit Mario's identity.
+      try { orchestrator.setChatActor(null); } catch { /* noop */ }
     }
   });
 

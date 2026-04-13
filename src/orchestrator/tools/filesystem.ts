@@ -3,9 +3,10 @@
  * Loads file access paths for '__orchestrator__' and delegates to the shared executor.
  */
 
-import { isAbsolute, resolve as resolvePath } from 'path';
+import { basename, isAbsolute, resolve as resolvePath } from 'path';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { FileAccessGuard, executeFilesystemTool } from '../../execution/filesystem/index.js';
+import { recordDeliverable, type DeliverableType } from '../deliverables-recorder.js';
 
 /** Cached guard per workspace+cwd combination to avoid re-querying on every tool call. */
 let cachedGuard: FileAccessGuard | null = null;
@@ -118,8 +119,39 @@ export function localSearchContent(ctx: LocalToolContext, input: Record<string, 
   return handleFilesystemTool(ctx, 'local_search_content', input);
 }
 
-export function localWriteFile(ctx: LocalToolContext, input: Record<string, unknown>): Promise<ToolResult> {
-  return handleFilesystemTool(ctx, 'local_write_file', input);
+/**
+ * Map a file extension to the deliverable_type the dashboard activity
+ * timeline knows how to render. Conservative defaults keep us from
+ * over-claiming "code" for every .md or .txt — the dashboard renders
+ * documents and code differently (download vs preview vs syntax-
+ * highlighted block).
+ */
+function deliverableTypeForPath(filePath: string): DeliverableType {
+  const lower = filePath.toLowerCase();
+  if (/\.(ts|tsx|js|jsx|py|rb|go|rs|java|sql|sh|c|cpp|h|html|css|json|yml|yaml|toml)$/.test(lower)) {
+    return 'code';
+  }
+  if (/\.(png|jpg|jpeg|gif|webp|svg|mp4|webm|mov|wav|mp3|ogg|m4a)$/.test(lower)) {
+    return 'media';
+  }
+  return 'document';
+}
+
+export async function localWriteFile(ctx: LocalToolContext, input: Record<string, unknown>): Promise<ToolResult> {
+  const result = await handleFilesystemTool(ctx, 'local_write_file', input);
+  if (result.success) {
+    // Auto-record a deliverable so the dashboard activity timeline
+    // sees the artifact. Fire-and-forget — never blocks the caller.
+    const path = (input.path as string | undefined) ?? '';
+    const content = (input.content as string | undefined) ?? '';
+    void recordDeliverable(ctx, {
+      title: path ? basename(path) : 'Untitled file',
+      type: deliverableTypeForPath(path),
+      content: { file_path: path, byte_size: content.length, preview: content.slice(0, 2000) },
+      provider: 'local-fs',
+    });
+  }
+  return result;
 }
 
 export function localEditFile(ctx: LocalToolContext, input: Record<string, unknown>): Promise<ToolResult> {

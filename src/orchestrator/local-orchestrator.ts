@@ -281,8 +281,32 @@ export class LocalOrchestrator {
       lspManager: this._lspManager,
       meetingSession: this._meetingSession,
       sessionId,
+      // Per-turn chat actor context: when the cloud chat bridge forwards
+      // a member-impersonated turn (chatUserName + personaAgentId), the
+      // /api/chat handler stashes the resolved team_member id + guide
+      // agent id on the orchestrator instance so they propagate into
+      // every tool ctx the turn produces. Used by the deliverables
+      // recorder to attribute artifacts to the right member + actor.
+      currentTeamMemberId: this._chatActorTeamMemberId,
+      currentGuideAgentId: this._chatActorGuideAgentId,
     };
   }
+
+  /**
+   * Stash the current chat actor (the team_member the runtime is
+   * chatting on behalf of, plus their guide agent). Set by the
+   * /api/chat handler before invoking orchestrator.chat() and cleared
+   * after the turn completes. Lives on the instance instead of the
+   * chat() method signature because the tool ctx builder is called
+   * from many code paths inside the iteration loop and we don't want
+   * to thread a new arg through every one.
+   */
+  setChatActor(actor: { teamMemberId: string | null; guideAgentId: string | null } | null): void {
+    this._chatActorTeamMemberId = actor?.teamMemberId ?? undefined;
+    this._chatActorGuideAgentId = actor?.guideAgentId ?? undefined;
+  }
+  private _chatActorTeamMemberId?: string;
+  private _chatActorGuideAgentId?: string;
 
   private buildToolExecCtx(executedToolCalls: Map<string, ToolResult>, options?: ChannelChatOptions, sessionId?: string): ToolExecutionContext {
     return {
