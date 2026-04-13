@@ -451,6 +451,8 @@ const CLOUD_MODEL_LABELS: Record<string, string> = {
   'anthropic/claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
   'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
   'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+  'xiaomi/mimo-v2-pro': 'MiMo V2 Pro',
+  'xiaomi/mimo-v2-flash': 'MiMo V2 Flash',
   'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
   'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite',
   'qwen/qwen3.5-9b': 'Qwen 3.5 9B',

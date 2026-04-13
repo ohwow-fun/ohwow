@@ -513,12 +513,14 @@ export async function proposeFirstMonthPlan(
       purpose: 'planning',
       system,
       prompt: user,
-      // Prefer sonnet for planning — gemini-flash on openrouter caps
+      // Prefer mimo-v2-pro for planning — gemini-flash on openrouter caps
       // output at 2048 tokens which truncates 4-week structured JSON
-      // mid-response. Sonnet handles long grounded JSON synthesis
-      // cleanly and the plan is infrequent enough (once per new
-      // hire) that the cost is irrelevant.
-      prefer_model: 'anthropic/claude-sonnet-4.6',
+      // mid-response. mimo-v2-pro handles long grounded JSON synthesis
+      // cleanly with a 1M context window, and unlike sonnet 4.6 it doesn't
+      // intermittently hang on tool-loaded chat turns. The plan is
+      // infrequent enough (once per new hire) that any extra latency is
+      // irrelevant.
+      prefer_model: 'xiaomi/mimo-v2-pro',
       max_tokens: 8192,
       temperature: 0.4,
     } as Record<string, unknown>,
