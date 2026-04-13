@@ -880,9 +880,22 @@ export class RuntimeEngine {
       const scraplingEnabled = isAllowlistMode
         ? allowlistPermits(toolPolicy, 'scrape_url')
         : agentConfig.scraping_enabled !== false;
+      // Local file access is enabled when:
+      //   1. Allowlist mode includes a filesystem tool, OR
+      //   2. The agent explicitly opts in via local_files_enabled === true, OR
+      //   3. The workspace has any default_filesystem_paths configured AND the
+      //      agent has not explicitly opted out (local_files_enabled === false).
+      //
+      // The workspace-baseline branch is what actually unblocks SOP-delegated
+      // agents that nobody ever set local_files_enabled on. Without it, every
+      // such agent silently fails any local_write_file call because the gate
+      // is closed regardless of how many paths the workspace has provided.
+      // Explicit opt-out (false) still wins so admins can lock down agents.
+      const explicitFsFlag = agentConfig.local_files_enabled;
+      const workspaceFsBaseline = await loadWorkspaceDefaultPaths(this.db, workspaceId);
       const localFilesEnabled = isAllowlistMode
         ? allowlistPermits(toolPolicy, 'local_list_directory')
-        : agentConfig.local_files_enabled === true;
+        : explicitFsFlag === true || (explicitFsFlag !== false && workspaceFsBaseline.length > 0);
       const bashEnabled = isAllowlistMode
         ? allowlistPermits(toolPolicy, 'bash_execute')
         : agentConfig.bash_enabled === true;
@@ -934,15 +947,13 @@ export class RuntimeEngine {
         autonomyLevel,
       };
 
-      // Load file access guard if enabled. Workspace-level defaults
-      // (default_filesystem_paths, e.g. /tmp) flow to every agent so that
-      // SOP-delegated work that touches scratch space doesn't fail with
-      // "no directories configured" just because the agent has no per-agent
-      // path rows. Per-agent paths still extend the union.
+      // Build the file access guard from the workspace baseline (already
+      // loaded above for the gate decision) plus any per-agent path rows.
+      // The workspace baseline is the same source of truth used by
+      // orchestrator chat (filesystem.ts), so admins manage one set of
+      // paths and both the orchestrator and per-agent execution see them.
       let fileAccessGuard: FileAccessGuard | null = null;
       if (localFilesEnabled) {
-        const workspacePaths = await loadWorkspaceDefaultPaths(this.db, workspaceId);
-
         const { data: pathData } = await this.db
           .from('agent_file_access_paths')
           .select('path')
@@ -952,7 +963,7 @@ export class RuntimeEngine {
           ? (pathData as Array<{ path: string }>).map((p) => p.path)
           : [];
 
-        const merged = Array.from(new Set([...workspacePaths, ...agentPaths]));
+        const merged = Array.from(new Set([...workspaceFsBaseline, ...agentPaths]));
         if (merged.length > 0) {
           fileAccessGuard = new FileAccessGuard(merged);
         }
