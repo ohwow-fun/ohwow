@@ -38,15 +38,24 @@ export const generateWorkflowSchema = z.object({
 /** POST /api/agents */
 export const createAgentSchema = z.object({
   name: z.string().min(1, 'name is required'),
-  role: z.string().min(1, 'role is required'),
+  role: z.string().optional(),
   system_prompt: z.string().min(1, 'system_prompt is required'),
   description: z.string().optional(),
   department_id: z.string().optional(),
+  display_name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  scheduled: z
+    .object({
+      cron: z.string(),
+      timezone: z.string().optional(),
+    })
+    .optional(),
   config: z.object({
     model: z.string().optional(),
     temperature: z.number().optional(),
     max_tokens: z.number().optional(),
     tools_enabled: z.array(z.string()).optional(),
+    tools_mode: z.enum(['inherit', 'allowlist']).optional(),
     approval_required: z.boolean().optional(),
     web_search_enabled: z.boolean().optional(),
   }).optional(),

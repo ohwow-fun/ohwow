@@ -16,6 +16,7 @@ import { registerCloudTools } from './tools/cloud.js';
 import { registerDaemonTools } from './tools/daemon.js';
 import { registerWorkspaceTools } from './tools/workspace.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
+import { registerAgentManagementTools } from './tools/agents.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -29,4 +30,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerDaemonTools(server);
   registerWorkspaceTools(server, client);
   registerMcpServerTools(server, client);
+  registerAgentManagementTools(server, client);
 }

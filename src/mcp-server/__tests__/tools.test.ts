@@ -14,6 +14,7 @@ import { registerResearchTools } from '../tools/research.js';
 import { registerMessagingTools } from '../tools/messaging.js';
 import { registerCloudTools } from '../tools/cloud.js';
 import { registerMcpServerTools } from '../tools/mcp-servers.js';
+import { registerAgentManagementTools } from '../tools/agents.js';
 import { registerTools } from '../tools.js';
 
 /* ── Mock MCP Server ─────────────────────────────────────────────── */
@@ -60,6 +61,10 @@ function createMockClient(overrides: {
       return postResult;
     }),
     del: vi.fn().mockImplementation(async () => {
+      if (shouldThrow) throw new Error('Daemon unreachable');
+      return postResult;
+    }),
+    patch: vi.fn().mockImplementation(async () => {
       if (shouldThrow) throw new Error('Daemon unreachable');
       return postResult;
     }),
@@ -162,10 +167,22 @@ describe('MCP tool registration', () => {
     ]);
   });
 
-  it('registers all 36 tools via barrel', () => {
+  it('registers 4 agent management tools', () => {
+    const server = createMockServer();
+    registerAgentManagementTools(server as never, createMockClient() as never);
+    expect(server.tools).toHaveLength(4);
+    expect(server.tools.map(t => t.name)).toEqual([
+      'ohwow_create_agent',
+      'ohwow_get_agent',
+      'ohwow_update_agent',
+      'ohwow_delete_agent',
+    ]);
+  });
+
+  it('registers all 40 tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(36);
+    expect(server.tools).toHaveLength(40);
   });
 
   it('every tool has a unique name', () => {
@@ -370,6 +387,174 @@ describe('Cloud tool graceful degradation', () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual(sites);
+  });
+});
+
+/* ── Agent management tools ──────────────────────────────────────── */
+
+describe('Agent management tools', () => {
+  it('ohwow_create_agent forwards name, system_prompt, and allowlist to POST body', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      postResult: {
+        data: {
+          id: 'uuid-1',
+          name: 'daily-standup',
+          system_prompt: 'You are a standup agent.',
+        },
+      },
+    });
+    registerAgentManagementTools(server as never, client as never);
+
+    const createTool = server.tools.find(t => t.name === 'ohwow_create_agent')!;
+    await createTool.handler({
+      name: 'daily-standup',
+      displayName: 'Daily Standup',
+      description: 'Read-only digest agent',
+      systemPrompt: 'You are a standup agent.',
+      toolAllowlist: ['list_tasks', 'mcp__avenued__list_users'],
+      role: 'analyst',
+    });
+
+    const postCall = (client.post as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(postCall[0]).toBe('/api/agents');
+    const body = postCall[1] as Record<string, unknown>;
+    expect(body.name).toBe('daily-standup');
+    expect(body.system_prompt).toBe('You are a standup agent.');
+    expect(body.display_name).toBe('Daily Standup');
+    expect(body.role).toBe('analyst');
+    const config = body.config as Record<string, unknown>;
+    expect(config.tools_mode).toBe('allowlist');
+    expect(config.tools_enabled).toEqual(['list_tasks', 'mcp__avenued__list_users']);
+  });
+
+  it('ohwow_create_agent surfaces daemon errors as isError', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      postResult: { error: 'An agent named "daily-standup" already exists in this workspace.' },
+    });
+    registerAgentManagementTools(server as never, client as never);
+
+    const createTool = server.tools.find(t => t.name === 'ohwow_create_agent')!;
+    const result = await createTool.handler({
+      name: 'daily-standup',
+      systemPrompt: 'You are a standup agent.',
+    }) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('already exists');
+  });
+
+  it('ohwow_get_agent resolves name → id and returns the full row', async () => {
+    const agentRow = {
+      id: 'uuid-1',
+      name: 'daily-standup',
+      system_prompt: 'You are a standup agent.',
+      config: '{"model":"claude-opus-4-6"}',
+    };
+    const server = createMockServer();
+    const client = createMockClient();
+    (client.get as unknown as { mockImplementation: (fn: (path: string) => Promise<unknown>) => void })
+      .mockImplementation(async (path: string) => {
+        if (path === '/api/agents') return { data: [agentRow] };
+        if (path === '/api/agents/uuid-1') return { data: agentRow };
+        throw new Error(`unexpected path: ${path}`);
+      });
+    registerAgentManagementTools(server as never, client as never);
+
+    const getTool = server.tools.find(t => t.name === 'ohwow_get_agent')!;
+    const result = await getTool.handler({ name: 'daily-standup' }) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.agent.id).toBe('uuid-1');
+    expect(parsed.agent.system_prompt).toBe('You are a standup agent.');
+  });
+
+  it('ohwow_get_agent returns isError when no agent matches the name', async () => {
+    const server = createMockServer();
+    const client = createMockClient({ getResult: { data: [] } });
+    registerAgentManagementTools(server as never, client as never);
+
+    const getTool = server.tools.find(t => t.name === 'ohwow_get_agent')!;
+    const result = await getTool.handler({ name: 'missing' }) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('No agent named "missing"');
+  });
+
+  it('ohwow_get_agent requires either name or id', async () => {
+    const server = createMockServer();
+    const client = createMockClient();
+    registerAgentManagementTools(server as never, client as never);
+
+    const getTool = server.tools.find(t => t.name === 'ohwow_get_agent')!;
+    const result = await getTool.handler({}) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Provide either');
+  });
+
+  it('ohwow_update_agent PATCHes the resolved id with renamed fields', async () => {
+    const server = createMockServer();
+    const client = createMockClient();
+    (client.get as unknown as { mockImplementation: (fn: (path: string) => Promise<unknown>) => void })
+      .mockImplementation(async (path: string) => {
+        if (path === '/api/agents') return { data: [{ id: 'uuid-1', name: 'daily-standup' }] };
+        throw new Error(`unexpected path: ${path}`);
+      });
+    (client.patch as unknown as { mockImplementation: (fn: (path: string, body: unknown) => Promise<unknown>) => void })
+      .mockImplementation(async () => ({ data: { id: 'uuid-1', name: 'daily-standup' } }));
+    registerAgentManagementTools(server as never, client as never);
+
+    const updateTool = server.tools.find(t => t.name === 'ohwow_update_agent')!;
+    await updateTool.handler({
+      name: 'daily-standup',
+      systemPrompt: 'Updated prompt.',
+      toolAllowlist: ['list_tasks'],
+      enabled: false,
+    });
+
+    const patchCall = (client.patch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(patchCall[0]).toBe('/api/agents/uuid-1');
+    const body = patchCall[1] as Record<string, unknown>;
+    expect(body.system_prompt).toBe('Updated prompt.');
+    expect(body.enabled).toBe(false);
+    const config = body.config as Record<string, unknown>;
+    expect(config.tools_enabled).toEqual(['list_tasks']);
+    expect(config.tools_mode).toBe('allowlist');
+  });
+
+  it('ohwow_update_agent errors if no fields to update', async () => {
+    const server = createMockServer();
+    const client = createMockClient();
+    (client.get as unknown as { mockImplementation: (fn: (path: string) => Promise<unknown>) => void })
+      .mockImplementation(async () => ({ data: [{ id: 'uuid-1', name: 'daily-standup' }] }));
+    registerAgentManagementTools(server as never, client as never);
+
+    const updateTool = server.tools.find(t => t.name === 'ohwow_update_agent')!;
+    const result = await updateTool.handler({ name: 'daily-standup' }) as { isError: boolean; content: Array<{ text: string }> };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('No fields provided');
+  });
+
+  it('ohwow_delete_agent resolves name → id and DELETEs', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      getResult: { data: [{ id: 'uuid-1', name: 'daily-standup' }] },
+      postResult: { data: { deleted: true } },
+    });
+    registerAgentManagementTools(server as never, client as never);
+
+    const deleteTool = server.tools.find(t => t.name === 'ohwow_delete_agent')!;
+    const result = await deleteTool.handler({ name: 'daily-standup' }) as { content: Array<{ text: string }> };
+
+    const delCall = (client.del as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(delCall[0]).toBe('/api/agents/uuid-1');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.deleted).toBe('daily-standup');
   });
 });
 

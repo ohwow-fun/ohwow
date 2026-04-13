@@ -230,7 +230,6 @@ describe('Agents Routes', () => {
     expect(res._body).toEqual({
       error: 'Validation failed',
       details: [
-        'role: Invalid input: expected string, received undefined',
         'system_prompt: Invalid input: expected string, received undefined',
       ],
     });

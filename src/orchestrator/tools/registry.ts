@@ -362,3 +362,13 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['get_collective_briefing', (ctx, input) => getCollectiveBriefing(ctx, input)],
   ['rebalance_workload', (ctx) => rebalanceWorkload(ctx)],
 ]);
+
+/**
+ * Static (import-time) tool names visible to this registry. Does NOT include
+ * runtime-registered skills or external MCP server tools — callers that need
+ * the live surface should also consult `runtimeToolRegistry` and whichever
+ * MCP server registry is active.
+ */
+export function getStaticToolNames(): string[] {
+  return Array.from(toolRegistry.keys());
+}

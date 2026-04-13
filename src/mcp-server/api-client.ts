@@ -216,6 +216,21 @@ export class DaemonApiClient {
     return res.json();
   }
 
+  async patch(path: string, body: Record<string, unknown>): Promise<unknown> {
+    const res = await this.fetchWithRetry(`${this.baseUrl}${path}`, {
+      method: 'PATCH',
+      headers: {
+        ...this.authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`ohwow daemon error on PATCH ${path}: ${res.status}. Check daemon with: ohwow logs`);
+    }
+    return res.json();
+  }
+
   /**
    * POST to an SSE endpoint, consume the stream, and return assembled text.
    * Used for /api/chat which streams orchestrator events.
