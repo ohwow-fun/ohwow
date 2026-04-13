@@ -93,10 +93,15 @@ export function registerAgentManagementTools(
         .array(z.string())
         .optional()
         .describe(TOOL_ALLOWLIST_DESCRIPTION),
-      model: z
-        .string()
-        .optional()
-        .describe('Model identifier (e.g. "claude-opus-4-6", "gpt-5", "qwen3:0.6b"). If omitted, uses the workspace default.'),
+      // NOTE: per-agent model pinning is DEPRECATED. ohwow's model
+      // router now picks per sub-task based on purpose + difficulty +
+      // cost budget. See execution-policy.ts (model_policy) and the
+      // memory note `feedback_agents_as_suborchestrators.md`. This
+      // tool used to expose a `model` field that the LLM would
+      // helpfully fill in with a workspace default, baking a stale
+      // pin into every new agent's config. It's gone. If you need
+      // to constrain an agent to a specific model, do it via
+      // execution-policy, not via config.model on the agent row.
       role: z
         .string()
         .optional()
@@ -113,7 +118,7 @@ export function registerAgentManagementTools(
         .optional()
         .describe('Optional cron schedule. Stored with the agent but not yet wired to the scheduler — runs must be triggered manually via ohwow_run_agent for now.'),
     },
-    async ({ name, displayName, description, systemPrompt, toolAllowlist, model, role, enabled, scheduled }) => {
+    async ({ name, displayName, description, systemPrompt, toolAllowlist, role, enabled, scheduled }) => {
       try {
         const body: Record<string, unknown> = {
           name,
@@ -126,7 +131,6 @@ export function registerAgentManagementTools(
         if (scheduled !== undefined) body.scheduled = scheduled;
 
         const config: Record<string, unknown> = {};
-        if (model !== undefined) config.model = model;
         if (toolAllowlist !== undefined) {
           config.tools_enabled = toolAllowlist;
           config.tools_mode = 'allowlist';
@@ -200,7 +204,7 @@ export function registerAgentManagementTools(
   // ─── ohwow_update_agent ──────────────────────────────────────────
   server.tool(
     'ohwow_update_agent',
-    '[Agents] Update fields on an existing agent. Use this to iterate on a system prompt, tighten a tool allowlist, rename, toggle enabled, or swap model after a test run. Identify the agent by `name` or `id`. Any field left undefined is untouched.',
+    '[Agents] Update fields on an existing agent. Use this to iterate on a system prompt, tighten a tool allowlist, rename, or toggle enabled. Identify the agent by `name` or `id`. Any field left undefined is untouched. Per-agent model pinning is deprecated — the router picks per sub-task now.',
     {
       name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
       id: z.string().optional().describe('Agent UUID (provide this OR `name`).'),
@@ -215,7 +219,8 @@ export function registerAgentManagementTools(
         .array(z.string())
         .optional()
         .describe('Replace the tool allowlist. Same validation rules as ohwow_create_agent.'),
-      model: z.string().optional().describe('Updated model identifier.'),
+      // NOTE: `model` removed — deprecated along with per-agent pinning.
+      // Router picks per sub-task. See ohwow_create_agent for context.
       role: z.string().optional().describe('Updated role label.'),
       enabled: z.boolean().optional().describe('Toggle the agent on/off.'),
       scheduled: z
@@ -226,7 +231,7 @@ export function registerAgentManagementTools(
         .optional()
         .describe('Replace the cron schedule.'),
     },
-    async ({ name, id, newName, displayName, description, systemPrompt, toolAllowlist, model, role, enabled, scheduled }) => {
+    async ({ name, id, newName, displayName, description, systemPrompt, toolAllowlist, role, enabled, scheduled }) => {
       try {
         if (!name && !id) {
           return errorResponse('Provide either `name` or `id`.');
@@ -251,7 +256,6 @@ export function registerAgentManagementTools(
         if (scheduled !== undefined) body.scheduled = scheduled;
 
         const configPatch: Record<string, unknown> = {};
-        if (model !== undefined) configPatch.model = model;
         if (toolAllowlist !== undefined) {
           configPatch.tools_enabled = toolAllowlist;
           configPatch.tools_mode = 'allowlist';

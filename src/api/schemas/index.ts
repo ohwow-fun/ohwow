@@ -50,8 +50,10 @@ export const createAgentSchema = z.object({
       timezone: z.string().optional(),
     })
     .optional(),
+  // Note: `model` removed from the config sub-schema. Per-agent
+  // model pinning is deprecated — the router picks per sub-task.
+  // See src/api/routes/agents.ts for the matching write-site change.
   config: z.object({
-    model: z.string().optional(),
     temperature: z.number().optional(),
     max_tokens: z.number().optional(),
     tools_enabled: z.array(z.string()).optional(),

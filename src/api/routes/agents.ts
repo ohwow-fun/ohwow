@@ -141,8 +141,15 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
         system_prompt,
         description: description || null,
         status: enabled === false ? 'disabled' : 'idle',
+        // NOTE: `model` intentionally NOT written here. Per-agent
+        // model pinning is deprecated — the model router picks per
+        // sub-task based on purpose + difficulty + cost budget. See
+        // execution-policy.ts `model_policy` for the replacement.
+        // Writing a default like 'qwen3:0.6b' or 'openrouter/o4-mini'
+        // here bakes a stale pin into every new agent that execution
+        // already ignores but downstream tools (ohwow_get_agent, UI
+        // surfaces) mistakenly display as a constraint.
         config: JSON.stringify({
-          model: userConfig?.model || 'qwen3:0.6b',
           temperature: userConfig?.temperature ?? 0.7,
           max_tokens: userConfig?.max_tokens ?? 4096,
           tools_mode: toolsMode,
