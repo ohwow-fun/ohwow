@@ -283,17 +283,30 @@ export async function updatePersonModel(
     'ingestion_status', 'role_title',
   ];
 
+  // Sonnet and other strong models frequently emit camelCase keys like
+  // `communicationStyle` even when the schema says snake_case — they default
+  // to JS conventions. Normalize incoming keys to snake_case and check
+  // against the valid set. Be liberal in what we accept: it's cheaper to
+  // translate than to reject and force a retry.
+  const camelToSnake = (s: string): string =>
+    s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  const normalizedUpdates: Record<string, unknown> = {};
+  for (const [rawKey, value] of Object.entries(updates)) {
+    const key = validDimensions.includes(rawKey) ? rawKey : camelToSnake(rawKey);
+    if (!validDimensions.includes(key)) {
+      return { success: false, error: `Invalid dimension: "${rawKey}". Valid: ${validDimensions.join(', ')}` };
+    }
+    normalizedUpdates[key] = value;
+  }
+
   const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
-  for (const [key, value] of Object.entries(updates)) {
-    if (!validDimensions.includes(key)) {
-      return { success: false, error: `Invalid dimension: "${key}"` };
-    }
+  for (const [key, value] of Object.entries(normalizedUpdates)) {
     // SQLite stores JSON as text
     updatePayload[key] = typeof value === 'object' ? JSON.stringify(value) : value;
   }
 
-  if (updates.ingestion_status === 'initial_complete') {
+  if (normalizedUpdates.ingestion_status === 'initial_complete') {
     updatePayload.last_ingestion_at = new Date().toISOString();
   }
 
@@ -305,28 +318,57 @@ export async function updatePersonModel(
 
   if (updateError) return { success: false, error: updateError.message };
 
-  // Log observation
+  // Log observation. Bump observation_count on the parent model so callers
+  // can cheaply check "have we accumulated enough for initial_complete yet"
+  // without re-scanning the observations table.
   if (observation) {
-    await ctx.db
+    const { error: obsError } = await ctx.db
       .from('agent_workforce_person_observations')
       .insert({
         id: crypto.randomUUID(),
         person_model_id: personId,
         workspace_id: ctx.workspaceId,
-        dimension: Object.keys(updates)[0] || 'general',
+        dimension: Object.keys(normalizedUpdates)[0] || 'general',
         observation_type: observationType || 'self_report',
         content: observation,
-        data: JSON.stringify(updates),
+        data: JSON.stringify(normalizedUpdates),
         confidence: 0.8,
         processed: 1,
       });
+    if (obsError) {
+      // Observation persistence failure is NOT fatal to the structured
+      // update — we already saved the dimensions above. Surface the error
+      // so the caller knows narrative memory didn't persist.
+      return {
+        success: true,
+        data: {
+          message: `Updated ${Object.keys(normalizedUpdates).length} dimension(s) but observation logging failed: ${obsError.message}`,
+          updatedDimensions: Object.keys(normalizedUpdates),
+          observationLogged: false,
+        },
+      };
+    }
+    // Best-effort counter bump — we don't block on it.
+    try {
+      const { data: cur } = await ctx.db
+        .from('agent_workforce_person_models')
+        .select('observation_count')
+        .eq('id', personId)
+        .maybeSingle();
+      const prev = ((cur as { observation_count?: number } | null)?.observation_count) ?? 0;
+      await ctx.db
+        .from('agent_workforce_person_models')
+        .update({ observation_count: prev + 1 })
+        .eq('id', personId);
+    } catch { /* non-fatal */ }
   }
 
   return {
     success: true,
     data: {
-      message: `Updated ${Object.keys(updates).length} dimension${Object.keys(updates).length !== 1 ? 's' : ''}.`,
-      updatedDimensions: Object.keys(updates),
+      message: `Updated ${Object.keys(normalizedUpdates).length} dimension${Object.keys(normalizedUpdates).length !== 1 ? 's' : ''}${observation ? ' + observation logged' : ''}.`,
+      updatedDimensions: Object.keys(normalizedUpdates),
+      observationLogged: !!observation,
     },
   };
 }
