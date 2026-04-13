@@ -41,6 +41,7 @@ export async function buildTargetedPrompt(
   compact?: boolean | 'micro',
   desktopDisplayLayout?: string,
   hasMcpTools?: boolean,
+  mcpServerNames?: string[],
 ): Promise<{ staticPart: string; dynamicPart: string }> {
   const need = (s: IntentSection) => sections.has(s);
 
@@ -277,6 +278,7 @@ export async function buildTargetedPrompt(
     desktopPreActivated,
     desktopDisplayLayout,
     hasMcpTools,
+    mcpServerNames,
     platform,
     learnedPrinciples: (principlesResult.data || []) as PrincipleRow[],
     learnedSkills: [],

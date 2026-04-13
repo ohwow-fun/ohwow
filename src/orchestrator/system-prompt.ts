@@ -56,6 +56,13 @@ export interface BuildLocalSystemPromptArgs {
   desktopPreActivated?: boolean;
   desktopDisplayLayout?: string;
   hasMcpTools?: boolean;
+  /**
+   * Names of registered MCP servers (e.g. ["avenued-prod-superadmin"]).
+   * Rendered alongside hasMcpTools so the model knows which servers
+   * exist and how to address their tools by the namespaced
+   * mcp__<server>__<tool> convention.
+   */
+  mcpServerNames?: string[];
   platform?: ChannelType;
   /** Learned principles from self-improvement cycle (top 5 by utility) */
   learnedPrinciples?: { id: string; rule: string; category: string }[];
@@ -805,6 +812,18 @@ You can control the user's macOS desktop when needed. Call \`request_desktop\` f
 Always call \`request_desktop\` before using any desktop_ tool.`
       : '';
 
+  // MCP awareness: when servers are registered, tell the model the naming
+  // convention and list the live server names. Without this, models routinely
+  // fail to find a tool when the user asks for it by raw name (e.g. "use the
+  // avenued_* tools" → model looks for `avenued_*` and sees only
+  // `mcp__avenued-prod-superadmin__avenued_*` and gives up).
+  const mcpSection = args.hasMcpTools && args.mcpServerNames && args.mcpServerNames.length > 0
+    ? `\n## MCP Tools
+Registered MCP server${args.mcpServerNames.length > 1 ? 's' : ''}: ${args.mcpServerNames.map(n => `\`${n}\``).join(', ')}.
+
+Their tools are exposed under the \`mcp__<server>__<tool>\` naming convention. When the user says "use the ${args.mcpServerNames[0]} tools" or asks for any tool by raw name, look in your tool list for entries that begin with \`mcp__${args.mcpServerNames[0]}__\` — that's where they live. Call those tools directly. Do not claim the tools are missing without first searching your tool list for the \`mcp__\` prefix.`
+    : '';
+
   // Tool priority section: emitted when 2+ interactive backends are available
   const interactiveBackendCount =
     (args.hasMcpTools || false ? 1 : 0) +
@@ -879,6 +898,7 @@ ${a2aSection}
 ${visionSection}
 ${browserSection}
 ${desktopSection}
+${mcpSection}
 ${toolPrioritySection}
 ${handoffSection}
 ${channelSections.join('')}${buildLocalPlatformAddendum(args.platform)}`;

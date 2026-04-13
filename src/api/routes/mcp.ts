@@ -280,10 +280,21 @@ export function createMcpRouter(
       await saveServers(db, next);
 
       // Force the orchestrator to reload so the new server is live
-      // immediately without restarting the daemon.
+      // immediately without restarting the daemon. Surface per-server
+      // connect failures: previously these were swallowed inside
+      // McpClientManager.connect and the route returned ok:true even
+      // when the new server was unreachable, leaving the caller to
+      // discover it later via "tool not visible" failures.
       if (orchestrator) {
         try {
           await orchestrator.reloadMcpServers();
+          const status = orchestrator.getMcpStatus();
+          if (status && status.errors.length > 0) {
+            logger.error(
+              { errors: status.errors, toolCount: status.toolCount },
+              '[api] MCP reload completed but some servers failed to connect',
+            );
+          }
         } catch (err) {
           logger.warn({ err }, '[api] MCP orchestrator reload failed (will retry on next chat)');
         }

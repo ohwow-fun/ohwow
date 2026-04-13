@@ -10,7 +10,14 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { McpServerConfig, McpToolAnnotations } from './types.js';
-import { mcpToolToAnthropic, parseMcpToolName, extractToolAnnotations } from './tool-adapter.js';
+import {
+  mcpToolToAnthropic,
+  parseMcpToolName,
+  extractToolAnnotations,
+  namespacedMcpToolName,
+  shortAliasForMcpTool,
+  MAX_TOOL_NAME_LENGTH,
+} from './tool-adapter.js';
 import { logger } from '../lib/logger.js';
 
 export interface McpToolEntry {
@@ -152,19 +159,50 @@ export class McpClientManager {
     this.clients.set(server.name, client);
     this.serverConfigs.set(server.name, server);
 
+    let truncatedCount = 0;
     for (const tool of tools) {
-      const namespacedName = `mcp__${server.name}__${tool.name}`;
+      const namespacedName = namespacedMcpToolName(server.name, tool.name);
+      // Provider tool-name limit is 64 chars on Anthropic + OpenAI. Long
+      // server names + long MCP tool names blow past it and the provider
+      // either silently drops the tool or 400s the whole request, leaving
+      // the model unable to see any MCP tools and forced to hallucinate
+      // an explanation. Emit a deterministic short alias for over-length
+      // names and register both keys in toolMap so dispatch resolves
+      // either form.
+      const displayName = namespacedName.length <= MAX_TOOL_NAME_LENGTH
+        ? namespacedName
+        : shortAliasForMcpTool(server.name, tool.name);
+      if (displayName !== namespacedName) {
+        truncatedCount++;
+        logger.warn(
+          `[MCP] Tool name "${namespacedName}" exceeds ${MAX_TOOL_NAME_LENGTH} chars; using alias "${displayName}". The dispatcher accepts either form.`,
+        );
+      }
+
       const annotations = extractToolAnnotations(tool);
-      this.toolMap.set(namespacedName, {
+      const entry: McpToolEntry = {
         client,
         serverName: server.name,
         originalName: tool.name,
         annotations,
-      });
-      this.toolDefinitions.push(mcpToolToAnthropic(server.name, tool));
+      };
+      // Register under both the namespaced and short-alias name. Existing
+      // dispatch sites (tool-executor, mcp-executor) look up by whatever
+      // the model called, and this lets either form route to the same entry.
+      this.toolMap.set(namespacedName, entry);
+      if (displayName !== namespacedName) {
+        this.toolMap.set(displayName, entry);
+      }
+      this.toolDefinitions.push(mcpToolToAnthropic(server.name, tool, displayName));
     }
 
-    logger.info(`[MCP] Connected to "${server.name}" — ${tools.length} tool(s)`);
+    if (truncatedCount > 0) {
+      logger.info(
+        `[MCP] Connected to "${server.name}" — ${tools.length} tool(s), ${truncatedCount} aliased to fit ${MAX_TOOL_NAME_LENGTH}-char limit`,
+      );
+    } else {
+      logger.info(`[MCP] Connected to "${server.name}" — ${tools.length} tool(s)`);
+    }
   }
 
   /**
@@ -376,15 +414,18 @@ export class McpClientManager {
       this.clients.delete(parsed.serverName);
     }
 
-    // Remove stale tool entries
+    // Remove stale tool entries. Filter toolDefinitions by looking up
+    // each name in the (about-to-be-cleared) toolMap so we catch both
+    // the namespaced form and any short aliases registered for
+    // over-length names — a name-prefix filter would miss the aliases.
+    const staleNames = new Set<string>();
     for (const [key, entry] of this.toolMap) {
       if (entry.serverName === parsed.serverName) {
+        staleNames.add(key);
         this.toolMap.delete(key);
       }
     }
-    this.toolDefinitions = this.toolDefinitions.filter(
-      t => !t.name.startsWith(`mcp__${parsed.serverName}__`)
-    );
+    this.toolDefinitions = this.toolDefinitions.filter(t => !staleNames.has(t.name));
 
     // Reconnect
     try {

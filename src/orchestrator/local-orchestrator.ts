@@ -161,6 +161,19 @@ export class LocalOrchestrator {
   private toolCache = new ToolCache();
   private mcpClients: McpClientManager | null = null;
   private mcpServers: McpServerConfig[];
+  /**
+   * Snapshot of the most recent MCP reload outcome. Updated by
+   * reloadMcpServers() and ensureMcpConnected() so daemon health endpoints
+   * (and the /api/mcp routes) can surface per-server connect failures
+   * instead of swallowing them. Read via getMcpStatus().
+   */
+  private mcpReloadStatus: {
+    ok: boolean;
+    serverCount: number;
+    toolCount: number;
+    errors: Array<{ serverName: string; error: string }>;
+    lastUpdatedMs: number;
+  } | null = null;
   private _lspManager?: import('../lsp/lsp-manager.js').LspManager;
   private _meetingSession?: import('../meeting/meeting-session.js').MeetingSession;
   /** Unified Brain: philosophical cognitive coordinator. */
@@ -771,10 +784,49 @@ export class LocalOrchestrator {
 
     this.mcpClients = await McpClientManager.connect(servers, { onElicitation });
     const toolCount = this.mcpClients.getToolDefinitions().length;
+    const failures = this.mcpClients.getConnectionFailures();
+    this.mcpReloadStatus = {
+      ok: failures.length === 0,
+      serverCount: servers.length,
+      toolCount,
+      errors: failures,
+      lastUpdatedMs: Date.now(),
+    };
     if (toolCount > 0) {
-      logger.info(`[mcp] Orchestrator connected — ${toolCount} tool(s) available`);
+      logger.info(
+        { toolCount, serverCount: servers.length, failureCount: failures.length },
+        `[mcp] Orchestrator connected — ${toolCount} tool(s) across ${servers.length} server(s)`,
+      );
+    }
+    if (failures.length > 0) {
+      // Surface per-server failures so add_mcp_server callers see them
+      // instead of getting a silent ok:true. The mcp.ts route logs a
+      // matching error after reloadMcpServers() returns.
+      for (const failure of failures) {
+        logger.error(
+          { serverName: failure.serverName, error: failure.error },
+          `[mcp] Failed to connect server "${failure.serverName}": ${failure.error}`,
+        );
+      }
     }
     this.syncOrganToBody();
+  }
+
+  /**
+   * Snapshot of the most recent MCP reload outcome. Daemon health checks
+   * and POST /api/mcp/servers callers read this to verify a reload
+   * actually populated tools, not just that the API call succeeded.
+   * Returns null if MCP has never been reloaded or no servers are
+   * configured.
+   */
+  getMcpStatus(): {
+    ok: boolean;
+    serverCount: number;
+    toolCount: number;
+    errors: Array<{ serverName: string; error: string }>;
+    lastUpdatedMs: number;
+  } | null {
+    return this.mcpReloadStatus;
   }
 
   /** Resolve a pending MCP elicitation request. */
@@ -1091,7 +1143,8 @@ export class LocalOrchestrator {
     // Build targeted system prompt (only fetches context for relevant sections)
     const desktopDisplayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
     const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
-    const { staticPart, dynamicPart } = await buildTargetedPrompt(this.promptDeps, userMessage, sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, undefined, desktopDisplayLayout, hasMcpTools);
+    const mcpServerNames = hasMcpTools ? this.mcpServers.map(s => s.name) : undefined;
+    const { staticPart, dynamicPart } = await buildTargetedPrompt(this.promptDeps, userMessage, sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, undefined, desktopDisplayLayout, hasMcpTools, mcpServerNames);
 
     // Array format: static block is cached, dynamic block changes each call
     const systemBlocks: TextBlockParam[] = [
@@ -1891,6 +1944,26 @@ export class LocalOrchestrator {
       tools = [...tools, ...runtimeSkillDefs];
     }
 
+    // Observability: log the assembled tool surface so operators can verify
+    // MCP tools actually landed in what the model sees. The "configured but
+    // empty" case is the regression signal — it means a server is registered
+    // but ensureMcpConnected/reload silently failed and getMcpStatus() will
+    // tell you why.
+    const mcpConfigured = this.mcpServers.length > 0;
+    if (mcpTools.length > 0 || mcpConfigured) {
+      const overLong = tools.filter(t => t.name.length > 64).map(t => t.name);
+      logger.info(
+        {
+          totalTools: tools.length,
+          mcpToolCount: mcpTools.length,
+          mcpServerCount: this.mcpServers.length,
+          mcpToolNames: mcpTools.slice(0, 5).map(t => t.name),
+          overLongNames: overLong.length > 0 ? overLong : undefined,
+        },
+        '[orchestrator] tool surface assembled',
+      );
+    }
+
     return tools;
   }
 
@@ -2036,10 +2109,12 @@ export class LocalOrchestrator {
     // Build system prompt as plain string (no TextBlockParam arrays, no cache_control)
     const displayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
     const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
+    const mcpServerNames = hasMcpTools ? this.mcpServers.map(s => s.name) : undefined;
     const { staticPart, dynamicPart } = await buildTargetedPrompt(
       this.promptDeps, userMessage, sections,
       browserPreActivated || this.browserActivated, options?.platform,
       desktopPreActivated || this.desktopActivated, undefined, displayLayout, hasMcpTools,
+      mcpServerNames,
     );
     let systemPrompt = activePersona
       ? `${activePersona.systemPrompt}\n\n## Runtime footer\nYou are speaking inside an OHWOW chat thread. You still have the full orchestrator tool catalog — use it freely (create_team_member, update_person_model, get_knowledge_document, run_bash, etc.). Stay in character as ${activePersona.name}${activePersona.role ? ` (${activePersona.role})` : ''} for every reply. To hand control back to the generic orchestrator, call deactivate_persona.`

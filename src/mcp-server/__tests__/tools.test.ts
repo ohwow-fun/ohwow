@@ -78,12 +78,13 @@ function createMockClient(overrides: {
 /* ── Registration count tests ────────────────────────────────────── */
 
 describe('MCP tool registration', () => {
-  it('registers 7 core tools', () => {
+  it('registers 8 core tools', () => {
     const server = createMockServer();
     registerCoreTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(7);
+    expect(server.tools).toHaveLength(8);
     expect(server.tools.map(t => t.name)).toEqual([
       'ohwow_chat',
+      'ohwow_get_chat',
       'ohwow_list_agents',
       'ohwow_run_agent',
       'ohwow_get_task',
@@ -182,7 +183,7 @@ describe('MCP tool registration', () => {
   it('registers all 40 tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(40);
+    expect(server.tools).toHaveLength(41);
   });
 
   it('every tool has a unique name', () => {
