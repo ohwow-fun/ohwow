@@ -141,21 +141,18 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
         system_prompt,
         description: description || null,
         status: enabled === false ? 'disabled' : 'idle',
-        // NOTE: `model` intentionally NOT written here. Per-agent
-        // model pinning is deprecated — the model router picks per
-        // sub-task based on purpose + difficulty + cost budget. See
-        // execution-policy.ts `model_policy` for the replacement.
-        // Writing a default like 'qwen3:0.6b' or 'openrouter/o4-mini'
-        // here bakes a stale pin into every new agent that execution
-        // already ignores but downstream tools (ohwow_get_agent, UI
-        // surfaces) mistakenly display as a constraint.
         config: JSON.stringify({
           temperature: userConfig?.temperature ?? 0.7,
           max_tokens: userConfig?.max_tokens ?? 4096,
           tools_mode: toolsMode,
           tools_enabled: toolsEnabled,
           approval_required: userConfig?.approval_required ?? false,
-          web_search_enabled: userConfig?.web_search_enabled ?? true,
+          // Conservative default: web search is opt-in. When an operator
+          // builds a narrow allowlist they almost never want the browser
+          // SDK search tool leaking in alongside it. Operators who want
+          // it pass `web_search_enabled: true` or add `web_search` to
+          // the allowlist explicitly.
+          web_search_enabled: userConfig?.web_search_enabled ?? false,
           ...(display_name ? { display_name } : {}),
           ...(scheduled ? { scheduled } : {}),
         }),
@@ -266,6 +263,12 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       }
       if (req.body.display_name !== undefined) configPatch.display_name = req.body.display_name;
       if (req.body.scheduled !== undefined) configPatch.scheduled = req.body.scheduled;
+      // Agents never pin a model — the router picks per task. Reject writes
+      // that try to reintroduce a `model` field so the old deprecated shape
+      // can't silently come back through the PATCH path.
+      if ('model' in configPatch) {
+        delete configPatch.model;
+      }
 
       if (Array.isArray(configPatch.tools_enabled)) {
         const unknown = validateToolAllowlist(configPatch.tools_enabled as string[]);

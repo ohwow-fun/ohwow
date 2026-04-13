@@ -93,15 +93,10 @@ export function registerAgentManagementTools(
         .array(z.string())
         .optional()
         .describe(TOOL_ALLOWLIST_DESCRIPTION),
-      // NOTE: per-agent model pinning is DEPRECATED. ohwow's model
-      // router now picks per sub-task based on purpose + difficulty +
-      // cost budget. See execution-policy.ts (model_policy) and the
-      // memory note `feedback_agents_as_suborchestrators.md`. This
-      // tool used to expose a `model` field that the LLM would
-      // helpfully fill in with a workspace default, baking a stale
-      // pin into every new agent's config. It's gone. If you need
-      // to constrain an agent to a specific model, do it via
-      // execution-policy, not via config.model on the agent row.
+      webSearchEnabled: z
+        .boolean()
+        .optional()
+        .describe('Whether the built-in web_search tool should be available to this agent. Defaults to false — conservative default so narrow allowlists do not accidentally grant web access. When `toolAllowlist` is set, this flag is overridden by the allowlist: the agent sees web_search only if "web_search" is explicitly in the list.'),
       role: z
         .string()
         .optional()
@@ -118,7 +113,7 @@ export function registerAgentManagementTools(
         .optional()
         .describe('Optional cron schedule. Stored with the agent but not yet wired to the scheduler — runs must be triggered manually via ohwow_run_agent for now.'),
     },
-    async ({ name, displayName, description, systemPrompt, toolAllowlist, role, enabled, scheduled }) => {
+    async ({ name, displayName, description, systemPrompt, toolAllowlist, webSearchEnabled, role, enabled, scheduled }) => {
       try {
         const body: Record<string, unknown> = {
           name,
@@ -135,6 +130,7 @@ export function registerAgentManagementTools(
           config.tools_enabled = toolAllowlist;
           config.tools_mode = 'allowlist';
         }
+        if (webSearchEnabled !== undefined) config.web_search_enabled = webSearchEnabled;
         if (Object.keys(config).length > 0) body.config = config;
 
         const result = (await client.post('/api/agents', body)) as {
@@ -160,7 +156,7 @@ export function registerAgentManagementTools(
   // ─── ohwow_get_agent ─────────────────────────────────────────────
   server.tool(
     'ohwow_get_agent',
-    '[Agents] Get an agent\'s full configuration by name or id, including the system prompt, tool allowlist, model policy, role, schedule, enabled flag, and timestamps. Use this instead of ohwow_list_agents when you need to inspect or iterate on a specific agent\'s system prompt — list_agents returns summary rows and does not include the prompt.',
+    '[Agents] Get an agent\'s full configuration by name or id, including the system prompt, tool allowlist, role, schedule, enabled flag, and timestamps. Use this instead of ohwow_list_agents when you need to inspect or iterate on a specific agent\'s system prompt — list_agents returns summary rows and does not include the prompt.',
     {
       name: z
         .string()
@@ -204,7 +200,7 @@ export function registerAgentManagementTools(
   // ─── ohwow_update_agent ──────────────────────────────────────────
   server.tool(
     'ohwow_update_agent',
-    '[Agents] Update fields on an existing agent. Use this to iterate on a system prompt, tighten a tool allowlist, rename, or toggle enabled. Identify the agent by `name` or `id`. Any field left undefined is untouched. Per-agent model pinning is deprecated — the router picks per sub-task now.',
+    '[Agents] Update fields on an existing agent. Use this to iterate on a system prompt, tighten a tool allowlist, rename, or toggle enabled. Identify the agent by `name` or `id`. Any field left undefined is untouched. Agents never pin a model — the router picks per task.',
     {
       name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
       id: z.string().optional().describe('Agent UUID (provide this OR `name`).'),
@@ -219,8 +215,10 @@ export function registerAgentManagementTools(
         .array(z.string())
         .optional()
         .describe('Replace the tool allowlist. Same validation rules as ohwow_create_agent.'),
-      // NOTE: `model` removed — deprecated along with per-agent pinning.
-      // Router picks per sub-task. See ohwow_create_agent for context.
+      webSearchEnabled: z
+        .boolean()
+        .optional()
+        .describe('Toggle the built-in web_search tool. Overridden by the allowlist when one is active — see ohwow_create_agent.'),
       role: z.string().optional().describe('Updated role label.'),
       enabled: z.boolean().optional().describe('Toggle the agent on/off.'),
       scheduled: z
@@ -231,7 +229,7 @@ export function registerAgentManagementTools(
         .optional()
         .describe('Replace the cron schedule.'),
     },
-    async ({ name, id, newName, displayName, description, systemPrompt, toolAllowlist, role, enabled, scheduled }) => {
+    async ({ name, id, newName, displayName, description, systemPrompt, toolAllowlist, webSearchEnabled, role, enabled, scheduled }) => {
       try {
         if (!name && !id) {
           return errorResponse('Provide either `name` or `id`.');
@@ -260,6 +258,7 @@ export function registerAgentManagementTools(
           configPatch.tools_enabled = toolAllowlist;
           configPatch.tools_mode = 'allowlist';
         }
+        if (webSearchEnabled !== undefined) configPatch.web_search_enabled = webSearchEnabled;
         if (Object.keys(configPatch).length > 0) body.config = configPatch;
 
         if (Object.keys(body).length === 0) {

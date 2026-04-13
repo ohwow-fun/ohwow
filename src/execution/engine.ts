@@ -117,6 +117,11 @@ import { detectAndPersistAnomalies } from './anomaly-monitoring.js';
 import { createDefaultToolRegistry } from './tool-dispatch/index.js';
 import type { ToolExecutionContext, ToolCallResult } from './tool-dispatch/index.js';
 import { getAgentDefaultModel } from './execution-policy.js';
+import {
+  resolveAgentToolPolicy,
+  filterToolsByPolicy,
+  allowlistPermits,
+} from './agent-tool-policy.js';
 import { STATE_TOOL_DEFINITIONS, loadStateContext, loadPreviousTaskContext } from './state/index.js';
 import { LocalLLMCache } from './llm-cache.js';
 import { serializeCheckpoint, type TaskCheckpoint } from './checkpoint-types.js';
@@ -891,20 +896,46 @@ export class RuntimeEngine {
       ]);
 
       // 4. Build system prompt
-      const webSearchEnabled = agentConfig.web_search_enabled !== false;
-      const browserEnabled = agentConfig.browser_enabled !== false; // opt-out: default true
+      // Resolve the agent's unified tool policy. In allowlist mode the
+      // feature-flag defaults below (web_search, browser, scrapling, etc.)
+      // are overridden to `false` unless the tool name is explicitly in the
+      // allowlist — otherwise the defaults silently leak past a narrow
+      // allowlist. Inherit mode preserves the legacy feature-flag behavior.
+      const toolPolicy = resolveAgentToolPolicy(agentConfig);
+      const isAllowlistMode = toolPolicy.mode === 'allowlist';
+
+      const webSearchEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'web_search')
+        : agentConfig.web_search_enabled === true; // opt-in: default false (narrower than legacy)
+      const browserEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'request_browser')
+        : agentConfig.browser_enabled !== false;
       const autonomyLevel: number = agentConfig.autonomy_level ?? 2;
       const approvalRequired = autonomyLevel === 1;
 
-      const scraplingEnabled = agentConfig.scraping_enabled !== false;
-      const localFilesEnabled = agentConfig.local_files_enabled === true;
-      const bashEnabled = agentConfig.bash_enabled === true;
-      const mcpEnabled = agentConfig.mcp_enabled === true;
-      const devopsEnabled = agentConfig.devops_enabled === true;
+      const scraplingEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'scrape_url')
+        : agentConfig.scraping_enabled !== false;
+      const localFilesEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'local_list_directory')
+        : agentConfig.local_files_enabled === true;
+      const bashEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'bash_execute')
+        : agentConfig.bash_enabled === true;
+      // MCP is enabled when the agent opts in OR when the allowlist contains
+      // any `mcp__<server>__<tool>` entry. The latter is the auto-enable
+      // signal documented for the MCP typed tools — adding an MCP tool name
+      // to the allowlist implicitly asks the engine to load that server.
+      const mcpEnabled = agentConfig.mcp_enabled === true || toolPolicy.requiresMcp;
+      const devopsEnabled = isAllowlistMode
+        ? false
+        : agentConfig.devops_enabled === true;
       // Desktop/browser can be enabled via agent config OR via SOP in the task input
       const sopTaskInputForCaps = String(task.input || '');
       const sopNeedsDesktop = sopTaskInputForCaps.includes('request_desktop') || sopTaskInputForCaps.includes('desktop_focus_app');
-      const desktopEnabled = agentConfig.desktop_enabled === true || agentConfig.desktop_enabled === 1 || sopNeedsDesktop;
+      const desktopEnabled = isAllowlistMode
+        ? allowlistPermits(toolPolicy, 'request_desktop')
+        : (agentConfig.desktop_enabled === true || agentConfig.desktop_enabled === 1 || sopNeedsDesktop);
       const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
       const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
       const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];
@@ -1174,7 +1205,9 @@ export class RuntimeEngine {
       // Connect MCP clients (global servers merged with per-agent servers)
       let mcpClients: McpClientManager | null = null;
       if (mcpEnabled) {
-        // Global servers: config file takes precedence; fall back to runtime_settings table
+        // Global servers: config file takes precedence; fall back to runtime_settings table.
+        // The SQLite adapter auto-parses JSON columns on read, so `value` may already
+        // be an array. Accept either shape so historical rows still load.
         let globalServers: McpServerConfig[] = this.config.mcpServers ?? [];
         if (globalServers.length === 0) {
           const { data: mcpSetting } = await this.db
@@ -1183,14 +1216,38 @@ export class RuntimeEngine {
             .eq('key', 'global_mcp_servers')
             .maybeSingle();
           if (mcpSetting) {
-            try {
-              globalServers = JSON.parse((mcpSetting as { value: string }).value) as McpServerConfig[];
-            } catch {
-              globalServers = [];
+            const raw = (mcpSetting as { value: unknown }).value;
+            if (Array.isArray(raw)) {
+              globalServers = raw as McpServerConfig[];
+            } else if (typeof raw === 'string') {
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) globalServers = parsed as McpServerConfig[];
+              } catch {
+                globalServers = [];
+              }
             }
           }
         }
-        const allServers = [...globalServers, ...agentMcpServers];
+        // When an allowlist references specific MCP servers, load only those.
+        // The operator said "exactly these mcp__<server>__<tool> names" — we
+        // should not connect to every registered server on every task, both
+        // for latency and for blast-radius reasons.
+        const filteredGlobalServers = toolPolicy.requiresMcp
+          ? globalServers.filter((s) => toolPolicy.referencedMcpServers.has(s.name))
+          : globalServers;
+        if (toolPolicy.requiresMcp) {
+          const missing = [...toolPolicy.referencedMcpServers].filter(
+            (name) => !globalServers.some((s) => s.name === name) && !agentMcpServers.some((s) => s.name === name),
+          );
+          if (missing.length > 0) {
+            logger.warn(
+              { agentId, taskId, missing },
+              '[RuntimeEngine] Agent allowlist references MCP servers that are not registered in this workspace',
+            );
+          }
+        }
+        const allServers = [...filteredGlobalServers, ...agentMcpServers];
         if (allServers.length > 0) {
           mcpClients = await McpClientManager.connect(allServers, {
             onElicitation: async (serverName, message, schema) => {
@@ -1237,16 +1294,11 @@ export class RuntimeEngine {
       if (approvalRequired) tools.push(...DRAFT_TOOL_DEFINITIONS);
       if (mcpClients) tools.push(...mcpClients.getToolDefinitions());
 
-      // Per-agent tool scoping: filter tools by allowlist/blocklist
-      const allowedTools = agentConfig.allowed_tools as string[] | undefined;
-      const blockedTools = agentConfig.blocked_tools as string[] | undefined;
-      if (allowedTools?.length) {
-        const allowSet = new Set(allowedTools);
-        tools = tools.filter(t => 'name' in t && allowSet.has(t.name));
-      } else if (blockedTools?.length) {
-        const blockSet = new Set(blockedTools);
-        tools = tools.filter(t => !('name' in t) || !blockSet.has(t.name));
-      }
+      // Per-agent tool scoping: filter tools by the resolved policy.
+      // In allowlist mode the filter is strict — only names in the list
+      // survive, which is what lets a narrow `ohwow_create_agent`
+      // allowlist produce an exactly-that-many-tools tool surface.
+      tools = filterToolsByPolicy(tools, toolPolicy);
 
       // Browser service is created lazily when request_browser is called
       let browserService: LocalBrowserService | null = null;
