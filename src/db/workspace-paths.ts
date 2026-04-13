@@ -28,17 +28,29 @@ export async function loadWorkspaceDefaultPaths(
 ): Promise<string[]> {
   try {
     const { data, error } = await db
-      .from<{ default_filesystem_paths: string | null }>('agent_workforce_workspaces')
+      .from<{ default_filesystem_paths: string | string[] | null }>('agent_workforce_workspaces')
       .select('default_filesystem_paths')
       .eq('id', workspaceId)
       .maybeSingle();
 
     if (error || !data) return [...FALLBACK_PATHS];
 
-    const raw = (data as { default_filesystem_paths: string | null }).default_filesystem_paths;
+    // The SQLite adapter auto-parses JSON-shaped strings (`["..."]` / `{...}`)
+    // back into arrays/objects. The Supabase cloud adapter returns the raw
+    // text. Handle both: if it's already an array, use it; if it's a string,
+    // JSON.parse it.
+    const raw = (data as { default_filesystem_paths: string | string[] | null }).default_filesystem_paths;
     if (!raw) return [...FALLBACK_PATHS];
 
-    const parsed = JSON.parse(raw);
+    let parsed: unknown;
+    if (Array.isArray(raw)) {
+      parsed = raw;
+    } else if (typeof raw === 'string') {
+      parsed = JSON.parse(raw);
+    } else {
+      return [...FALLBACK_PATHS];
+    }
+
     if (!Array.isArray(parsed)) return [...FALLBACK_PATHS];
 
     const paths = parsed.filter((p): p is string => typeof p === 'string' && p.length > 0);
