@@ -472,7 +472,7 @@ export class ControlPlaneClient {
    * queue under "resource_sync" so the change is not lost.
    */
   async reportResource(
-    resource: 'contact' | 'knowledge_document' | 'team_member',
+    resource: 'contact' | 'knowledge_document' | 'team_member' | 'agent' | 'task' | 'goal' | 'onboarding_plan',
     action: 'upsert' | 'delete',
     payload: Record<string, unknown> & { id: string },
   ): Promise<{ ok: boolean; error?: string }> {
@@ -503,11 +503,22 @@ export class ControlPlaneClient {
       const isJson = contentType.includes('application/json');
 
       if (!response.ok || !isJson) {
+        // Capture response body so failures point straight at the cause
+        // (validation error, FK violation, missing column) instead of
+        // making the operator dig through cloud logs.
+        const failBody = await response.text().catch(() => '');
         const errMsg = !isJson
           ? `HTTP ${response.status} non-JSON response (likely endpoint not deployed)`
-          : `HTTP ${response.status}`;
+          : `HTTP ${response.status}: ${failBody.slice(0, 400)}`;
         logger.warn(
-          { resource, action, id: payload.id, status: response.status, contentType },
+          {
+            resource,
+            action,
+            id: payload.id,
+            status: response.status,
+            contentType,
+            body: failBody.slice(0, 400),
+          },
           '[ControlPlane] resource sync failed, queuing',
         );
         await this.outboundQueue.enqueue('resource_sync', body);

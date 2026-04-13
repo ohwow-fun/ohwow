@@ -16,23 +16,7 @@ import { retrieveKnowledgeChunks, tokenize } from '../../lib/rag/retrieval.js';
 import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
 import { chunkText } from '../../lib/rag/chunker.js';
 import { logger } from '../../lib/logger.js';
-
-/** Fire-and-forget upstream knowledge-doc sync. Never throws. */
-async function syncKnowledgeUpstream(
-  ctx: LocalToolContext,
-  action: 'upsert' | 'delete',
-  payload: Record<string, unknown> & { id: string },
-): Promise<void> {
-  if (!ctx.controlPlane) return;
-  try {
-    const result = await ctx.controlPlane.reportResource('knowledge_document', action, payload);
-    if (!result.ok) {
-      logger.debug({ action, id: payload.id, error: result.error }, '[knowledge] cloud sync deferred');
-    }
-  } catch (err) {
-    logger.warn({ err, action, id: payload.id }, '[knowledge] cloud sync threw');
-  }
-}
+import { syncResource } from '../../control-plane/sync-resources.js';
 
 // ============================================================================
 // ENQUEUE DOCUMENT FOR BACKGROUND PROCESSING
@@ -523,7 +507,7 @@ export async function uploadKnowledge(
     // Cloud mirror: after the doc is fully processed, push it upstream so
     // cloud agents can see it. Send metadata only (not chunks or embeddings)
     // since cloud handles its own chunking/embedding pipeline.
-    void syncKnowledgeUpstream(ctx, 'upsert', {
+    void syncResource(ctx, 'knowledge_document', 'upsert', {
       id: docId,
       title,
       filename,
@@ -819,7 +803,7 @@ export async function deleteKnowledge(
     .delete()
     .eq('id', documentId);
 
-  void syncKnowledgeUpstream(ctx, 'delete', { id: documentId });
+  void syncResource(ctx, 'knowledge_document', 'delete', { id: documentId });
 
   return {
     success: true,

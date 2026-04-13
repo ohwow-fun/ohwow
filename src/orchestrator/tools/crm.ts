@@ -3,30 +3,13 @@
  * Tools for managing contacts and logging events locally.
  *
  * Every create/update/delete path fires a best-effort upstream sync via
- * `ctx.controlPlane.reportResource` so cloud dashboards see the same
+ * the shared `syncResource` dispatcher so cloud dashboards see the same
  * contact state. Sync failures are never propagated back to the caller —
  * the local write is the source of truth and the cloud is a mirror.
  */
 
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
-import { logger } from '../../lib/logger.js';
-
-/** Fire-and-forget upstream contact sync. Never throws. */
-async function syncContactUpstream(
-  ctx: LocalToolContext,
-  action: 'upsert' | 'delete',
-  payload: Record<string, unknown> & { id: string },
-): Promise<void> {
-  if (!ctx.controlPlane) return;
-  try {
-    const result = await ctx.controlPlane.reportResource('contact', action, payload);
-    if (!result.ok) {
-      logger.debug({ action, id: payload.id, error: result.error }, '[crm] contact sync deferred');
-    }
-  } catch (err) {
-    logger.warn({ err, action, id: payload.id }, '[crm] contact sync threw');
-  }
-}
+import { syncResource } from '../../control-plane/sync-resources.js';
 
 // ============================================================================
 // list_contacts
@@ -104,7 +87,7 @@ export async function createContact(
 
   // Fire-and-forget cloud sync so the new contact shows up in the cloud
   // dashboard and cloud-side agents. Never blocks the local response.
-  void syncContactUpstream(ctx, 'upsert', {
+  void syncResource(ctx, 'contact', 'upsert', {
     id: contactId,
     name,
     email: insertPayload.email as string | undefined,
@@ -165,7 +148,7 @@ export async function updateContact(
     .eq('id', contactId)
     .maybeSingle();
   if (refreshed) {
-    void syncContactUpstream(ctx, 'upsert', {
+    void syncResource(ctx, 'contact', 'upsert', {
       ...(refreshed as Record<string, unknown>),
       id: contactId,
     });

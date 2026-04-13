@@ -17,43 +17,21 @@
  *   answer → optionally draft_cloud_invite when the member is ready for
  *   dashboard access.
  *
- * Cloud sync for team_member rows is intentionally deferred — the cloud
- * sync-resource endpoint only knows about contacts + knowledge docs today.
- * When the cloud route learns team_member we will wire it here the same way
- * as syncContactUpstream in crm.ts.
+ * Cloud sync for team_member rows happens via the shared
+ * `syncResource` dispatcher. The cloud agent_workforce_team_members
+ * table needs the row so an invited member can authenticate, find
+ * their guide agent, and have their COS-voiced briefing render.
  */
 
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
+import { syncResource, hexToUuid } from '../../control-plane/sync-resources.js';
 import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
 import { activateConversationPersona } from '../conversation-persona.js';
 
-/**
- * Fire-and-forget sync of a team_member row to cloud Supabase. Cloud has
- * its own agent_workforce_team_members table; for a member to use their
- * own cloud account (invite → accept → chat with their guide agent) the
- * cloud side needs to know their id, email, and assigned_guide_agent_id.
- * Never throws — upstream failure does not break the local write.
- */
-async function syncTeamMemberUpstream(
-  ctx: LocalToolContext,
-  action: 'upsert' | 'delete',
-  payload: Record<string, unknown> & { id: string },
-): Promise<void> {
-  if (!ctx.controlPlane) return;
-  try {
-    const result = await ctx.controlPlane.reportResource('team_member', action, payload);
-    if (!result.ok) {
-      logger.debug({ action, id: payload.id, error: result.error }, '[team] team_member sync deferred');
-    }
-  } catch (err) {
-    logger.warn({ err, action, id: payload.id }, '[team] team_member sync threw');
-  }
-}
-
 /** Convert a local team_members row into the payload shape the cloud expects. */
-function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unknown> & { id: string } {
-  const id = row.id as string;
+export function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unknown> & { id: string } {
+  const id = hexToUuid(row.id as string);
   let skills: unknown = [];
   if (typeof row.skills === 'string') {
     try {
@@ -64,6 +42,7 @@ function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unk
   } else if (Array.isArray(row.skills)) {
     skills = row.skills;
   }
+  const guideAgentId = row.assigned_guide_agent_id;
   return {
     id,
     name: row.name,
@@ -75,7 +54,8 @@ function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unk
     phone: row.phone ?? null,
     group_label: row.group_label ?? null,
     avatar_url: row.avatar_url ?? null,
-    assigned_guide_agent_id: row.assigned_guide_agent_id ?? null,
+    // Cloud expects dashed uuid for the FK as well.
+    assigned_guide_agent_id: typeof guideAgentId === 'string' && guideAgentId ? hexToUuid(guideAgentId) : null,
     cloud_invite_token: row.cloud_invite_token ?? null,
     cloud_invite_status: row.cloud_invite_status ?? null,
     onboarding_status: row.onboarding_status ?? 'not_started',
@@ -213,7 +193,7 @@ export async function createTeamMember(
 
   const loaded = await loadTeamMember(ctx, id);
   if (loaded) {
-    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(loaded));
+    void syncResource(ctx, 'team_member', 'upsert', teamMemberSyncPayload(loaded));
   }
   return {
     success: true,
@@ -281,7 +261,7 @@ export async function updateTeamMember(
 
   const refreshed = await loadTeamMember(ctx, teamMemberId);
   if (refreshed) {
-    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshed));
+    void syncResource(ctx, 'team_member', 'upsert', teamMemberSyncPayload(refreshed));
   }
   return {
     success: true,
@@ -406,7 +386,7 @@ export async function assignGuideAgent(
   // assigned_guide_agent_id when the member next opens their chat.
   const refreshedForSync = await loadTeamMember(ctx, teamMemberId);
   if (refreshedForSync) {
-    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshedForSync));
+    void syncResource(ctx, 'team_member', 'upsert', teamMemberSyncPayload(refreshedForSync));
   }
 
   // Auto-install this agent as the active persona for the current chat
@@ -504,7 +484,7 @@ export async function sendCloudInvite(
   // workspace_invites row the cloud route already created.)
   const refreshedAfterInvite = await loadTeamMember(ctx, teamMemberId);
   if (refreshedAfterInvite) {
-    void syncTeamMemberUpstream(ctx, 'upsert', teamMemberSyncPayload(refreshedAfterInvite));
+    void syncResource(ctx, 'team_member', 'upsert', teamMemberSyncPayload(refreshedAfterInvite));
   }
 
   try {
