@@ -127,20 +127,41 @@ if (subcommand === 'logs') {
     workspaceLayoutFor,
     writeWorkspacePointer,
     isValidWorkspaceName,
+    readWorkspaceConfig,
+    writeWorkspaceConfig,
+    findWorkspaceByLicenseKey,
     loadConfig,
+    DEFAULT_WORKSPACE,
     DEFAULT_PORT,
   } = await import('./config.js');
+
+  // Format a workspace config as a compact marker for `list`:
+  //   default        → (no marker, legacy)
+  //   ws-a           → (local-only)
+  //   ws-b           → (cloud: AvenueD Ops)
+  const formatMarker = (name: string): string => {
+    const cfg = readWorkspaceConfig(name);
+    if (!cfg) return '';
+    if (cfg.mode === 'local-only') return '  (local-only)';
+    if (cfg.mode === 'cloud') {
+      const label = cfg.displayName
+        ? `: ${cfg.displayName}`
+        : cfg.licenseKey
+          ? `: ${cfg.licenseKey.slice(0, 7)}***`
+          : '';
+      return `  (cloud${label})`;
+    }
+    return '';
+  };
 
   if (!action || action === 'list') {
     const active = resolveActiveWorkspace();
     const all = new Set(listWorkspaces());
-    // The active workspace may not have a directory yet (legacy install or
-    // fresh install before first daemon boot). Show it anyway.
     all.add(active.name);
     const sorted = Array.from(all).sort();
     for (const name of sorted) {
-      const marker = name === active.name ? '*' : ' ';
-      console.log(`${marker} ${name}`);
+      const pointer = name === active.name ? '*' : ' ';
+      console.log(`${pointer} ${name}${formatMarker(name)}`);
     }
     if (sorted.length === 1) {
       console.log('');
@@ -156,23 +177,120 @@ if (subcommand === 'logs') {
 
   if (action === 'create') {
     const name = process.argv[4];
+    const localOnly = process.argv.includes('--local-only');
+    const licenseKeyArg = process.argv.find((a) => a.startsWith('--license-key='))?.split('=')[1];
+    const displayNameArg = process.argv.find((a) => a.startsWith('--name='))?.split('=')[1];
+
     if (!name) {
-      console.error('Usage: ohwow workspace create <name>');
+      console.error('Usage: ohwow workspace create <name> [--local-only | --license-key=<key>] [--name="Display Name"]');
       process.exit(1);
     }
     if (!isValidWorkspaceName(name)) {
       console.error('Workspace name must be alphanumeric, dash, or underscore (no leading dot/dash).');
       process.exit(1);
     }
-    const { mkdirSync, existsSync } = await import('fs');
+    if (localOnly && licenseKeyArg) {
+      console.error('--local-only and --license-key are mutually exclusive.');
+      process.exit(1);
+    }
+    if (name === DEFAULT_WORKSPACE) {
+      console.error(`Workspace name "${DEFAULT_WORKSPACE}" is reserved.`);
+      process.exit(1);
+    }
+
+    const { existsSync } = await import('fs');
     const layout = workspaceLayoutFor(name);
     if (existsSync(layout.dataDir)) {
       console.log(`Workspace "${name}" already exists at ${layout.dataDir}`);
       process.exit(0);
     }
-    mkdirSync(layout.dataDir, { recursive: true });
-    console.log(`Created workspace "${name}" at ${layout.dataDir}`);
+
+    // Mirror detection for cloud mode — refuse if the license is already used
+    // by another local workspace (including the default via global config.json).
+    if (licenseKeyArg) {
+      const clash = findWorkspaceByLicenseKey(licenseKeyArg);
+      if (clash) {
+        console.error(
+          `License key is already used by workspace "${clash}". ` +
+            `Use a different license, or run "ohwow workspace unlink ${clash}" first.`,
+        );
+        process.exit(1);
+      }
+    }
+
+    // writeWorkspaceConfig creates the dir as a side effect.
+    if (localOnly) {
+      writeWorkspaceConfig(name, {
+        schemaVersion: 1,
+        mode: 'local-only',
+        ...(displayNameArg ? { displayName: displayNameArg } : {}),
+      });
+      console.log(`Created local-only workspace "${name}" at ${layout.dataDir}`);
+    } else if (licenseKeyArg) {
+      writeWorkspaceConfig(name, {
+        schemaVersion: 1,
+        mode: 'cloud',
+        licenseKey: licenseKeyArg,
+        ...(displayNameArg ? { displayName: displayNameArg } : {}),
+      });
+      console.log(`Created cloud workspace "${name}" at ${layout.dataDir}`);
+      console.log(`  License: ${licenseKeyArg.slice(0, 7)}***`);
+    } else {
+      // No mode flag: bare mkdir, legacy behavior. Used by tests and manual
+      // setups that don't want a workspace.json.
+      const { mkdirSync } = await import('fs');
+      mkdirSync(layout.dataDir, { recursive: true });
+      console.log(`Created workspace "${name}" at ${layout.dataDir}`);
+      console.log('  (no mode specified — will inherit global config on boot)');
+    }
     console.log(`Run "ohwow workspace use ${name}" to switch.`);
+    process.exit(0);
+  }
+
+  if (action === 'info') {
+    const name = process.argv[4] || resolveActiveWorkspace().name;
+    if (!isValidWorkspaceName(name)) {
+      console.error('Workspace name must be alphanumeric, dash, or underscore.');
+      process.exit(1);
+    }
+    const layout = workspaceLayoutFor(name);
+    const cfg = readWorkspaceConfig(name);
+    const { existsSync } = await import('fs');
+    const dirExists = existsSync(layout.dataDir);
+    const dbExists = existsSync(layout.dbPath);
+    const isActive = resolveActiveWorkspace().name === name;
+
+    // Check daemon status against this workspace's data dir.
+    let daemonStatus = 'not running';
+    let daemonPort: number | null = null;
+    try {
+      daemonPort = loadConfig().port;
+    } catch {
+      daemonPort = DEFAULT_PORT;
+    }
+    if (dirExists && daemonPort) {
+      const { isDaemonRunning } = await import('./daemon/lifecycle.js');
+      const status = await isDaemonRunning(layout.dataDir, daemonPort);
+      if (status.running) daemonStatus = `running (PID ${status.pid}, port ${daemonPort})`;
+    }
+
+    console.log(`Workspace "${name}"${isActive ? '  [active]' : ''}`);
+    console.log(`  Directory: ${layout.dataDir}${dirExists ? '' : ' (missing)'}`);
+    console.log(`  Database:  ${layout.dbPath}${dbExists ? '' : ' (not yet created)'}`);
+    console.log(`  Daemon:    ${daemonStatus}`);
+    if (!cfg) {
+      console.log('  Mode:      default (inherits global config.json)');
+    } else if (cfg.mode === 'local-only') {
+      console.log('  Mode:      local-only (no cloud sync, tier=free)');
+      if (cfg.displayName) console.log(`  Label:     ${cfg.displayName}`);
+    } else if (cfg.mode === 'cloud') {
+      console.log('  Mode:      cloud');
+      if (cfg.displayName) console.log(`  Label:     ${cfg.displayName}`);
+      console.log(`  License:   ${cfg.licenseKey ? cfg.licenseKey.slice(0, 7) + '***' : '(none)'}`);
+      if (cfg.cloudWorkspaceId) console.log(`  Cloud ID:  ${cfg.cloudWorkspaceId}`);
+      if (cfg.cloudDeviceId) console.log(`  Device:    ${cfg.cloudDeviceId}`);
+      if (cfg.lastConnectAt) console.log(`  Connected: ${cfg.lastConnectAt}`);
+    }
     process.exit(0);
   }
 
@@ -254,7 +372,9 @@ if (subcommand === 'logs') {
   }
 
   console.error(`Unknown workspace action: ${action}`);
-  console.error('Usage: ohwow workspace [list|current|create <name>|use <name> [--restart]]');
+  console.error(
+    'Usage: ohwow workspace [list|current|info [<name>]|create <name> [--local-only | --license-key=<key>] [--name="Label"]|use <name> [--restart]]',
+  );
   process.exit(1);
 } else if (subcommand === 'mcp-server') {
   const { startMcpServer } = await import('./mcp-server/index.js');

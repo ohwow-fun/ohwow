@@ -350,6 +350,150 @@ export function resolveActiveWorkspace(): WorkspaceLayout {
   return defaultLayout;
 }
 
+// ---------------------------------------------------------------------------
+// Per-workspace config (workspace.json)
+//
+// Each non-default workspace can carry a workspace.json with overrides on top
+// of the global config. The absence of workspace.json is the "legacy default"
+// signal — those workspaces read global config.json unchanged, preserving the
+// pre-multi-workspace behavior.
+//
+// Mode semantics:
+//   - 'local-only': blanks licenseKey + forces tier='free'. Control plane is
+//     never instantiated; the workspace is a fully disconnected sandbox.
+//   - 'cloud':      uses workspace-specific licenseKey + forces tier='connected'.
+//     The daemon connects to whichever cloud workspace that license maps to.
+//
+// See docs/multi-workspace-plan.md for the full design.
+// ---------------------------------------------------------------------------
+
+export type WorkspaceMode = 'local-only' | 'cloud';
+
+export interface WorkspaceConfig {
+  schemaVersion: 1;
+  mode: WorkspaceMode;
+  /** Required when mode='cloud'. Blank otherwise. */
+  licenseKey?: string;
+  /** Persisted after the first successful ControlPlaneClient.connect(). */
+  cloudWorkspaceId?: string;
+  /** Persisted alongside cloudWorkspaceId. */
+  cloudDeviceId?: string;
+  /** ISO timestamp of the last successful connect. */
+  lastConnectAt?: string;
+  /** Human label, shown in `workspace list`/`workspace info`. */
+  displayName?: string;
+  /**
+   * Forward-compat slot for multi-workspace-per-license cloud feature.
+   * When set, forwarded as ConnectRequest.requestedWorkspaceId. Safe to
+   * include today — cloud backends that don't know about it ignore it.
+   */
+  requestedCloudWorkspaceId?: string;
+}
+
+export function workspaceConfigPath(name: string): string {
+  return join(WORKSPACES_DIR, name, 'workspace.json');
+}
+
+/**
+ * Read a workspace's config file. Returns null if missing or unreadable.
+ * Malformed files are logged but treated as missing to avoid hard-failing
+ * subcommands like `workspace list`.
+ */
+export function readWorkspaceConfig(name: string): WorkspaceConfig | null {
+  const path = workspaceConfigPath(name);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    return JSON.parse(raw) as WorkspaceConfig;
+  } catch (err) {
+    logger.warn(`[Config] Failed to parse ${path}: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Write a workspace's config file, creating the workspace dir if needed.
+ * Always round-trips schemaVersion=1 even if the caller forgot to set it.
+ */
+export function writeWorkspaceConfig(name: string, cfg: WorkspaceConfig): void {
+  const layout = workspaceLayoutFor(name);
+  if (!existsSync(layout.dataDir)) {
+    mkdirSync(layout.dataDir, { recursive: true });
+  }
+  const normalized: WorkspaceConfig = { ...cfg, schemaVersion: 1 };
+  writeFileSync(workspaceConfigPath(name), JSON.stringify(normalized, null, 2));
+}
+
+/**
+ * Find the local workspace (if any) that uses a given license key. Scans every
+ * workspace.json under ~/.ohwow/workspaces AND the global config.json (which
+ * acts as the default workspace's implicit config). Returns null when nothing
+ * matches. Used for mirror detection in `workspace create --license-key=...`.
+ */
+export function findWorkspaceByLicenseKey(licenseKey: string): string | null {
+  if (!licenseKey) return null;
+  // Check per-workspace configs first.
+  for (const name of listWorkspaces()) {
+    const cfg = readWorkspaceConfig(name);
+    if (cfg?.mode === 'cloud' && cfg.licenseKey === licenseKey) {
+      return name;
+    }
+  }
+  // Check global config.json (default workspace). Only matches when the
+  // default workspace has NOT been explicitly given a workspace.json override.
+  const defaultCfg = readWorkspaceConfig(DEFAULT_WORKSPACE);
+  if (defaultCfg === null && existsSync(DEFAULT_CONFIG_PATH)) {
+    try {
+      const raw = readFileSync(DEFAULT_CONFIG_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as { licenseKey?: string };
+      if (parsed.licenseKey === licenseKey) return DEFAULT_WORKSPACE;
+    } catch {
+      // malformed — treat as no match
+    }
+  }
+  return null;
+}
+
+/**
+ * Find the local workspace (if any) that has persisted a given cloud workspace
+ * ID. Only scans per-workspace configs (global config.json doesn't track the
+ * cloud workspace id — that's resolved on every connect for the default
+ * workspace). Used for the cross-workspace conflict check at daemon boot.
+ */
+export function findWorkspaceByCloudId(cloudWorkspaceId: string): string | null {
+  if (!cloudWorkspaceId) return null;
+  for (const name of listWorkspaces()) {
+    const cfg = readWorkspaceConfig(name);
+    if (cfg?.mode === 'cloud' && cfg.cloudWorkspaceId === cloudWorkspaceId) {
+      return name;
+    }
+  }
+  return null;
+}
+
+/**
+ * Apply a workspace.json's mode-based overrides on top of the global
+ * fileConfig. Pure function — returns a new ConfigFile, never mutates.
+ *
+ *  - local-only: blanks licenseKey + forces tier='free' so the control plane
+ *    is never instantiated. The global license (if any) is ignored for this
+ *    workspace.
+ *  - cloud:      substitutes the workspace-specific licenseKey (not global)
+ *    and forces tier='connected'. The cloud resolves the actual plan tier.
+ *
+ * Missing or malformed workspace.json → fileConfig returned unchanged.
+ */
+function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | null): ConfigFile {
+  if (!ws) return fileConfig;
+  if (ws.mode === 'local-only') {
+    return { ...fileConfig, licenseKey: '', tier: 'free' };
+  }
+  if (ws.mode === 'cloud') {
+    return { ...fileConfig, licenseKey: ws.licenseKey ?? '', tier: 'connected' };
+  }
+  return fileConfig;
+}
+
 /**
  * Load runtime config from file + env vars (env vars override file values).
  * Free tier: no license key or API key required.
@@ -367,6 +511,13 @@ export function loadConfig(configPath?: string): RuntimeConfig {
       logger.warn(`[Config] Failed to parse ${path}: ${err}`);
     }
   }
+
+  // Apply per-workspace overrides from ~/.ohwow/workspaces/<name>/workspace.json
+  // if present. The default workspace has no workspace.json and passes through
+  // unchanged, preserving the pre-multi-workspace behavior.
+  const activeWs = resolveActiveWorkspace();
+  const wsConfig = readWorkspaceConfig(activeWs.name);
+  fileConfig = applyWorkspaceOverrides(fileConfig, wsConfig);
 
   // Determine tier: connected if license key exists, otherwise free.
   // All plan-specific enforcement happens on the cloud side.
