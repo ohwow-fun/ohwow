@@ -45,6 +45,7 @@ import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompleti
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
 import { getPersonModel, listPersonModels, startPersonIngestion, updatePersonModel } from './person-model.js';
+import { createTeamMember, listTeamMembers, updateTeamMember, assignGuideAgent, draftCloudInvite, listMemberTasks } from './team.js';
 import { getTransitionStatus, overrideTransitionStage, detectTaskPatterns, getTimeSaved } from './transitions.js';
 import { routeTask, getRoutingRecommendations, getWorkloadBalance, recordRoutingOutcome, getTaskAugmentation, triggerPreWork } from './work-router.js';
 import { getHumanGrowth, getSkillPaths, createSkillPath, getTeamHealth, getDelegationMetrics, recordSkillAssessment } from './human-growth.js';
@@ -274,6 +275,14 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['list_person_models', (ctx) => listPersonModels(ctx)],
   ['start_person_ingestion', (ctx, input) => startPersonIngestion(ctx, input)],
   ['update_person_model', (ctx, input) => updatePersonModel(ctx, input)],
+
+  // Team member (human) tools — chief-of-staff pattern
+  ['create_team_member', (ctx, input) => createTeamMember(ctx, input)],
+  ['list_team_members', (ctx, input) => listTeamMembers(ctx, input)],
+  ['update_team_member', (ctx, input) => updateTeamMember(ctx, input)],
+  ['assign_guide_agent', (ctx, input) => assignGuideAgent(ctx, input)],
+  ['draft_cloud_invite', (ctx, input) => draftCloudInvite(ctx, input)],
+  ['list_member_tasks', (ctx, input) => listMemberTasks(ctx, input)],
 
   // Transition engine tools
   ['get_transition_status', (ctx, input) => getTransitionStatus(ctx, input)],

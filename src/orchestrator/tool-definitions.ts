@@ -2074,6 +2074,86 @@ export const LSP_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 
+  // --- Team members (human collaborators) ---
+  {
+    name: 'create_team_member',
+    description: 'Add a new human team member to the workspace. Use this when the user says "X is joining the team" or "hire Y" or "onboard Z". Returns the new member record; follow up with assign_guide_agent and start_person_ingestion to run the full onboarding flow.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Full name (required)' },
+        email: { type: 'string', description: 'Email address' },
+        role: { type: 'string', description: 'Role or job title (e.g. "Growth Lead")' },
+        timezone: { type: 'string', description: 'IANA timezone like America/Los_Angeles' },
+        phone: { type: 'string', description: 'Phone (optional)' },
+        group_label: { type: 'string', description: 'Free-form team label: "engineering", "gtm", etc.' },
+        capacity_hours: { type: 'number', description: 'Weekly capacity in hours' },
+        skills: { type: 'array', items: { type: 'string' }, description: 'List of skill tags' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_team_members',
+    description: 'List all human team members in the workspace with their guide agent, onboarding status, and invite status.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'update_team_member',
+    description: 'Edit an existing team member record. Pass only the fields you want to change.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id (from create_team_member or list_team_members)' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string' },
+        timezone: { type: 'string' },
+        phone: { type: 'string' },
+        group_label: { type: 'string' },
+        capacity_hours: { type: 'number' },
+        skills: { type: 'array', items: { type: 'string' } },
+        onboarding_status: { type: 'string', description: 'not_started | in_progress | ready | active' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'assign_guide_agent',
+    description: 'Assign a dedicated "chief of staff" guide agent to a team member. If agent_id is omitted, a new Chief of Staff agent is auto-spawned for them. The guide becomes the member\'s always-on AI partner.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        agent_id: { type: 'string', description: 'Optional: pick an existing agent instead of spawning one' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'draft_cloud_invite',
+    description: 'Draft (do NOT send yet) a cloud dashboard invite email for a team member. Returns a preview email body the founder can review before calling send_cloud_invite. During launch week the actual send step is manual.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        role: { type: 'string', description: 'Cloud role: admin, member, viewer. Default: member.' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'list_member_tasks',
+    description: 'List work routed to a specific human team member via the work router.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+
   // --- Transition Engine ---
   {
     name: 'get_transition_status',
@@ -2524,6 +2604,11 @@ const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   run_agent: 1, run_sequence: 2, evolve_task: 2, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
   search_contacts: 1, list_contacts: 1, create_contact: 1,
+  // Team management — chief-of-staff pattern. P1 so onboarding prompts always
+  // load them regardless of model size or context budget.
+  create_team_member: 1, list_team_members: 1, update_team_member: 1,
+  assign_guide_agent: 1, draft_cloud_invite: 1, list_member_tasks: 1,
+  start_person_ingestion: 1, update_person_model: 1, get_person_model: 1, list_person_models: 1,
   get_workspace_stats: 1, get_activity_feed: 1,
   cloud_get_analytics: 1, cloud_list_contacts: 2, cloud_list_schedules: 2, cloud_list_agents: 2, cloud_list_tasks: 2, cloud_list_members: 3,
   request_file_access: 1, request_browser: 1, request_desktop: 1,

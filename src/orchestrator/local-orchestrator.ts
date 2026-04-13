@@ -17,7 +17,7 @@ import type {
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
-import { ORCHESTRATOR_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { ORCHESTRATOR_TOOL_DEFINITIONS, LSP_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
 import { invalidateBashAccessCache } from './tools/bash.js';
 import { FILE_ACCESS_ACTIVATION_MESSAGE } from '../execution/filesystem/index.js';
@@ -1575,9 +1575,17 @@ export class LocalOrchestrator {
     maxPriority?: 1 | 2 | 3,
     userMessageForToolExtraction?: string,
   ): Promise<Tool[]> {
+    // LSP_TOOL_DEFINITIONS is a historically misnamed bucket that actually
+    // holds a mix of tools (LSP, operational pillars, person models, team
+    // members, transition engine, work router, human growth, observation,
+    // collective intelligence). It was never imported here, which meant a
+    // large slice of orchestrator tools was orphaned and invisible to the
+    // model. Fold it into the base set so every registered tool handler has
+    // a corresponding definition the model can call.
+    const allBaseTools = [...ORCHESTRATOR_TOOL_DEFINITIONS, ...LSP_TOOL_DEFINITIONS];
     let tools = options?.excludedTools?.length
-      ? ORCHESTRATOR_TOOL_DEFINITIONS.filter((t) => !options.excludedTools.includes(t.name))
-      : [...ORCHESTRATOR_TOOL_DEFINITIONS];
+      ? allBaseTools.filter((t) => !options.excludedTools.includes(t.name))
+      : [...allBaseTools];
 
     // Add browser tools: if pre-activated or already activated from a previous turn,
     // skip the gateway and inject full browser tools directly
