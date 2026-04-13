@@ -133,8 +133,9 @@
     "vitest": "^4.1.0"
   },
   "overrides": {
-    "langsmith": ">=0.5.0",
+    "axios": ">=1.15.0",
+    "langsmith": ">=0.5.18",
     "file-type": ">=21.3.1",
-    "basic-ftp": ">=5.2.1"
+    "basic-ftp": ">=5.2.2"
   }
 }
