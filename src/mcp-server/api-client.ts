@@ -205,6 +205,17 @@ export class DaemonApiClient {
     return res.json();
   }
 
+  async del(path: string): Promise<unknown> {
+    const res = await this.fetchWithRetry(`${this.baseUrl}${path}`, {
+      method: 'DELETE',
+      headers: this.authHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`ohwow daemon error on DELETE ${path}: ${res.status}. Check daemon with: ohwow logs`);
+    }
+    return res.json();
+  }
+
   /**
    * POST to an SSE endpoint, consume the stream, and return assembled text.
    * Used for /api/chat which streams orchestrator events.

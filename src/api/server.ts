@@ -512,7 +512,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createA2ARouter(db));
   app.use(createPeersRouter(db, { messageRouter: messageRouter ?? undefined, rawDb }));
   app.use('/api/data-locality', createDataLocalityRoutes(db, workspaceId || 'local', controlPlane?.connectedDeviceId || 'local', eventBus ?? null));
-  app.use(createMcpRouter());
+  app.use(createMcpRouter(db, orchestrator));
   app.use(createCloudProxyRouter(controlPlane ?? null));
   app.use(createOrgRouter(db));
   app.use(createPdfToolsRouter());

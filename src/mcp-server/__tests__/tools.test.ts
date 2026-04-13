@@ -13,6 +13,7 @@ import { registerKnowledgeTools } from '../tools/knowledge.js';
 import { registerResearchTools } from '../tools/research.js';
 import { registerMessagingTools } from '../tools/messaging.js';
 import { registerCloudTools } from '../tools/cloud.js';
+import { registerMcpServerTools } from '../tools/mcp-servers.js';
 import { registerTools } from '../tools.js';
 
 /* ── Mock MCP Server ─────────────────────────────────────────────── */
@@ -55,6 +56,10 @@ function createMockClient(overrides: {
       return getResult;
     }),
     post: vi.fn().mockImplementation(async () => {
+      if (shouldThrow) throw new Error('Daemon unreachable');
+      return postResult;
+    }),
+    del: vi.fn().mockImplementation(async () => {
       if (shouldThrow) throw new Error('Daemon unreachable');
       return postResult;
     }),
@@ -145,10 +150,22 @@ describe('MCP tool registration', () => {
     ]);
   });
 
-  it('registers all 32 tools via barrel', () => {
+  it('registers 4 MCP server management tools', () => {
+    const server = createMockServer();
+    registerMcpServerTools(server as never, createMockClient() as never);
+    expect(server.tools).toHaveLength(4);
+    expect(server.tools.map(t => t.name)).toEqual([
+      'ohwow_add_mcp_server',
+      'ohwow_list_mcp_servers',
+      'ohwow_remove_mcp_server',
+      'ohwow_test_mcp_server',
+    ]);
+  });
+
+  it('registers all 36 tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(32);
+    expect(server.tools).toHaveLength(36);
   });
 
   it('every tool has a unique name', () => {
@@ -195,6 +212,138 @@ describe('MCP tool error handling', () => {
   });
 });
 
+/* ── MCP server tool security ────────────────────────────────────── */
+
+describe('MCP server management tools', () => {
+  it('ohwow_add_mcp_server forwards headers to the daemon POST body', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      postResult: { ok: true, server: { name: 'acme', transport: 'http', url: 'https://acme.example/api/mcp' } },
+    });
+    registerMcpServerTools(server as never, client as never);
+
+    const addTool = server.tools.find(t => t.name === 'ohwow_add_mcp_server')!;
+    await addTool.handler({
+      name: 'acme',
+      transport: 'http',
+      url: 'https://acme.example/api/mcp',
+      headers: { Authorization: 'Bearer sk-super-secret-123' },
+    });
+
+    // The client.post call should have received the credential in its body
+    // (that's how it gets forwarded to the daemon), but the add tool's
+    // RESPONSE must not echo it back.
+    const postCall = (client.post as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(postCall[0]).toBe('/api/mcp/servers');
+    expect(JSON.stringify(postCall[1])).toContain('Bearer sk-super-secret-123');
+  });
+
+  it('ohwow_add_mcp_server response never echoes the raw credential', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      // Simulate the daemon returning a redacted summary (what the real
+      // route in src/api/routes/mcp.ts does).
+      postResult: {
+        ok: true,
+        server: {
+          name: 'acme',
+          transport: 'http',
+          url: 'https://acme.example/api/mcp',
+          headers: { Authorization: '<set>' },
+          enabled: true,
+        },
+      },
+    });
+    registerMcpServerTools(server as never, client as never);
+
+    const addTool = server.tools.find(t => t.name === 'ohwow_add_mcp_server')!;
+    const result = await addTool.handler({
+      name: 'acme',
+      transport: 'http',
+      url: 'https://acme.example/api/mcp',
+      headers: { Authorization: 'Bearer sk-super-secret-123' },
+    }) as { content: Array<{ text: string }> };
+
+    const responseText = result.content[0].text;
+    expect(responseText).not.toContain('sk-super-secret-123');
+    expect(responseText).toContain('<set>');
+  });
+
+  it('ohwow_list_mcp_servers passes through redacted daemon response', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      getResult: {
+        servers: [
+          {
+            name: 'acme',
+            transport: 'http',
+            url: 'https://acme.example/api/mcp',
+            headers: { Authorization: '<set>' },
+            enabled: true,
+          },
+        ],
+      },
+    });
+    registerMcpServerTools(server as never, client as never);
+
+    const listTool = server.tools.find(t => t.name === 'ohwow_list_mcp_servers')!;
+    const result = await listTool.handler({}) as { content: Array<{ text: string }> };
+
+    expect(result.content[0].text).toContain('<set>');
+    expect(result.content[0].text).not.toContain('Bearer ');
+  });
+
+  it('ohwow_remove_mcp_server calls DELETE on the name path', async () => {
+    const server = createMockServer();
+    const client = createMockClient({ postResult: { ok: true, removed: 'acme' } });
+    registerMcpServerTools(server as never, client as never);
+
+    const removeTool = server.tools.find(t => t.name === 'ohwow_remove_mcp_server')!;
+    await removeTool.handler({ name: 'acme' });
+
+    const delCall = (client.del as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(delCall[0]).toBe('/api/mcp/servers/acme');
+  });
+
+  it('ohwow_test_mcp_server returns tool names only', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      postResult: {
+        success: true,
+        toolCount: 2,
+        toolNames: ['acme_list', 'acme_create'],
+        latencyMs: 42,
+      },
+    });
+    registerMcpServerTools(server as never, client as never);
+
+    const testTool = server.tools.find(t => t.name === 'ohwow_test_mcp_server')!;
+    const result = await testTool.handler({ name: 'acme' }) as { content: Array<{ text: string }> };
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.toolNames).toEqual(['acme_list', 'acme_create']);
+    expect(parsed.toolCount).toBe(2);
+  });
+
+  it('ohwow_test_mcp_server surfaces connection failures as isError', async () => {
+    const server = createMockServer();
+    const client = createMockClient({
+      postResult: { success: false, error: 'Connection refused', latencyMs: 10 },
+    });
+    registerMcpServerTools(server as never, client as never);
+
+    const testTool = server.tools.find(t => t.name === 'ohwow_test_mcp_server')!;
+    const result = await testTool.handler({ name: 'acme' }) as {
+      isError: boolean;
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Connection refused');
+  });
+});
+
 /* ── Cloud tool graceful degradation ─────────────────────────────── */
 
 describe('Cloud tool graceful degradation', () => {
@@ -223,3 +372,4 @@ describe('Cloud tool graceful degradation', () => {
     expect(parsed).toEqual(sites);
   });
 });
+
