@@ -50,6 +50,7 @@ import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
+import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
 import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handlers-fuzz.js';
 import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
@@ -1351,6 +1352,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // the change after 20 minutes, and rolls back automatically
         // if the adjustment didn't help.
         experimentRunner.register(new StaleTaskThresholdTunerExperiment());
+        // Phase 6: AgentCoverageGapExperiment enumerates the live
+        // agent_workforce_agents table every hour and writes a
+        // per-agent gap-filler finding for any agent showing stale
+        // or high-fail-rate shape. First experiment whose probe
+        // subjects are discovered at runtime rather than hardcoded.
+        experimentRunner.register(new AgentCoverageGapExperiment());
         // E4/E5/E6 flaw-hunt audits wrapped as scheduled experiments.
         // All three are read-only: the fuzz watches for hidden
         // list-handler truncation, the schema-drift audit AST-walks
