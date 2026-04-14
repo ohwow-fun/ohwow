@@ -25,6 +25,7 @@ import {
   shouldAutoCreateDeliverable,
 } from './response-classifier.js';
 import { buildAgentSystemPrompt } from './system-prompt.js';
+import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
 import {
@@ -146,16 +147,6 @@ const MODEL_MAP: Record<ClaudeModel, string> = {
   'claude-sonnet-4-5': 'claude-sonnet-4-5-20250929',
   'claude-haiku-4': 'claude-haiku-4-5-20251001',
 };
-
-// Model tiers for per-iteration selection (from CURATED_OPENROUTER_MODELS)
-// Prioritize cost-effective models with reliable tool calling
-const AGENT_MODEL_TIERS = {
-  FREE: 'xiaomi/mimo-v2-flash',             // FREE, 262K ctx, tools
-  FAST: 'qwen/qwen3.5-9b',                 // $0.05/$0.15 per M, 262K ctx, tools+vision, very cheap
-  BALANCED: 'deepseek/deepseek-v3.2',       // $0.26/$0.38 per M, 163K ctx, tools
-  STRONG: 'google/gemini-3.1-pro-preview',  // $2/$12 per M, 1M ctx, tools+vision, reliable tool calling
-  VISION: 'google/gemini-3.1-flash-lite-preview', // 1M ctx, vision+tools, cheap
-} as const;
 
 const WEB_SEARCH_TOOL: WebSearchTool20250305 = {
   type: 'web_search_20250305',
@@ -2650,7 +2641,7 @@ export class RuntimeEngine {
           // Agents never pin — the router picks across tiers based on
           // iteration index, difficulty, error signal, SOP presence, and
           // vision requirements.
-          const iterModel = this.selectAgentModelForIteration(
+          const iterModel = selectAgentModelForIteration(
             iteration, opts.difficulty, consecutiveParseErrors > 0, !!opts.skillsDocument,
             needsVision, provider,
           );
@@ -3076,54 +3067,6 @@ export class RuntimeEngine {
    */
   private async compileSkills(_agentId: string, _workspaceId: string, _taskTitle: string): Promise<string> {
     return '';
-  }
-
-  // ==========================================================================
-  // DYNAMIC MODEL SELECTION FOR AGENTS
-  // ==========================================================================
-
-  /**
-   * Per-iteration model selection for agents. Picks from the model tiers
-   * below based on iteration index, task difficulty, whether earlier
-   * iterations produced parse errors, whether an SOP procedure is in the
-   * prompt, and whether vision is required. No per-agent pin is consulted —
-   * the router owns this decision entirely.
-   */
-  private selectAgentModelForIteration(
-    iteration: number,
-    difficulty: DifficultyLevel | undefined,
-    hasErrors: boolean,
-    hasSOP: boolean,
-    needsVision: boolean,
-    provider: ModelProvider,
-  ): string | undefined {
-    // For non-OpenRouter providers, let them use their own default
-    if (provider.name !== 'openrouter') return undefined;
-
-    // Vision-required: use a vision-capable model
-    if (needsVision) return AGENT_MODEL_TIERS.VISION;
-
-    // SOP-driven tasks: stay on STRONG for the entire procedure
-    // The SOP has multi-step tool sequences (request_desktop → focus → type → screenshot)
-    // and the model needs to continue calling tools, not just summarize
-    if (hasSOP) {
-      if (iteration <= 6) return AGENT_MODEL_TIERS.STRONG;
-      return AGENT_MODEL_TIERS.FAST; // tail iterations for cleanup
-    }
-
-    // Iteration 0: quality matters most for initial reasoning + tool planning
-    if (iteration === 0) {
-      if (difficulty === 'complex') return AGENT_MODEL_TIERS.STRONG;
-      if (difficulty === 'moderate') return AGENT_MODEL_TIERS.BALANCED;
-      return AGENT_MODEL_TIERS.FAST;
-    }
-
-    // Error recovery: escalate to balanced
-    if (hasErrors) return AGENT_MODEL_TIERS.BALANCED;
-
-    // Later iterations: cheap tool-result routing
-    if (iteration >= 3) return AGENT_MODEL_TIERS.FREE;
-    return AGENT_MODEL_TIERS.FAST;
   }
 
 }
