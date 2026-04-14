@@ -53,7 +53,9 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
       const payload = body;
 
       // 3. Store raw event
+      const eventId = crypto.randomUUID().replace(/-/g, '');
       await db.from('webhook_events').insert({
+        id: eventId,
         source: 'ghl',
         event_type: eventType,
         payload: JSON.stringify(payload),
@@ -67,10 +69,21 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
       // 4. Respond immediately
       res.status(200).json({ received: true });
 
-      // 5. Async: evaluate triggers (fire-and-forget)
-      triggerEvaluator.evaluate('ghl', eventType, payload.data || {}).catch((err) => {
-        logger.error(`[Webhook] Trigger evaluation error: ${err}`);
-      });
+      // 5. Async: evaluate triggers, then mark the row processed so the
+      // Webhook Events audit UI reflects actual state instead of stranding
+      // every event at "pending" forever.
+      void triggerEvaluator.evaluate('ghl', eventType, payload.data || {})
+        .catch((err) => {
+          logger.error(`[Webhook] Trigger evaluation error: ${err}`);
+        })
+        .finally(() => {
+          db.from('webhook_events')
+            .update({ processed: 1 })
+            .eq('id', eventId)
+            .catch((err: unknown) => {
+              logger.warn({ err, eventId }, '[Webhook] Failed to mark ghl event processed');
+            });
+        });
 
       // 6. Emit event on bus
       eventBus.emit('webhook:received', { source: 'ghl', eventType, payload });
@@ -108,7 +121,9 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
       const payload = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
 
       // 4. Store raw event
+      const eventId = crypto.randomUUID().replace(/-/g, '');
       await db.from('webhook_events').insert({
+        id: eventId,
         source: 'custom',
         event_type: 'custom',
         payload: JSON.stringify(payload),
@@ -125,11 +140,29 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
       // 6. Respond immediately
       res.status(200).json({ received: true, fields_discovered: fields.length });
 
-      // 7. If trigger is enabled, dispatch async
+      // 7. If trigger is enabled, dispatch async and mark the row processed
+      // on completion. Disabled triggers get marked immediately — no work to
+      // do, and the audit UI shouldn't strand them at "pending" forever.
       if (trigger.enabled) {
-        triggerEvaluator.evaluateCustom(trigger, payload).catch((err) => {
-          logger.error(`[Webhook] Custom trigger evaluation error: ${err}`);
-        });
+        void triggerEvaluator.evaluateCustom(trigger, payload)
+          .catch((err) => {
+            logger.error(`[Webhook] Custom trigger evaluation error: ${err}`);
+          })
+          .finally(() => {
+            db.from('webhook_events')
+              .update({ processed: 1 })
+              .eq('id', eventId)
+              .catch((err: unknown) => {
+                logger.warn({ err, eventId }, '[Webhook] Failed to mark custom event processed');
+              });
+          });
+      } else {
+        void db.from('webhook_events')
+          .update({ processed: 1 })
+          .eq('id', eventId)
+          .catch((err: unknown) => {
+            logger.warn({ err, eventId }, '[Webhook] Failed to mark disabled-trigger event processed');
+          });
       }
 
       // 8. Emit event
