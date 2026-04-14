@@ -86,15 +86,16 @@ export function createSystemRouter(
           .eq('workspace_id', workspaceId).eq('status', 'needs_approval'),
       ]);
 
-      // Aggregate token/cost from agents stats
+      // Aggregate token/cost from llm_calls (authoritative spend ledger).
+      // The agent_workforce_agents.stats JSON was stale / never written.
       let totalTokens = 0;
       let totalCostCents = 0;
       try {
         const row = rawDb.prepare(`
           SELECT
-            COALESCE(SUM(json_extract(stats, '$.tokens_used')), 0) as tokens,
-            COALESCE(SUM(json_extract(stats, '$.cost_cents')), 0) as cost
-          FROM agent_workforce_agents
+            COALESCE(SUM(input_tokens + output_tokens), 0) as tokens,
+            COALESCE(SUM(cost_cents), 0) as cost
+          FROM llm_calls
           WHERE workspace_id = ?
         `).get(workspaceId) as { tokens: number; cost: number } | undefined;
         if (row) {
@@ -102,7 +103,7 @@ export function createSystemRouter(
           totalCostCents = row.cost;
         }
       } catch {
-        // Stats column may not have expected shape
+        // llm_calls may not exist in older DBs
       }
 
       const uptimeSeconds = Math.round((Date.now() - startTime) / 1000);
