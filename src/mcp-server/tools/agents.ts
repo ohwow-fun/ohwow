@@ -281,6 +281,157 @@ export function registerAgentManagementTools(
     },
   );
 
+  // ─── ohwow_grant_agent_path ──────────────────────────────────────
+  server.tool(
+    'ohwow_grant_agent_path',
+    '[Agents] Grant an agent permission to read/write files under a local directory. Writes a row to agent_file_access_paths that the FileAccessGuard reads on every task run, so the agent\'s filesystem tools (local_read_file, local_write_file, run_bash, etc.) will accept paths inside the granted directory. Without this, a narrowly-scoped agent hits "path outside allowed directories" and the task either fails the hallucination gate or routes to needs_approval. The daemon validates that the path exists, is a directory, lives inside the user\'s home, and isn\'t a sensitive subdirectory like .ssh or .gnupg. Identify the agent by `name` or `id`.',
+    {
+      name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
+      id: z.string().optional().describe('Agent UUID, or the literal string "__orchestrator__" to grant paths to the orchestrator itself (provide this OR `name`).'),
+      path: z.string().describe('Absolute directory path to grant access to. Must exist, be a directory, live inside the user\'s home, and not be under .ssh, .gnupg, /etc, /var, /usr, etc. Tildes are not expanded — pass a fully-resolved path.'),
+      label: z.string().optional().describe('Optional human-readable label shown in UIs (e.g. "living docs (diary)", "workspace data"). Purely cosmetic.'),
+    },
+    async ({ name, id, path, label }) => {
+      try {
+        if (!name && !id) {
+          return errorResponse('Provide either `name` or `id`.');
+        }
+
+        let resolvedId = id;
+        if (!resolvedId && name) {
+          const match = await resolveAgentByName(client, name);
+          if (!match) {
+            return errorResponse(`No agent named "${name}" in this workspace.`);
+          }
+          resolvedId = match.id;
+        }
+
+        const result = (await client.post(
+          `/api/agents/${encodeURIComponent(resolvedId!)}/file-access`,
+          { path, label },
+        )) as { data?: { path: string; label: string | null }; error?: string };
+
+        if (result.error) {
+          return errorResponse(`Couldn't grant path: ${result.error}`);
+        }
+
+        return jsonResponse({
+          ok: true,
+          agent: name ?? resolvedId,
+          path: result.data?.path ?? path,
+          label: result.data?.label ?? label ?? null,
+          note: 'Path granted. FileAccessGuard re-reads this table on every task run, so the next run will see the new access.',
+        });
+      } catch (err) {
+        return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    },
+  );
+
+  // ─── ohwow_list_agent_paths ──────────────────────────────────────
+  server.tool(
+    'ohwow_list_agent_paths',
+    '[Agents] List all filesystem paths granted to an agent. Returns rows from agent_file_access_paths with id, path, label, and created_at. Use the returned `id` with ohwow_revoke_agent_path to remove a specific row. Identify the agent by `name` or `id`.',
+    {
+      name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
+      id: z.string().optional().describe('Agent UUID, or the literal string "__orchestrator__" for orchestrator-scoped paths (provide this OR `name`).'),
+    },
+    async ({ name, id }) => {
+      try {
+        if (!name && !id) {
+          return errorResponse('Provide either `name` or `id`.');
+        }
+
+        let resolvedId = id;
+        if (!resolvedId && name) {
+          const match = await resolveAgentByName(client, name);
+          if (!match) {
+            return errorResponse(`No agent named "${name}" in this workspace.`);
+          }
+          resolvedId = match.id;
+        }
+
+        const result = (await client.get(
+          `/api/agents/${encodeURIComponent(resolvedId!)}/file-access`,
+        )) as { data?: Array<{ id: string; path: string; label: string | null; created_at: string }>; error?: string };
+
+        if (result.error) {
+          return errorResponse(`Couldn't list paths: ${result.error}`);
+        }
+
+        return jsonResponse({
+          ok: true,
+          agent: name ?? resolvedId,
+          paths: result.data ?? [],
+        });
+      } catch (err) {
+        return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    },
+  );
+
+  // ─── ohwow_revoke_agent_path ─────────────────────────────────────
+  server.tool(
+    'ohwow_revoke_agent_path',
+    '[Agents] Revoke an agent\'s access to a filesystem path. Identify the agent by `name` or `id`, then identify the row by either `pathId` (from ohwow_list_agent_paths) or `path` (exact match — the tool lists and resolves locally). Idempotent on a missing row.',
+    {
+      name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
+      id: z.string().optional().describe('Agent UUID, or the literal string "__orchestrator__" (provide this OR `name`).'),
+      pathId: z.string().optional().describe('The row id from ohwow_list_agent_paths. Takes precedence over `path` when both are provided.'),
+      path: z.string().optional().describe('Absolute directory path. The tool lists existing grants and deletes the matching row. Used when the caller doesn\'t know the row id. Exact-match, fully-resolved path.'),
+    },
+    async ({ name, id, pathId, path }) => {
+      try {
+        if (!name && !id) {
+          return errorResponse('Provide either `name` or `id`.');
+        }
+        if (!pathId && !path) {
+          return errorResponse('Provide either `pathId` or `path`.');
+        }
+
+        let resolvedId = id;
+        if (!resolvedId && name) {
+          const match = await resolveAgentByName(client, name);
+          if (!match) {
+            return errorResponse(`No agent named "${name}" in this workspace.`);
+          }
+          resolvedId = match.id;
+        }
+
+        let resolvedPathId = pathId;
+        if (!resolvedPathId && path) {
+          const listResult = (await client.get(
+            `/api/agents/${encodeURIComponent(resolvedId!)}/file-access`,
+          )) as { data?: Array<{ id: string; path: string }>; error?: string };
+          if (listResult.error) {
+            return errorResponse(`Couldn't list paths for match: ${listResult.error}`);
+          }
+          const row = (listResult.data ?? []).find((r) => r.path === path);
+          if (!row) {
+            return errorResponse(`No granted path matches "${path}" for this agent.`);
+          }
+          resolvedPathId = row.id;
+        }
+
+        const result = (await client.del(
+          `/api/agents/${encodeURIComponent(resolvedId!)}/file-access/${encodeURIComponent(resolvedPathId!)}`,
+        )) as { success?: boolean; error?: string };
+
+        if (result.error) {
+          return errorResponse(`Couldn't revoke path: ${result.error}`);
+        }
+
+        return jsonResponse({
+          ok: true,
+          agent: name ?? resolvedId,
+          revoked: resolvedPathId,
+        });
+      } catch (err) {
+        return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    },
+  );
+
   // ─── ohwow_delete_agent ──────────────────────────────────────────
   server.tool(
     'ohwow_delete_agent',

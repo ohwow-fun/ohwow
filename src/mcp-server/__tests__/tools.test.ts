@@ -168,22 +168,25 @@ describe('MCP tool registration', () => {
     ]);
   });
 
-  it('registers 4 agent management tools', () => {
+  it('registers 7 agent management tools', () => {
     const server = createMockServer();
     registerAgentManagementTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(4);
+    expect(server.tools).toHaveLength(7);
     expect(server.tools.map(t => t.name)).toEqual([
       'ohwow_create_agent',
       'ohwow_get_agent',
       'ohwow_update_agent',
+      'ohwow_grant_agent_path',
+      'ohwow_list_agent_paths',
+      'ohwow_revoke_agent_path',
       'ohwow_delete_agent',
     ]);
   });
 
-  it('registers all 40 tools via barrel', () => {
+  it('registers all tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(41);
+    expect(server.tools).toHaveLength(44);
   });
 
   it('every tool has a unique name', () => {
