@@ -407,10 +407,22 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     commitSha = runInRepo('git rev-parse HEAD', repoRoot).trim();
   } catch { /* shouldn't happen but not fatal — commit already landed */ }
 
-  logger.info(
-    { experimentId: opts.experimentId, commitSha, filesWritten: opts.files.map((f) => f.path) },
-    '[self-commit] experiment committed autonomously',
-  );
+  // 9. Push to origin so committed experiments are visible remotely.
+  // Non-fatal — the commit is already in local git history. A push
+  // failure just means the remote is temporarily behind; the next
+  // successful safeSelfCommit will push both commits at once.
+  try {
+    runInRepo('git push', repoRoot, { timeoutMs: 60_000 });
+    logger.info(
+      { experimentId: opts.experimentId, commitSha, filesWritten: opts.files.map((f) => f.path) },
+      '[self-commit] experiment committed and pushed autonomously',
+    );
+  } catch (pushErr) {
+    logger.warn(
+      { experimentId: opts.experimentId, commitSha, err: extractErrorSummary(pushErr) },
+      '[self-commit] commit succeeded but push failed — will retry on next commit',
+    );
+  }
 
   return {
     ok: true,
