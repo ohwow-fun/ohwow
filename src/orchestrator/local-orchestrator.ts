@@ -235,8 +235,37 @@ export class LocalOrchestrator {
     this.browserRequestedProfile = profile;
   }
 
-  /** Activate browser — connects to real Chrome via CDP or launches Chromium */
+  /**
+   * In-flight singleflight promise for the current browser activation.
+   * Without it, two concurrent chats both calling `request_browser`
+   * (or both pre-activating via the browser intent classifier) each
+   * spawn their own Chromium process and race on this.browserService /
+   * this.browserActivated. Bug #6 family.
+   */
+  private browserActivateInFlight: Promise<void> | null = null;
+
+  /** Activate browser — connects to real Chrome via CDP or launches Chromium.
+   *  Singleflight: concurrent callers share one in-flight launch. */
   private async activateBrowser(requestedProfile?: string): Promise<void> {
+    if (this.browserActivated && this.browserService) return;
+
+    if (!this.browserActivateInFlight) {
+      this.browserActivateInFlight = this.doActivateBrowser(requestedProfile).catch((err) => {
+        this.browserActivateInFlight = null;
+        throw err;
+      });
+    }
+
+    try {
+      await this.browserActivateInFlight;
+    } finally {
+      if (this.browserActivated && this.browserService) {
+        this.browserActivateInFlight = null;
+      }
+    }
+  }
+
+  private async doActivateBrowser(requestedProfile?: string): Promise<void> {
     const { service, degradedReason } = await activateBrowserSession({
       requestedProfile,
       browserHeadless: this.browserHeadless,

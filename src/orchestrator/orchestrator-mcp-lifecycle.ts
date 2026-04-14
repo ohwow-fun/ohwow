@@ -137,13 +137,61 @@ export class McpLifecycle {
   }
 
   /**
+   * In-flight singleflight promise for the current connect attempt. Multiple
+   * concurrent callers share this — without it, four parallel chats all racing
+   * past the `if (this.clients) return` guard each spawn their own
+   * McpClientManager.connect() call, contending on stdio pipes and at least
+   * one hanging indefinitely. Bug #6.
+   *
+   * Cleared on success (set to null after assignment so subsequent callers
+   * take the fast path via this.clients) and on failure (so a retry can run
+   * cleanly without inheriting the failed promise).
+   */
+  private connectInFlight: Promise<void> | null = null;
+
+  /**
    * Ensure MCP clients are connected. Lazy-initializes on first use.
    * When `force=true`, closes existing connections and reconnects (for
    * crash recovery).
+   *
+   * Concurrent callers share one in-flight connect via singleflight.
+   * Without singleflight, four chats arriving within the same event loop
+   * tick all see this.clients === null, all pass the guard, and all call
+   * McpClientManager.connect() in parallel — racing on the same stdio
+   * subprocesses and producing at least one hang.
    */
   async ensureConnected(force = false): Promise<void> {
     if (this.clients && !force) return;
 
+    // Force reload: drop any in-flight connect so a fresh one starts.
+    if (force && this.connectInFlight) {
+      this.connectInFlight = null;
+    }
+
+    if (!this.connectInFlight) {
+      this.connectInFlight = this.doConnect(force).catch((err) => {
+        // Drop the cached promise so the next caller can retry.
+        this.connectInFlight = null;
+        throw err;
+      });
+    }
+
+    try {
+      await this.connectInFlight;
+    } finally {
+      // After the connect resolves successfully, clear the in-flight slot
+      // so subsequent calls take the cheap `if (this.clients) return` path
+      // instead of awaiting a settled promise. Errors already cleared the
+      // slot in the catch above, so this is the success-only cleanup.
+      if (this.clients) {
+        this.connectInFlight = null;
+      }
+    }
+  }
+
+  /** Internal: the actual connect implementation, separated so singleflight
+   *  can wrap it. Idempotent on repeat call (the outer guard handles it). */
+  private async doConnect(force: boolean): Promise<void> {
     // Load servers: prefer constructor config, fall back to DB.
     let servers = this.servers;
     if (servers.length === 0) {
