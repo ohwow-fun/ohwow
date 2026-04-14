@@ -30,6 +30,7 @@ import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import { OrchestratorRuntimeConfig, type RagConfigOptions, type InferenceCapabilities } from './orchestrator-runtime-config.js';
+import { PermissionBroker } from './orchestrator-approvals.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -143,10 +144,8 @@ export class LocalOrchestrator {
   private desktopActivated = false;
   private filesystemActivated = false;
   private config = new OrchestratorRuntimeConfig();
+  private broker: PermissionBroker;
   private exchangeCount = 0;
-  private pendingPermissions = new Map<string, (granted: boolean) => void>();
-  private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
-  private pendingElicitations = new Map<string, (response: Record<string, unknown> | null) => void>();
   private lastIntentBySession = new Map<string, ClassifiedIntent>();
   private circuitBreaker = new CircuitBreaker();
   private toolCache = new ToolCache();
@@ -377,14 +376,14 @@ export class LocalOrchestrator {
       executedToolCalls,
       browserState: this.browserState,
       desktopState: this.desktopState,
-      waitForPermission: (requestId: string) => this.waitForPermission(requestId),
-      addAllowedPath: (path: string) => this.addAllowedPath(path),
+      waitForPermission: (requestId: string) => this.broker.waitForPermission(requestId),
+      addAllowedPath: (path: string) => this.broker.addAllowedPath(path),
       options,
       circuitBreaker: this.circuitBreaker,
       toolCache: this.toolCache,
       delegateSubtask: (prompt: string, focus: string) => this.runDelegateSubtask(prompt, focus, options),
       mcpClients: this.mcpClients,
-      waitForCostApproval: (id: string) => this.waitForCostApproval(id),
+      waitForCostApproval: (id: string) => this.broker.waitForCostApproval(id),
       skipMediaCostConfirmation: this.config.skipMediaCostConfirmation,
       immuneSystem: this.immuneSystem,
     };
@@ -451,6 +450,7 @@ export class LocalOrchestrator {
     this.dataDir = dataDir || '';
     this.mcpServers = mcpServers || [];
     this.config.desktopToolsEnabled = desktopToolsEnabled === true;
+    this.broker = new PermissionBroker(this.db, this.workspaceId);
 
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
@@ -779,19 +779,10 @@ export class LocalOrchestrator {
     }
 
     const onElicitation: ElicitationHandler = async (_serverName, _message, _schema) => {
-      const requestId = crypto.randomUUID();
-      return new Promise<Record<string, unknown> | null>((resolve) => {
-        this.pendingElicitations.set(requestId, resolve);
-        // Elicitation requests are surfaced as events — the TUI handles user input
-        // For now, auto-decline since we don't have the event channel here
-        // The calling code should wire this up via the event stream
-        setTimeout(() => {
-          if (this.pendingElicitations.has(requestId)) {
-            this.pendingElicitations.delete(requestId);
-            resolve(null);
-          }
-        }, 30_000);
-      });
+      // Elicitation requests are surfaced as events — the TUI handles user input.
+      // For now, auto-decline after 30s since we don't have the event channel here.
+      // The calling code should wire this up via the event stream.
+      return this.broker.awaitElicitation();
     };
 
     this.mcpClients = await McpClientManager.connect(servers, { onElicitation });
@@ -843,11 +834,7 @@ export class LocalOrchestrator {
 
   /** Resolve a pending MCP elicitation request. */
   resolveElicitation(requestId: string, response: Record<string, unknown> | null): void {
-    const resolve = this.pendingElicitations.get(requestId);
-    if (resolve) {
-      this.pendingElicitations.delete(requestId);
-      resolve(response);
-    }
+    this.broker.resolveElicitation(requestId, response);
   }
 
   /** Set the schedule change callback for notifying the scheduler on CRUD. */
@@ -857,42 +844,12 @@ export class LocalOrchestrator {
 
   /** Resolve a pending permission request. Called by the API route. */
   resolvePermission(requestId: string, granted: boolean): void {
-    const resolve = this.pendingPermissions.get(requestId);
-    if (resolve) {
-      this.pendingPermissions.delete(requestId);
-      resolve(granted);
-    }
-  }
-
-  private waitForPermission(requestId: string): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      this.pendingPermissions.set(requestId, resolve);
-    });
+    this.broker.resolvePermission(requestId, granted);
   }
 
   /** Resolve a pending cost approval request. Called by the API route. */
   resolveCostApproval(requestId: string, approved: boolean): void {
-    const resolve = this.pendingCostApprovals.get(requestId);
-    if (resolve) {
-      this.pendingCostApprovals.delete(requestId);
-      resolve(approved);
-    }
-  }
-
-  private waitForCostApproval(requestId: string): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      this.pendingCostApprovals.set(requestId, resolve);
-    });
-  }
-
-  private async addAllowedPath(allowedPath: string): Promise<void> {
-    await this.db.from('agent_file_access_paths').insert({
-      id: crypto.randomUUID(),
-      workspace_id: this.workspaceId,
-      agent_id: '__orchestrator__',
-      path: allowedPath,
-    });
-    invalidateFileAccessCache();
+    this.broker.resolveCostApproval(requestId, approved);
   }
 
   /**
