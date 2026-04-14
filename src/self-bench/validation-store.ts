@@ -155,3 +155,25 @@ export async function markValidationError(
     completed_at: new Date().toISOString(),
   }).eq('id', id);
 }
+
+/**
+ * Stamp a validation row with a successful rollback. Called by the
+ * runner after rollback() returned a non-null InterventionApplied.
+ * The base status stays 'completed' (validate() ran to conclusion),
+ * outcome stays 'failed' (that's why we rolled back), but the
+ * rolled_back columns record that the runner self-healed.
+ *
+ * Queries can then filter "validations that failed AND were NOT
+ * rolled back" to find the cases an operator needs to investigate.
+ */
+export async function markValidationRolledBack(
+  db: DatabaseAdapter,
+  id: string,
+  rollbackFindingId: string,
+): Promise<void> {
+  await db.from('experiment_validations').update({
+    rolled_back: 1,
+    rollback_finding_id: rollbackFindingId,
+    rolled_back_at: new Date().toISOString(),
+  }).eq('id', id);
+}

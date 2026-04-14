@@ -29,4 +29,5 @@ export {
   markValidationCompleted,
   markValidationSkipped,
   markValidationError,
+  markValidationRolledBack,
 } from './validation-store.js';

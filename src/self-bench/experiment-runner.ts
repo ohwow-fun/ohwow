@@ -53,6 +53,7 @@ import {
   markValidationCompleted,
   markValidationSkipped,
   markValidationError,
+  markValidationRolledBack,
 } from './validation-store.js';
 import { logger } from '../lib/logger.js';
 
@@ -320,8 +321,9 @@ export class ExperimentRunner implements ExperimentScheduler {
       return;
     }
 
+    let validationFindingId: string | null = null;
     try {
-      const findingId = await writeFinding(this.db, {
+      validationFindingId = await writeFinding(this.db, {
         experimentId: exp.id,
         category: 'validation',
         subject: `intervention:${pending.interventionFindingId}`,
@@ -341,7 +343,7 @@ export class ExperimentRunner implements ExperimentScheduler {
         durationMs: this.now() - started,
       });
 
-      await markValidationCompleted(this.db, pending.id, result.outcome, findingId).catch(
+      await markValidationCompleted(this.db, pending.id, result.outcome, validationFindingId).catch(
         (err) => logger.warn({ err }, '[runner] failed to mark validation completed'),
       );
 
@@ -359,6 +361,93 @@ export class ExperimentRunner implements ExperimentScheduler {
         { err, experimentId: exp.id, validationId: pending.id },
         '[runner] failed to persist validation finding',
       );
+    }
+
+    // Phase 5 — automatic rollback when validation failed AND the
+    // experiment implements the hook. The rollback is the runner
+    // self-healing: we applied a change, measured it, the measurement
+    // said the change didn't hold, so we undo it without operator
+    // intervention. Lands as its own finding in category='validation'
+    // with verdict='warning' (a rollback is noteworthy but not an
+    // error), and stamps the validation row via
+    // markValidationRolledBack so queries can filter
+    // "failed AND not rolled back" vs "failed AND self-healed."
+    if (result.outcome === 'failed' && exp.rollback) {
+      const rollbackStarted = this.now();
+      let rollbackApplied: InterventionApplied | null = null;
+      let rollbackError: string | null = null;
+      try {
+        rollbackApplied = (await exp.rollback(pending.baseline, ctx)) ?? null;
+      } catch (err) {
+        rollbackError = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { err, experimentId: exp.id, validationId: pending.id },
+          '[runner] rollback() threw',
+        );
+      }
+
+      if (rollbackApplied) {
+        try {
+          const rollbackFindingId = await writeFinding(this.db, {
+            experimentId: exp.id,
+            category: 'validation',
+            subject: `rollback:${pending.interventionFindingId}`,
+            hypothesis: `Auto-rollback of intervention finding ${pending.interventionFindingId} after validation outcome=failed`,
+            verdict: 'warning',
+            summary: `rollback: ${rollbackApplied.description}`,
+            evidence: {
+              is_rollback: true,
+              intervention_finding_id: pending.interventionFindingId,
+              validation_id: pending.id,
+              validation_finding_id: validationFindingId,
+              baseline: pending.baseline,
+              rollback_details: rollbackApplied.details,
+            },
+            interventionApplied: rollbackApplied,
+            ranAt: new Date(rollbackStarted).toISOString(),
+            durationMs: this.now() - rollbackStarted,
+          });
+          await markValidationRolledBack(this.db, pending.id, rollbackFindingId).catch(
+            (err) => logger.warn({ err }, '[runner] failed to stamp rollback on validation'),
+          );
+          logger.info(
+            {
+              experimentId: exp.id,
+              validationId: pending.id,
+              rollbackFindingId,
+              durationMs: this.now() - rollbackStarted,
+            },
+            '[runner] rollback applied',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, experimentId: exp.id, validationId: pending.id },
+            '[runner] failed to persist rollback finding',
+          );
+        }
+      } else if (rollbackError) {
+        // rollback() threw. Write an error finding so operators see it.
+        try {
+          await writeFinding(this.db, {
+            experimentId: exp.id,
+            category: 'validation',
+            subject: `rollback:${pending.interventionFindingId}`,
+            hypothesis: `Auto-rollback attempt for ${pending.interventionFindingId}`,
+            verdict: 'error',
+            summary: `rollback() threw: ${rollbackError}`,
+            evidence: {
+              is_rollback: true,
+              intervention_finding_id: pending.interventionFindingId,
+              validation_id: pending.id,
+              error: rollbackError,
+              baseline: pending.baseline,
+            },
+            interventionApplied: null,
+            ranAt: new Date(rollbackStarted).toISOString(),
+            durationMs: this.now() - rollbackStarted,
+          });
+        } catch { /* best effort */ }
+      }
     }
   }
 

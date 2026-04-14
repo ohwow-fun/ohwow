@@ -257,6 +257,20 @@ export interface Experiment {
     baseline: Record<string, unknown>,
     ctx: ExperimentContext,
   ): Promise<ValidationResult>;
+  /**
+   * Phase 5 — automatic rollback. When validate() returns
+   * outcome='failed' and the experiment implements this hook, the
+   * runner calls rollback(baseline, ctx) to undo the intervention.
+   * Takes the SAME baseline that was passed to validate() so the
+   * rollback knows exactly what was changed. Returns a description
+   * of what was reverted (for the ledger), or null if there was
+   * nothing to undo (e.g. the failed state resolved itself between
+   * validate and rollback).
+   */
+  rollback?(
+    baseline: Record<string, unknown>,
+    ctx: ExperimentContext,
+  ): Promise<InterventionApplied | null>;
 }
 
 /**
