@@ -17,8 +17,12 @@ export type IntentSection =
 /**
  * Maps each tool name to the intent sections where it's relevant.
  * Tools not listed here are included in ALL sections (always available).
+ *
+ * Exported so tests can verify every mapped tool name still corresponds to
+ * a real tool in the merged catalog — catches future dead entries like the
+ * mount_docs orphans removed in the Phase A refactor.
  */
-const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
+export const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   // Always included (not in map): update_plan
 
   // Agent/task management → 'agents' section
@@ -213,8 +217,8 @@ const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   export_slides_pdf: ['agents'],
 };
 
-/** Always-included tools regardless of intent. */
-const ALWAYS_INCLUDED_TOOLS = new Set([
+/** Always-included tools regardless of intent. Exported for coverage tests. */
+export const ALWAYS_INCLUDED_TOOLS = new Set([
   'update_plan', 'delegate_subtask',
   'cloud_list_contacts', 'cloud_list_schedules', 'cloud_list_agents',
   'cloud_list_tasks', 'cloud_get_analytics', 'cloud_list_members',
@@ -248,8 +252,10 @@ const ALWAYS_INCLUDED_TOOLS = new Set([
  * Tool priority tiers for progressive revelation.
  * P1 = core tools always loaded, P2 = common extensions, P3 = rare/advanced.
  * Tools not listed default to P2 (included unless budget is very tight).
+ *
+ * Exported for coverage tests.
  */
-const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
+export const TOOL_PRIORITY: Record<string, 1 | 2 | 3> = {
   // P1: Core tools per section (3-5 per section)
   run_agent: 1, run_sequence: 2, evolve_task: 2, list_agents: 1, list_tasks: 1, approve_task: 1, get_task_detail: 1,
   local_read_file: 1, local_list_directory: 1, local_write_file: 1, run_bash: 1,
