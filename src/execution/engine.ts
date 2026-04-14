@@ -198,20 +198,20 @@ interface TaskMessageRow {
 // ============================================================================
 
 export class RuntimeEngine {
-  private anthropic: Anthropic | null;
-  private emitter: TypedEventBus<RuntimeEvents> | null;
-  private modelRouter: ModelRouter | null;
-  private scraplingService: ScraplingService;
-  private semaphore: Semaphore;
-  private pendingElicitations = new Map<string, (result: Record<string, unknown> | null) => void>();
-  private circuitBreaker = new CircuitBreaker();
-  private toolRegistry = createDefaultToolRegistry();
-  private docMountManager: DocMountManager;
+  anthropic: Anthropic | null;
+  emitter: TypedEventBus<RuntimeEvents> | null;
+  modelRouter: ModelRouter | null;
+  scraplingService: ScraplingService;
+  semaphore: Semaphore;
+  pendingElicitations = new Map<string, (result: Record<string, unknown> | null) => void>();
+  circuitBreaker = new CircuitBreaker();
+  toolRegistry = createDefaultToolRegistry();
+  docMountManager: DocMountManager;
   /** Brain: unified cognitive coordinator for agent task execution. */
-  private brain = new Brain({ modelRouter: null });
-  private taskDistributor: import('../peers/task-distributor.js').TaskDistributor | null = null;
-  private ccSessionStore: ClaudeCodeSessionStore | null = null;
-  private deviceFetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher | null = null;
+  brain = new Brain({ modelRouter: null });
+  taskDistributor: import('../peers/task-distributor.js').TaskDistributor | null = null;
+  ccSessionStore: ClaudeCodeSessionStore | null = null;
+  deviceFetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher | null = null;
 
   /** Set the device data fetcher for device-pinned memory retrieval */
   setDeviceFetcher(fetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher): void {
@@ -251,12 +251,12 @@ export class RuntimeEngine {
   }
 
   /** Emit a lifecycle event if an emitter is attached */
-  private emit(event: string, data: unknown): void {
+  emit(event: string, data: unknown): void {
     this.emitter?.emit(event, data);
   }
 
   /** Build a ToolExecutionContext for the current task */
-  private buildToolContext(opts: {
+  buildToolContext(opts: {
     taskId: string;
     agentId: string;
     workspaceId: string;
@@ -294,7 +294,7 @@ export class RuntimeEngine {
   }
 
   /** Dispatch a tool call via the registry */
-  private async dispatchTool(
+  async dispatchTool(
     toolName: string,
     input: Record<string, unknown>,
     toolCtx: ToolExecutionContext,
@@ -319,7 +319,7 @@ export class RuntimeEngine {
    * Determine whether this agent/task should use Claude Code CLI for full delegation.
    * Priority: per-agent override > global config > autodetect.
    */
-  private async shouldUseClaudeCodeCli(agentConfig: Record<string, unknown>): Promise<boolean> {
+  async shouldUseClaudeCodeCli(agentConfig: Record<string, unknown>): Promise<boolean> {
     // Per-agent explicit override
     if (agentConfig.execution_backend === 'claude-code-cli') return isClaudeCodeCliAvailable();
     if (agentConfig.execution_backend === 'native') return false;
@@ -343,7 +343,7 @@ export class RuntimeEngine {
    * Spawns `claude` as a child process with agent context injected via --add-dir.
    * Claude Code handles the full tool loop (file editing, bash, search, etc.).
    */
-  private async executeWithClaudeCodeCliPath(opts: {
+  async executeWithClaudeCodeCliPath(opts: {
     agentId: string;
     taskId: string;
     workspaceId: string;
@@ -2478,7 +2478,7 @@ export class RuntimeEngine {
    * Collect state updates made during this task for cloud sync.
    * Used by both success and failure report paths.
    */
-  private async collectStateUpdates(
+  async collectStateUpdates(
     workspaceId: string, agentId: string, taskStartIso: string,
   ): Promise<import('../control-plane/types.js').TaskReportStateUpdate[]> {
     const { data: stateRows } = await this.db
@@ -2520,7 +2520,7 @@ export class RuntimeEngine {
   // OLLAMA EXECUTION PATH
   // ==========================================================================
 
-  private async executeWithModelRouter(opts: {
+  async executeWithModelRouter(opts: {
     systemPrompt: string;
     messages: MessageParam[];
     tools: Array<WebSearchTool20250305 | Tool>;
@@ -2926,7 +2926,7 @@ export class RuntimeEngine {
   // MEMORY COMPILATION (simplified, self-contained)
   // ==========================================================================
 
-  private async compileMemory(agentId: string, workspaceId: string, taskTitle: string): Promise<string> {
+  async compileMemory(agentId: string, workspaceId: string, taskTitle: string): Promise<string> {
     try {
       const relevantMemories = await retrieveRelevantMemories({
         db: this.db,
@@ -3018,7 +3018,7 @@ export class RuntimeEngine {
   // KNOWLEDGE COMPILATION (simplified, same budget-aware approach)
   // ==========================================================================
 
-  private async compileKnowledge(agentId: string, workspaceId: string, taskTitle: string, taskDescription?: string | null): Promise<string> {
+  async compileKnowledge(agentId: string, workspaceId: string, taskTitle: string, taskDescription?: string | null): Promise<string> {
     try {
       const query = taskDescription ? `${taskTitle} ${taskDescription}` : taskTitle;
       const chunks = await retrieveKnowledgeChunks({
@@ -3065,7 +3065,7 @@ export class RuntimeEngine {
    * `runTask` callers don't need to be edited in this refactor. A
    * follow-up pass can remove the call site and drop this method.
    */
-  private async compileSkills(_agentId: string, _workspaceId: string, _taskTitle: string): Promise<string> {
+  async compileSkills(_agentId: string, _workspaceId: string, _taskTitle: string): Promise<string> {
     return '';
   }
 
