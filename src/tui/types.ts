@@ -124,7 +124,22 @@ export interface RuntimeEvents {
   'task:delegated': { taskId: string; agentId: string; peerId: string; peerName: string };
   'task:react_step': { taskId: string; step: Record<string, unknown> };
   'task:warning': { taskId: string; warning: string; tools: string[] };
-  'task:needs_approval': { taskId: string; agentId: string; agentName: string; taskTitle: string; deliverableType?: string; workspaceId: string };
+  'task:needs_approval': {
+    taskId: string;
+    agentId: string;
+    agentName: string;
+    taskTitle: string;
+    deliverableType?: string;
+    workspaceId: string;
+    /** Present when the task paused on a FileAccessGuard denial. */
+    permission?: {
+      toolName: string;
+      attemptedPath: string;
+      suggestedExact: string;
+      suggestedParent: string;
+      guardReason: string;
+    };
+  };
   'task:upserted': Record<string, unknown>;
   'task:removed': { id: string };
 

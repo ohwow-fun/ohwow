@@ -22,6 +22,7 @@ import type { ExecuteAgentResult } from './types.js';
 import { classifyError, isRetryableFailure } from '../lib/error-classification.js';
 import { classifyRootCause } from '../lib/failure-root-cause.js';
 import { detectAndPersistAnomalies } from './anomaly-monitoring.js';
+import { PermissionDeniedError } from './filesystem/index.js';
 import { logger } from '../lib/logger.js';
 
 export interface HandleTaskFailureArgs {
@@ -40,6 +41,22 @@ export async function handleTaskFailure(
   const { error, taskId, agentId, workspaceId, taskTitle, startTime } = args;
   const errorMessage = error instanceof Error ? error.message : 'Unknown error';
   const durationSeconds = Math.round((Date.now() - startTime) / 1000);
+
+  // FileAccessGuard denials take a different path: the task pauses in
+  // needs_approval with a structured permission request for the operator
+  // to approve/deny via ohwow_approve_permission_request. Bypasses the
+  // retry-with-backoff, status='failed', failed_tasks stats, anomaly
+  // detection, root-cause enrichment, and Ollama-drain logic below.
+  if (error instanceof PermissionDeniedError) {
+    return await handlePermissionDenied.call(this, {
+      taskId,
+      agentId,
+      workspaceId,
+      taskTitle,
+      details: error.details,
+      durationSeconds,
+    });
+  }
 
   // Update task as failed with categorized error
   const failureCategory = classifyError(error);
@@ -215,6 +232,113 @@ export async function handleTaskFailure(
     taskId,
     status: 'failed',
     error: errorMessage,
+    tokensUsed: 0,
+    costCents: 0,
+  };
+}
+
+interface HandlePermissionDeniedArgs {
+  taskId: string;
+  agentId: string;
+  workspaceId: string;
+  taskTitle: string;
+  details: import('./filesystem/permission-error.js').PermissionDeniedDetails;
+  durationSeconds: number;
+}
+
+async function handlePermissionDenied(
+  this: RuntimeEngine,
+  args: HandlePermissionDeniedArgs,
+): Promise<ExecuteAgentResult> {
+  const { taskId, agentId, workspaceId, taskTitle, details, durationSeconds } = args;
+  const now = new Date().toISOString();
+
+  // Pull the latest checkpoint iteration (if any) so the permission
+  // request payload records where the loop stopped — useful for the
+  // operator UI and for any future mid-turn resume implementation.
+  let iteration: number | null = null;
+  try {
+    const { data } = await this.db
+      .from('agent_workforce_tasks')
+      .select('checkpoint_iteration')
+      .eq('id', taskId)
+      .single();
+    iteration = (data as { checkpoint_iteration: number | null } | null)?.checkpoint_iteration ?? null;
+  } catch { /* non-fatal — iteration stays null */ }
+
+  const permissionRequest = {
+    tool_name: details.toolName,
+    attempted_path: details.attemptedPath,
+    suggested_exact: details.suggestedExact,
+    suggested_parent: details.suggestedParent,
+    guard_reason: details.guardReason,
+    iteration,
+    timestamp: now,
+  };
+
+  await this.db.from('agent_workforce_tasks').update({
+    status: 'needs_approval',
+    approval_reason: 'permission_denied',
+    permission_request: JSON.stringify(permissionRequest),
+    duration_seconds: durationSeconds,
+    updated_at: now,
+  }).eq('id', taskId).then(() => {}, () => {});
+
+  // Reset agent to idle so it can pick up other work while the
+  // operator decides. Do NOT bump failed_tasks — this is not a failure.
+  await this.db.from('agent_workforce_agents').update({
+    status: 'idle',
+    updated_at: now,
+  }).eq('id', agentId).then(() => {}, () => {});
+
+  // Fetch agent name for the activity + event payload.
+  let agentName = 'agent';
+  try {
+    const { data } = await this.db
+      .from('agent_workforce_agents')
+      .select('name')
+      .eq('id', agentId)
+      .single();
+    agentName = (data as { name: string } | null)?.name ?? agentName;
+  } catch { /* non-fatal */ }
+
+  try {
+    await this.db.rpc('create_agent_activity', {
+      p_workspace_id: workspaceId,
+      p_activity_type: 'permission_requested',
+      p_title: `${agentName} wants access to ${details.suggestedExact}`,
+      p_description: `${details.toolName}: ${details.guardReason}`,
+      p_agent_id: agentId,
+      p_task_id: taskId,
+      p_metadata: { runtime: true, tool_name: details.toolName },
+    });
+  } catch { /* non-fatal activity write */ }
+
+  this.emit('task:needs_approval', {
+    taskId,
+    agentId,
+    agentName,
+    taskTitle: taskTitle || `Task ${taskId}`,
+    workspaceId,
+    permission: {
+      toolName: details.toolName,
+      attemptedPath: details.attemptedPath,
+      suggestedExact: details.suggestedExact,
+      suggestedParent: details.suggestedParent,
+      guardReason: details.guardReason,
+    },
+  });
+
+  logger.info(
+    { taskId, agentId, toolName: details.toolName, attemptedPath: details.attemptedPath },
+    '[RuntimeEngine] Task paused on permission request',
+  );
+
+  return {
+    success: false,
+    taskId,
+    status: 'needs_approval',
+    error: `Permission denied: ${details.toolName} on ${details.attemptedPath}`,
     tokensUsed: 0,
     costCents: 0,
   };
