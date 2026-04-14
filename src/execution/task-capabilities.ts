@@ -32,6 +32,14 @@ export interface TaskCapabilityInput {
     input: string | unknown;
     goal_id: string | null;
   };
+  /**
+   * Ephemeral filesystem grants attached to this specific task run by an
+   * "approve once" decision on a paused permission request. Union'd into
+   * the FileAccessGuard alongside the workspace baseline + per-agent
+   * paths, so the resumed child task can complete without persisting a
+   * row in agent_file_access_paths.
+   */
+  permissionGrants?: string[];
 }
 
 export interface TaskCapabilities {
@@ -66,7 +74,7 @@ export interface TaskCapabilities {
  */
 export async function resolveTaskCapabilities(
   this: RuntimeEngine,
-  { agentConfig, agentId, workspaceId, task }: TaskCapabilityInput,
+  { agentConfig, agentId, workspaceId, task, permissionGrants }: TaskCapabilityInput,
 ): Promise<TaskCapabilities> {
   const toolPolicy = resolveAgentToolPolicy(agentConfig);
   const isAllowlistMode = toolPolicy.mode === 'allowlist';
@@ -166,7 +174,12 @@ export async function resolveTaskCapabilities(
       ? (pathData as Array<{ path: string }>).map((p) => p.path)
       : [];
 
-    const merged = Array.from(new Set([...workspaceFsBaseline, ...agentPaths]));
+    const ephemeralGrants = permissionGrants ?? [];
+    const merged = Array.from(new Set([
+      ...workspaceFsBaseline,
+      ...agentPaths,
+      ...ephemeralGrants,
+    ]));
     if (merged.length > 0) {
       fileAccessGuard = new FileAccessGuard(merged);
     }

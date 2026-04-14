@@ -777,11 +777,28 @@ export class RuntimeEngine {
       // 4. Build system prompt
       // Resolve capabilities: tool policy, feature flags, file access
       // guard (with doc auto-mount expansion), and goal context.
+      // Ephemeral "approve once" grants attached to a resumed child task.
+      // Stored as a JSON string in agent_workforce_tasks.permission_grants
+      // by the approval handler in src/api/routes/permission-requests.ts.
+      const ephemeralPermissionGrants: string[] = (() => {
+        const raw = (task as unknown as Record<string, unknown>).permission_grants;
+        if (!raw) return [];
+        if (Array.isArray(raw)) return raw as string[];
+        if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) ? (parsed as string[]) : [];
+          } catch { return []; }
+        }
+        return [];
+      })();
+
       const caps = await resolveTaskCapabilities.call(this, {
         agentConfig,
         agentId,
         workspaceId,
         task: { input: task.input, goal_id: task.goal_id },
+        permissionGrants: ephemeralPermissionGrants,
       });
       const {
         browserEnabled,

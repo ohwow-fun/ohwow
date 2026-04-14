@@ -49,6 +49,7 @@ import { createModelsRouter } from './routes/models.js';
 import { createA2ARouter } from './routes/a2a.js';
 import { createPdfToolsRouter } from './routes/pdf-tools.js';
 import { createFileAccessRouter } from './routes/file-access.js';
+import { createPermissionRequestsRouter } from './routes/permission-requests.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createWhatsAppRouter } from './routes/whatsapp.js';
@@ -517,6 +518,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createOrgRouter(db));
   app.use(createPdfToolsRouter());
   app.use(createFileAccessRouter(db));
+  app.use(createPermissionRequestsRouter(db, engine));
   if (config.dataDir) {
     app.use(createAttachmentsRouter(db, config.dataDir));
   }
