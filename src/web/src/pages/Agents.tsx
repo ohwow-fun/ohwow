@@ -55,8 +55,6 @@ export function AgentsPage() {
               <Plus size={14} weight="bold" />
               Create agent
             </button>
-          ) : atLimit ? (
-            <span className="text-xs text-neutral-400">Free tier: 1 agent max</span>
           ) : null
         }
       />
