@@ -32,6 +32,7 @@ import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import { OrchestratorRuntimeConfig, type RagConfigOptions, type InferenceCapabilities } from './orchestrator-runtime-config.js';
 import { PermissionBroker } from './orchestrator-approvals.js';
 import { activateBrowserSession } from './orchestrator-sessions.js';
+import { McpLifecycle, type McpReloadStatus } from './orchestrator-mcp-lifecycle.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -40,7 +41,6 @@ import { repairToolCall } from './tool-call-repair.js';
 import { extractToolCallsFromText } from '../execution/text-tool-parse.js';
 import type { ScraplingService } from '../execution/scrapling/index.js';
 import type { McpServerConfig } from '../mcp/types.js';
-import { McpClientManager, type ElicitationHandler } from '../mcp/client.js';
 import {
   REQUEST_BROWSER_TOOL,
   LIST_CHROME_PROFILES_TOOL,
@@ -150,8 +150,7 @@ export class LocalOrchestrator {
   private lastIntentBySession = new Map<string, ClassifiedIntent>();
   private circuitBreaker = new CircuitBreaker();
   private toolCache = new ToolCache();
-  private mcpClients: McpClientManager | null = null;
-  private mcpServers: McpServerConfig[];
+  private mcp!: McpLifecycle;
   /**
    * Workspace-level kill switch for desktop control tools. When false
    * (default), the orchestrator does NOT inject request_desktop or any
@@ -163,19 +162,6 @@ export class LocalOrchestrator {
    * `desktopToolsEnabled: true` or globally via OHWOW_DESKTOP_TOOLS_ENABLED.
    * Stored on `this.config.desktopToolsEnabled`.
    */
-  /**
-   * Snapshot of the most recent MCP reload outcome. Updated by
-   * reloadMcpServers() and ensureMcpConnected() so daemon health endpoints
-   * (and the /api/mcp routes) can surface per-server connect failures
-   * instead of swallowing them. Read via getMcpStatus().
-   */
-  private mcpReloadStatus: {
-    ok: boolean;
-    serverCount: number;
-    toolCount: number;
-    errors: Array<{ serverName: string; error: string }>;
-    lastUpdatedMs: number;
-  } | null = null;
   /** Unified Brain: philosophical cognitive coordinator. */
   private brain: Brain | null = null;
   /** Soul: deep human persona awareness (Aristotle's Psyche). */
@@ -317,7 +303,7 @@ export class LocalOrchestrator {
       circuitBreaker: this.circuitBreaker,
       toolCache: this.toolCache,
       delegateSubtask: (prompt: string, focus: string) => this.runDelegateSubtask(prompt, focus, options),
-      mcpClients: this.mcpClients,
+      mcpClients: this.mcp.getClients(),
       waitForCostApproval: (id: string) => this.broker.waitForCostApproval(id),
       skipMediaCostConfirmation: this.config.skipMediaCostConfirmation,
       immuneSystem: this.immuneSystem,
@@ -383,9 +369,9 @@ export class LocalOrchestrator {
     this.browserTarget = browserTarget || 'chrome';
     this.chromeCdpPort = chromeCdpPort || 9222;
     this.dataDir = dataDir || '';
-    this.mcpServers = mcpServers || [];
     this.config.desktopToolsEnabled = desktopToolsEnabled === true;
     this.broker = new PermissionBroker(this.db, this.workspaceId);
+    this.mcp = new McpLifecycle(this.db, this.broker, () => this.syncOrganToBody(), mcpServers || []);
 
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
@@ -495,7 +481,8 @@ export class LocalOrchestrator {
     else this.digitalBody.removeOrgan('browser');
     if (this.desktopService) this.digitalBody.setOrgan('desktop', createDesktopOrgan(this.desktopService));
     else this.digitalBody.removeOrgan('desktop');
-    if (this.mcpClients) this.digitalBody.setOrgan('mcp', createMcpOrgan(this.mcpClients));
+    const mcpClients = this.mcp?.getClients();
+    if (mcpClients) this.digitalBody.setOrgan('mcp', createMcpOrgan(mcpClients));
     else this.digitalBody.removeOrgan('mcp');
   }
 
@@ -601,11 +588,7 @@ export class LocalOrchestrator {
 
   /** Close MCP client connections (call alongside browser cleanup on shutdown). */
   async closeMcp(): Promise<void> {
-    if (this.mcpClients) {
-      logger.debug('[mcp] closeMcp() called — closing MCP connections');
-      await this.mcpClients.close().catch(() => {});
-      this.mcpClients = null;
-    }
+    await this.mcp.close();
   }
 
   /**
@@ -613,158 +596,22 @@ export class LocalOrchestrator {
    * Called by the typed `ohwow_add_mcp_server` / `ohwow_remove_mcp_server`
    * tools (via POST /api/mcp/servers) so newly registered servers are live
    * without a daemon restart.
-   *
-   * Unlike the lazy path in ensureMcpConnected(), this always reads from
-   * runtime_settings and overwrites the in-memory list — the constructor
-   * config (if any) is superseded for the remainder of the process.
    */
   async reloadMcpServers(): Promise<void> {
-    let fresh: McpServerConfig[] = [];
-    try {
-      const { data } = await this.db
-        .from('runtime_settings')
-        .select('value')
-        .eq('key', 'global_mcp_servers')
-        .maybeSingle();
-      if (data) {
-        // The SQLite adapter (parseJsonColumns in src/db/sqlite-adapter.ts)
-        // auto-parses JSON-shaped string columns on read, so `value` is
-        // already an array by the time we get it. Calling JSON.parse() on an
-        // array coerces it to "[object Object]" and throws. Accept either
-        // shape so we tolerate adapter behavior changes and historical rows.
-        const raw = (data as { value: unknown }).value;
-        if (Array.isArray(raw)) {
-          fresh = raw as McpServerConfig[];
-        } else if (typeof raw === 'string') {
-          try {
-            const parsed = JSON.parse(raw);
-            fresh = Array.isArray(parsed) ? (parsed as McpServerConfig[]) : [];
-          } catch (parseErr) {
-            // Corrupted row — log and treat as empty rather than poisoning
-            // the in-memory state. The row is left in place so a future
-            // recovery tool can inspect it.
-            logger.warn(
-              { err: parseErr },
-              '[mcp] reloadMcpServers: runtime_settings.global_mcp_servers is corrupted; treating as empty',
-            );
-            fresh = [];
-          }
-        }
-      }
-    } catch (err) {
-      logger.warn({ err }, '[mcp] reloadMcpServers: failed to read runtime_settings');
-      return;
-    }
-    this.mcpServers = fresh;
-    // Tear down existing clients and reconnect immediately so the next
-    // orchestrator turn sees the updated tool surface.
-    if (this.mcpClients) {
-      await this.mcpClients.close().catch(() => {});
-      this.mcpClients = null;
-    }
-    if (fresh.length > 0) {
-      await this.ensureMcpConnected(true);
-    } else {
-      // Empty list — sync organ state so consumers see no MCP tools.
-      this.syncOrganToBody();
-    }
+    await this.mcp.reload();
   }
 
-  /**
-   * Ensure MCP clients are connected. Lazy-initializes on first use.
-   * When force=true, closes existing connections and reconnects (for crash recovery).
-   */
   private async ensureMcpConnected(force = false): Promise<void> {
-    if (this.mcpClients && !force) return;
-
-    // Load servers: prefer constructor config, fallback to DB
-    let servers = this.mcpServers;
-    if (servers.length === 0) {
-      try {
-        const { data } = await this.db
-          .from('runtime_settings')
-          .select('value')
-          .eq('key', 'global_mcp_servers')
-          .maybeSingle();
-        if (data) {
-          // SQLite adapter auto-parses JSON columns on read. Accept either
-          // an already-parsed array or (defensively) a raw JSON string.
-          const raw = (data as { value: unknown }).value;
-          if (Array.isArray(raw)) {
-            servers = raw as McpServerConfig[];
-          } else if (typeof raw === 'string') {
-            try {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed)) servers = parsed as McpServerConfig[];
-            } catch {
-              // Corrupted row — leave servers as []
-            }
-          }
-        }
-      } catch {
-        // DB not available, skip
-      }
-    }
-
-    if (servers.length === 0) return;
-
-    if (force && this.mcpClients) {
-      await this.mcpClients.close().catch(() => {});
-      this.mcpClients = null;
-    }
-
-    const onElicitation: ElicitationHandler = async (_serverName, _message, _schema) => {
-      // Elicitation requests are surfaced as events — the TUI handles user input.
-      // For now, auto-decline after 30s since we don't have the event channel here.
-      // The calling code should wire this up via the event stream.
-      return this.broker.awaitElicitation();
-    };
-
-    this.mcpClients = await McpClientManager.connect(servers, { onElicitation });
-    const toolCount = this.mcpClients.getToolDefinitions().length;
-    const failures = this.mcpClients.getConnectionFailures();
-    this.mcpReloadStatus = {
-      ok: failures.length === 0,
-      serverCount: servers.length,
-      toolCount,
-      errors: failures,
-      lastUpdatedMs: Date.now(),
-    };
-    if (toolCount > 0) {
-      logger.info(
-        { toolCount, serverCount: servers.length, failureCount: failures.length },
-        `[mcp] Orchestrator connected — ${toolCount} tool(s) across ${servers.length} server(s)`,
-      );
-    }
-    if (failures.length > 0) {
-      // Surface per-server failures so add_mcp_server callers see them
-      // instead of getting a silent ok:true. The mcp.ts route logs a
-      // matching error after reloadMcpServers() returns.
-      for (const failure of failures) {
-        logger.error(
-          { serverName: failure.serverName, error: failure.error },
-          `[mcp] Failed to connect server "${failure.serverName}": ${failure.error}`,
-        );
-      }
-    }
-    this.syncOrganToBody();
+    await this.mcp.ensureConnected(force);
   }
 
   /**
    * Snapshot of the most recent MCP reload outcome. Daemon health checks
    * and POST /api/mcp/servers callers read this to verify a reload
    * actually populated tools, not just that the API call succeeded.
-   * Returns null if MCP has never been reloaded or no servers are
-   * configured.
    */
-  getMcpStatus(): {
-    ok: boolean;
-    serverCount: number;
-    toolCount: number;
-    errors: Array<{ serverName: string; error: string }>;
-    lastUpdatedMs: number;
-  } | null {
-    return this.mcpReloadStatus;
+  getMcpStatus(): McpReloadStatus | null {
+    return this.mcp.getStatus();
   }
 
   /** Resolve a pending MCP elicitation request. */
@@ -1046,8 +893,8 @@ export class LocalOrchestrator {
 
     // Build targeted system prompt (only fetches context for relevant sections)
     const desktopDisplayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
-    const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
-    const mcpServerNames = hasMcpTools ? this.mcpServers.map(s => s.name) : undefined;
+    const hasMcpTools = this.mcp.hasTools();
+    const mcpServerNames = hasMcpTools ? this.mcp.getServerNames() : undefined;
     const { staticPart, dynamicPart } = await buildTargetedPrompt(this.promptDeps, userMessage, sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, undefined, desktopDisplayLayout, hasMcpTools, mcpServerNames);
 
     // Array format: static block is cached, dynamic block changes each call
@@ -1833,7 +1680,7 @@ export class LocalOrchestrator {
     }
 
     // Append MCP tools (skip intent filtering — MCP tools aren't in TOOL_SECTION_MAP)
-    const mcpTools = this.mcpClients?.getToolDefinitions() ?? [];
+    const mcpTools = this.mcp.getToolDefinitions();
 
     // Filter by intent sections and priority when provided. Explicit
     // tool names mentioned in the user message bypass the filter — if
@@ -1869,14 +1716,14 @@ export class LocalOrchestrator {
     // empty" case is the regression signal — it means a server is registered
     // but ensureMcpConnected/reload silently failed and getMcpStatus() will
     // tell you why.
-    const mcpConfigured = this.mcpServers.length > 0;
+    const mcpConfigured = this.mcp.getServerCount() > 0;
     if (mcpTools.length > 0 || mcpConfigured) {
       const overLong = tools.filter(t => t.name.length > 64).map(t => t.name);
       logger.info(
         {
           totalTools: tools.length,
           mcpToolCount: mcpTools.length,
-          mcpServerCount: this.mcpServers.length,
+          mcpServerCount: this.mcp.getServerCount(),
           mcpToolNames: mcpTools.slice(0, 5).map(t => t.name),
           overLongNames: overLong.length > 0 ? overLong : undefined,
         },
@@ -2028,8 +1875,8 @@ export class LocalOrchestrator {
 
     // Build system prompt as plain string (no TextBlockParam arrays, no cache_control)
     const displayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
-    const hasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
-    const mcpServerNames = hasMcpTools ? this.mcpServers.map(s => s.name) : undefined;
+    const hasMcpTools = this.mcp.hasTools();
+    const mcpServerNames = hasMcpTools ? this.mcp.getServerNames() : undefined;
     const { staticPart, dynamicPart } = await buildTargetedPrompt(
       this.promptDeps, userMessage, sections,
       browserPreActivated || this.browserActivated, options?.platform,
@@ -2776,7 +2623,7 @@ export class LocalOrchestrator {
     // Build prompt tier-aware: micro models get bare skeleton, small get compact, medium+ get full
     const initialPromptMode: boolean | 'micro' = paramTier === 'micro' ? 'micro' : paramTier === 'small' ? true : false;
     const ollamaDisplayLayout = this.desktopService ? buildDisplayLayout(this.desktopService.getScreenInfo().displays) : undefined;
-    const ollamaHasMcpTools = !!(this.mcpClients && this.mcpClients.getToolDefinitions().length > 0);
+    const ollamaHasMcpTools = this.mcp.hasTools();
     let { staticPart: ollamaStatic, dynamicPart: ollamaDynamic } = await buildTargetedPrompt(this.promptDeps, userMessage, classified.sections, browserPreActivated || this.browserActivated, options?.platform, desktopPreActivated || this.desktopActivated, initialPromptMode, ollamaDisplayLayout, ollamaHasMcpTools);
     let systemPrompt = ollamaStatic + '\n\n' + ollamaDynamic;
     if (initialPromptMode) {
