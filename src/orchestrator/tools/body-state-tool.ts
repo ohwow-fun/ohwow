@@ -30,7 +30,44 @@ export async function getBodyState(ctx: LocalToolContext): Promise<ToolResult> {
 
   try {
     const state = await cachedService.getBodyState();
-    return { success: true, data: state };
+
+    // Decorate with the BPP affective vitals so chat agents can introspect
+    // their own emotional + physiological state in the same call. The data
+    // is otherwise only exposed by the public /health endpoint, which
+    // means the orchestrator could not answer "how do you feel" through
+    // any tool — proprioception bench P4.14 caught it.
+    const brain = ctx.engine.getBrain();
+    const bpp: Record<string, unknown> = {};
+    if (brain) {
+      try {
+        const affect = brain.getAffectEngine?.()?.getState();
+        if (affect) {
+          bpp.affect_dominant = affect.dominant;
+          bpp.affect_valence = affect.valence;
+          bpp.affect_arousal = affect.arousal;
+        }
+      } catch { /* affect engine not wired or in init */ }
+      try {
+        const endocrine = brain.getEndocrineSystem?.()?.getProfile();
+        if (endocrine) bpp.endocrine_tone = endocrine.overallTone;
+      } catch { /* endocrine not wired */ }
+      try {
+        const homeo = brain.getHomeostasisController?.()?.getOverallDeviation();
+        if (typeof homeo === 'number') bpp.homeostasis_deviation = homeo;
+      } catch { /* homeo not wired */ }
+      try {
+        const sleep = brain.getSleepCycle?.()?.getState();
+        if (sleep) {
+          bpp.sleep_phase = sleep.phase;
+          bpp.sleep_debt = sleep.sleepDebt;
+        }
+      } catch { /* sleep cycle not wired */ }
+    }
+
+    return {
+      success: true,
+      data: Object.keys(bpp).length > 0 ? { ...state, bpp } : state,
+    };
   } catch (err) {
     return {
       success: false,

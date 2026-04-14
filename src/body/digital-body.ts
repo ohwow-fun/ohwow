@@ -35,12 +35,39 @@ abstract class BaseOrgan implements BodyPart {
   abstract readonly name: string;
   readonly domain = 'digital' as const;
 
+  /** Whether this organ has ever reported active in the current daemon
+   *  lifetime. Lets getHealth() distinguish "never started" (dormant) from
+   *  "was running, now isn't" (failed). The digital nervous system polls
+   *  every organ on a 10s interval so this flag warms up automatically as
+   *  organs come online. P3.11 proprioception bench caught the original
+   *  collapse: killing voicebox left the Voice organ reporting 'dormant'
+   *  instead of 'failed' even after it had been alive for the whole
+   *  daemon lifetime, because the base class flattened both states. */
+  private wasEverActive = false;
+
   abstract isActive(): boolean;
   abstract getAffordances(): Affordance[];
   abstract getUmwelt(): UmweltDimension[];
 
   getHealth(): OrganHealth {
-    return this.isActive() ? 'healthy' : 'dormant';
+    if (this.isActive()) {
+      this.wasEverActive = true;
+      return 'healthy';
+    }
+    return this.wasEverActive ? 'failed' : 'dormant';
+  }
+
+  /** Subclasses with custom getHealth() should call this once at the top so
+   *  the wasEverActive flag stays in sync with their own activation logic. */
+  protected recordActivationTick(): void {
+    if (this.isActive()) this.wasEverActive = true;
+  }
+
+  /** Whether this organ has ever been observed active during the current
+   *  daemon lifetime. Subclasses with custom getHealth() can read this to
+   *  distinguish dormant from failed in their own decision tree. */
+  protected hasEverBeenActive(): boolean {
+    return this.wasEverActive;
   }
 }
 
@@ -255,7 +282,11 @@ class VoiceOrgan extends BaseOrgan {
   isActive(): boolean { return this.service.isActive(); }
 
   getHealth(): OrganHealth {
-    if (!this.service.isActive()) return 'dormant';
+    this.recordActivationTick();
+    if (!this.service.isActive()) {
+      // Distinguish "never started" (dormant) from "was up, died" (failed).
+      return this.hasEverBeenActive() ? 'failed' : 'dormant';
+    }
     const hasStt = !!this.service.getSttProvider();
     const hasTts = !!this.service.getTtsProvider();
     if (hasStt && hasTts) return 'healthy';
@@ -488,7 +519,10 @@ class PresenceOrgan extends BaseOrgan {
   isActive(): boolean { return this.service.isActive(); }
 
   getHealth(): OrganHealth {
-    if (!this.service.isActive()) return 'dormant';
+    this.recordActivationTick();
+    if (!this.service.isActive()) {
+      return this.hasEverBeenActive() ? 'failed' : 'dormant';
+    }
     const state = this.service.getState();
     if (state === 'absent') return 'dormant';
     return 'healthy';
