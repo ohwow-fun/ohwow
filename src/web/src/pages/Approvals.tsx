@@ -63,13 +63,22 @@ function ApprovalBody({ text }: { text: string }) {
       i++; continue;
     }
 
-    // Numbered list
-    const numbered = line.match(/^(\d+)\. (.+)/);
+    // Numbered list (content may live on the same line or wrap to the next)
+    const numbered = line.match(/^(\d+)\.\s*(.*)$/);
     if (numbered) {
+      let content = numbered[2];
+      if (!content.trim()) {
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;
+        if (j < lines.length && !/^(\d+\.|[-*+] |#{1,3} |```)/.test(lines[j])) {
+          content = lines[j];
+          i = j;
+        }
+      }
       elements.push(
         <div key={i} className="flex gap-1.5 text-xs text-neutral-300">
           <span className="text-neutral-500 shrink-0">{numbered[1]}.</span>
-          <span>{inlineFormat(numbered[2])}</span>
+          <span>{inlineFormat(content)}</span>
         </div>
       );
       i++; continue;
