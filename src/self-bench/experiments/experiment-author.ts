@@ -119,8 +119,17 @@ export class ExperimentAuthorExperiment implements Experiment {
       commit_result: null,
     };
 
+    // subject: null — we deliberately do NOT write the proposal:<slug>
+    // namespace here. The author's probe-time finding would otherwise
+    // collide with the generator's proposal finding under the same
+    // subject, and readUnclaimedProposals's "latest-per-subject"
+    // grouping would then mask the real brief with the author's
+    // selected_brief shape on the very next tick. Claim markers
+    // (written in intervene) still use proposal:<slug> because that's
+    // how dedupe works — but probe-time state never touches that
+    // namespace.
     return {
-      subject: `proposal:${oldest.brief.slug}`,
+      subject: null,
       summary: `selected proposal ${oldest.brief.slug} for authoring`,
       evidence,
     };
@@ -272,10 +281,21 @@ export class ExperimentAuthorExperiment implements Experiment {
 
     const allFindings = [...authorFindings, ...generatorFindings];
 
-    // Group by subject, keep the newest row per subject.
+    // Group by subject, keep the newest row per subject. Only
+    // consider findings that are actually proposal-shaped — either
+    // original briefs from the generator (is_experiment_proposal) or
+    // claim-marker outcomes from this experiment (is_authoring_outcome).
+    // Stray probe-time findings from older author versions that wrote
+    // into the proposal:<slug> namespace are filtered out here so
+    // they can't mask a real brief.
     const latestBySubject = new Map<string, Finding>();
     for (const f of allFindings) {
       if (!f.subject || !f.subject.startsWith('proposal:')) continue;
+      const ev = f.evidence as {
+        is_experiment_proposal?: boolean;
+        is_authoring_outcome?: boolean;
+      };
+      if (!ev.is_experiment_proposal && !ev.is_authoring_outcome) continue;
       const existing = latestBySubject.get(f.subject);
       if (!existing || f.ranAt > existing.ranAt) {
         latestBySubject.set(f.subject, f);
