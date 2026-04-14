@@ -59,6 +59,9 @@ import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
 import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
+import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
+import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
+import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
   refreshRuntimeConfigCache,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
@@ -1457,6 +1460,21 @@ export async function startDaemon(): Promise<DaemonHandle> {
           cadenceScheduler.start();
           logger.info('[daemon] content-cadence-scheduler started');
         }
+
+        // Phase 8-A.1: LLM provider availability — watches failure rates
+        // per provider in a rolling 1h window. Warns at >5%, fails at >20%.
+        // No intervene; routing adaptation is Phase 8-B.
+        experimentRunner.register(new ProviderAvailabilityExperiment());
+
+        // Phase 8-A.2: Agent lock contention — detects agents marked
+        // 'working' whose active task hasn't updated in >30 minutes.
+        // Warns at 10% stalled agents, fails at 30%.
+        experimentRunner.register(new AgentLockContentionExperiment());
+
+        // Phase 8-A.3: List handler completeness digest — meta-experiment
+        // that surfaces a weekly summary of list-handlers-fuzz findings
+        // as a business-facing signal. 1h cadence.
+        experimentRunner.register(new ListCompletenessSummaryExperiment());
 
         // Phase 8-B: AgentTaskCostWatcherExperiment — observer for the
         // rolling 7d avg cost per completed task. Anchors to the
