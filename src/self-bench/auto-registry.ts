@@ -18,66 +18,50 @@
  * - Each entry is a zero-arg factory (() => Experiment) so daemon/start.ts
  *   can construct experiments after importing without coupling to class
  *   names at the import site.
+ *
+ * Slop-refactor note (2026-04-14)
+ * --------------------------------
+ * The 19 individual MigrationSchema*Experiment files this file used to
+ * import were collapsed into a single MigrationSchemaProbeExperiment
+ * class fed by MIGRATION_SCHEMA_REGISTRY. Same probe behavior, same
+ * experiment ids (slugs preserved so historical findings stay
+ * queryable). The factories below are generated from the registry at
+ * module load — no manual maintenance for migration probes anymore.
+ *
+ * Until the proposal generator is updated to append to the registry
+ * instead of writing new TS files (Layer 1 of the autonomous-fixing
+ * safety floor — see the audit), the author may continue to author
+ * per-migration files. Those files would land alongside the registry-
+ * driven factories and emit duplicate findings. Track that risk in
+ * ContentCadenceLoopHealthExperiment-style meta watchers as the
+ * autonomous loop matures.
  */
 
 import type { Experiment } from './experiment-types.js';
-import { MigrationSchema010LocalCrmExperiment } from './experiments/migration-schema-010-local-crm.js';
-import { MigrationSchema012OrchestratorMemoryExperiment } from './experiments/migration-schema-012-orchestrator-memory.js';
-import { MigrationSchema014WebhooksAndTriggersExperiment } from './experiments/migration-schema-014-webhooks-and-triggers.js';
-import { MigrationSchema015FileAttachmentsExperiment } from './experiments/migration-schema-015-file-attachments.js';
-import { MigrationSchema016DashboardTablesExperiment } from './experiments/migration-schema-016-dashboard-tables.js';
-import { MigrationSchema017WorkflowTriggersExperiment } from './experiments/migration-schema-017-workflow-triggers.js';
-import { MigrationSchema018WorkspaceOnboardingExperiment } from './experiments/migration-schema-018-workspace-onboarding.js';
-import { MigrationSchema023LocalFileAccessExperiment } from './experiments/migration-schema-023-local-file-access.js';
-import { MigrationSchema024ModelStatsExperiment } from './experiments/migration-schema-024-model-stats.js';
-import { MigrationSchema062EndocrineSystemExperiment } from './experiments/migration-schema-062-endocrine-system.js';
-import { MigrationSchema072BiologicalOrgExperiment } from './experiments/migration-schema-072-biological-org.js';
-import { MigrationSchema103FixPersonModelsFkExperiment } from './experiments/migration-schema-103-fix-person-models-fk.js';
-import { MigrationSchema104FixPersonObservationsFkExperiment } from './experiments/migration-schema-104-fix-person-observations-fk.js';
-import { MigrationSchema105OnboardingPlansExperiment } from './experiments/migration-schema-105-onboarding-plans.js';
-import { MigrationSchema116SelfFindingsExperiment } from './experiments/migration-schema-116-self-findings.js';
-import { MigrationSchema117ExperimentValidationsExperiment } from './experiments/migration-schema-117-experiment-validations.js';
-import { MigrationSchema119RuntimeConfigOverridesExperiment } from './experiments/migration-schema-119-runtime-config-overrides.js';
+import { MigrationSchemaProbeExperiment } from './experiments/migration-schema-probe.js';
+import { MIGRATION_SCHEMA_REGISTRY } from './registries/migration-schema-registry.js';
+import { ToolchainToolTestStateExperiment } from './experiments/toolchain-tool-test-state.js';
+import { ToolchainToolTestSynthesizeForGoalExperiment } from './experiments/toolchain-tool-test-synthesize-for-goal.js';
+import { ToolchainToolTestWhatsappExperiment } from './experiments/toolchain-tool-test-whatsapp.js';
+import { ToolchainToolTestAgentsExperiment } from './experiments/toolchain-tool-test-agents.js';
+import { ToolchainToolTestCollectiveIntelligenceExperiment } from './experiments/toolchain-tool-test-collective-intelligence.js';
+import { ToolchainToolTestHumanGrowthExperiment } from './experiments/toolchain-tool-test-human-growth.js';
 
 /**
  * Array of zero-arg experiment factories. daemon/start.ts iterates this
  * and calls register(factory()) for each entry.
- *
- * ExperimentAuthorExperiment appends new entries here after each commit.
- * Entries are append-only — removal is manual.
  */
-import { ToolchainToolTestStateExperiment } from './experiments/toolchain-tool-test-state.js';
-import { ToolchainToolTestSynthesizeForGoalExperiment } from './experiments/toolchain-tool-test-synthesize-for-goal.js';
-import { ToolchainToolTestWhatsappExperiment } from './experiments/toolchain-tool-test-whatsapp.js';
-import { MigrationSchema009NudgesExperiment } from './experiments/migration-schema-009-nudges.js';
-import { ToolchainToolTestAgentsExperiment } from './experiments/toolchain-tool-test-agents.js';
-import { ToolchainToolTestCollectiveIntelligenceExperiment } from './experiments/toolchain-tool-test-collective-intelligence.js';
-import { ToolchainToolTestHumanGrowthExperiment } from './experiments/toolchain-tool-test-human-growth.js';
-import { ToolchainToolTestInvestigateShellAllowlistExperiment } from './experiments/toolchain-tool-test-investigate-shell-allowlist.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
-  () => new MigrationSchema010LocalCrmExperiment(),
-  () => new MigrationSchema012OrchestratorMemoryExperiment(),
-  () => new MigrationSchema014WebhooksAndTriggersExperiment(),
-  () => new MigrationSchema015FileAttachmentsExperiment(),
-  () => new MigrationSchema016DashboardTablesExperiment(),
-  () => new MigrationSchema017WorkflowTriggersExperiment(),
-  () => new MigrationSchema018WorkspaceOnboardingExperiment(),
-  () => new MigrationSchema023LocalFileAccessExperiment(),
-  () => new MigrationSchema024ModelStatsExperiment(),
-  () => new MigrationSchema062EndocrineSystemExperiment(),
-  () => new MigrationSchema072BiologicalOrgExperiment(),
-  () => new MigrationSchema103FixPersonModelsFkExperiment(),
-  () => new MigrationSchema104FixPersonObservationsFkExperiment(),
-  () => new MigrationSchema105OnboardingPlansExperiment(),
-  () => new MigrationSchema116SelfFindingsExperiment(),
-  () => new MigrationSchema117ExperimentValidationsExperiment(),
-  () => new MigrationSchema119RuntimeConfigOverridesExperiment(),
+  // Migration schema probes — one factory per registry row.
+  ...MIGRATION_SCHEMA_REGISTRY.map(
+    (config) => () => new MigrationSchemaProbeExperiment(config),
+  ),
+  // Toolchain test probes — pending the same registry-collapse refactor
+  // as migration-schema. For now these stay as individual factories.
   () => new ToolchainToolTestStateExperiment(),
   () => new ToolchainToolTestSynthesizeForGoalExperiment(),
   () => new ToolchainToolTestWhatsappExperiment(),
-  () => new MigrationSchema009NudgesExperiment(),
   () => new ToolchainToolTestAgentsExperiment(),
   () => new ToolchainToolTestCollectiveIntelligenceExperiment(),
   () => new ToolchainToolTestHumanGrowthExperiment(),
-  () => new ToolchainToolTestInvestigateShellAllowlistExperiment(),
 ];
