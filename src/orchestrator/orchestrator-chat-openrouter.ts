@@ -72,6 +72,7 @@ import {
   checkTurnTokenBudget,
   estimateMessagesTokens,
   buildBudgetExitMessage,
+  clampToolResult,
 } from './turn-context-guard.js';
 import {
   type ToolCallRequest,
@@ -745,7 +746,12 @@ export async function* runOpenRouterChat(
           sessionToolNames.push(req.name);
           // On 3rd consecutive same-tool failure, append a stop-and-rethink nudge
           // to the tool message the model sees next iteration.
-          let toolMessageContent = outcome.resultContent;
+          // Clamp before push so a single pathological tool output (a
+          // repo-wide grep, a 10k-line listing) can't dominate the context
+          // for the four iterations before compactStaleOpenAIToolResults
+          // kicks in. See turn-context-guard.clampToolResult for the
+          // truncation marker contract.
+          let toolMessageContent = clampToolResult(outcome.resultContent);
           if (consecutiveDecision === 'nudge') {
             toolMessageContent = `${toolMessageContent}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
           }

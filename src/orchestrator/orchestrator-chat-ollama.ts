@@ -59,6 +59,7 @@ import {
   checkTurnTokenBudget,
   estimateMessagesTokens,
   buildBudgetExitMessage,
+  clampToolResult,
 } from './turn-context-guard.js';
 import {
   type ToolCallRequest,
@@ -608,8 +609,13 @@ export async function* runOllamaChat(
             outcome.isError ? outcome.resultContent : undefined,
           );
 
-          // Ollama format: use text resultContent (no image blocks)
-          let toolMessageContent = outcome.resultContent;
+          // Ollama format: use text resultContent (no image blocks). Clamp
+          // before push so one pathological tool output can't dominate the
+          // context — doubly important here because the ollama path also
+          // inline-duplicates toolResultsSummary into the reflection block
+          // below as a fallback for small models that don't parse
+          // role='tool' reliably.
+          let toolMessageContent = clampToolResult(outcome.resultContent);
           if (consecutiveDecision === 'nudge') {
             toolMessageContent = `${toolMessageContent}${consecutiveBreaker.buildNudgeMessage(outcome.toolName)}`;
           }

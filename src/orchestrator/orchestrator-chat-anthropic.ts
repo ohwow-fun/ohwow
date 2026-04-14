@@ -74,6 +74,7 @@ import {
   checkTurnTokenBudget,
   estimateMessagesTokens,
   buildBudgetExitMessage,
+  clampToolResult,
 } from './turn-context-guard.js';
 import {
   executeToolCall,
@@ -556,7 +557,7 @@ export async function* runAnthropicChat(
             toolResults.push({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: outcome.formattedBlocks || (outcome.isError ? outcome.resultContent : outcome.resultContent),
+              content: outcome.formattedBlocks || clampToolResult(outcome.resultContent),
               is_error: outcome.isError,
             });
           }
@@ -643,7 +644,11 @@ export async function* runAnthropicChat(
         // Anthropic format: use formattedBlocks (with images) for browser/desktop results
         // On the 3rd consecutive same-tool failure, append a nudge so the model
         // sees "stop calling this" inline with the next tool result.
-        let resultContent: ToolResultBlockParam['content'] = outcome.formattedBlocks || outcome.resultContent;
+        // Clamp the string path so a single pathological tool output can't
+        // dominate the context for the four iterations before
+        // compactStaleToolResults kicks in. formattedBlocks is already bounded
+        // by image eviction elsewhere in the loop.
+        let resultContent: ToolResultBlockParam['content'] = outcome.formattedBlocks || clampToolResult(outcome.resultContent);
         if (consecutiveDecision === 'nudge') {
           const nudge = consecutiveBreaker.buildNudgeMessage(outcome.toolName);
           if (typeof resultContent === 'string') {

@@ -225,6 +225,44 @@ function summarizeToolResultText(text: string): string {
 }
 
 // ----------------------------------------------------------------------
+// Per-result clamp
+// ----------------------------------------------------------------------
+
+/**
+ * Default ceiling for a single tool result before compaction runs. 8000
+ * characters is ~2000 tokens under the `chars/4` heuristic — enough room
+ * for a useful dump (a short file, a small directory listing, a focused
+ * grep) but small enough that a pathological 500KB response can't pin the
+ * context budget through four iterations of verbatim retention.
+ */
+export const DEFAULT_TOOL_RESULT_CHAR_CAP = 8000;
+
+/**
+ * Clamp a single tool-result string so one runaway output (a grep over
+ * the whole repo, a 10k-line directory listing, a full-file dump) can't
+ * dominate the loopMessages budget for the four iterations before
+ * compactStaleToolResults kicks in. Keeps the head of the output verbatim
+ * so the model can still read the first findings, replaces the tail with
+ * an explicit `[truncated: kept N of M chars…]` marker the model can
+ * recognize and use as a cue to call the tool again with a narrower
+ * query.
+ *
+ * Bug #9 guard — caught during the S3.12 bench when a registry-wide grep
+ * result accumulated across iterations faster than compaction could
+ * catch up. Meant to be called at the tool-push site in each chat loop
+ * (openrouter, ollama, anthropic), BEFORE the result enters loopMessages.
+ */
+export function clampToolResult(
+  content: string,
+  maxChars: number = DEFAULT_TOOL_RESULT_CHAR_CAP,
+): string {
+  if (content.length <= maxChars) return content;
+  const head = content.slice(0, maxChars);
+  const omitted = content.length - maxChars;
+  return `${head}\n\n[truncated: kept ${maxChars} of ${content.length} chars — ${omitted} chars omitted. Call the tool again with a narrower query if you need the rest.]`;
+}
+
+// ----------------------------------------------------------------------
 // Token budget guard
 // ----------------------------------------------------------------------
 
