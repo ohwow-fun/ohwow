@@ -497,7 +497,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createApprovalsRouter(db));
   app.use(createDeliverablesRouter(db));
   app.use(createSchedulesRouter(db, onScheduleChange));
-  app.use(createKnowledgeRouter(db));
+  app.use(createKnowledgeRouter(db, config.dataDir));
   app.use(createSystemRouter(db, rawDb, startTime));
   if (orchestrator) {
     app.use(createOrchestratorRouter(orchestrator));
