@@ -33,13 +33,28 @@
  *
  * No intervene
  * ------------
- * A failing agent is an operator / prompt-engineering / model-choice
+ * A failing agent is an operator / prompt-engineering / constraint
  * call, not something the runner can auto-heal. The probe's job is
  * to make the failure LOUD. The fix is always upstream of the
- * experiment: fine-tune the agent's system prompt, route it to a
- * different model tier, shrink its context, or retire it. The
- * finding row carries the specific agents + their rates so the
- * operator (or a future meta-experiment) can act.
+ * experiment: fine-tune the agent's system prompt, shrink its
+ * context, tighten its tool allowlist, clamp it via per-agent
+ * constraints (`config.model_policy.localOnly` or
+ * `config.model_policy.maxCostCents` — see AgentModelPolicy in
+ * execution-policy.ts), or retire it. The finding row carries the
+ * specific agents + their rates so the operator (or a future
+ * meta-experiment) can act.
+ *
+ * Note on "route it to a different model" as a remediation: that is
+ * not a thing in shape C. Agents never pin a model; the router picks
+ * per sub-task based on iteration/difficulty/purpose. The runtime's
+ * automatic tier-ladder remediation already exists as
+ * ModelHealthExperiment + refreshDemotedAgentModels — it blocklists
+ * misbehaving models globally and escalateIfDemoted walks the next
+ * call up the tier ladder (FREE → FAST → BALANCED → STRONG) for
+ * every agent that would have landed on the demoted model. That
+ * fixes bad-MODEL situations. This experiment watches bad-AGENT
+ * situations, which are disjoint: the agent's failure may be its
+ * prompt, context budget, or tool mix, not the model underneath.
  */
 
 import type {
