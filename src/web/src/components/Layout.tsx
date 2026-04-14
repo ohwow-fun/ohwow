@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useApi } from '../hooks/useApi';
 import { useTier } from '../hooks/useTier';
 import { useEventToasts } from '../hooks/useEventToasts';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -244,7 +243,19 @@ function SidebarContent({
 
 export function Layout() {
   const location = useLocation();
-  const { data: health, error: healthError, loading: healthLoading } = useApi<HealthData>('/health');
+  // /health returns the object directly (no { data: } wrapper), so we can't use useApi here.
+  const [health, setHealth] = useState<HealthData | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/health')
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d: HealthData) => { if (!cancelled) { setHealth(d); setHealthError(null); } })
+      .catch((e: Error) => { if (!cancelled) setHealthError(e.message); })
+      .finally(() => { if (!cancelled) setHealthLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
   const { tier, modelReady, loading: tierLoading } = useTier();
   useEventToasts();
   const [mobileOpen, setMobileOpen] = useState(false);
