@@ -51,6 +51,8 @@ import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
+import { ExperimentProposalGenerator } from '../self-bench/experiments/experiment-proposal-generator.js';
+import { ExperimentAuthorExperiment } from '../self-bench/experiments/experiment-author.js';
 import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handlers-fuzz.js';
 import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
@@ -1375,6 +1377,20 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // or high-fail-rate shape. First experiment whose probe
         // subjects are discovered at runtime rather than hardcoded.
         experimentRunner.register(new AgentCoverageGapExperiment());
+        // Phase 7-C: ExperimentProposalGenerator reads llm_calls
+        // + the existing ledger every hour and writes
+        // ExperimentBrief rows as findings with
+        // category='experiment_proposal'. The briefs sit in the
+        // ledger until Phase 7-D picks them up and authors the
+        // corresponding code autonomously.
+        experimentRunner.register(new ExperimentProposalGenerator());
+        // Phase 7-D: ExperimentAuthorExperiment is the terminal
+        // slice of autonomous code authoring. Reads unclaimed
+        // proposals, runs fillExperimentTemplate, calls
+        // safeSelfCommit which path-restricts + gates + commits.
+        // Gated behind ~/.ohwow/self-commit-enabled — production
+        // stays closed until the operator opts in.
+        experimentRunner.register(new ExperimentAuthorExperiment());
         // E4/E5/E6 flaw-hunt audits wrapped as scheduled experiments.
         // All three are read-only: the fuzz watches for hidden
         // list-handler truncation, the schema-drift audit AST-walks
