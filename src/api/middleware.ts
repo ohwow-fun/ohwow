@@ -46,6 +46,15 @@ export function createAuthMiddleware(
   }
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // Public capability-probe endpoints — return only service reachability,
+    // no workspace data. Web UI polls these on load to decide whether to
+    // offer voice controls, so requiring auth just floods the console with
+    // 401s while the user is still on the login screen or signed out.
+    if (req.path === '/api/voice/providers' || req.path === '/api/voice/health') {
+      next();
+      return;
+    }
+
     // Check peer token (X-Peer-Token header for workspace-to-workspace calls)
     const peerToken = req.headers['x-peer-token'] as string | undefined;
     if (peerToken && db) {
