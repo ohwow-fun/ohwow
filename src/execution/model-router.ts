@@ -16,6 +16,7 @@ import { ClaudeCodeProvider } from './providers/claude-code-provider.js';
 import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import { MLXProvider } from './providers/mlx-provider.js';
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider.js';
+import { linkRequestSignal, abortPromise } from '../lib/with-timeout.js';
 import type {
   TextBlock,
   MessageParam,
@@ -1233,12 +1234,29 @@ export class OpenRouterProvider implements ModelProvider {
     }
 
     const startTime = Date.now();
+    // Bug #7: link the caller's per-iteration signal to fetch + install a
+    // streaming idle watchdog. Without this, reasoning-only models
+    // (e.g. xiaomi/mimo-v2-pro emitting delta.reasoning but no delta.content)
+    // consume bytes forever without yielding, and the outer for-await never
+    // sees progress. `AbortSignal.any` does not reliably propagate to
+    // in-flight reader.read() in Node's fetch, so we also race reads against
+    // the signal directly via abortPromise().
+    const link = linkRequestSignal(params.signal, 120_000);
+    const STREAM_IDLE_MS = 60_000;
+    let idleTimer: NodeJS.Timeout | null = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        link.controller.abort(new Error(`OpenRouter stream idle for ${STREAM_IDLE_MS / 1000}s`));
+      }, STREAM_IDLE_MS);
+    };
+
     let response: Response;
     try {
       response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
+        signal: link.signal,
         body: JSON.stringify({
           model,
           messages,
@@ -1250,18 +1268,11 @@ export class OpenRouterProvider implements ModelProvider {
         }),
       });
     } catch (err) {
+      if (idleTimer) clearTimeout(idleTimer);
+      link.dispose();
       this._available = null;
       this._availableCheckedAt = 0;
       throw err;
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`OpenRouter streaming request failed (${response.status}): ${text.slice(0, 200)}`);
-    }
-
-    if (!response.body) {
-      throw new Error('OpenRouter streaming response has no body');
     }
 
     let fullContent = '';
@@ -1269,106 +1280,126 @@ export class OpenRouterProvider implements ModelProvider {
     const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
     let hasToolCalls = false;
 
-    // Parse SSE stream (identical format to OpenAI chat/completions)
-    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`OpenRouter streaming request failed (${response.status}): ${text.slice(0, 200)}`);
+      }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+      if (!response.body) {
+        throw new Error('OpenRouter streaming response has no body');
+      }
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (data === '[DONE]') continue;
+      resetIdle();
 
-          try {
-            const chunk = JSON.parse(data) as {
-              choices?: Array<{
-                delta?: {
-                  content?: string;
-                  tool_calls?: Array<{
-                    index: number;
-                    id?: string;
-                    function?: { name?: string; arguments?: string };
-                  }>;
-                };
-              }>;
-              usage?: { prompt_tokens: number; completion_tokens: number };
-            };
+      // Parse SSE stream (identical format to OpenAI chat/completions)
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const abortRace = abortPromise(link.signal);
 
-            const delta = chunk.choices?.[0]?.delta;
+      try {
+        while (true) {
+          const readPromise = reader.read();
+          const { done, value } = await Promise.race([readPromise, abortRace.promise]);
+          if (done) break;
+          resetIdle();
 
-            if (delta?.content && !hasToolCalls) {
-              fullContent += delta.content;
-              yield { type: 'token', content: delta.content };
-            } else if (delta?.content) {
-              fullContent += delta.content;
-            }
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-            if (delta?.tool_calls) {
-              hasToolCalls = true;
-              for (const tc of delta.tool_calls) {
-                const existing = toolCallAccum.get(tc.index);
-                if (existing) {
-                  if (tc.function?.name) existing.name += tc.function.name;
-                  if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-                } else {
-                  toolCallAccum.set(tc.index, {
-                    id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                    name: tc.function?.name || '',
-                    arguments: tc.function?.arguments || '',
-                  });
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]') continue;
+
+            try {
+              const chunk = JSON.parse(data) as {
+                choices?: Array<{
+                  delta?: {
+                    content?: string;
+                    tool_calls?: Array<{
+                      index: number;
+                      id?: string;
+                      function?: { name?: string; arguments?: string };
+                    }>;
+                  };
+                }>;
+                usage?: { prompt_tokens: number; completion_tokens: number };
+              };
+
+              const delta = chunk.choices?.[0]?.delta;
+
+              if (delta?.content && !hasToolCalls) {
+                fullContent += delta.content;
+                yield { type: 'token', content: delta.content };
+              } else if (delta?.content) {
+                fullContent += delta.content;
+              }
+
+              if (delta?.tool_calls) {
+                hasToolCalls = true;
+                for (const tc of delta.tool_calls) {
+                  const existing = toolCallAccum.get(tc.index);
+                  if (existing) {
+                    if (tc.function?.name) existing.name += tc.function.name;
+                    if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+                  } else {
+                    toolCallAccum.set(tc.index, {
+                      id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                      name: tc.function?.name || '',
+                      arguments: tc.function?.arguments || '',
+                    });
+                  }
                 }
               }
-            }
 
-            if (chunk.usage) {
-              usage = chunk.usage;
+              if (chunk.usage) {
+                usage = chunk.usage;
+              }
+            } catch {
+              // Skip malformed SSE chunks
             }
-          } catch {
-            // Skip malformed SSE chunks
           }
         }
+      } finally {
+        abortRace.detach();
+        try { reader.releaseLock(); } catch { /* */ }
       }
+
+      const _durationMs = Date.now() - startTime;
+
+      // Extract actual cost from OpenRouter response header
+      const openrouterCostHeader = response.headers.get('x-openrouter-cost');
+      const costCents = openrouterCostHeader
+        ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+        : undefined;
+
+      const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
+        .filter(tc => tc.name)
+        .map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: tc.arguments || '{}',
+          },
+        }));
+
+      return {
+        content: fullContent,
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        model,
+        provider: 'openrouter',
+        costCents,
+        toolCalls,
+      };
     } finally {
-      reader.releaseLock();
+      if (idleTimer) clearTimeout(idleTimer);
+      link.dispose();
     }
-
-    const _durationMs = Date.now() - startTime;
-
-    // Extract actual cost from OpenRouter response header
-    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
-    const costCents = openrouterCostHeader
-      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
-      : undefined;
-
-    const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
-      .filter(tc => tc.name)
-      .map(tc => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: {
-          name: tc.name,
-          arguments: tc.arguments || '{}',
-        },
-      }));
-
-    return {
-      content: fullContent,
-      inputTokens: usage.prompt_tokens,
-      outputTokens: usage.completion_tokens,
-      model,
-      provider: 'openrouter',
-      costCents,
-      toolCalls,
-    };
   }
 
   async isAvailable(): Promise<boolean> {

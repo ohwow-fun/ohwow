@@ -17,9 +17,19 @@ import type {
   OpenAIToolCall,
   MessageContentPart,
 } from '../model-router.js';
+import { linkRequestSignal, abortPromise } from '../../lib/with-timeout.js';
 
 const AVAILABILITY_TTL_OK_MS = 30_000;
 const AVAILABILITY_TTL_FAIL_MS = 5_000;
+
+// Defaults for the request-level deadline and the streaming idle watchdog.
+// REQUEST_DEADLINE_MS acts as a floor: even without an external signal, a
+// hung upstream can't pin the request forever. STREAM_IDLE_MS aborts the
+// request if no bytes arrive on the SSE stream within the window, which
+// catches "reasoning-only" providers that consume bytes but never emit a
+// delta we yield. Bug #7.
+const REQUEST_DEADLINE_MS = 120_000;
+const STREAM_IDLE_MS = 60_000;
 
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = 'openai-compatible';
@@ -60,12 +70,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
 
     const startTime = Date.now();
+    const link = linkRequestSignal(params.signal, REQUEST_DEADLINE_MS);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: link.signal,
         body: JSON.stringify({
           model,
           messages,
@@ -75,35 +86,40 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }),
       });
     } catch (err) {
+      link.dispose();
       this._available = null;
       this._availableCheckedAt = 0;
       throw err;
     }
 
-    if (!response.ok) {
-      await this.throwServerError(response);
+    try {
+      if (!response.ok) {
+        await this.throwServerError(response);
+      }
+
+      const data = await response.json() as {
+        choices: Array<{ message: { content: string } }>;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
+
+      const content = data.choices?.[0]?.message?.content || '';
+      const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+      const durationMs = Date.now() - startTime;
+
+      if (this._responseCallback) {
+        try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+      }
+
+      return {
+        content,
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        model,
+        provider: 'openai-compatible',
+      };
+    } finally {
+      link.dispose();
     }
-
-    const data = await response.json() as {
-      choices: Array<{ message: { content: string } }>;
-      usage?: { prompt_tokens: number; completion_tokens: number };
-    };
-
-    const content = data.choices?.[0]?.message?.content || '';
-    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
-    const durationMs = Date.now() - startTime;
-
-    if (this._responseCallback) {
-      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
-    }
-
-    return {
-      content,
-      inputTokens: usage.prompt_tokens,
-      outputTokens: usage.completion_tokens,
-      model,
-      provider: 'openai-compatible',
-    };
   }
 
   async createMessageWithTools(params: CreateMessageParams & {
@@ -129,12 +145,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
 
     const startTime = Date.now();
+    const link = linkRequestSignal(params.signal, REQUEST_DEADLINE_MS);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: link.signal,
         body: JSON.stringify({
           model,
           messages,
@@ -146,57 +163,62 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }),
       });
     } catch (err) {
+      link.dispose();
       this._available = null;
       this._availableCheckedAt = 0;
       throw err;
     }
 
-    if (!response.ok) {
-      await this.throwServerError(response);
+    try {
+      if (!response.ok) {
+        await this.throwServerError(response);
+      }
+
+      const data = await response.json() as {
+        choices: Array<{
+          message: {
+            content: string | null;
+            tool_calls?: Array<{
+              id?: string;
+              type: 'function';
+              function: { name: string; arguments: string };
+            }>;
+          };
+        }>;
+        usage?: { prompt_tokens: number; completion_tokens: number };
+      };
+
+      const choice = data.choices?.[0];
+      const content = choice?.message?.content || '';
+      const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
+      const durationMs = Date.now() - startTime;
+
+      if (this._responseCallback) {
+        try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+      }
+
+      const toolCalls: OpenAIToolCall[] = (choice?.message?.tool_calls || [])
+        .filter((tc) => tc.function && typeof tc.function.name === 'string')
+        .map((tc, i) => ({
+          id: tc.id || `call_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          type: 'function' as const,
+          function: {
+            name: tc.function.name,
+            arguments: tc.function.arguments ?? '{}',
+          },
+        }));
+
+      return {
+        content,
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        model,
+        provider: 'openai-compatible',
+        toolCalls,
+      };
+    } finally {
+      link.dispose();
     }
-
-    const data = await response.json() as {
-      choices: Array<{
-        message: {
-          content: string | null;
-          tool_calls?: Array<{
-            id?: string;
-            type: 'function';
-            function: { name: string; arguments: string };
-          }>;
-        };
-      }>;
-      usage?: { prompt_tokens: number; completion_tokens: number };
-    };
-
-    const choice = data.choices?.[0];
-    const content = choice?.message?.content || '';
-    const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
-    const durationMs = Date.now() - startTime;
-
-    if (this._responseCallback) {
-      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
-    }
-
-    const toolCalls: OpenAIToolCall[] = (choice?.message?.tool_calls || [])
-      .filter((tc) => tc.function && typeof tc.function.name === 'string')
-      .map((tc, i) => ({
-        id: tc.id || `call_${i}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        type: 'function' as const,
-        function: {
-          name: tc.function.name,
-          arguments: tc.function.arguments ?? '{}',
-        },
-      }));
-
-    return {
-      content,
-      inputTokens: usage.prompt_tokens,
-      outputTokens: usage.completion_tokens,
-      model,
-      provider: 'openai-compatible',
-      toolCalls,
-    };
   }
 
   async *createMessageStreaming(params: CreateMessageParams): AsyncGenerator<{ type: 'token'; content: string }, ModelResponse> {
@@ -211,12 +233,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
 
     const startTime = Date.now();
+    const link = linkRequestSignal(params.signal, REQUEST_DEADLINE_MS);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: link.signal,
         body: JSON.stringify({
           model,
           messages,
@@ -226,40 +249,55 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }),
       });
     } catch (err) {
+      link.dispose();
       this._available = null;
       this._availableCheckedAt = 0;
       throw err;
     }
 
-    if (!response.ok) {
-      await this.throwServerError(response);
-    }
+    let idleTimer: NodeJS.Timeout | null = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        link.controller.abort(new Error(`openai-compatible stream idle for ${STREAM_IDLE_MS / 1000}s`));
+      }, STREAM_IDLE_MS);
+    };
+    resetIdle();
 
     let fullContent = '';
     let usage = { prompt_tokens: 0, completion_tokens: 0 };
 
-    for await (const chunk of this.parseStream(response)) {
-      if (chunk.content) {
-        fullContent += chunk.content;
-        yield { type: 'token', content: chunk.content };
+    try {
+      if (!response.ok) {
+        await this.throwServerError(response);
       }
-      if (chunk.usage) {
-        usage = chunk.usage;
+
+      for await (const chunk of this.parseStream(response, resetIdle, link.signal)) {
+        if (chunk.content) {
+          fullContent += chunk.content;
+          yield { type: 'token', content: chunk.content };
+        }
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
       }
-    }
 
-    const durationMs = Date.now() - startTime;
-    if (this._responseCallback) {
-      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
-    }
+      const durationMs = Date.now() - startTime;
+      if (this._responseCallback) {
+        try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
+      }
 
-    return {
-      content: fullContent,
-      inputTokens: usage.prompt_tokens,
-      outputTokens: usage.completion_tokens,
-      model,
-      provider: 'openai-compatible',
-    };
+      return {
+        content: fullContent,
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        model,
+        provider: 'openai-compatible',
+      };
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      link.dispose();
+    }
   }
 
   async *createMessageWithToolsStreaming(params: CreateMessageParams & {
@@ -285,12 +323,13 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
 
     const startTime = Date.now();
+    const link = linkRequestSignal(params.signal, REQUEST_DEADLINE_MS);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: link.signal,
         body: JSON.stringify({
           model,
           messages,
@@ -302,72 +341,87 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }),
       });
     } catch (err) {
+      link.dispose();
       this._available = null;
       this._availableCheckedAt = 0;
       throw err;
     }
 
-    if (!response.ok) {
-      await this.throwServerError(response);
-    }
+    let idleTimer: NodeJS.Timeout | null = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        link.controller.abort(new Error(`openai-compatible stream idle for ${STREAM_IDLE_MS / 1000}s`));
+      }, STREAM_IDLE_MS);
+    };
+    resetIdle();
 
     let fullContent = '';
     let usage = { prompt_tokens: 0, completion_tokens: 0 };
     const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
     let hasToolCalls = false;
 
-    for await (const chunk of this.parseStream(response)) {
-      if (chunk.content && !hasToolCalls) {
-        fullContent += chunk.content;
-        yield { type: 'token', content: chunk.content };
-      } else if (chunk.content) {
-        fullContent += chunk.content;
+    try {
+      if (!response.ok) {
+        await this.throwServerError(response);
       }
-      if (chunk.toolCalls) {
-        hasToolCalls = true;
-        for (const tc of chunk.toolCalls) {
-          const existing = toolCallAccum.get(tc.index);
-          if (existing) {
-            if (tc.name) existing.name += tc.name;
-            if (tc.arguments) existing.arguments += tc.arguments;
-          } else {
-            toolCallAccum.set(tc.index, {
-              id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-              name: tc.name || '',
-              arguments: tc.arguments || '',
-            });
+
+      for await (const chunk of this.parseStream(response, resetIdle, link.signal)) {
+        if (chunk.content && !hasToolCalls) {
+          fullContent += chunk.content;
+          yield { type: 'token', content: chunk.content };
+        } else if (chunk.content) {
+          fullContent += chunk.content;
+        }
+        if (chunk.toolCalls) {
+          hasToolCalls = true;
+          for (const tc of chunk.toolCalls) {
+            const existing = toolCallAccum.get(tc.index);
+            if (existing) {
+              if (tc.name) existing.name += tc.name;
+              if (tc.arguments) existing.arguments += tc.arguments;
+            } else {
+              toolCallAccum.set(tc.index, {
+                id: tc.id || `call_${tc.index}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                name: tc.name || '',
+                arguments: tc.arguments || '',
+              });
+            }
           }
         }
+        if (chunk.usage) {
+          usage = chunk.usage;
+        }
       }
-      if (chunk.usage) {
-        usage = chunk.usage;
+
+      const durationMs = Date.now() - startTime;
+      if (this._responseCallback) {
+        try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
       }
+
+      const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
+        .filter(tc => tc.name)
+        .map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: {
+            name: tc.name,
+            arguments: tc.arguments || '{}',
+          },
+        }));
+
+      return {
+        content: fullContent,
+        inputTokens: usage.prompt_tokens,
+        outputTokens: usage.completion_tokens,
+        model,
+        provider: 'openai-compatible',
+        toolCalls,
+      };
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      link.dispose();
     }
-
-    const durationMs = Date.now() - startTime;
-    if (this._responseCallback) {
-      try { this._responseCallback(model, usage.prompt_tokens, usage.completion_tokens, durationMs); } catch { /* */ }
-    }
-
-    const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
-      .filter(tc => tc.name)
-      .map(tc => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: {
-          name: tc.name,
-          arguments: tc.arguments || '{}',
-        },
-      }));
-
-    return {
-      content: fullContent,
-      inputTokens: usage.prompt_tokens,
-      outputTokens: usage.completion_tokens,
-      model,
-      provider: 'openai-compatible',
-      toolCalls,
-    };
   }
 
   async isAvailable(): Promise<boolean> {
@@ -412,7 +466,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
     throw new Error(`OpenAI-compatible server request failed (${response.status}): ${text}`);
   }
 
-  private async *parseStream(response: Response): AsyncGenerator<{
+  private async *parseStream(
+    response: Response,
+    onProgress?: () => void,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{
     content?: string;
     toolCalls?: Array<{ index: number; id?: string; name?: string; arguments?: string }>;
     usage?: { prompt_tokens: number; completion_tokens: number };
@@ -423,10 +481,21 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // Race reader.read() against the external abort signal. Without this,
+    // a hung upstream (e.g. a reasoning model emitting only delta.reasoning
+    // chunks that the parser doesn't yield) pins the for-await iterator
+    // forever, because Node's fetch AbortSignal propagation to in-flight
+    // body reads is not always reliable. Bug #7.
+    const abortRace = signal ? abortPromise(signal) : null;
+
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const readPromise = reader.read();
+        const { done, value } = abortRace
+          ? await Promise.race([readPromise, abortRace.promise])
+          : await readPromise;
         if (done) break;
+        if (onProgress) onProgress();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -485,7 +554,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
         }
       }
     } finally {
-      reader.releaseLock();
+      if (abortRace) abortRace.detach();
+      try { reader.releaseLock(); } catch { /* */ }
     }
   }
 
