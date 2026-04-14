@@ -74,6 +74,7 @@ import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { logger } from '../lib/logger.js';
 import { runInvariantsForPaths } from './patch-invariants.js';
+import { diffTopLevelSymbols, changedSymbolCount } from './patch-ast-bounds.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -375,14 +376,27 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     }
   }
 
-  // 2. New-file-only check (exempts MODIFY_ALLOWED_EXACT_PATHS)
+  // 2. New-file-only check (exempts MODIFY_ALLOWED_EXACT_PATHS).
+  //    Also snapshots pre-write bytes for modify paths so Layer 4's
+  //    AST gate can diff against them after the write.
   const absPaths: string[] = [];
+  const preWriteSnapshots = new Map<string, string>();
   for (const f of opts.files) {
     const abs = path.join(repoRoot, f.path);
     const normalized = path.normalize(f.path).replace(/\\/g, '/');
     const modifyOk = MODIFY_ALLOWED_EXACT_PATHS.has(normalized);
-    if (!modifyOk && fs.existsSync(abs)) {
-      return { ok: false, reason: `target already exists: ${f.path}` };
+    if (fs.existsSync(abs)) {
+      if (!modifyOk) {
+        return { ok: false, reason: `target already exists: ${f.path}` };
+      }
+      try {
+        preWriteSnapshots.set(normalized, fs.readFileSync(abs, 'utf-8'));
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `could not snapshot pre-write state for ${f.path}: ${extractErrorSummary(err)}`,
+        };
+      }
     }
     absPaths.push(abs);
   }
@@ -395,8 +409,29 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
       fs.writeFileSync(abs, opts.files[i].content, 'utf-8');
     }
   } catch (err) {
-    rollbackFiles(absPaths);
+    rollbackFiles(absPaths, preWriteSnapshots, opts.files);
     return { ok: false, reason: `write failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+
+  // 3b. Layer 4 — AST-bounded patch surface. For every path that
+  //     pre-existed (i.e. a modify, not a create), the diff between
+  //     pre-write bytes and the new content must touch at most one
+  //     top-level symbol. Creates are unaffected — a new file has no
+  //     "prior" AST to compare against.
+  for (const f of opts.files) {
+    const normalized = path.normalize(f.path).replace(/\\/g, '/');
+    const prior = preWriteSnapshots.get(normalized);
+    if (prior === undefined) continue;
+    const diff = diffTopLevelSymbols(prior, f.content);
+    const touched = changedSymbolCount(diff);
+    if (touched > 1) {
+      const names = [...diff.added, ...diff.removed, ...diff.modified];
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
+      return {
+        ok: false,
+        reason: `AST-bounded patch surface: ${f.path} modifies ${touched} top-level symbols (${names.join(', ')}); autonomous modifies are limited to 1`,
+      };
+    }
   }
 
   // 4. Gates (typecheck + vitest on the new test files)
@@ -404,7 +439,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     try {
       runInRepo('npm run typecheck', repoRoot, { timeoutMs: 180_000 });
     } catch (err) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: `typecheck gate failed: ${extractErrorSummary(err)}` };
     }
 
@@ -416,7 +451,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
         const cmd = `npx vitest run ${testFiles.map((t) => `"${t}"`).join(' ')}`;
         runInRepo(cmd, repoRoot, { timeoutMs: 120_000 });
       } catch (err) {
-        rollbackFiles(absPaths);
+        rollbackFiles(absPaths, preWriteSnapshots, opts.files);
         return { ok: false, reason: `vitest gate failed: ${extractErrorSummary(err)}` };
       }
     }
@@ -433,7 +468,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     opts.files.map((f) => f.path),
   );
   if (!invariantResult.ok) {
-    rollbackFiles(absPaths);
+    rollbackFiles(absPaths, preWriteSnapshots, opts.files);
     return { ok: false, reason: invariantResult.reason };
   }
 
@@ -443,26 +478,26 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   //     it mandatory for code patches outside the experiments dir.
   if (opts.fixesFindingId !== undefined) {
     if (typeof opts.fixesFindingId !== 'string' || opts.fixesFindingId.length === 0) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: 'fixesFindingId must be a non-empty string when set' };
     }
     if (typeof opts.findingResolver !== 'function') {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: 'findingResolver is required when fixesFindingId is set' };
     }
     let finding: FindingLookup | null;
     try {
       finding = await opts.findingResolver(opts.fixesFindingId);
     } catch (err) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: `findingResolver threw: ${extractErrorSummary(err)}` };
     }
     if (!finding) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: `fixesFindingId ${opts.fixesFindingId} not found` };
     }
     if (finding.verdict !== 'warning' && finding.verdict !== 'fail') {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return {
         ok: false,
         reason: `finding ${opts.fixesFindingId} has verdict '${finding.verdict}' — only 'warning' or 'fail' can justify a patch`,
@@ -470,12 +505,12 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     }
     const ranAtMs = Date.parse(finding.ranAt);
     if (!Number.isFinite(ranAtMs)) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return { ok: false, reason: `finding ${opts.fixesFindingId} has unparseable ranAt '${finding.ranAt}'` };
     }
     const ageMs = Date.now() - ranAtMs;
     if (ageMs > FINDING_MAX_AGE_MS) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return {
         ok: false,
         reason: `finding ${opts.fixesFindingId} is stale (${Math.round(ageMs / (24 * 60 * 60 * 1000))}d old, max 7d) — re-run the probe before patching`,
@@ -487,7 +522,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     );
     const intersect = affected.some((p) => patched.has(p));
     if (!intersect) {
-      rollbackFiles(absPaths);
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
       return {
         ok: false,
         reason: `finding ${opts.fixesFindingId} affected_files [${affected.join(', ')}] does not intersect patched files [${[...patched].join(', ')}]`,
@@ -510,7 +545,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
       fixes_finding_id: opts.fixesFindingId ?? null,
     });
   } catch (err) {
-    rollbackFiles(absPaths);
+    rollbackFiles(absPaths, preWriteSnapshots, opts.files);
     return { ok: false, reason: `audit log write failed: ${extractErrorSummary(err)}` };
   }
 
@@ -565,7 +600,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     try {
       runInRepo(`git reset HEAD -- ${fileArgs}`, repoRoot);
     } catch { /* best effort */ }
-    rollbackFiles(absPaths);
+    rollbackFiles(absPaths, preWriteSnapshots, opts.files);
     return { ok: false, reason: `git commit failed: ${extractErrorSummary(err)}` };
   }
 
@@ -599,10 +634,29 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   };
 }
 
-function rollbackFiles(absPaths: string[]): void {
-  for (const abs of absPaths) {
+/**
+ * Undo what safeSelfCommit wrote to disk. For files that existed
+ * before the write (modify paths), restore the captured pre-write
+ * bytes. For files that didn't exist (creates), unlink. Best-effort
+ * per file — a restore failure is logged nowhere and swallowed; the
+ * caller has already decided to refuse and rollback is cleanup, not
+ * load-bearing.
+ */
+function rollbackFiles(
+  absPaths: string[],
+  preWriteSnapshots: Map<string, string>,
+  files: readonly SelfCommitFile[],
+): void {
+  for (let i = 0; i < absPaths.length; i++) {
+    const abs = absPaths[i];
+    const normalized = path.normalize(files[i].path).replace(/\\/g, '/');
+    const prior = preWriteSnapshots.get(normalized);
     try {
-      if (fs.existsSync(abs)) fs.unlinkSync(abs);
+      if (prior !== undefined) {
+        fs.writeFileSync(abs, prior, 'utf-8');
+      } else if (fs.existsSync(abs)) {
+        fs.unlinkSync(abs);
+      }
     } catch { /* best effort */ }
   }
 }

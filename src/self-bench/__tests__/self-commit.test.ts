@@ -360,6 +360,71 @@ describe('safeSelfCommit — git state', () => {
   });
 });
 
+describe('safeSelfCommit — Layer 4 AST-bounded patch surface', () => {
+  const REGISTRY = 'src/self-bench/registries/toolchain-test-registry.ts';
+
+  it('allows a one-symbol modify (registry row append)', async () => {
+    fs.mkdirSync(path.join(tempRoot, 'src/self-bench/registries'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, REGISTRY),
+      `export const R = [ { slug: 'a' } ];\n`,
+    );
+    execSync(`git add ${REGISTRY} && git commit -m "seed"`, { cwd: tempRoot, stdio: 'pipe' });
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: REGISTRY,
+        content: `export const R = [ { slug: 'a' }, { slug: 'b' } ];\n`,
+      }],
+      commitMessage: 'feat(self-bench): layer-4 one-symbol-modify happy path check',
+      experimentId: 'l4-writer',
+    }));
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a modify that touches two top-level symbols', async () => {
+    fs.mkdirSync(path.join(tempRoot, 'src/self-bench/registries'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, REGISTRY),
+      `export const R = [ { slug: 'a' } ];\n`,
+    );
+    execSync(`git add ${REGISTRY} && git commit -m "seed"`, { cwd: tempRoot, stdio: 'pipe' });
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: REGISTRY,
+        content:
+          `import type { T } from './t.js';\n` +
+          `export const R = [ { slug: 'a' }, { slug: 'b' } ];\n`,
+      }],
+      commitMessage: 'feat(self-bench): layer-4 two-symbol modify must be refused',
+      experimentId: 'l4-writer',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('AST-bounded patch surface');
+    expect(result.reason).toContain('2 top-level symbols');
+
+    // Pre-write bytes restored on rollback
+    const after = fs.readFileSync(path.join(tempRoot, REGISTRY), 'utf-8');
+    expect(after).toBe(`export const R = [ { slug: 'a' } ];\n`);
+  });
+
+  it('does not apply to new-file creates (no prior AST to diff)', async () => {
+    // A fresh experiment file can have as many declarations as it
+    // needs — Layer 4 only gates modifies.
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/experiments/multi-symbol-new.ts',
+        content:
+          `export const a = 1;\nexport const b = 2;\nexport function c() { return 3; }\n`,
+      }],
+      commitMessage: 'feat(self-bench): layer-4 creates-are-unbounded regression guard',
+      experimentId: 'l4-writer',
+    }));
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('safeSelfCommit — Layer 3 invariant suite', () => {
   it('refuses a patched experiment that imports from orchestrator/', async () => {
     const result = await safeSelfCommit(baseOpts({
