@@ -60,6 +60,7 @@ import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
 import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
 import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/autonomous-author-quality.js';
+import { AutonomousPatchRollbackExperiment } from '../self-bench/experiments/autonomous-patch-rollback.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1426,6 +1427,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // as evidence so the operator can decide whether to widen the
         // patch allowlist or throttle the author back. Pure observer.
         experimentRunner.register(new AutonomousAuthorQualityExperiment());
+        // Layer 5b of the safety floor: cool-off watcher that reads
+        // Fixes-Finding-Id trailers on autonomous commits in the last
+        // 30min and fires git revert + push when the justifying
+        // finding re-fires with verdict=warning|fail on the same
+        // experiment_id + subject after the commit. Intervene is gated
+        // by ~/.ohwow/auto-revert-enabled — without that file the
+        // experiment flags candidates in the ledger but does not
+        // mutate main. Probe is read-only and always safe to run.
+        experimentRunner.register(new AutonomousPatchRollbackExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
