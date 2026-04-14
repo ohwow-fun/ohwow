@@ -128,7 +128,11 @@ export class DeliverableExecutor {
   }
 }
 
-function parseContent(raw: string): Record<string, unknown> {
+function parseContent(raw: unknown): Record<string, unknown> {
+  // The DB adapter sometimes returns TEXT JSON columns already parsed as
+  // objects; handle both shapes so the handler sees a consistent object.
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return {};
   try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
 }
 
