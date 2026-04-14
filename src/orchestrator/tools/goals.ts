@@ -3,10 +3,88 @@
  * list_goals, create_goal, update_goal, link_task_to_goal, link_project_to_goal
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { randomUUID } from 'node:crypto';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { syncResource, hexToUuid, type SyncPayload } from '../../control-plane/sync-resources.js';
 import { logger } from '../../lib/logger.js';
+
+export const GOAL_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_goals',
+    description:
+      'Get all strategic goals with their progress.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', enum: ['active', 'completed', 'paused', 'archived'] },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_goal',
+    description:
+      'Create a new strategic goal. Confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'The goal title' },
+        description: { type: 'string', description: 'Why this goal matters' },
+        target_metric: { type: 'string', description: 'Metric name (e.g., "MRR")' },
+        target_value: { type: 'number', description: 'Target value' },
+        current_value: { type: 'number', description: 'Current value' },
+        unit: { type: 'string', description: 'Unit (e.g., "$", "%")' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high'] },
+        due_date: { type: 'string', description: 'Target date (ISO 8601)' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'update_goal',
+    description:
+      'Update a goal\'s details, status, or metric progress.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        goal_id: { type: 'string', description: 'The goal ID' },
+        title: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'completed', 'paused', 'archived'] },
+        current_value: { type: 'number' },
+        target_value: { type: 'number' },
+        priority: { type: 'string', enum: ['low', 'normal', 'high'] },
+      },
+      required: ['goal_id'],
+    },
+  },
+  {
+    name: 'link_task_to_goal',
+    description:
+      'Link a task to a strategic goal for business context.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'The task ID' },
+        goal_id: { type: 'string', description: 'The goal ID (empty to unlink)' },
+      },
+      required: ['task_id', 'goal_id'],
+    },
+  },
+  {
+    name: 'link_project_to_goal',
+    description:
+      'Link a project to a strategic goal.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        goal_id: { type: 'string', description: 'The goal ID (empty to unlink)' },
+      },
+      required: ['project_id', 'goal_id'],
+    },
+  },
+];
 
 /** Reshape a local agent_workforce_goals row into the cloud sync payload. */
 export function goalSyncPayload(row: Record<string, unknown>): SyncPayload {

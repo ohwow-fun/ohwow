@@ -3,7 +3,80 @@
  * update_project, get_project_board, move_task_column
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const PROJECT_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_projects',
+    description:
+      'Get all projects with their progress.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        status: { type: 'string', enum: ['active', 'completed', 'archived'] },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_project',
+    description:
+      'Create a new project. Confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Project name' },
+        description: { type: 'string', description: 'Optional description' },
+        color: { type: 'string', description: 'Optional hex color' },
+        due_date: { type: 'string', description: 'Optional due date (ISO 8601)' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_project',
+    description:
+      'Update a project\'s details or status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'completed', 'archived'] },
+        color: { type: 'string' },
+        due_date: { type: 'string' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'get_project_board',
+    description:
+      'Get a project\'s Kanban board — tasks grouped by column.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        project_id: { type: 'string', description: 'The project ID' },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'move_task_column',
+    description:
+      'Move a task to a different board column.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        task_id: { type: 'string', description: 'The task ID' },
+        board_column: { type: 'string', enum: ['backlog', 'todo', 'in_progress', 'review', 'done'] },
+      },
+      required: ['task_id', 'board_column'],
+    },
+  },
+];
 
 export async function listProjects(
   ctx: LocalToolContext,

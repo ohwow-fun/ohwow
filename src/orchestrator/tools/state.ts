@@ -14,8 +14,92 @@
  *     reader doesn't trip the same row.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { randomUUID } from 'node:crypto';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const AGENT_STATE_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_agent_state',
+    description:
+      'Read a persistent state value for an agent. State persists across task runs, enabling agents to track counters, progress, or structured data over time.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent whose state to read' },
+        key: { type: 'string', description: 'The state key to retrieve' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'State scope. Default: "agent"' },
+        scope_id: { type: 'string', description: 'Scope ID (goal or schedule ID) when scope is not "agent"' },
+      },
+      required: ['agent_id', 'key'],
+    },
+  },
+  {
+    name: 'set_agent_state',
+    description:
+      'Save a persistent state value for an agent. The value will be available in future task runs. Use for counters, progress tracking, structured data, etc. ' +
+      'Pass ttl_seconds to expire the value automatically (e.g. 3600 for one hour). Keys matching incident_*, *_health_*, temp_*, scratch_* expire after 24h by default.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent whose state to update' },
+        key: { type: 'string', description: 'The state key to store' },
+        value: { description: 'The value to store (string, number, boolean, array, or object)' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'State scope. Default: "agent"' },
+        scope_id: { type: 'string', description: 'Scope ID (goal or schedule ID) when scope is not "agent"' },
+        ttl_seconds: { type: 'number', description: 'Optional expiry. Positive integer = expire after N seconds. 0 or negative = persistent (no expiry). Omit to use the key-shape default.' },
+      },
+      required: ['agent_id', 'key', 'value'],
+    },
+  },
+  {
+    name: 'list_agent_state',
+    description:
+      'List all persistent state keys and values for an agent. Shows what data the agent has stored across task runs.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent whose state to list' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'Filter by scope' },
+        scope_id: { type: 'string', description: 'Filter by scope ID' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'delete_agent_state',
+    description:
+      'Delete a persistent state key for an agent.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent whose state to modify' },
+        key: { type: 'string', description: 'The state key to delete' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'State scope. Default: "agent"' },
+        scope_id: { type: 'string', description: 'Scope ID (goal or schedule ID) when scope is not "agent"' },
+      },
+      required: ['agent_id', 'key'],
+    },
+  },
+  {
+    name: 'clear_agent_state',
+    description:
+      'Bulk-delete state rows by key prefix. Use to purge polluted or stale state ' +
+      '(e.g. clear every incident_* row when an incident is resolved). If agent_id is ' +
+      'omitted, clears across every agent in the workspace. key_prefix is required to ' +
+      'prevent accidental "delete everything."',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        key_prefix: { type: 'string', description: 'Required. Match keys starting with this prefix.' },
+        agent_id: { type: 'string', description: 'Optional. Limit purge to one agent. Omit for workspace-wide.' },
+        scope: { type: 'string', enum: ['agent', 'goal', 'schedule'], description: 'Optional scope filter.' },
+        scope_id: { type: 'string', description: 'Optional scope ID filter.' },
+      },
+      required: ['key_prefix'],
+    },
+  },
+];
 
 interface StateRow {
   id: string;
