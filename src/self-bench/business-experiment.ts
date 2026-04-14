@@ -83,6 +83,18 @@ export interface BusinessExperimentOptions {
    * to run anywhere else.
    */
   allowedWorkspace?: string;
+  /**
+   * Shadow-mode switch. When true, probe and judge still run
+   * normally (so the ledger captures what the experiment *would*
+   * have done), but the public intervene() short-circuits to null
+   * BEFORE delegating to businessIntervene. This means no runtime
+   * config writes, no outbound mutations, no validation enqueue —
+   * the experiment becomes an observer. Use this to dogfood a new
+   * business experiment against the real 'default' workspace
+   * without letting its first real intervention land on production
+   * state until the probe + judge look right in the ledger.
+   */
+  dryRun?: boolean;
 }
 
 /** Minimal goal shape used by business experiments. */
@@ -130,9 +142,11 @@ export abstract class BusinessExperiment implements Experiment {
   abstract cadence: ExperimentCadence;
 
   readonly allowedWorkspace: string;
+  readonly dryRun: boolean;
 
   constructor(opts: BusinessExperimentOptions = {}) {
     this.allowedWorkspace = opts.allowedWorkspace ?? DEFAULT_BUSINESS_WORKSPACE;
+    this.dryRun = opts.dryRun ?? false;
   }
 
   // Subclass hooks. The `business*` names make it obvious at every
@@ -187,6 +201,12 @@ export abstract class BusinessExperiment implements Experiment {
   ): Promise<InterventionApplied | null> {
     if (wasProbeSkipped(result)) return null;
     if (!this.isAllowedWorkspace(ctx)) return null;
+    // Shadow-mode gate. Short-circuit BEFORE delegating so subclasses
+    // cannot accidentally mutate state when dryRun is on. probe + judge
+    // already ran and wrote to the ledger, which is the whole point —
+    // operators can watch what the experiment would have done for
+    // multiple cycles before flipping dryRun off.
+    if (this.dryRun) return null;
     return this.businessIntervene(verdict, result, ctx);
   }
 

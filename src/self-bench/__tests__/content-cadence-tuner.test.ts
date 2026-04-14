@@ -235,6 +235,43 @@ describe('BusinessExperiment — workspace guard (via ContentCadenceTunerExperim
   });
 });
 
+describe('BusinessExperiment — dryRun (shadow mode)', () => {
+  it('lets probe + judge run but short-circuits intervene to null', async () => {
+    const env = buildDb();
+    // Goal behind velocity so a non-dryRun run would widen.
+    seedGoal(env, { current_value: 0, target_value: 14 });
+    const ctx = makeCtx(env);
+    const exp = new ContentCadenceTunerExperiment({ dryRun: true });
+
+    const result = await exp.probe(ctx);
+    // probe still produced real evidence — shadow mode is an
+    // intervene-time gate, not a probe-time gate. The ledger
+    // still captures what the experiment would have done.
+    const ev = result.evidence as { should_widen?: boolean; proposed_cadence?: number };
+    expect(ev.should_widen).toBe(true);
+    expect(ev.proposed_cadence).toBe(2);
+    expect(exp.judge(result, [])).toBe('warning');
+
+    // But the intervention is suppressed — no runtime config write,
+    // no side effect, even though the verdict warranted one.
+    const intervention = await exp.intervene('warning', result, ctx);
+    expect(intervention).toBeNull();
+    expect(currentContentCadence()).toBe(CONTENT_CADENCE_DEFAULT);
+  });
+
+  it('defaults to dryRun=false so existing callsites keep intervening', async () => {
+    const env = buildDb();
+    seedGoal(env, { current_value: 0, target_value: 14 });
+    const ctx = makeCtx(env);
+    const exp = new ContentCadenceTunerExperiment();
+    expect(exp.dryRun).toBe(false);
+
+    const result = await exp.probe(ctx);
+    const intervention = await exp.intervene('warning', result, ctx);
+    expect(intervention).not.toBeNull();
+  });
+});
+
 describe('ContentCadenceTunerExperiment — probe + judge', () => {
   it('passes with reason=no_goal when no matching goal exists', async () => {
     const env = buildDb();
