@@ -13,7 +13,11 @@ import { useState, useCallback } from 'react';
  * fences, inline code, bullet lists, and plain paragraphs.
  */
 function ApprovalBody({ text }: { text: string }) {
-  const lines = text.split('\n');
+  const COLLAPSED_LINES = 12;
+  const allLines = text.split('\n');
+  const canCollapse = allLines.length > COLLAPSED_LINES;
+  const [expanded, setExpanded] = useState(false);
+  const lines = !canCollapse || expanded ? allLines : allLines.slice(0, COLLAPSED_LINES);
   const elements: React.ReactNode[] = [];
   let i = 0;
 
@@ -79,7 +83,19 @@ function ApprovalBody({ text }: { text: string }) {
     i++;
   }
 
-  return <div className="mt-2 space-y-0.5 max-h-48 overflow-y-auto pr-1">{elements}</div>;
+  return (
+    <div className="mt-2 space-y-0.5">
+      {elements}
+      {canCollapse && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[11px] text-neutral-400 hover:text-white transition-colors mt-1"
+        >
+          {expanded ? 'Show less' : `Show ${allLines.length - COLLAPSED_LINES} more lines`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 function inlineFormat(text: string): React.ReactNode {
