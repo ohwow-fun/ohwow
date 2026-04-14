@@ -123,6 +123,19 @@ export async function recordLlmCallTelemetry(
     latencyMs: number;
     success: boolean;
     errorMessage?: string;
+    /**
+     * Number of tool_calls in the model response for this single LLM call.
+     * 0 is a real value (model was offered tools and chose none). Leave
+     * undefined when the call wasn't offered tools at all, so the column
+     * stays NULL and doesn't pollute "tool-call rate" aggregations.
+     */
+    toolCallCount?: number;
+    /**
+     * 'work' when the call site's task input looksLikeToolWork, 'chat' when
+     * it doesn't, undefined when the call site has no task input
+     * (generation, orchestrator chat, ad-hoc /api/llm).
+     */
+    taskShape?: 'work' | 'chat';
   },
 ): Promise<void> {
   try {
@@ -144,6 +157,8 @@ export async function recordLlmCallTelemetry(
       latency_ms: row.latencyMs,
       success: row.success ? 1 : 0,
       error_message: row.errorMessage ?? null,
+      tool_call_count: row.toolCallCount ?? null,
+      task_shape: row.taskShape ?? null,
       created_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -575,7 +590,9 @@ export async function runLlmCall(
         : undefined;
 
     // Fire-and-forget telemetry — the result is returned to the caller
-    // regardless of whether the row lands.
+    // regardless of whether the row lands. toolCallCount is only emitted
+    // when the caller offered tools, so llm_calls aggregations can tell
+    // "model didn't call a tool" apart from "tools weren't offered".
     await recordLlmCallTelemetry(deps, {
       purpose,
       provider: response.provider,
@@ -585,6 +602,7 @@ export async function runLlmCall(
       costCents: response.costCents ?? 0,
       latencyMs,
       success: true,
+      toolCallCount: tools && tools.length > 0 ? (toolCalls?.length ?? 0) : undefined,
     });
 
     return {
