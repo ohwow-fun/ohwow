@@ -329,6 +329,11 @@ export class ContentCadenceScheduler {
       // this dispatch; the prompt already says "just post it". This short-circuits
       // the L<=2 + deliverable → needs_approval routing that was piling up 15+
       // duplicate pending rows per day.
+      //
+      // deferred_action: declare the intended real-world action so
+      // DeliverableExecutor can actually post the tweet once the agent produces
+      // one. Executor defaults to dry-run unless runtime_settings.
+      // deliverable_executor_live is flipped to "true".
       const { data: taskData } = await this.db
         .from('agent_workforce_tasks')
         .insert({
@@ -339,6 +344,7 @@ export class ContentCadenceScheduler {
           status: 'pending',
           priority: 'normal',
           metadata: JSON.stringify({ trust_output: true, dispatcher: 'content_cadence' }),
+          deferred_action: JSON.stringify({ type: 'post_tweet', provider: 'x', params: {} }),
         })
         .select('id')
         .single();

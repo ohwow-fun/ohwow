@@ -260,12 +260,24 @@ export async function finalizeTaskSuccess(
           }
 
           const deliverableType = !deferredAction ? 'document'
+            : deferredAction.type === 'post_tweet' ? 'document'
             : deferredAction.type.toLowerCase().includes('send_email') || deferredAction.type.toLowerCase().includes('gmail') ? 'email'
             : 'other';
 
           const deliverableTitle = !deferredAction ? task.title
             : deferredAction.params?.to ? `${deferredAction.type.replace(/_/g, ' ')} to ${deferredAction.params.to}`
             : `${deferredAction.type.replace(/_/g, ' ')}: ${task.title}`;
+
+          // Build deliverable.content so the executor can find the action
+          // payload. For post_tweet, the agent's cleanContent IS the tweet
+          // text — merge it into params.text. For other action types, trust
+          // whatever params the dispatcher already populated; fall back to
+          // {text: cleanContent} when no deferred_action is present.
+          const contentPayload: Record<string, unknown> = deferredAction
+            ? deferredAction.type === 'post_tweet'
+              ? { ...(deferredAction.params ?? {}), text: cleanContent, action_spec: { type: 'post_tweet' } }
+              : (deferredAction.params ?? {})
+            : { text: cleanContent };
 
           // Explicit ISO-8601 so list_deliverables' since filter can
           // lexicographically compare against .toISOString() values.
@@ -277,9 +289,9 @@ export async function finalizeTaskSuccess(
             task_id: taskId,
             agent_id: agentId,
             deliverable_type: deliverableType,
-            provider: deferredAction?.provider || null,
+            provider: deferredAction?.provider || (deferredAction?.type === 'post_tweet' ? 'x' : null),
             title: deliverableTitle,
-            content: JSON.stringify(deferredAction?.params || { text: cleanContent }),
+            content: JSON.stringify(contentPayload),
             status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
             auto_created: 0,
             created_at: deliverableNow,
@@ -322,6 +334,20 @@ export async function finalizeTaskSuccess(
           }
         } catch (err) {
           logger.error({ err }, '[RuntimeEngine] Auto-deliverable fallback failed');
+        }
+      }
+
+      // Trust-output path: when the dispatcher pre-trusts the output and the
+      // agent produced a deliverable with a known action shape, execute the
+      // action now so status=approved doesn't silently dead-end. Best-effort;
+      // failures are recorded on the deliverable but don't fail the task.
+      if (trustOutput && finalStatus === 'completed' && responseType === 'deliverable') {
+        try {
+          const { DeliverableExecutor } = await import('./deliverable-executor.js');
+          const executor = new DeliverableExecutor(this.db);
+          await executor.executeForTask(taskId);
+        } catch (err) {
+          logger.warn({ err, taskId }, '[RuntimeEngine] trust-output executor failed');
         }
       }
 

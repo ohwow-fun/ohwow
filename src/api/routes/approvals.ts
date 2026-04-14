@@ -7,9 +7,11 @@
 
 import { Router } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { DeliverableExecutor } from '../../execution/deliverable-executor.js';
 
 export function createApprovalsRouter(db: DatabaseAdapter): Router {
   const router = Router();
+  const executor = new DeliverableExecutor(db);
 
   // List tasks needing approval
   router.get('/api/approvals', async (req, res) => {
@@ -113,7 +115,19 @@ export function createApprovalsRouter(db: DatabaseAdapter): Router {
         req.params.id,
       );
 
-      res.json({ data: { id: req.params.id, status: 'approved' } });
+      // Run the real-world action (post tweet, send email, etc.) for any
+      // deliverable this task produced. Defaults to dry-run unless the
+      // workspace has runtime_settings.deliverable_executor_live='true'.
+      // Errors don't fail the HTTP response — the approval already landed;
+      // execution outcome is captured in deliverables.delivery_result.
+      let executionResults: unknown[] = [];
+      try {
+        executionResults = await executor.executeForTask(req.params.id);
+      } catch (err) {
+        executionResults = [{ ok: false, error: err instanceof Error ? err.message : String(err) }];
+      }
+
+      res.json({ data: { id: req.params.id, status: 'approved', execution: executionResults } });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
