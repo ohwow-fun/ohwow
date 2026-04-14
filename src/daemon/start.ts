@@ -49,6 +49,7 @@ import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
+import { ContentCadenceTunerExperiment } from '../self-bench/experiments/content-cadence-tuner.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
 import { ExperimentProposalGenerator } from '../self-bench/experiments/experiment-proposal-generator.js';
@@ -1410,6 +1411,47 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // while an agent can be silently drowning in failed tasks.
         // Per-agent failure-rate watchdog on a 24h rolling window.
         experimentRunner.register(new AgentOutcomesExperiment());
+        // Phase 8-A (shadow mode): ContentCadenceTunerExperiment is
+        // the first BusinessExperiment wired into the live runner.
+        // Gated behind workspaceSlug === 'default' because its probe
+        // anchors to a business goal that only makes sense on the
+        // GTM dogfood workspace, and hardcoded dryRun: true so the
+        // first rollout only writes no-intervention findings until
+        // an operator decides the probe + judge look right. Without
+        // a downstream consumer of content_cadence.posts_per_day,
+        // flipping dryRun off today would produce a "widened →
+        // didn't work → rolled back" cycle on every run — the
+        // shadow-mode ledger is the correct observable instead.
+        //
+        // Env var: OHWOW_CONTENT_CADENCE_TUNER_FAST=1 accelerates
+        // the loop to 5-minute probe cadence + 5-minute validation
+        // delay so a full probe→judge→(skip intervene)→validate
+        // cycle lands in the ledger within minutes instead of a
+        // day. Unset, the tuner inherits its class defaults (6h /
+        // 24h) so nothing shifts in production when this code
+        // merges without the env var being set.
+        if (workspaceSlug === 'default') {
+          const cadenceTuner = new ContentCadenceTunerExperiment({ dryRun: true });
+          const fast = process.env.OHWOW_CONTENT_CADENCE_TUNER_FAST;
+          if (fast === '1' || fast === 'true') {
+            cadenceTuner.cadence = {
+              everyMs: 5 * 60 * 1000,
+              runOnBoot: true,
+              validationDelayMs: 5 * 60 * 1000,
+            };
+          }
+          experimentRunner.register(cadenceTuner);
+          logger.info(
+            {
+              experimentId: cadenceTuner.id,
+              dryRun: cadenceTuner.dryRun,
+              fastCadence: fast === '1' || fast === 'true',
+              everyMs: cadenceTuner.cadence.everyMs,
+              validationDelayMs: cadenceTuner.cadence.validationDelayMs,
+            },
+            '[daemon] content-cadence-tuner registered in shadow mode',
+          );
+        }
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
