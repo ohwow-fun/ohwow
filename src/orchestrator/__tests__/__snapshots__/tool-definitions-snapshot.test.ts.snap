@@ -210,6 +210,7 @@ exports[`tool-definitions snapshot (regression net for refactor) > ORCHESTRATOR_
   "openclaw_remove_skill",
   "openclaw_audit_skill",
   "resync_workspace_to_cloud",
+  "investigate_shell",
 ]
 `;
 
@@ -1205,6 +1206,7 @@ exports[`tool-definitions snapshot (regression net for refactor) > filterToolsBy
   "get_work_patterns",
   "get_workload_balance",
   "github_search",
+  "investigate_shell",
   "list_connectors",
   "list_deliverables",
   "list_member_tasks",
@@ -1969,7 +1971,7 @@ exports[`tool-definitions snapshot (regression net for refactor) > union catalog
 {
   "cosExtension": 47,
   "lsp": 5,
-  "orchestrator": 146,
-  "union": 198,
+  "orchestrator": 147,
+  "union": 199,
 }
 `;

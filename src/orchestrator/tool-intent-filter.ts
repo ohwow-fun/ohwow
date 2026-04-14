@@ -12,7 +12,7 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 export type IntentSection =
   | 'pulse' | 'agents' | 'projects' | 'business' | 'memory' | 'rag'
   | 'vision' | 'filesystem' | 'channels' | 'browser' | 'desktop' | 'project_instructions'
-  | 'dev';
+  | 'dev' | 'investigate';
 
 /**
  * Maps each tool name to the intent sections where it's relevant.
@@ -195,6 +195,15 @@ export const TOOL_SECTION_MAP: Record<string, IntentSection[]> = {
   lsp_go_to_definition: ['dev', 'filesystem'],
   lsp_references: ['dev', 'filesystem'],
   lsp_completions: ['dev', 'filesystem'],
+
+  // investigate_shell → 'investigate' + 'dev'. Mapped into its own
+  // section so only the investigate sub-orchestrator focus (which
+  // includes 'investigate' in its section set) and the dev-tier
+  // workflows see it. The main orchestrator catalog exposes it too
+  // via the 'dev' section, but it's excluded by default from
+  // non-investigate sub-orchestrators because they don't request
+  // 'investigate'.
+  investigate_shell: ['investigate', 'dev'],
 
   // Browser tools → 'browser'
   request_browser: ['browser'],
