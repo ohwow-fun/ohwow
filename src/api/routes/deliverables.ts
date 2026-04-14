@@ -48,15 +48,23 @@ export function createDeliverablesRouter(db: DatabaseAdapter): Router {
   router.get('/api/deliverables', async (req, res) => {
     try {
       const { workspaceId } = req;
-      const { status, type, limit = '50' } = req.query;
+      const { status, type, limit = '50', offset = '0' } = req.query;
 
       const parsedLimit = Math.min(Math.max(parseInt(limit as string, 10) || 50, 1), 200);
+      const parsedOffset = Math.max(0, parseInt(offset as string, 10) || 0);
+
+      let countQuery = db.from('agent_workforce_deliverables')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspaceId);
+      if (status) countQuery = countQuery.eq('status', status as string);
+      if (type) countQuery = countQuery.eq('deliverable_type', type as string);
+      const { count: total } = await countQuery;
 
       let query = db.from('agent_workforce_deliverables')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false })
-        .limit(parsedLimit);
+        .range(parsedOffset, parsedOffset + parsedLimit - 1);
 
       if (status) query = query.eq('status', status as string);
       if (type) query = query.eq('deliverable_type', type as string);
@@ -68,7 +76,7 @@ export function createDeliverablesRouter(db: DatabaseAdapter): Router {
         return;
       }
 
-      res.json({ data: data || [] });
+      res.json({ data: data || [], total: total ?? 0, limit: parsedLimit, offset: parsedOffset });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

@@ -99,11 +99,39 @@ export function TasksPage() {
     }
   };
 
-  const delStatusParam = delFilter === 'all' ? '' : `?status=${delFilter}`;
-  const { data: deliverables, loading: delLoading } = useApi<DeliverableRow[]>(
-    viewMode === 'deliverables' ? `/api/deliverables${delStatusParam}` : null,
-    [wsTick, delFilter, viewMode],
-  );
+  const [deliverables, setDeliverables] = useState<DeliverableRow[] | null>(null);
+  const [delTotal, setDelTotal] = useState(0);
+  const [delLoading, setDelLoading] = useState(false);
+  const [delLoadingMore, setDelLoadingMore] = useState(false);
+
+  const buildDelQuery = useCallback((offset: number) => {
+    const parts = [`limit=${PAGE_SIZE}`, `offset=${offset}`];
+    if (delFilter !== 'all') parts.push(`status=${delFilter}`);
+    return `/api/deliverables?${parts.join('&')}`;
+  }, [delFilter]);
+
+  useEffect(() => {
+    if (viewMode !== 'deliverables') return;
+    let cancelled = false;
+    setDelLoading(true);
+    api<{ data: DeliverableRow[]; total: number }>(buildDelQuery(0))
+      .then(res => { if (!cancelled) { setDeliverables(res.data); setDelTotal(res.total); } })
+      .catch(() => { if (!cancelled) { setDeliverables([]); setDelTotal(0); } })
+      .finally(() => { if (!cancelled) setDelLoading(false); });
+    return () => { cancelled = true; };
+  }, [buildDelQuery, viewMode, wsTick]);
+
+  const loadMoreDeliverables = async () => {
+    if (!deliverables || delLoadingMore || deliverables.length >= delTotal) return;
+    setDelLoadingMore(true);
+    try {
+      const res = await api<{ data: DeliverableRow[]; total: number }>(buildDelQuery(deliverables.length));
+      setDeliverables([...deliverables, ...res.data]);
+      setDelTotal(res.total);
+    } finally {
+      setDelLoadingMore(false);
+    }
+  };
 
   const agentMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -147,9 +175,9 @@ export function TasksPage() {
     <div className="p-6 max-w-4xl">
       <PageHeader
         title="Tasks"
-        subtitle={viewMode === 'tasks' && total > 0
-          ? `${tasks?.length ?? 0} of ${total}${filter === 'all' ? '' : ` ${filter.replace(/_/g, ' ')}`} shown`
-          : 'All agent tasks'}
+        subtitle={viewMode === 'tasks'
+          ? (total > 0 ? `${tasks?.length ?? 0} of ${total}${filter === 'all' ? '' : ` ${filter.replace(/_/g, ' ')}`} shown` : 'All agent tasks')
+          : (delTotal > 0 ? `${deliverables?.length ?? 0} of ${delTotal}${delFilter === 'all' ? '' : ` ${delFilter.replace(/_/g, ' ')}`} shown` : 'Agent deliverables')}
         action={
           <button
             onClick={() => setShowDispatch(!showDispatch)}
@@ -325,6 +353,17 @@ export function TasksPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+          {!delLoading && deliverables && deliverables.length < delTotal && (
+            <div className="flex justify-center mt-4">
+              <button
+                onClick={loadMoreDeliverables}
+                disabled={delLoadingMore}
+                className="px-4 py-2 text-xs text-neutral-300 border border-white/10 rounded-md hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                {delLoadingMore ? 'Loading...' : `Load ${Math.min(PAGE_SIZE, delTotal - deliverables.length)} more`}
+              </button>
             </div>
           )}
         </>
