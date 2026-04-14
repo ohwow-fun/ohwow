@@ -50,6 +50,9 @@ import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
+import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handlers-fuzz.js';
+import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
+import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
 import {
   refreshRuntimeConfigCache,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
@@ -1348,6 +1351,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // the change after 20 minutes, and rolls back automatically
         // if the adjustment didn't help.
         experimentRunner.register(new StaleTaskThresholdTunerExperiment());
+        // E4/E5/E6 flaw-hunt audits wrapped as scheduled experiments.
+        // All three are read-only: the fuzz watches for hidden
+        // list-handler truncation, the schema-drift audit AST-walks
+        // every tool handler against its declared schema, and the
+        // prose-invariant audit re-verifies hand-curated CLAUDE.md +
+        // constant-value claims against the live tree.
+        experimentRunner.register(new ListHandlersFuzzExperiment());
+        experimentRunner.register(new HandlerSchemaDriftExperiment());
+        experimentRunner.register(new ProseInvariantDriftExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
