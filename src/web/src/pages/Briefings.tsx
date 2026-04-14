@@ -33,7 +33,7 @@ export function BriefingsPage() {
   const briefings = useMemo(() => {
     if (!activity) return [];
     return activity.filter(a =>
-      BRIEFING_TYPES.some(t => a.type.toLowerCase().includes(t))
+      BRIEFING_TYPES.some(t => (a.type ?? '').toLowerCase().includes(t))
     );
   }, [activity]);
 
