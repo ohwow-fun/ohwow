@@ -20,7 +20,7 @@ export function createA2ARouter(db: DatabaseAdapter): Router {
         .order('created_at', { ascending: false });
 
       if (error) { res.status(500).json({ error: error.message }); return; }
-      res.json({ connections: data || [] });
+      res.json({ data: data || [] });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

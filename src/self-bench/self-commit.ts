@@ -145,6 +145,16 @@ const ALLOWED_PATH_PREFIXES = [
   // only adds factory lines, never removes them. Listing the exact path
   // (not a prefix) keeps the allowlist tight.
   'src/self-bench/auto-registry.ts',
+  // Layer 1 of the autonomous-fixing safety floor: registries are how
+  // the author expresses "another instance of an existing parameterized
+  // probe class" instead of generating a fresh templated TS file. The
+  // two specific registries below are append-only by convention; each
+  // is also listed in MODIFY_ALLOWED_EXACT_PATHS to widen the
+  // new-file-only default for them. Listed as exact paths (not the
+  // 'src/self-bench/registries/' prefix) so adding a brand-new registry
+  // remains a deliberate human action.
+  'src/self-bench/registries/migration-schema-registry.ts',
+  'src/self-bench/registries/toolchain-test-registry.ts',
 ] as const;
 
 /**
@@ -155,6 +165,8 @@ const ALLOWED_PATH_PREFIXES = [
  */
 const MODIFY_ALLOWED_EXACT_PATHS = new Set([
   'src/self-bench/auto-registry.ts',
+  'src/self-bench/registries/migration-schema-registry.ts',
+  'src/self-bench/registries/toolchain-test-registry.ts',
 ]);
 
 /** Test-only env var that bypasses the kill-switch file check. */

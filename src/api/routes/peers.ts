@@ -190,7 +190,7 @@ export function createPeersRouter(
       }
 
       const peers = ((data || []) as Array<Record<string, unknown>>).map(parsePeerRow);
-      res.json({ peers });
+      res.json({ data: peers });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
