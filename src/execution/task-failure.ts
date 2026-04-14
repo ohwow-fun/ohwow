@@ -23,6 +23,7 @@ import { classifyError, isRetryableFailure } from '../lib/error-classification.j
 import { classifyRootCause } from '../lib/failure-root-cause.js';
 import { detectAndPersistAnomalies } from './anomaly-monitoring.js';
 import { PermissionDeniedError } from './filesystem/index.js';
+import { recordTriggerOutcome } from '../triggers/trigger-watchdog.js';
 import { logger } from '../lib/logger.js';
 
 export interface HandleTaskFailureArgs {
@@ -227,6 +228,10 @@ export async function handleTaskFailure(
     }
   }
 
+  // Trigger watchdog: increment consecutive_failures on the source
+  // trigger if any. No-op for operator-dispatched tasks.
+  void recordTriggerOutcome(this.db, taskId, 'failure');
+
   return {
     success: false,
     taskId,
@@ -333,6 +338,12 @@ async function handlePermissionDenied(
     { taskId, agentId, toolName: details.toolName, attemptedPath: details.attemptedPath },
     '[RuntimeEngine] Task paused on permission request',
   );
+
+  // Trigger watchdog: a paused-for-approval task hasn't succeeded,
+  // so count it as a failure. If the operator approves, the resumed
+  // child task inherits source_trigger_id and will reset the counter
+  // on its own completion.
+  void recordTriggerOutcome(this.db, taskId, 'failure');
 
   return {
     success: false,

@@ -35,6 +35,7 @@ import {
   parseResponseMeta,
   shouldAutoCreateDeliverable,
 } from './response-classifier.js';
+import { recordTriggerOutcome } from '../triggers/trigger-watchdog.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -375,6 +376,19 @@ export async function finalizeTaskSuccess(
       }
 
       this.emit('task:completed', { taskId, agentId, status: finalStatus, tokensUsed: totalTokens, costCents });
+
+      // Trigger watchdog: a 'completed' outcome resets the source
+      // trigger's consecutive_failures counter and stamps
+      // last_succeeded_at. 'needs_approval' counts as a failure from
+      // the trigger's point of view — the automation didn't produce
+      // a clean completion — but if the operator later approves and
+      // the resumed child task completes, that child carries the same
+      // source_trigger_id and will reset the counter.
+      void recordTriggerOutcome(
+        this.db,
+        taskId,
+        finalStatus === 'completed' ? 'success' : 'failure',
+      );
 
       // 7.5 Auto-increment goal progress on successful completion
       // Skip auto-increment if agent explicitly called update_goal_progress

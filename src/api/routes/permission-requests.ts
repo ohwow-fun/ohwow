@@ -259,6 +259,11 @@ export function createPermissionRequestsRouter(
         parent_task_id: taskId,
         resumed_from_task_id: taskId,
         goal_id: row.goal_id ?? null,
+        // Inherit the trigger back-link so a successful resume resets
+        // the watchdog counter. Without this, every permission-paused
+        // cron would keep consecutive_failures incremented even after
+        // the operator approved and the child ran cleanly.
+        source_trigger_id: row.source_trigger_id ?? null,
         created_at: now,
         updated_at: now,
       };

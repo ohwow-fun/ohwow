@@ -39,6 +39,11 @@ export const runAgentDispatcher: ActionDispatcher = {
         input: prompt,
         status: 'pending',
         priority: 'normal',
+        // Back-link for the trigger watchdog. The finalization hooks
+        // read this column and aggregate the outcome into the trigger's
+        // consecutive_failures / last_succeeded_at so silent cron
+        // failures surface as a trigger_stuck activity after N runs.
+        source_trigger_id: trigger.id,
       })
       .select('id')
       .single();
