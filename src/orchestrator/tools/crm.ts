@@ -70,7 +70,7 @@ export const CRM_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'log_contact_event',
     description:
-      'Log an event for a contact (call, email, meeting, note).',
+      'Log an event for a contact (call, email, meeting, note). Supports optional attribution via agent_id and free-form metadata.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -78,6 +78,8 @@ export const CRM_TOOL_DEFINITIONS: Tool[] = [
         event_type: { type: 'string', description: 'Type of event (e.g., call, email, meeting, note)' },
         title: { type: 'string', description: 'Event title' },
         description: { type: 'string', description: 'Event details' },
+        agent_id: { type: 'string', description: 'Optional: attribute the event to a specific agent' },
+        metadata: { type: 'object', description: 'Optional freeform metadata (persisted as JSON)' },
       },
       required: ['contact_id', 'event_type', 'title'],
     },

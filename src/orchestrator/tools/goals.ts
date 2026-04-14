@@ -44,7 +44,7 @@ export const GOAL_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'update_goal',
     description:
-      'Update a goal\'s details, status, or metric progress.',
+      'Update a goal\'s details, status, metric progress, or target date.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -54,6 +54,7 @@ export const GOAL_TOOL_DEFINITIONS: Tool[] = [
         current_value: { type: 'number' },
         target_value: { type: 'number' },
         priority: { type: 'string', enum: ['low', 'normal', 'high'] },
+        due_date: { type: 'string', description: 'Target date (ISO 8601). Empty string clears the date.' },
       },
       required: ['goal_id'],
     },

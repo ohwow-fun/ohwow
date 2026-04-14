@@ -76,12 +76,13 @@ export const TEAM_TOOL_DEFINITIONS: Tool[] = [
   },
   {
     name: 'assign_guide_agent',
-    description: 'Assign a dedicated "chief of staff" guide agent to a team member. If agent_id is omitted, a new Chief of Staff agent is auto-spawned for them. The guide becomes the member\'s always-on AI partner.',
+    description: 'Assign a dedicated "chief of staff" guide agent to a team member. If agent_id is omitted, a new Chief of Staff agent is auto-spawned for them. The guide becomes the member\'s always-on AI partner, and by default becomes the active persona for the current chat session so the next reply comes back in its voice — pass activate_for_session=false to suppress that takeover.',
     input_schema: {
       type: 'object' as const,
       properties: {
         team_member_id: { type: 'string', description: 'Team member id' },
         agent_id: { type: 'string', description: 'Optional: pick an existing agent instead of spawning one' },
+        activate_for_session: { type: 'boolean', description: 'If false, do not auto-install the guide as the active persona for the current chat session. Default true.' },
       },
       required: ['team_member_id'],
     },
