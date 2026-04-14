@@ -60,16 +60,17 @@ export interface ExperimentBrief {
   /** Cadence in milliseconds. */
   everyMs: number;
   /**
-   * Template variant. Phase 7-B shipped only 'model_latency_probe'.
-   * Phase 7-C Rule 2 adds 'migration_schema_probe' — a schema-drift
-   * canary that reads sqlite_master and compares against the table
-   * list parsed out of a specific migration file at generation time.
+   * Template variant. Grows one rule at a time:
+   *   Phase 7-B: 'model_latency_probe'
+   *   Phase 7-C Rule 2: 'migration_schema_probe'
+   *   Phase 7-C Rule 3+4: 'subprocess_health_probe'
    */
-  template: 'model_latency_probe' | 'migration_schema_probe';
+  template: 'model_latency_probe' | 'migration_schema_probe' | 'subprocess_health_probe';
   /** Template-specific parameters. Shape depends on `template`. */
   params:
     | ModelLatencyProbeParams
     | MigrationSchemaProbeParams
+    | SubprocessHealthProbeParams
     | Record<string, unknown>;
 }
 
@@ -108,6 +109,37 @@ export interface MigrationSchemaProbeParams {
   expected_tables: string[];
 }
 
+/**
+ * Parameters for the subprocess_health_probe template. Produced by
+ * the proposal generator's toolchain-singleton rule (Rule 3) and the
+ * missing-tool-test rule (Rule 4). The generated experiment runs the
+ * command in the repo root via execSync, captures exit code and
+ * truncated output, and records a pass/fail finding. Read-only in
+ * practice — allowlisted commands are all non-mutating (typecheck,
+ * lint, test). No DB access needed; the probe is a pure subprocess
+ * health check.
+ */
+export interface SubprocessHealthProbeParams {
+  /**
+   * The shell command to run. Must start with one of the allowed
+   * prefixes so the generated experiment can't be weaponised to run
+   * arbitrary code. Validated by validateBrief.
+   */
+  command: string;
+  /** Short human-readable label, e.g. "TypeScript type checker". */
+  description: string;
+  /**
+   * How many lines of output to keep in the finding evidence.
+   * Truncates both stdout and stderr independently. Range: 5..500.
+   */
+  capture_lines: number;
+  /**
+   * Subprocess timeout in milliseconds. Range: 10_000..600_000 (10s–10m).
+   * Defaults baked in at proposal time: typecheck=180s, tests=300s, lint=120s.
+   */
+  timeout_ms: number;
+}
+
 export interface GeneratedExperimentFiles {
   /** Path of the experiment source file relative to repo root. */
   sourcePath: string;
@@ -118,6 +150,23 @@ export interface GeneratedExperimentFiles {
   /** Contents of the test file. */
   testContent: string;
 }
+
+/**
+ * Commands the subprocess_health_probe template is allowed to run.
+ * Validated at brief-creation time so the generated source can only
+ * ever invoke non-mutating build/check commands. Extend this list
+ * when adding new probe types; never add commands that write files
+ * (build, install) or mutate DB (migrations apply).
+ */
+export const SUBPROCESS_COMMAND_ALLOWLIST: readonly string[] = Object.freeze([
+  'npm run typecheck',
+  'npm run lint',
+  'npm test',
+  'npm run test',
+  'npx tsc',
+  'npx eslint',
+  'npx vitest run',
+]);
 
 /**
  * Convert a slug like "qwen-35b-latency" into a class-safe
@@ -207,6 +256,26 @@ export function validateBrief(brief: ExperimentBrief): string | null {
     return null;
   }
 
+  if (brief.template === 'subprocess_health_probe') {
+    const p = brief.params as SubprocessHealthProbeParams;
+    if (!p.command || typeof p.command !== 'string' || p.command.length > 300) {
+      return 'params.command missing or too long';
+    }
+    if (!SUBPROCESS_COMMAND_ALLOWLIST.some((prefix) => p.command.startsWith(prefix))) {
+      return `params.command must start with one of: ${SUBPROCESS_COMMAND_ALLOWLIST.join(', ')}`;
+    }
+    if (!p.description || typeof p.description !== 'string' || p.description.length > 200) {
+      return 'params.description missing or too long';
+    }
+    if (typeof p.capture_lines !== 'number' || p.capture_lines < 5 || p.capture_lines > 500) {
+      return 'params.capture_lines must be 5..500';
+    }
+    if (typeof p.timeout_ms !== 'number' || p.timeout_ms < 10_000 || p.timeout_ms > 600_000) {
+      return 'params.timeout_ms must be 10000..600000';
+    }
+    return null;
+  }
+
   return `unknown template: ${(brief as { template?: unknown }).template}`;
 }
 
@@ -227,6 +296,10 @@ export function fillExperimentTemplate(brief: ExperimentBrief): GeneratedExperim
 
   if (brief.template === 'migration_schema_probe') {
     return fillMigrationSchemaProbe(brief, brief.params as MigrationSchemaProbeParams);
+  }
+
+  if (brief.template === 'subprocess_health_probe') {
+    return fillSubprocessHealthProbe(brief, brief.params as SubprocessHealthProbeParams);
   }
 
   throw new Error(`unknown template: ${(brief as { template?: unknown }).template}`);
@@ -575,6 +648,244 @@ describe('${className} (auto-generated)', () => {
   });
 });
 `;
+
+  return {
+    sourcePath: `src/self-bench/experiments/${brief.slug}.ts`,
+    sourceContent,
+    testPath: `src/self-bench/__tests__/${brief.slug}.test.ts`,
+    testContent,
+  };
+}
+
+function fillSubprocessHealthProbe(
+  brief: ExperimentBrief,
+  params: SubprocessHealthProbeParams,
+): GeneratedExperimentFiles {
+  const className = slugToClassName(brief.slug);
+  const experimentId = brief.slug;
+  const subjectLiteral = tsString(`subprocess:${brief.slug}`);
+  const halfLines = Math.max(3, Math.floor(params.capture_lines / 2));
+
+  // These are values baked into the generated source at generation time.
+  const cmdLiteral = tsString(params.command);
+  const descStr = params.description.replace(/`/g, '\\`');
+  const timeoutMs = params.timeout_ms;
+  const everyMs = brief.everyMs;
+  const hypLiteral = tsString(brief.hypothesis);
+  const nameLiteral = tsString(brief.name);
+  const idLiteral = tsString(experimentId);
+
+  const sourceContent = [
+    `/**`,
+    ` * ${brief.name}`,
+    ` *`,
+    ` * AUTO-GENERATED by Phase 7-D ExperimentAuthorExperiment from a`,
+    ` * brief in self_findings with category='experiment_proposal'.`,
+    ` *`,
+    ` * Hypothesis: ${brief.hypothesis}`,
+    ` *`,
+    ` * Template: subprocess_health_probe`,
+    ` * Command: ${params.command}`,
+    ` * Timeout: ${params.timeout_ms}ms`,
+    ` */`,
+    ``,
+    `import { execSync } from 'node:child_process';`,
+    `import type {`,
+    `  Experiment,`,
+    `  ExperimentContext,`,
+    `  Finding,`,
+    `  ProbeResult,`,
+    `  Verdict,`,
+    `} from '../experiment-types.js';`,
+    `import { getSelfCommitStatus } from '../self-commit.js';`,
+    ``,
+    `interface ${className}Evidence extends Record<string, unknown> {`,
+    `  command: string;`,
+    `  exit_code: number;`,
+    `  stdout_lines: string[];`,
+    `  stderr_lines: string[];`,
+    `  duration_ms: number;`,
+    `  repo_root: string | null;`,
+    `  error?: string;`,
+    `}`,
+    ``,
+    `export class ${className} implements Experiment {`,
+    `  id = ${idLiteral};`,
+    `  name = ${nameLiteral};`,
+    `  category = 'tool_reliability' as const;`,
+    `  hypothesis = ${hypLiteral};`,
+    `  cadence = { everyMs: ${everyMs}, runOnBoot: true };`,
+    ``,
+    `  async probe(_ctx: ExperimentContext): Promise<ProbeResult> {`,
+    `    const { repoRoot } = getSelfCommitStatus();`,
+    `    const command = ${cmdLiteral};`,
+    `    const startMs = Date.now();`,
+    ``,
+    `    if (!repoRoot) {`,
+    `      const evidence: ${className}Evidence = {`,
+    `        command,`,
+    `        exit_code: -1,`,
+    `        stdout_lines: [],`,
+    `        stderr_lines: [],`,
+    `        duration_ms: 0,`,
+    `        repo_root: null,`,
+    `        error: 'repo root not configured',`,
+    `      };`,
+    `      return {`,
+    `        subject: ${subjectLiteral},`,
+    `        summary: \`${descStr}: repo root unavailable\`,`,
+    `        evidence,`,
+    `      };`,
+    `    }`,
+    ``,
+    `    let exitCode = 0;`,
+    `    let stdout = '';`,
+    `    let stderr = '';`,
+    ``,
+    `    try {`,
+    `      stdout = execSync(command, {`,
+    `        cwd: repoRoot,`,
+    `        stdio: 'pipe',`,
+    `        timeout: ${timeoutMs},`,
+    `        encoding: 'utf-8',`,
+    `      }).toString();`,
+    `    } catch (err) {`,
+    `      exitCode = (err as { status?: number }).status ?? 1;`,
+    `      const execErr = err as { stdout?: Buffer | string; stderr?: Buffer | string };`,
+    `      stdout = execErr.stdout ? String(execErr.stdout) : '';`,
+    `      stderr = execErr.stderr ? String(execErr.stderr) : '';`,
+    `      if (!stdout && !stderr && err instanceof Error) {`,
+    `        stderr = err.message;`,
+    `      }`,
+    `    }`,
+    ``,
+    `    const durationMs = Date.now() - startMs;`,
+    `    const stdoutLines = stdout.split('\\n').filter((l) => l.trim()).slice(-${halfLines});`,
+    `    const stderrLines = stderr.split('\\n').filter((l) => l.trim()).slice(-${halfLines});`,
+    ``,
+    `    const evidence: ${className}Evidence = {`,
+    `      command,`,
+    `      exit_code: exitCode,`,
+    `      stdout_lines: stdoutLines,`,
+    `      stderr_lines: stderrLines,`,
+    `      duration_ms: durationMs,`,
+    `      repo_root: repoRoot,`,
+    `    };`,
+    ``,
+    `    const summary =`,
+    `      exitCode === 0`,
+    `        ? \`${descStr}: passed in \${durationMs}ms\``,
+    `        : \`${descStr}: failed (exit \${exitCode}) in \${durationMs}ms\`;`,
+    ``,
+    `    return {`,
+    `      subject: ${subjectLiteral},`,
+    `      summary,`,
+    `      evidence,`,
+    `    };`,
+    `  }`,
+    ``,
+    `  judge(result: ProbeResult, _history: Finding[]): Verdict {`,
+    `    const ev = result.evidence as ${className}Evidence;`,
+    `    if (ev.repo_root === null) return 'warning';`,
+    `    if (ev.exit_code !== 0) return 'fail';`,
+    `    return 'pass';`,
+    `  }`,
+    `}`,
+  ].join('\n');
+
+  const testContent = [
+    `import { describe, it, expect, vi, beforeEach } from 'vitest';`,
+    `import type { ExperimentContext } from '../experiment-types.js';`,
+    ``,
+    `vi.mock('node:child_process', () => ({`,
+    `  execSync: vi.fn(),`,
+    `}));`,
+    ``,
+    `vi.mock('../self-commit.js', () => ({`,
+    `  getSelfCommitStatus: vi.fn(() => ({`,
+    `    killSwitchOpen: false,`,
+    `    repoRootConfigured: true,`,
+    `    repoRoot: '/fake/repo',`,
+    `    allowedPathPrefixes: [],`,
+    `    auditLogPath: '/fake/log',`,
+    `  })),`,
+    `}));`,
+    ``,
+    `import { execSync } from 'node:child_process';`,
+    `import { getSelfCommitStatus } from '../self-commit.js';`,
+    `import { ${className} } from '../experiments/${brief.slug}.js';`,
+    ``,
+    `function makeCtx(): ExperimentContext {`,
+    `  return {`,
+    `    // eslint-disable-next-line @typescript-eslint/no-explicit-any`,
+    `    db: {} as any,`,
+    `    workspaceId: 'ws-test',`,
+    `    // eslint-disable-next-line @typescript-eslint/no-explicit-any`,
+    `    engine: {} as any,`,
+    `    recentFindings: async () => [],`,
+    `  };`,
+    `}`,
+    ``,
+    `describe('${className} (auto-generated)', () => {`,
+    `  const exp = new ${className}();`,
+    ``,
+    `  beforeEach(() => {`,
+    `    vi.mocked(getSelfCommitStatus).mockReturnValue({`,
+    `      killSwitchOpen: false,`,
+    `      repoRootConfigured: true,`,
+    `      repoRoot: '/fake/repo',`,
+    `      allowedPathPrefixes: [],`,
+    `      auditLogPath: '/fake/log',`,
+    `    });`,
+    `  });`,
+    ``,
+    `  it('returns pass when command exits 0', async () => {`,
+    `    vi.mocked(execSync).mockReturnValue(Buffer.from('all good\\n') as unknown as string);`,
+    `    const result = await exp.probe(makeCtx());`,
+    `    expect(exp.judge(result, [])).toBe('pass');`,
+    `    const ev = result.evidence as { exit_code: number; command: string };`,
+    `    expect(ev.exit_code).toBe(0);`,
+    `    expect(ev.command).toBe(${cmdLiteral});`,
+    `  });`,
+    ``,
+    `  it('returns fail when command exits non-zero', async () => {`,
+    `    const err = Object.assign(new Error('failed'), {`,
+    `      status: 1,`,
+    `      stdout: Buffer.from('error output\\n'),`,
+    `      stderr: Buffer.from('stderr line\\n'),`,
+    `    });`,
+    `    vi.mocked(execSync).mockImplementation(() => { throw err; });`,
+    `    const result = await exp.probe(makeCtx());`,
+    `    expect(exp.judge(result, [])).toBe('fail');`,
+    `    const ev = result.evidence as { exit_code: number; stderr_lines: string[] };`,
+    `    expect(ev.exit_code).toBe(1);`,
+    `    expect(ev.stderr_lines.length).toBeGreaterThan(0);`,
+    `  });`,
+    ``,
+    `  it('returns warning when repo root is unavailable', async () => {`,
+    `    vi.mocked(getSelfCommitStatus).mockReturnValue({`,
+    `      killSwitchOpen: false,`,
+    `      repoRootConfigured: false,`,
+    `      repoRoot: null,`,
+    `      allowedPathPrefixes: [],`,
+    `      auditLogPath: '/fake/log',`,
+    `    });`,
+    `    const result = await exp.probe(makeCtx());`,
+    `    expect(exp.judge(result, [])).toBe('warning');`,
+    `    const ev = result.evidence as { repo_root: null; error: string };`,
+    `    expect(ev.repo_root).toBeNull();`,
+    `    expect(ev.error).toContain('repo root');`,
+    `  });`,
+    ``,
+    `  it('evidence exposes command and duration', async () => {`,
+    `    vi.mocked(execSync).mockReturnValue(Buffer.from('') as unknown as string);`,
+    `    const result = await exp.probe(makeCtx());`,
+    `    const ev = result.evidence as { command: string; duration_ms: number };`,
+    `    expect(ev.command).toBe(${cmdLiteral});`,
+    `    expect(typeof ev.duration_ms).toBe('number');`,
+    `  });`,
+    `});`,
+  ].join('\n');
 
   return {
     sourcePath: `src/self-bench/experiments/${brief.slug}.ts`,
