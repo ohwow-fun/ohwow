@@ -124,11 +124,17 @@ export async function persistExchange(
     deps.db.from('orchestrator_messages_fts').insert({ message_id: userMsgId, content: userContent }).then(() => {}, () => {});
     deps.db.from('orchestrator_messages_fts').insert({ message_id: asstMsgId, content: assistantContent }).then(() => {}, () => {});
 
-    // Update conversation metadata
+    // Update conversation metadata. Count is re-derived from the messages table
+    // so it stays correct even when older exchanges skipped the increment.
+    const { count: totalCount } = await deps.db
+      .from('orchestrator_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('conversation_id', conversationId);
     await deps.db
       .from('orchestrator_conversations')
       .update({
         last_message_at: now,
+        message_count: totalCount ?? 0,
       })
       .eq('id', conversationId);
 
