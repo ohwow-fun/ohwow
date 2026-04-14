@@ -31,6 +31,7 @@ import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
 import { OrchestratorRuntimeConfig, type RagConfigOptions, type InferenceCapabilities } from './orchestrator-runtime-config.js';
 import { PermissionBroker } from './orchestrator-approvals.js';
+import { activateBrowserSession } from './orchestrator-sessions.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -226,81 +227,15 @@ export class LocalOrchestrator {
 
   /** Activate browser — connects to real Chrome via CDP or launches Chromium */
   private async activateBrowser(requestedProfile?: string): Promise<void> {
-    // "isolated" profile means use Playwright Chromium with no state
-    if (requestedProfile === 'isolated') {
-      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-      logger.info('[orchestrator] Browser activated (isolated Chromium)');
-      this.browserActivated = true;
-      this.syncOrganToBody();
-      return;
-    }
-
-    if (this.browserTarget === 'chrome') {
-      try {
-        // Resolve profile identifier (directory, email, alias, display
-        // name) to a concrete Chrome profile directory using the same
-        // resolver as desktop_focus_app so the two paths stay in sync.
-        // This is the fix that lets ogsus@ohwow.fun land on Profile 1
-        // via the chromeProfileAliases config map, instead of falling
-        // through to the bare account_info match and ending up on the
-        // Default profile.
-        let profileDir = requestedProfile;
-        if (profileDir) {
-          const { resolveChromeProfile, discoverChromeProfiles } = await import(
-            '../execution/desktop/chrome-profile-resolver.js'
-          );
-          const resolved = resolveChromeProfile(profileDir, {
-            profiles: discoverChromeProfiles(),
-            aliases: this.config.chromeProfileAliases,
-          });
-          if (resolved) {
-            profileDir = resolved;
-          } else if (profileDir.includes('@')) {
-            // Last-resort: try the browser service's own email lookup
-            // (covers Google-signed-in accounts that aren't in the alias map)
-            profileDir = await LocalBrowserService.findProfileForEmail(profileDir) || undefined;
-          }
-        }
-        const cdpUrl = await LocalBrowserService.connectToChrome(this.chromeCdpPort, profileDir);
-        if (cdpUrl) {
-          this.browserService = new LocalBrowserService({ headless: false, cdpUrl });
-          this._browserDegradedReason = null;
-          logger.info(`[orchestrator] Browser activated via Chrome CDP${profileDir ? ` (profile: ${profileDir})` : ''}`);
-        } else {
-          // CDP setup failed. Fall back to bundled Chromium so the
-          // orchestrator still has SOME browser capability, but
-          // surface the degradation LOUDLY so the LLM stops
-          // pretending it's in the user's real logged-in session.
-          // Build the reason from a pure filesystem probe so
-          // fresh-install users get "run ohwow chrome bootstrap"
-          // instead of the misleading "Chrome CDP unavailable".
-          const { describeDebugChromeState } = await import('../execution/browser/chrome-lifecycle.js');
-          const state = describeDebugChromeState();
-          this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-          if (state.status === 'missing') {
-            this._browserDegradedReason =
-              `${state.reason} Running in isolated Chromium (no logged-in sessions). ${state.bootstrapHint}`;
-          } else if (state.status === 'corrupted') {
-            this._browserDegradedReason =
-              `${state.reason} Running in isolated Chromium. Issues: ${state.detectedIssues.join('; ')}. ${state.bootstrapHint}`;
-          } else {
-            // Debug dir is fine but CDP still didn't come up. Real
-            // transient failure — port busy, Chrome crashed on boot,
-            // timeout waiting for devtools, etc.
-            this._browserDegradedReason =
-              `Debug Chrome is installed but CDP did not come up on :${this.chromeCdpPort}${profileDir ? ` (requested profile: ${profileDir})` : ''}. Running in isolated Chromium. Check daemon.log for spawn errors, or run \`ohwow chrome status\` to inspect the debug dir.`;
-          }
-          logger.warn(`[orchestrator] ${this._browserDegradedReason}`);
-        }
-      } catch (err) {
-        logger.warn({ err: err instanceof Error ? err.message : err }, '[orchestrator] Chrome activation failed, falling back to Chromium');
-        this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-        this._browserDegradedReason = `Chrome activation threw: ${err instanceof Error ? err.message : String(err)} — running in isolated Chromium with no real profile`;
-      }
-    } else {
-      this.browserService = new LocalBrowserService({ headless: this.browserHeadless });
-      this._browserDegradedReason = null;
-    }
+    const { service, degradedReason } = await activateBrowserSession({
+      requestedProfile,
+      browserHeadless: this.browserHeadless,
+      browserTarget: this.browserTarget,
+      chromeCdpPort: this.chromeCdpPort,
+      chromeProfileAliases: this.config.chromeProfileAliases,
+    });
+    this.browserService = service;
+    this._browserDegradedReason = degradedReason;
     this.browserActivated = true;
     this.syncOrganToBody();
   }
