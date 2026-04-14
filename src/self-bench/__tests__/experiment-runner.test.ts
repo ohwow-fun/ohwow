@@ -304,7 +304,12 @@ describe('ExperimentRunner', () => {
     expect(findings.find((f) => f.experiment_id === 'healthy')?.verdict).toBe('pass');
   });
 
-  it('reentrant tick() does nothing while a prior tick is in flight', async () => {
+  it('same experiment does not re-enter while a prior tick is in flight', async () => {
+    // Per-experiment inFlight guard: overlapping ticks (from setInterval
+    // firing while the prior tick is still awaiting) must not re-claim
+    // an experiment that is still mid-run. The slow experiment's
+    // probe hangs; a second tick is fired before the probe resolves;
+    // the second tick must see 'slow' in inFlight and skip it.
     const runner = buildRunner();
     let resolveProbe: () => void = () => {};
     const exp = makeStubExperiment({
@@ -320,12 +325,65 @@ describe('ExperimentRunner', () => {
 
     const firstTick = runner.tick();
     const secondTick = runner.tick();
-    // Second tick should see `this.running` and return early.
+    // Second tick finds 'slow' in inFlight and skips it; only the
+    // first tick's probe invocation has happened.
     await secondTick;
     expect(exp.probeCallCount).toBe(1);
 
     resolveProbe();
     await firstTick;
+  });
+
+  it('experiments fire in parallel within a single tick', async () => {
+    // Under the parallel-fire model, a slow experiment (e.g. the Phase
+    // 7-D author running typecheck + vitest for tens of seconds) must
+    // not block faster experiments from completing on the same tick.
+    // Assertion: the fast experiment's completion timestamp is
+    // recorded BEFORE the slow experiment's, proving the two
+    // Promises are running concurrently rather than sequentially.
+    const runner = buildRunner();
+    const completionOrder: string[] = [];
+
+    let resolveSlow: () => void = () => {};
+    const slow = makeStubExperiment({
+      id: 'slow',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: () => new Promise((resolve) => {
+        resolveSlow = () => {
+          completionOrder.push('slow');
+          resolve({ summary: 's', evidence: {} });
+        };
+      }),
+      judge: () => 'pass',
+    });
+
+    const fast = makeStubExperiment({
+      id: 'fast',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: async () => {
+        completionOrder.push('fast');
+        return { summary: 'f', evidence: {} };
+      },
+      judge: () => 'pass',
+    });
+
+    runner.register(slow);
+    runner.register(fast);
+
+    const tickPromise = runner.tick();
+    // Let the microtask queue drain so 'fast' can complete while
+    // 'slow' is still awaiting the external resolver.
+    await new Promise((r) => setImmediate(r));
+    expect(completionOrder).toEqual(['fast']);
+
+    // Now let the slow one finish and the tick resolve.
+    resolveSlow();
+    await tickPromise;
+    expect(completionOrder).toEqual(['fast', 'slow']);
+    expect(fast.probeCallCount).toBe(1);
+    expect(slow.probeCallCount).toBe(1);
   });
 
   it('registeredIds returns every registered experiment', () => {

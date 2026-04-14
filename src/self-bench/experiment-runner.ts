@@ -23,11 +23,19 @@
  * moves on. The runner never throws out of tick() — a broken
  * experiment must not take down the daemon.
  *
- * Concurrency: tick() uses a simple `this.running` flag so overlapping
- * ticks don't run the same experiment twice. If a tick is still in
- * flight when the next interval fires, the new one is skipped. Phase
- * 1 experiments are all cheap DB reads so this is fine; long-running
- * experiments in later phases will need their own concurrency control.
+ * Concurrency: experiments run in parallel within a tick AND across
+ * overlapping ticks, guarded by per-experiment inFlight tracking.
+ * A slow experiment (e.g. the Phase 7-D author running
+ * `npm run typecheck` + vitest for 30-90s) never blocks fast
+ * experiments from running — it just prevents its own cadence from
+ * double-firing. setInterval re-enters tick() independently of any
+ * outstanding await, so a 90s author tick lets fast experiments keep
+ * ticking through at their own cadence during that window.
+ *
+ * The validation queue drain has its own reentrancy guard
+ * (processingValidations) because two overlapping ticks both calling
+ * processValidationQueue() would race on marking pending validations
+ * completed.
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
@@ -103,7 +111,19 @@ export class ExperimentRunner implements ExperimentScheduler {
   private experiments = new Map<string, Experiment>();
   private nextRunAt = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
+  /**
+   * Per-experiment in-flight claims. Added synchronously inside
+   * tick() BEFORE any await so two overlapping ticks can't both
+   * pick up the same experiment. Cleared in runOne()'s finally
+   * block so even a throwing experiment releases its claim.
+   */
+  private inFlight = new Set<string>();
+  /**
+   * Reentrancy guard for processValidationQueue specifically. Two
+   * parallel ticks both draining the queue would race on marking
+   * pending validations completed.
+   */
+  private processingValidations = false;
   private readonly tickIntervalMs: number;
   private readonly now: () => number;
 
@@ -214,26 +234,37 @@ export class ExperimentRunner implements ExperimentScheduler {
    * Exposed for tests — production code should only call start/stop.
    */
   async tick(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      const now = this.now();
-      for (const [id, exp] of this.experiments) {
-        const due = this.nextRunAt.get(id) ?? 0;
-        if (due > now) continue;
-        await this.runOne(exp);
-        // Schedule next run. Use now-after-completion so a slow probe
-        // doesn't pile up missed runs.
-        this.nextRunAt.set(id, this.now() + Math.max(0, exp.cadence.everyMs));
-      }
+    const now = this.now();
 
-      // Validation queue: process every pending validation whose
-      // validate_at has passed. Runs AFTER the experiment loop so a
-      // brand-new intervention from this tick doesn't immediately
-      // cascade into its own validation on the same tick.
+    // Collection pass is fully synchronous — claim inFlight BEFORE
+    // any await so a second tick re-entering this method during the
+    // Promise.all below cannot also claim the same experiment.
+    const due: Experiment[] = [];
+    for (const [id, exp] of this.experiments) {
+      const nextAt = this.nextRunAt.get(id) ?? 0;
+      if (nextAt > now) continue;
+      if (this.inFlight.has(id)) continue;
+      this.inFlight.add(id);
+      due.push(exp);
+    }
+
+    // Fire all due experiments in parallel. Each runOne() handles its
+    // own inFlight cleanup + nextRunAt reschedule in a finally block
+    // so a throwing experiment still releases its claim.
+    await Promise.all(due.map((exp) => this.runOne(exp)));
+
+    // Validation queue: process every pending validation whose
+    // validate_at has passed. Runs AFTER this tick's experiment
+    // awaits so a brand-new intervention doesn't immediately cascade
+    // into its own validation on the same tick. Guarded against
+    // parallel drains from overlapping ticks so we never double-mark
+    // a pending row completed.
+    if (this.processingValidations) return;
+    this.processingValidations = true;
+    try {
       await this.processValidationQueue();
     } finally {
-      this.running = false;
+      this.processingValidations = false;
     }
   }
 
@@ -471,82 +502,90 @@ export class ExperimentRunner implements ExperimentScheduler {
     let errorSummary: string | null = null;
 
     try {
-      probeResult = await exp.probe(ctx);
-      const history = await readRecentFindings(this.db, exp.id, JUDGE_HISTORY_LIMIT);
-      verdict = exp.judge(probeResult, history);
-      // Invoke intervene on any non-error verdict. Historically
-      // this was gated on verdict !== 'pass' as well, but that
-      // blocked meta-experiments like AdaptiveSchedulerExperiment
-      // whose routine successful work IS the intervention. Existing
-      // experiments that don't want to mutate on pass already
-      // early-return null (ModelHealthExperiment, StaleTaskCleanup)
-      // so this is backward-compatible — the gate only ever blocked
-      // intent, not a real safety rule.
-      if (exp.intervene && verdict !== 'error') {
-        intervention = (await exp.intervene(verdict, probeResult, ctx)) ?? null;
-      }
-    } catch (err) {
-      errorSummary = err instanceof Error ? err.message : String(err);
-      verdict = 'error';
-      logger.warn({ err, experimentId: exp.id }, '[runner] experiment threw');
-    }
-
-    let findingId: string | null = null;
-    try {
-      findingId = await writeFinding(this.db, {
-        experimentId: exp.id,
-        category: exp.category,
-        subject: probeResult?.subject ?? null,
-        hypothesis: exp.hypothesis,
-        verdict,
-        summary: probeResult?.summary ?? errorSummary ?? 'experiment produced no result',
-        evidence: probeResult?.evidence ?? (errorSummary ? { error: errorSummary } : {}),
-        interventionApplied: intervention,
-        ranAt: new Date(started).toISOString(),
-        durationMs: this.now() - started,
-      });
-    } catch (err) {
-      // Swallow store failures — we already logged the experiment
-      // result and writing the finding is best-effort.
-      logger.warn({ err, experimentId: exp.id }, '[runner] failed to persist finding');
-    }
-
-    // Phase 3: if this run applied an intervention AND the experiment
-    // implements validate(), enqueue a validation row so the runner
-    // loops back and verifies the intervention held. Without this,
-    // interventions are fire-and-forget — no audit trail, no rollback
-    // signal, no feedback loop.
-    if (findingId && intervention && exp.validate) {
-      const delay = exp.cadence.validationDelayMs ?? DEFAULT_VALIDATION_DELAY_MS;
-      const validateAt = new Date(this.now() + delay).toISOString();
       try {
-        await enqueueValidation(this.db, {
-          interventionFindingId: findingId,
-          experimentId: exp.id,
-          baseline: intervention.details,
-          validateAt,
-        });
-        logger.debug(
-          { experimentId: exp.id, findingId, validateAt },
-          '[runner] queued validation for intervention',
-        );
+        probeResult = await exp.probe(ctx);
+        const history = await readRecentFindings(this.db, exp.id, JUDGE_HISTORY_LIMIT);
+        verdict = exp.judge(probeResult, history);
+        // Invoke intervene on any non-error verdict. Historically
+        // this was gated on verdict !== 'pass' as well, but that
+        // blocked meta-experiments like AdaptiveSchedulerExperiment
+        // whose routine successful work IS the intervention. Existing
+        // experiments that don't want to mutate on pass already
+        // early-return null (ModelHealthExperiment, StaleTaskCleanup)
+        // so this is backward-compatible — the gate only ever blocked
+        // intent, not a real safety rule.
+        if (exp.intervene && verdict !== 'error') {
+          intervention = (await exp.intervene(verdict, probeResult, ctx)) ?? null;
+        }
       } catch (err) {
-        logger.warn(
-          { err, experimentId: exp.id, findingId },
-          '[runner] failed to enqueue validation',
-        );
+        errorSummary = err instanceof Error ? err.message : String(err);
+        verdict = 'error';
+        logger.warn({ err, experimentId: exp.id }, '[runner] experiment threw');
       }
-    }
 
-    logger.debug(
-      {
-        experimentId: exp.id,
-        verdict,
-        durationMs: this.now() - started,
-        intervention: intervention?.description,
-      },
-      '[runner] experiment completed',
-    );
+      let findingId: string | null = null;
+      try {
+        findingId = await writeFinding(this.db, {
+          experimentId: exp.id,
+          category: exp.category,
+          subject: probeResult?.subject ?? null,
+          hypothesis: exp.hypothesis,
+          verdict,
+          summary: probeResult?.summary ?? errorSummary ?? 'experiment produced no result',
+          evidence: probeResult?.evidence ?? (errorSummary ? { error: errorSummary } : {}),
+          interventionApplied: intervention,
+          ranAt: new Date(started).toISOString(),
+          durationMs: this.now() - started,
+        });
+      } catch (err) {
+        // Swallow store failures — we already logged the experiment
+        // result and writing the finding is best-effort.
+        logger.warn({ err, experimentId: exp.id }, '[runner] failed to persist finding');
+      }
+
+      // Phase 3: if this run applied an intervention AND the experiment
+      // implements validate(), enqueue a validation row so the runner
+      // loops back and verifies the intervention held. Without this,
+      // interventions are fire-and-forget — no audit trail, no rollback
+      // signal, no feedback loop.
+      if (findingId && intervention && exp.validate) {
+        const delay = exp.cadence.validationDelayMs ?? DEFAULT_VALIDATION_DELAY_MS;
+        const validateAt = new Date(this.now() + delay).toISOString();
+        try {
+          await enqueueValidation(this.db, {
+            interventionFindingId: findingId,
+            experimentId: exp.id,
+            baseline: intervention.details,
+            validateAt,
+          });
+          logger.debug(
+            { experimentId: exp.id, findingId, validateAt },
+            '[runner] queued validation for intervention',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, experimentId: exp.id, findingId },
+            '[runner] failed to enqueue validation',
+          );
+        }
+      }
+
+      logger.debug(
+        {
+          experimentId: exp.id,
+          verdict,
+          durationMs: this.now() - started,
+          intervention: intervention?.description,
+        },
+        '[runner] experiment completed',
+      );
+    } finally {
+      // Always release the inFlight claim and reschedule the next
+      // run, even if something above threw. Using now-after-completion
+      // so a slow probe doesn't pile up missed runs back-to-back.
+      this.inFlight.delete(exp.id);
+      this.nextRunAt.set(exp.id, this.now() + Math.max(0, exp.cadence.everyMs));
+    }
   }
 }
 
