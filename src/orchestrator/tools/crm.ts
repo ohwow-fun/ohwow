@@ -2,14 +2,99 @@
  * CRM Orchestrator Tools
  * Tools for managing contacts and logging events locally.
  *
+ * Tool schemas at the top, runtime handlers below.
+ *
  * Every create/update/delete path fires a best-effort upstream sync via
  * the shared `syncResource` dispatcher so cloud dashboards see the same
  * contact state. Sync failures are never propagated back to the caller —
  * the local write is the source of truth and the cloud is a mirror.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { syncResource } from '../../control-plane/sync-resources.js';
+
+export const CRM_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_contacts',
+    description:
+      'List contacts in the local CRM. Can filter by type and status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
+        status: { type: 'string', enum: ['active', 'inactive'] },
+        limit: { type: 'number', description: 'Max contacts to return (default 20)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_contact',
+    description:
+      'Create a new contact in the local CRM. Confirm details before creating.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Contact name' },
+        email: { type: 'string', description: 'Email address' },
+        phone: { type: 'string', description: 'Phone number' },
+        company: { type: 'string', description: 'Company name' },
+        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
+        notes: { type: 'string', description: 'Additional notes' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for categorization' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_contact',
+    description:
+      'Update an existing contact in the local CRM.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        contact_id: { type: 'string', description: 'The contact ID' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        company: { type: 'string' },
+        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
+        status: { type: 'string', enum: ['active', 'inactive'] },
+        notes: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['contact_id'],
+    },
+  },
+  {
+    name: 'log_contact_event',
+    description:
+      'Log an event for a contact (call, email, meeting, note).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        contact_id: { type: 'string', description: 'The contact ID' },
+        event_type: { type: 'string', description: 'Type of event (e.g., call, email, meeting, note)' },
+        title: { type: 'string', description: 'Event title' },
+        description: { type: 'string', description: 'Event details' },
+      },
+      required: ['contact_id', 'event_type', 'title'],
+    },
+  },
+  {
+    name: 'search_contacts',
+    description:
+      'Search contacts by name, email, or company.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+      },
+      required: ['query'],
+    },
+  },
+];
 
 // ============================================================================
 // list_contacts

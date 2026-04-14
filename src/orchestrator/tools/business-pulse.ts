@@ -1,9 +1,59 @@
 /**
  * Business Pulse Tool — deep analytics snapshot for the orchestrator.
  * Goes beyond the embedded pulse with weekly/monthly trends, agent utilization, and streaks.
+ *
+ * Schema definitions for the broader business-intelligence cluster
+ * (get_business_pulse, get_body_state, get_contact_pipeline,
+ * get_daily_reps_status) live here as a single colocation point. Each tool's
+ * runtime handler still lives in its own file (body-state-tool.ts,
+ * contact-pipeline.ts, daily-reps.ts).
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const BUSINESS_INTEL_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_business_pulse',
+    description:
+      'Get a deep business analytics snapshot: tasks (today/week/30d), contacts by type, revenue trend, agent utilization, streak days. Use for detailed performance analysis beyond the embedded pulse.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_body_state',
+    description:
+      'Get system health: organ status (which integrations are active), agent performance (recent success rates), memory pressure, task pipeline status, and cost trajectory. Use to understand overall system health.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_contact_pipeline',
+    description:
+      'Get sales funnel data: contacts by type (lead/customer/partner), recently added, stale leads with no activity in 14 days, and recent activity breakdown. Use when discussing sales, leads, or customer growth.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_daily_reps_status',
+    description:
+      'Get today\'s daily reps progress: tasks completed, contact touchpoints, approvals processed — each vs recommended minimums. Includes completion rate % and streak days. Use when the user asks about daily progress or what to do next.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
 
 export async function getBusinessPulse(ctx: LocalToolContext): Promise<ToolResult> {
   const now = new Date();

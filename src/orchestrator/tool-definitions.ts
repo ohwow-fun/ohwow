@@ -30,6 +30,8 @@ import { A2A_TOOL_DEFINITIONS } from './tools/a2a.js';
 import { PEER_TOOL_DEFINITIONS } from './tools/peers.js';
 import { WHATSAPP_TOOL_DEFINITIONS } from './tools/whatsapp.js';
 import { TELEGRAM_TOOL_DEFINITIONS } from './tools/telegram.js';
+import { BUSINESS_INTEL_TOOL_DEFINITIONS } from './tools/business-pulse.js';
+import { CRM_TOOL_DEFINITIONS } from './tools/crm.js';
 
 export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...LLM_TOOL_DEFINITIONS,
@@ -71,127 +73,8 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...PEER_TOOL_DEFINITIONS,
   ...WHATSAPP_TOOL_DEFINITIONS,
   ...TELEGRAM_TOOL_DEFINITIONS,
-  // Business intelligence tools
-  {
-    name: 'get_business_pulse',
-    description:
-      'Get a deep business analytics snapshot: tasks (today/week/30d), contacts by type, revenue trend, agent utilization, streak days. Use for detailed performance analysis beyond the embedded pulse.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'get_body_state',
-    description:
-      'Get system health: organ status (which integrations are active), agent performance (recent success rates), memory pressure, task pipeline status, and cost trajectory. Use to understand overall system health.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'get_contact_pipeline',
-    description:
-      'Get sales funnel data: contacts by type (lead/customer/partner), recently added, stale leads with no activity in 14 days, and recent activity breakdown. Use when discussing sales, leads, or customer growth.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'get_daily_reps_status',
-    description:
-      'Get today\'s daily reps progress: tasks completed, contact touchpoints, approvals processed — each vs recommended minimums. Includes completion rate % and streak days. Use when the user asks about daily progress or what to do next.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  // CRM tools
-  {
-    name: 'list_contacts',
-    description:
-      'List contacts in the local CRM. Can filter by type and status.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
-        status: { type: 'string', enum: ['active', 'inactive'] },
-        limit: { type: 'number', description: 'Max contacts to return (default 20)' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'create_contact',
-    description:
-      'Create a new contact in the local CRM. Confirm details before creating.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        name: { type: 'string', description: 'Contact name' },
-        email: { type: 'string', description: 'Email address' },
-        phone: { type: 'string', description: 'Phone number' },
-        company: { type: 'string', description: 'Company name' },
-        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
-        notes: { type: 'string', description: 'Additional notes' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for categorization' },
-      },
-      required: ['name'],
-    },
-  },
-  {
-    name: 'update_contact',
-    description:
-      'Update an existing contact in the local CRM.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        contact_id: { type: 'string', description: 'The contact ID' },
-        name: { type: 'string' },
-        email: { type: 'string' },
-        phone: { type: 'string' },
-        company: { type: 'string' },
-        contact_type: { type: 'string', enum: ['lead', 'customer', 'partner', 'other'] },
-        status: { type: 'string', enum: ['active', 'inactive'] },
-        notes: { type: 'string' },
-        tags: { type: 'array', items: { type: 'string' } },
-      },
-      required: ['contact_id'],
-    },
-  },
-  {
-    name: 'log_contact_event',
-    description:
-      'Log an event for a contact (call, email, meeting, note).',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        contact_id: { type: 'string', description: 'The contact ID' },
-        event_type: { type: 'string', description: 'Type of event (e.g., call, email, meeting, note)' },
-        title: { type: 'string', description: 'Event title' },
-        description: { type: 'string', description: 'Event details' },
-      },
-      required: ['contact_id', 'event_type', 'title'],
-    },
-  },
-  {
-    name: 'search_contacts',
-    description:
-      'Search contacts by name, email, or company.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'Search query' },
-      },
-      required: ['query'],
-    },
-  },
+  ...BUSINESS_INTEL_TOOL_DEFINITIONS,
+  ...CRM_TOOL_DEFINITIONS,
   // Scraping tools
   {
     name: 'scrape_url',
