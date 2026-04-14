@@ -46,6 +46,7 @@ import { MigrationSchema119RuntimeConfigOverridesExperiment } from './experiment
  * ExperimentAuthorExperiment appends new entries here after each commit.
  * Entries are append-only — removal is manual.
  */
+import { ToolchainToolTestStateExperiment } from './experiments/toolchain-tool-test-state.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema010LocalCrmExperiment(),
   () => new MigrationSchema012OrchestratorMemoryExperiment(),
@@ -64,4 +65,5 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema116SelfFindingsExperiment(),
   () => new MigrationSchema117ExperimentValidationsExperiment(),
   () => new MigrationSchema119RuntimeConfigOverridesExperiment(),
+  () => new ToolchainToolTestStateExperiment(),
 ];
