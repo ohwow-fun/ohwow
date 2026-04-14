@@ -29,6 +29,7 @@ import { resolveTaskCapabilities } from './task-capabilities.js';
 import { buildTaskToolList } from './tool-list.js';
 import { finalizeTaskSuccess } from './task-completion.js';
 import { handleTaskFailure } from './task-failure.js';
+import { runAnthropicReActLoop, type ReActServicesHolder } from './react-loop.js';
 import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
@@ -1051,377 +1052,52 @@ export class RuntimeEngine {
             (agentConfig as Record<string, unknown>)._resolvedModel = routerResult.actualModelUsed;
           }
         } else if (tools.length > 0) {
-          // ── Anthropic tool loop ──
-          let currentMessages = [...messages];
-          let iterations = 0;
-          const toolCallHashes: string[] = [];
-          const anthropicToolsUsed: string[] = [];
+          // ── Anthropic tool loop (runAnthropicReActLoop) ──
+          const services: ReActServicesHolder = {
+            browserService,
+            browserActivated,
+            desktopService,
+            desktopActivated,
+          };
           const contextLimit = getContextLimit(modelId);
-          let iterationsSinceSummarize = SUMMARIZE_COOLDOWN_ITERATIONS; // allow summarization from start
-
-          while (iterations < MAX_TOOL_LOOP_ITERATIONS) {
-            iterations++;
-            const iterationStart = Date.now();
-
-            // Check LLM cache for first iteration (no tool results in messages)
-            const isToolContinuation = iterations > 1;
-            let response: Anthropic.Messages.Message;
-
-            if (!isToolContinuation) {
-              const cached = await llmCache.lookup(systemPromptHash, currentMessages, modelId);
-              if (cached) {
-                logger.debug({ modelId, similarity: cached.similarity }, 'Local LLM cache hit');
-                response = {
-                  id: `msg_cached_${Date.now()}`,
-                  type: 'message',
-                  container: null,
-                  role: 'assistant',
-                  content: [{ type: 'text' as const, text: cached.responseContent, citations: null }],
-                  model: modelId as Anthropic.Messages.Model,
-                  stop_reason: 'end_turn',
-                  stop_sequence: null,
-                  stop_details: null,
-                  usage: {
-                    input_tokens: cached.responseTokens.input_tokens,
-                    output_tokens: cached.responseTokens.output_tokens,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
-                    cache_creation: null,
-                    inference_geo: null,
-                    server_tool_use: null,
-                    service_tier: null,
-                  },
-                };
-              } else {
-                response = await this.anthropic!.messages.create({
-                  model: modelId,
-                  max_tokens: agentConfig.max_tokens || 4096,
-                  temperature: agentConfig.temperature ?? 0.7,
-                  system: systemPrompt,
-                  messages: currentMessages,
-                  tools,
-                });
-              }
-            } else {
-              response = await this.anthropic!.messages.create({
-                model: modelId,
-                max_tokens: agentConfig.max_tokens || 4096,
-                temperature: agentConfig.temperature ?? 0.7,
-                system: systemPrompt,
-                messages: currentMessages,
-                tools,
-              });
-            }
-
-            totalInputTokens += response.usage.input_tokens;
-            totalOutputTokens += response.usage.output_tokens;
-            this.emit('task:progress', { taskId, tokensUsed: totalInputTokens + totalOutputTokens });
-
-            const textBlocks = response.content.filter((b): b is TextBlock => b.type === 'text');
-            const textContent = textBlocks.map(b => b.text).join('\n');
-
-            // Budget guard: mid-loop per-task cost check
-            if (agentBudget) {
-              const runningCost = calculateCostCents(
-                modelId as ClaudeModel,
-                totalInputTokens,
-                totalOutputTokens,
-              );
-              const midCheck = checkMidLoop(runningCost, agentBudget);
-              if (!midCheck.allowed) {
-                logger.warn({ agentId, taskId, runningCost, reason: midCheck.reason }, '[RuntimeEngine] Mid-loop budget hard stop');
-                await this.db.rpc('create_agent_activity', {
-                  p_workspace_id: workspaceId,
-                  p_activity_type: 'budget_hard_stop',
-                  p_title: `Per-task budget hit for ${agent.name}`,
-                  p_description: midCheck.reason,
-                  p_agent_id: agentId,
-                  p_task_id: taskId,
-                  p_metadata: { runtime: true, runningCost },
-                });
-                this.emit('budget:exceeded', { agentId, taskId, reason: midCheck.reason });
-                fullContent = textContent || fullContent;
-                break;
-              }
-            }
-
-            if (response.stop_reason === 'end_turn' || response.stop_reason === 'max_tokens') {
-              // Cache end_turn responses for future reuse
-              if (!isToolContinuation && response.stop_reason === 'end_turn' && textContent) {
-                void llmCache.store(systemPromptHash, currentMessages, modelId, textContent, {
-                  input_tokens: response.usage.input_tokens,
-                  output_tokens: response.usage.output_tokens,
-                });
-              }
-              fullContent = textContent;
-              break;
-            }
-
-            // Handle server tool uses (web search) — SDK handles these automatically
-            const hasServerTool = response.content.some(b => b.type === 'server_tool_use');
-
-            // Handle client tool uses — unified dispatch for all tool types
-            const toolUseBlocks = response.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
-
-            if (toolUseBlocks.length === 0 && hasServerTool) {
-              // Web search only — let the SDK continue
-              currentMessages = [...currentMessages, { role: 'assistant' as const, content: response.content }];
-              continue;
-            }
-
-            if (toolUseBlocks.length === 0) {
-              fullContent = textContent;
-              break;
-            }
-
-            // Activate browser on-demand if request_browser is called
-            const hasRequestBrowser = toolUseBlocks.some(b => b.name === 'request_browser');
-            if (hasRequestBrowser && !browserActivated) {
-              // Connect to real Chrome via CDP when browserTarget is 'chrome'
-              if (this.config.browserTarget === 'chrome') {
-                try {
-                  const cdpUrl = await LocalBrowserService.connectToChrome(this.config.chromeCdpPort || 9222);
-                  browserService = new LocalBrowserService({ headless: false, cdpUrl: cdpUrl || undefined });
-                } catch {
-                  browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
-                }
-              } else {
-                browserService = new LocalBrowserService({ headless: this.config.browserHeadless });
-              }
-              browserActivated = true;
-
-              // Remove request_browser from tools and add full browser toolkit
-              const requestBrowserIdx = tools.findIndex(t => 'name' in t && t.name === 'request_browser');
-              if (requestBrowserIdx !== -1) tools.splice(requestBrowserIdx, 1);
-              tools.push(...BROWSER_TOOL_DEFINITIONS);
-            }
-
-            // Activate desktop on-demand if request_desktop is called
-            const hasRequestDesktop = toolUseBlocks.some(b => b.name === 'request_desktop');
-            if (hasRequestDesktop && !desktopActivated) {
-              desktopService = new LocalDesktopService({ dataDir: this.config.dataDir, ...desktopOptions });
-              desktopActivated = true;
-
-              const requestDesktopIdx = tools.findIndex(t => 'name' in t && t.name === 'request_desktop');
-              if (requestDesktopIdx !== -1) tools.splice(requestDesktopIdx, 1);
-              tools.push(...DESKTOP_TOOL_DEFINITIONS);
-            }
-
-            // Unified tool result collection via registry
-            const toolResults: ToolResultBlockParam[] = [];
-            const toolCtx = this.buildToolContext({
-              taskId,
-              agentId,
-              workspaceId,
-              goalId: task.goal_id || undefined,
-              browserService,
-              browserActivated,
-              desktopService,
-              desktopActivated,
-              desktopOptions,
-              fileAccessGuard,
-              mcpClients,
-              gitEnabled: bashEnabled,
-            });
-
-            for (const block of toolUseBlocks) {
-              const result = await this.dispatchTool(
-                block.name,
-                block.input as Record<string, unknown>,
-                toolCtx,
-              );
-
-              // Sync browser state back from context (request_browser mutates it)
-              if (result.browserActivated && !browserActivated) {
-                browserService = toolCtx.browserService;
-                browserActivated = true;
-                const requestBrowserIdx = tools.findIndex(t => 'name' in t && t.name === 'request_browser');
-                if (requestBrowserIdx !== -1) tools.splice(requestBrowserIdx, 1);
-                tools.push(...BROWSER_TOOL_DEFINITIONS);
-              }
-
-              // Sync desktop state back from context (request_desktop mutates it)
-              if (result.desktopActivated && !desktopActivated) {
-                desktopService = toolCtx.desktopService;
-                desktopActivated = true;
-                const requestDesktopIdx = tools.findIndex(t => 'name' in t && t.name === 'request_desktop');
-                if (requestDesktopIdx !== -1) tools.splice(requestDesktopIdx, 1);
-                tools.push(...DESKTOP_TOOL_DEFINITIONS);
-              }
-
-              // Expand FileAccessGuard when doc mounts add new paths
-              if (result.mountedDocPaths?.length) {
-                const currentPaths = fileAccessGuard?.getAllowedPaths() ?? [];
-                const expanded = [...currentPaths, ...result.mountedDocPaths];
-                fileAccessGuard = new FileAccessGuard(expanded);
-                // Ensure filesystem tools are available if not already
-                if (!tools.some(t => 'name' in t && t.name === 'local_list_directory')) {
-                  tools.push(...FILESYSTEM_TOOL_DEFINITIONS);
-                }
-              }
-
-              // Cast content to the SDK-expected type (our ToolCallResult is wider)
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: result.content as string,
-                is_error: result.is_error,
-              });
-            }
-
-            if (toolResults.length > 0) {
-              // Track tool names for reversibility check
-              for (const block of toolUseBlocks) {
-                anthropicToolsUsed.push(block.name);
-              }
-
-              // Brain: record tool executions (perceive → predict → record)
-              for (const block of toolUseBlocks) {
-                const matchedResult = toolResults.find(r => r.tool_use_id === block.id);
-                if (matchedResult) {
-                  this.brain.recordToolExecution(block.name, block.input, !matchedResult.is_error);
-                }
-                toolCallHashes.push(hashToolCall(block.name, block.input));
-              }
-
-              // Brain: enriched stagnation warning
-              if (this.brain.isStagnating() && toolResults.length > 0) {
-                const lastResult = toolResults[toolResults.length - 1];
-                const existingContent = typeof lastResult.content === 'string' ? lastResult.content : '';
-                const warning = this.brain.buildStagnationWarning();
-                toolResults[toolResults.length - 1] = {
-                  ...lastResult,
-                  content: `${existingContent}\n\n${warning}`,
-                };
-              }
-
-              // Inject reflection prompt every 5 iterations
-              if (iterations % 5 === 0 && toolResults.length > 0) {
-                const lastResult = toolResults[toolResults.length - 1];
-                const existingContent = typeof lastResult.content === 'string' ? lastResult.content : '';
-                const reflectionText = REFLECTION_PROMPT
-                  .replace('{{N}}', String(iterations))
-                  .replace('{{MAX}}', String(MAX_TOOL_LOOP_ITERATIONS));
-                toolResults[toolResults.length - 1] = {
-                  ...lastResult,
-                  content: `${existingContent}\n\n${reflectionText}`,
-                };
-              }
-
-              // Log side-effecting tool calls to action journal
-              for (const block of toolUseBlocks) {
-                const toolRev = getToolReversibility(block.name);
-                if (toolRev !== 'read_only') {
-                  const matchingResult = toolResults.find(r => r.tool_use_id === block.id);
-                  const journal = new LocalActionJournalService(this.db, workspaceId);
-                  journal.logAction({
-                    taskId,
-                    agentId,
-                    toolName: block.name,
-                    toolInput: block.input as Record<string, unknown>,
-                    toolOutput: matchingResult ? (typeof matchingResult.content === 'string' ? matchingResult.content : JSON.stringify(matchingResult.content)) : null,
-                    reversibility: toolRev,
-                  }).catch(() => { /* non-fatal */ });
-                }
-              }
-
-              // Collect ReAct step
-              const reactStep: LocalReActStep = {
-                iteration: iterations,
-                thought: textContent.trim() ? truncate(textContent, REACT_SUMMARY_MAX_LENGTH) : '',
-                actions: toolUseBlocks.map(b => ({
-                  tool: b.name,
-                  inputSummary: truncate(JSON.stringify(b.input), REACT_SUMMARY_MAX_LENGTH),
-                })),
-                observations: toolResults.map(r => ({
-                  tool: toolUseBlocks.find(b => b.id === r.tool_use_id)?.name || 'unknown',
-                  resultSummary: truncate(
-                    typeof r.content === 'string' ? r.content : JSON.stringify(r.content),
-                    REACT_SUMMARY_MAX_LENGTH,
-                  ),
-                  success: !r.is_error,
-                })),
-                durationMs: Date.now() - iterationStart,
-                timestamp: new Date().toISOString(),
-              };
-              reactTrace.push(reactStep);
-              this.emit('task:react_step', { taskId, step: reactStep });
-
-              currentMessages = [
-                ...currentMessages,
-                { role: 'assistant' as const, content: response.content },
-                { role: 'user' as const, content: toolResults },
-              ];
-
-              // Mid-loop context summarization: check if we're approaching limits
-              iterationsSinceSummarize++;
-              const utilizationPct = totalInputTokens / contextLimit;
-              if (utilizationPct >= CONTEXT_WARNING_THRESHOLD_PCT) {
-                logger.warn(`[RuntimeEngine] Context utilization at ${Math.round(utilizationPct * 100)}% for task ${taskId}`);
-              }
-              if (
-                utilizationPct >= CONTEXT_SUMMARIZE_THRESHOLD_PCT &&
-                iterationsSinceSummarize >= SUMMARIZE_COOLDOWN_ITERATIONS &&
-                currentMessages.length > 6
-              ) {
-                currentMessages = await summarizeMessages(currentMessages, this.anthropic);
-                iterationsSinceSummarize = 0;
-              }
-
-              // Save checkpoint after each iteration (fire-and-forget)
-              const iterCheckpoint: TaskCheckpoint = {
-                version: 1,
-                messages: currentMessages,
-                iteration: iterations,
-                toolCallCount: toolCallHashes.length,
-                totalInputTokens,
-                totalOutputTokens,
-                toolCallHashes,
-                elapsedMs: Date.now() - startTime,
-                savedAt: new Date().toISOString(),
-                reason: 'iteration_save',
-              };
-              void this.db.from('agent_workforce_tasks').update({
-                checkpoint: serializeCheckpoint(iterCheckpoint),
-                checkpoint_iteration: iterations,
-              }).eq('id', taskId).then(() => {});
-
-              // Check for pause request
-              try {
-                const { data: pauseCheck } = await this.db
-                  .from('agent_workforce_tasks')
-                  .select('pause_requested')
-                  .eq('id', taskId)
-                  .single();
-                if (pauseCheck && (pauseCheck as { pause_requested?: number }).pause_requested) {
-                  const pauseCheckpoint: TaskCheckpoint = { ...iterCheckpoint, reason: 'pause_requested' };
-                  await this.db.from('agent_workforce_tasks').update({
-                    checkpoint: serializeCheckpoint(pauseCheckpoint),
-                    checkpoint_iteration: iterations,
-                    status: 'paused',
-                  }).eq('id', taskId);
-                  logger.info({ taskId, iteration: iterations }, 'Task paused at checkpoint');
-                  return {
-                    success: true,
-                    taskId,
-                    status: 'paused',
-                    output: { text: fullContent || textContent },
-                    tokensUsed: totalInputTokens + totalOutputTokens,
-                    costCents: calculateCostCents(modelId as ClaudeModel, totalInputTokens, totalOutputTokens),
-                  };
-                }
-              } catch { /* non-fatal pause check */ }
-
-              continue;
-            }
-
-            fullContent = textContent;
-            break;
-          }
+          const loopResult = await runAnthropicReActLoop.call(this, {
+            systemPrompt,
+            systemPromptHash,
+            messages,
+            tools,
+            caps,
+            services,
+            mcpClients,
+            taskId,
+            agentId,
+            workspaceId,
+            task,
+            agentConfig,
+            agent,
+            modelId,
+            contextLimit,
+            llmCache,
+            agentBudget,
+            startTime,
+          });
+          fullContent = loopResult.fullContent;
+          totalInputTokens = loopResult.totalInputTokens;
+          totalOutputTokens = loopResult.totalOutputTokens;
+          reactTrace = loopResult.reactTrace;
+          // Sync services back to executeTask's locals so the outer
+          // finally can close whatever the loop activated.
+          browserService = services.browserService;
+          browserActivated = services.browserActivated;
+          desktopService = services.desktopService;
+          desktopActivated = services.desktopActivated;
+          // The loop may have reassigned caps.fileAccessGuard on a doc-
+          // mount expansion; re-bind the local so any remaining readers
+          // see the final value.
+          fileAccessGuard = caps.fileAccessGuard;
 
           // Check for irreversible tools used in Anthropic path
-          const irreversibleAnthropicTools = anthropicToolsUsed.filter(
-            name => getToolReversibility(name) === 'irreversible'
+          const irreversibleAnthropicTools = loopResult.anthropicToolsUsed.filter(
+            (name) => getToolReversibility(name) === 'irreversible',
           );
           if (irreversibleAnthropicTools.length > 0) {
             this.emit('task:warning', {
@@ -1429,6 +1105,20 @@ export class RuntimeEngine {
               warning: 'irreversible_tools_used',
               tools: irreversibleAnthropicTools,
             });
+          }
+
+          // Pause early-return: the loop signals pause via result.paused.
+          // We return a paused ExecuteAgentResult here — the outer finally
+          // still runs, closing browser/desktop/MCP cleanly.
+          if (loopResult.paused) {
+            return {
+              success: true,
+              taskId,
+              status: 'paused',
+              output: loopResult.paused.output,
+              tokensUsed: loopResult.paused.tokensUsed,
+              costCents: loopResult.paused.costCents,
+            };
           }
         } else {
           // Simple single call (no tools)
