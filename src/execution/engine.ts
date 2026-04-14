@@ -23,6 +23,7 @@ import { resolveTaskCapabilities } from './task-capabilities.js';
 import { buildTaskToolList } from './tool-list.js';
 import { finalizeTaskSuccess } from './task-completion.js';
 import { handleTaskFailure } from './task-failure.js';
+import { assertTaskWasGrounded } from './hallucination-gate.js';
 import { runAnthropicReActLoop, type ReActServicesHolder } from './react-loop.js';
 import { runModelRouterLoop } from './model-router-loop.js';
 import type { ReActStep } from './task-completion.js';
@@ -1062,6 +1063,16 @@ export class RuntimeEngine {
           });
         }
       }
+
+      // Fail-closed hallucination gate: if the agent produced text-only
+      // output to a task shaped like real work, it's almost always
+      // fabricated. Throws HallucinationDetectedError which the outer
+      // catch routes through handleTaskFailure → status='failed'.
+      assertTaskWasGrounded({
+        reactTrace,
+        taskInput: typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? ''),
+        agentConfig: agentConfig as Record<string, unknown>,
+      });
 
       return await finalizeTaskSuccess.call(this, {
         taskId,
