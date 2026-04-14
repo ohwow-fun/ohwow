@@ -1,5 +1,5 @@
 /**
- * safeSelfCommit — Phase 7-A safety primitive.
+ * safeSelfCommit — Phase 7-A safety primitive, Path A audit-contract revision.
  *
  * The load-bearing safety layer for ohwow writing its own experiment
  * code and committing it to git. Every Phase 7 commit from a
@@ -25,18 +25,30 @@
  *    human-driven change. This dramatically reduces the blast
  *    radius of a hallucinated codegen.
  *
- * 4. Pre-flight gates. npm run typecheck runs first. If that
- *    passes, the specific new test files run via vitest. Only if
- *    both green does the git add/commit sequence run. Any failure
- *    between write and commit triggers a rollback (delete the
- *    written files).
+ * 4. Commit-message shape. Minimum 40 characters and must start
+ *    with "feat(self-bench): " so the operator bailout "commit
+ *    message shorter than 40 chars or missing feat(self-bench):
+ *    prefix" is self-enforcing.
  *
- * 5. Commit scope is explicit. git add receives only the files
- *    from the opts.files list — no git add . ever. Commit uses
- *    --no-verify because we already ran the hook gates manually
- *    above and running them again from inside a running daemon
- *    process would deadlock (the daemon's test framework is not
- *    reentrant). The --no-verify is document-in-comment load-bearing.
+ * 5. Pre-flight gates. npm run typecheck runs first. If that
+ *    passes, the specific new test files run via vitest. Only if
+ *    both green does the audit log get written.
+ *
+ * 6. Pre-commit audit log. BEFORE any git-state mutation, we
+ *    append one JSON line to ~/.ohwow/self-commit-log with the
+ *    exact shape the operator runbook enforces (ts,
+ *    files_changed, bailout_check, extends_experiment_id,
+ *    why_not_edit_existing). If the audit write fails, the commit
+ *    aborts fail-closed — no commit without an audit trail. The
+ *    audit entry is the operator's tripwire for halting the loop
+ *    on missing-audit or non-none bailout_check.
+ *
+ * 7. Commit scope is explicit. git add receives only the files
+ *    from the opts.files list — no git add . ever. Commit runs
+ *    WITHOUT --no-verify (husky runs its hooks) so the operator
+ *    runbook bailout "--no-verify" is self-enforcing. The
+ *    redundant typecheck the hook runs is cheap (~8s) and
+ *    harmless — it's a subset of what we already ran manually.
  *
  * Error handling
  * --------------
@@ -64,14 +76,36 @@ export interface SelfCommitFile {
 
 export interface SelfCommitOptions {
   files: SelfCommitFile[];
-  /** Human-readable commit message (first line = subject). */
+  /**
+   * Human-readable commit message. Must be at least 40 characters
+   * and start with "feat(self-bench): " so operator bailout #3
+   * ("commit message shorter than 40 chars or missing
+   * feat(self-bench): prefix") is self-enforcing.
+   */
   commitMessage: string;
   /** Experiment id of the writer, for the commit trailer. */
   experimentId: string;
   /**
+   * Audit field (required) — id of an existing experiment this
+   * commit extends, or null if it's a new green-field experiment.
+   * Lands in the pre-commit audit log so operators can tell
+   * "extension" commits from "fresh" commits at a glance.
+   */
+  extendsExperimentId: string | null;
+  /**
+   * Audit field (required) — sentence-form justification for NOT
+   * editing an existing experiment. At least 10 characters.
+   * Lands in the pre-commit audit log. For Phase 7 the author
+   * populates this with a standard sentence about Phase 7-A's
+   * new-file-only policy; future phases that support edits will
+   * populate it with the actual reason.
+   */
+  whyNotEditExisting: string;
+  /**
    * Skip the typecheck + vitest gates. ONLY for unit tests of
    * safeSelfCommit itself. Production call sites must leave this
-   * undefined so the real gates run.
+   * undefined so the real gates run. Gate skip does NOT skip the
+   * audit log write — that's always on.
    */
   skipGates?: boolean;
 }
@@ -81,6 +115,19 @@ export interface SelfCommitResult {
   reason?: string;
   commitSha?: string;
   filesWritten?: string[];
+}
+
+/**
+ * Exact key shape of the pre-commit audit log line. Operators
+ * parse this file and halt on any row missing these keys or with
+ * bailout_check != 'none'.
+ */
+export interface SelfCommitAuditEntry {
+  ts: string;
+  files_changed: string[];
+  bailout_check: string;
+  extends_experiment_id: string | null;
+  why_not_edit_existing: string;
 }
 
 const ALLOWED_PATH_PREFIXES = [
@@ -98,9 +145,27 @@ export const SELF_COMMIT_ENABLED_PATH = path.join(
   'self-commit-enabled',
 );
 
-// Module-level repo root. Set at daemon boot by setSelfCommitRepoRoot.
-// Tests override via the setter in their beforeEach.
+/**
+ * Append-only audit log that every self-commit attempt writes to
+ * BEFORE invoking git. Operator tails this file during supervision
+ * to halt on any row whose bailout_check is not "none" or that is
+ * missing the required keys. If the audit write fails, the commit
+ * is aborted fail-closed — no commit without an audit trail.
+ */
+export const AUDIT_LOG_PATH = path.join(
+  os.homedir(),
+  '.ohwow',
+  'self-commit-log',
+);
+
+const COMMIT_MESSAGE_MIN_LENGTH = 40;
+const COMMIT_MESSAGE_PREFIX = 'feat(self-bench): ';
+const WHY_NOT_EDIT_MIN_LENGTH = 10;
+
+// Module-level state. Set at daemon boot via the setter.
+// Tests override via their beforeEach hooks.
 let repoRootOverride: string | null = null;
+let auditLogPathOverride: string | null = null;
 
 /**
  * Wire the daemon's repo root at boot. Detected in start.ts from
@@ -110,9 +175,19 @@ export function setSelfCommitRepoRoot(root: string | null): void {
   repoRootOverride = root;
 }
 
+/**
+ * Test-only override for the audit log path. Tests point it at a
+ * temp file so they don't pollute the operator's real log. Pass
+ * null to clear.
+ */
+export function _setAuditLogPathForTests(p: string | null): void {
+  auditLogPathOverride = p;
+}
+
 /** Test-only reset so beforeEach starts clean. */
 export function _resetSelfCommitForTests(): void {
   repoRootOverride = null;
+  auditLogPathOverride = null;
 }
 
 function getRepoRoot(): string | null {
@@ -120,6 +195,10 @@ function getRepoRoot(): string | null {
   const envOverride = process.env.OHWOW_REPO_ROOT;
   if (envOverride) return envOverride;
   return null;
+}
+
+function getAuditLogPath(): string {
+  return auditLogPathOverride ?? AUDIT_LOG_PATH;
 }
 
 function isKillSwitchOpen(): boolean {
@@ -142,6 +221,17 @@ function isPathAllowed(relPath: string): boolean {
   if (path.isAbsolute(normalized)) return false;
   // Must match one of the allowed prefixes
   return ALLOWED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+/**
+ * Append one JSON line to the audit log. Throws on failure so the
+ * caller can abort the commit — fail-closed is the whole point of
+ * this file. Creates the parent directory if missing.
+ */
+function writeAuditEntry(entry: SelfCommitAuditEntry): void {
+  const logPath = getAuditLogPath();
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.appendFileSync(logPath, JSON.stringify(entry) + '\n', 'utf-8');
 }
 
 /**
@@ -171,6 +261,29 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return {
       ok: false,
       reason: `self-commit is disabled by default. To enable, create ${SELF_COMMIT_ENABLED_PATH}`,
+    };
+  }
+
+  // Commit message shape — rejects short or un-prefixed messages
+  // so the operator bailout is enforced BEFORE touching anything.
+  if (typeof opts.commitMessage !== 'string' || opts.commitMessage.length < COMMIT_MESSAGE_MIN_LENGTH) {
+    return {
+      ok: false,
+      reason: `commitMessage must be at least ${COMMIT_MESSAGE_MIN_LENGTH} characters (got ${opts.commitMessage?.length ?? 0})`,
+    };
+  }
+  if (!opts.commitMessage.startsWith(COMMIT_MESSAGE_PREFIX)) {
+    return {
+      ok: false,
+      reason: `commitMessage must start with "${COMMIT_MESSAGE_PREFIX}"`,
+    };
+  }
+
+  // Audit-field validation — refuse garbage before we get near git.
+  if (typeof opts.whyNotEditExisting !== 'string' || opts.whyNotEditExisting.length < WHY_NOT_EDIT_MIN_LENGTH) {
+    return {
+      ok: false,
+      reason: `whyNotEditExisting must be at least ${WHY_NOT_EDIT_MIN_LENGTH} characters`,
     };
   }
 
@@ -226,7 +339,25 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     }
   }
 
-  // 5. Git add (explicit file list — never git add .)
+  // 5. Pre-commit audit log. Fail-closed on write error — no
+  //    commit without an audit trail. Happens AFTER gates pass
+  //    (so we don't pollute the log with rows whose gates failed)
+  //    but BEFORE git state mutation (so operators see the
+  //    attempt before the commit lands).
+  try {
+    writeAuditEntry({
+      ts: new Date().toISOString(),
+      files_changed: opts.files.map((f) => f.path),
+      bailout_check: 'none',
+      extends_experiment_id: opts.extendsExperimentId,
+      why_not_edit_existing: opts.whyNotEditExisting,
+    });
+  } catch (err) {
+    rollbackFiles(absPaths);
+    return { ok: false, reason: `audit log write failed: ${extractErrorSummary(err)}` };
+  }
+
+  // 6. Git add (explicit file list — never git add .)
   try {
     const addArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
     runInRepo(`git add ${addArgs}`, repoRoot);
@@ -235,13 +366,14 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return { ok: false, reason: `git add failed: ${extractErrorSummary(err)}` };
   }
 
-  // 6. Git commit with sign-off + self-attribution trailer
+  // 7. Git commit with sign-off + self-attribution trailer. NO
+  //    --no-verify — husky's pre-commit hook runs (typecheck +
+  //    lint-staged eslint). Those are cheap and deterministic;
+  //    running them again from inside the daemon is fine because
+  //    husky hooks operate on staged files, not on the test runner.
   const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n`;
   try {
-    // --no-verify because we already ran the hook gates (typecheck +
-    // vitest) manually above. Running them again inside the daemon's
-    // own test runner would deadlock vitest against itself.
-    runInRepo('git commit -s --no-verify -F -', repoRoot, { input: fullMessage });
+    runInRepo('git commit -s -F -', repoRoot, { input: fullMessage });
   } catch (err) {
     // Git reset the staged changes so the repo is clean.
     try {
@@ -252,7 +384,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return { ok: false, reason: `git commit failed: ${extractErrorSummary(err)}` };
   }
 
-  // 7. Read back the resulting SHA
+  // 8. Read back the resulting SHA
   let commitSha: string | undefined;
   try {
     commitSha = runInRepo('git rev-parse HEAD', repoRoot).trim();
@@ -302,11 +434,13 @@ export function getSelfCommitStatus(): {
   repoRootConfigured: boolean;
   repoRoot: string | null;
   allowedPathPrefixes: readonly string[];
+  auditLogPath: string;
 } {
   return {
     killSwitchOpen: isKillSwitchOpen(),
     repoRootConfigured: getRepoRoot() !== null,
     repoRoot: getRepoRoot(),
     allowedPathPrefixes: ALLOWED_PATH_PREFIXES,
+    auditLogPath: getAuditLogPath(),
   };
 }

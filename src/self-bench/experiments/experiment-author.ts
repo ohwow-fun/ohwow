@@ -81,7 +81,14 @@ export class ExperimentAuthorExperiment implements Experiment {
   category = 'other' as const;
   hypothesis =
     'Unclaimed experiment proposals in the ledger can be safely turned into committed code via the Phase 7-B template + Phase 7-A safe-commit pipeline, producing new experiments without human intervention.';
-  cadence = { everyMs: 60 * 60 * 1000, runOnBoot: false };
+  // runOnBoot: true so the first tick fires immediately after the
+  // daemon picks up a new build. Operators can then watch the
+  // audit log + git log for the first live authoring. Subsequent
+  // runs are hourly. safeSelfCommit is still gated behind the
+  // kill switch file, so enabling runOnBoot doesn't change the
+  // safety posture — it just makes the first live run observable
+  // at restart time instead of an hour later.
+  cadence = { everyMs: 60 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const proposals = await this.readUnclaimedProposals(ctx);
@@ -173,15 +180,27 @@ export class ExperimentAuthorExperiment implements Experiment {
     }
 
     // The safe-commit primitive runs all the gates (typecheck,
-    // vitest on the new test file, git add/commit). It returns
-    // { ok, reason?, commitSha? } and never throws.
+    // vitest on the new test file, audit log, git add/commit).
+    // It returns { ok, reason?, commitSha? } and never throws.
+    //
+    // Commit message: deliberately long + feat(self-bench): prefix
+    // so the runbook bailout "commit message < 40 chars or missing
+    // prefix" is structurally impossible to trip.
+    //
+    // extendsExperimentId is always null in Phase 7 — the pipeline
+    // is new-file-only by hard constraint. whyNotEditExisting
+    // documents that constraint for operator audit.
+    const commitMessage = `feat(self-bench): auto-author ${brief.slug} from proposal brief`;
     const commitResult = await safeSelfCommit({
       files: [
         { path: files.sourcePath, content: files.sourceContent },
         { path: files.testPath, content: files.testContent },
       ],
-      commitMessage: `feat(self-bench): ${brief.name} (auto-authored)`,
+      commitMessage,
       experimentId: this.id,
+      extendsExperimentId: null,
+      whyNotEditExisting:
+        'Phase 7-A safeSelfCommit is hard-constrained to new files only via the new-file-only policy; this brief is a green-field probe with no parent experiment to extend.',
     });
 
     // Always mark the claim attempt, even on failure, so operators

@@ -7,6 +7,7 @@ import { ExperimentAuthorExperiment } from '../experiments/experiment-author.js'
 import {
   setSelfCommitRepoRoot,
   _resetSelfCommitForTests,
+  _setAuditLogPathForTests,
 } from '../self-commit.js';
 import type {
   Experiment,
@@ -31,6 +32,7 @@ import type { ExperimentBrief } from '../experiment-template.js';
  */
 
 let tempRoot: string;
+let auditLogPath: string;
 
 function initRepo(root: string) {
   execSync('git init -b main', { cwd: root, stdio: 'pipe' });
@@ -131,11 +133,15 @@ beforeEach(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'author-test-'));
   initRepo(tempRoot);
   setSelfCommitRepoRoot(tempRoot);
+  // Audit log path must be outside the repo so git status stays clean.
+  auditLogPath = path.join(os.tmpdir(), `author-audit-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
+  _setAuditLogPathForTests(auditLogPath);
   process.env.OHWOW_SELF_COMMIT_TEST_ALLOW = '1';
 });
 
 afterEach(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { if (fs.existsSync(auditLogPath)) fs.unlinkSync(auditLogPath); } catch { /* ignore */ }
   _resetSelfCommitForTests();
   delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
 });
@@ -224,10 +230,38 @@ describe('ExperimentAuthorExperiment — intervene', () => {
     expect(fs.existsSync(path.join(tempRoot, 'src/self-bench/experiments/author-test-probe.ts'))).toBe(true);
     expect(fs.existsSync(path.join(tempRoot, 'src/self-bench/__tests__/author-test-probe.test.ts'))).toBe(true);
 
-    // git log shows the commit
+    // git log shows the commit using the new message shape:
+    // "feat(self-bench): auto-author <slug> from proposal brief"
     const log = execSync('git log --oneline', { cwd: tempRoot, encoding: 'utf-8' });
-    expect(log).toContain('Author test probe');
-    expect(log).toContain('auto-authored');
+    expect(log).toContain('feat(self-bench)');
+    expect(log).toContain('auto-author author-test-probe');
+  });
+
+  it('writes a pre-commit audit log entry with all required keys', async () => {
+    const inserted: Array<Record<string, unknown>> = [];
+    const ctx = makeCtx(tempRoot, {
+      'experiment-proposal-generator': [proposalFinding(sampleBrief, false)],
+    }, inserted);
+
+    const result = await exp.probe(ctx);
+    await exp.intervene!('warning', result, ctx);
+
+    // Audit log file exists and contains one line with the five
+    // required keys + bailout_check === "none".
+    expect(fs.existsSync(auditLogPath)).toBe(true);
+    const lines = fs.readFileSync(auditLogPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]);
+    expect(entry).toHaveProperty('ts');
+    expect(entry).toHaveProperty('files_changed');
+    expect(entry).toHaveProperty('bailout_check');
+    expect(entry).toHaveProperty('extends_experiment_id');
+    expect(entry).toHaveProperty('why_not_edit_existing');
+    expect(entry.bailout_check).toBe('none');
+    expect(entry.extends_experiment_id).toBeNull();
+    expect(String(entry.why_not_edit_existing).length).toBeGreaterThan(10);
+    expect(entry.files_changed).toContain('src/self-bench/experiments/author-test-probe.ts');
+    expect(entry.files_changed).toContain('src/self-bench/__tests__/author-test-probe.test.ts');
   });
 
   it('writes a claim-marker finding after a successful commit', async () => {
