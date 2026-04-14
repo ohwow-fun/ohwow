@@ -79,6 +79,7 @@ import {
 import { executeToolCallsBatch } from './batch-executor.js';
 import { ConsecutiveToolBreaker } from './error-recovery.js';
 import { parseToolArguments } from '../execution/tool-parse.js';
+import { recordLlmCallTelemetry } from '../execution/llm-organ.js';
 import { repairToolCall } from './tool-call-repair.js';
 import { hashToolCall } from '../lib/stagnation.js';
 import { logger } from '../lib/logger.js';
@@ -525,6 +526,7 @@ export async function* runOpenRouterChat(
         `OpenRouter stream (${iterModel}, iter ${iteration})`,
         MODEL_CALL_TIMEOUT_MS,
       );
+      const iterStartMs = Date.now();
       try {
         const thinkFilter = new ThinkTagFilter();
         const stream = provider.createMessageWithToolsStreaming({
@@ -569,6 +571,23 @@ export async function* runOpenRouterChat(
       } finally {
         orStreamTimer.cancel();
       }
+
+      // Record per-iteration telemetry. The orchestrator chat loop calls the
+      // provider directly, bypassing llm-organ, so without this write there
+      // is no llm_calls row and every cost/token aggregation reads 0.
+      await recordLlmCallTelemetry(
+        { db: this.db, workspaceId: this.workspaceId },
+        {
+          purpose: 'orchestrator_chat',
+          provider: response.provider,
+          model: response.model,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          costCents: response.costCents ?? 0,
+          latencyMs: Date.now() - iterStartMs,
+          success: true,
+        },
+      );
 
       totalInputTokens += response.inputTokens;
       totalOutputTokens += response.outputTokens;

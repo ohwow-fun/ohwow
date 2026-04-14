@@ -101,9 +101,18 @@ async function computeRoutingHistory(
  * Persist a row in the llm_calls telemetry table. Best-effort: a
  * telemetry failure must never cause the underlying llm call to fail, so
  * errors are swallowed and logged at warn level.
+ *
+ * Exported so direct provider callers (e.g. the orchestrator chat loop,
+ * which bypasses llm-organ's dispatch) can write llm_calls rows too.
+ * Accepts the narrower subset of LlmCallDeps it actually uses.
  */
-async function recordLlmCallTelemetry(
-  deps: LlmCallDeps,
+export async function recordLlmCallTelemetry(
+  deps: {
+    db: DatabaseAdapter;
+    workspaceId: string;
+    currentAgentId?: string;
+    currentTaskId?: string;
+  },
   row: {
     purpose: Purpose;
     provider: string;
