@@ -36,13 +36,16 @@ describe('COPYWRITING_RULES string', () => {
 });
 
 describe('copywriting-rules propagation wiring', () => {
-  it('engine.ts imports COPYWRITING_RULES and splices it into buildSystemPrompt', () => {
-    const enginePath = join(srcRoot, 'execution', 'engine.ts');
-    const source = readFileSync(enginePath, 'utf8');
+  it('execution/system-prompt.ts imports COPYWRITING_RULES and splices it into the agent prompt', () => {
+    // The RuntimeEngine sub-agent prompt builder was lifted out of
+    // engine.ts into its own module. This guard now checks the
+    // execution/system-prompt.ts file that RuntimeEngine delegates to.
+    const sysPromptPath = join(srcRoot, 'execution', 'system-prompt.ts');
+    const source = readFileSync(sysPromptPath, 'utf8');
     expect(source).toMatch(/from '\.\.\/lib\/copywriting-rules\.js'/);
     expect(source).toMatch(/COPYWRITING_RULES/);
     // Sub-agent prompt template must splice the block in.
-    const buildIdx = source.indexOf('private buildSystemPrompt(');
+    const buildIdx = source.indexOf('export function buildAgentSystemPrompt(');
     expect(buildIdx).toBeGreaterThan(-1);
     const buildBlock = source.slice(buildIdx, buildIdx + 5000);
     expect(buildBlock).toMatch(/\$\{COPYWRITING_RULES\}/);
