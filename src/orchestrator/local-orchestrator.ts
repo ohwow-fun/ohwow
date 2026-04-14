@@ -473,48 +473,66 @@ export class LocalOrchestrator {
   }
 
   /**
-   * Initialize the 8 philosophical layers and wire them into the Brain.
-   * All layers are optional — Brain works without them.
+   * Initialize the 8 philosophical layers and wire them into BOTH brains.
+   *
+   * The orchestrator and the RuntimeEngine each construct their own Brain
+   * instance — this.brain (orchestrator chat) and this.engine.getBrain()
+   * (per-agent task execution + the brain that LocalToolContext exposes
+   * to chat tools). Without dual wiring, get_body_state called from a
+   * chat tool reads the engine's brain, finds no bpp modules, and returns
+   * an empty bpp block even though the orchestrator's brain has them.
+   * P4.14 proprioception bench caught exactly this. All layers are
+   * optional — Brain works without them.
    */
   private initPhilosophicalLayers(): void {
+    const engineBrain = this.engine.getBrain();
+
     import('../affect/affect-engine.js').then(({ AffectEngine }) => {
       this.affectEngine = new AffectEngine(this.db, this.workspaceId);
       this.brain?.setAffectEngine(this.affectEngine);
+      engineBrain?.setAffectEngine(this.affectEngine);
     }).catch(() => { /* non-fatal */ });
 
     import('../endocrine/endocrine-system.js').then(({ EndocrineSystem }) => {
       this.endocrineSystem = new EndocrineSystem(this.db, this.workspaceId);
       this.brain?.setEndocrineSystem(this.endocrineSystem);
+      engineBrain?.setEndocrineSystem(this.endocrineSystem);
     }).catch(() => { /* non-fatal */ });
 
     import('../homeostasis/homeostasis-controller.js').then(({ HomeostasisController }) => {
       this.homeostasisController = new HomeostasisController(this.db, this.workspaceId);
       this.brain?.setHomeostasisController(this.homeostasisController);
+      engineBrain?.setHomeostasisController(this.homeostasisController);
     }).catch(() => { /* non-fatal */ });
 
     import('../immune/immune-system.js').then(({ ImmuneSystem }) => {
       this.immuneSystem = new ImmuneSystem(this.db, this.workspaceId);
       this.brain?.setImmuneSystem(this.immuneSystem);
+      engineBrain?.setImmuneSystem(this.immuneSystem);
     }).catch(() => { /* non-fatal */ });
 
     import('../narrative/narrative-engine.js').then(({ NarrativeEngine }) => {
       this.narrativeEngine = new NarrativeEngine(this.db, this.workspaceId);
       this.brain?.setNarrativeEngine(this.narrativeEngine);
+      engineBrain?.setNarrativeEngine(this.narrativeEngine);
     }).catch(() => { /* non-fatal */ });
 
     import('../ethos/ethics-engine.js').then(({ EthicsEngine }) => {
       this.ethicsEngine = new EthicsEngine(this.db, this.workspaceId);
       this.brain?.setEthicsEngine(this.ethicsEngine);
+      engineBrain?.setEthicsEngine(this.ethicsEngine);
     }).catch(() => { /* non-fatal */ });
 
     import('../hexis/habit-engine.js').then(({ HabitEngine }) => {
       this.habitEngine = new HabitEngine(this.db, this.workspaceId);
       this.brain?.setHabitEngine(this.habitEngine);
+      engineBrain?.setHabitEngine(this.habitEngine);
     }).catch(() => { /* non-fatal */ });
 
     import('../oneiros/sleep-cycle.js').then(({ SleepCycle }) => {
       this.sleepCycle = new SleepCycle();
       this.brain?.setSleepCycle(this.sleepCycle);
+      engineBrain?.setSleepCycle(this.sleepCycle);
     }).catch(() => { /* non-fatal */ });
   }
 
