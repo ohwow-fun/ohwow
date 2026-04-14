@@ -37,8 +37,16 @@ export default defineConfig({
   clean: false,
   // Bundle React + ink so there's exactly one instance
   noExternal: ['react', 'ink', 'ink-text-input', 'ink-select-input', 'ink-spinner', 'react-reconciler'],
-  // Don't bundle native modules
-  external: ['better-sqlite3', 'playwright-core', '@jimp/custom', '@jimp/plugin-resize', '@jimp/plugin-scale', '@jimp/plugins', '@nut-tree-fork/nut-js'],
+  // Don't bundle native modules. typescript is external because
+  // its compiler source contains top-level `await` mixed with
+  // `require()` — when inlined into the single-file ESM bundle
+  // via the createRequire banner, Node refuses to load
+  // ("Cannot determine intended module format"). Keeping
+  // typescript external lets the runtime do a normal
+  // require('typescript') via the banner's createRequire, and
+  // src/orchestrator/self-bench/schema-handler-audit.ts's
+  // `import ts from 'typescript'` still works.
+  external: ['better-sqlite3', 'playwright-core', '@jimp/custom', '@jimp/plugin-resize', '@jimp/plugin-scale', '@jimp/plugins', '@nut-tree-fork/nut-js', 'typescript'],
   banner: { js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);" },
   esbuildPlugins: [stubDevtools],
   esbuildOptions(options) {
