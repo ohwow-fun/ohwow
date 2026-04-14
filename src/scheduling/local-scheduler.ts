@@ -41,6 +41,24 @@ async function getCronParser(): Promise<typeof import('cron-parser')> {
 
 const HEARTBEAT_INTERVAL = 300_000; // 5 minutes
 
+/**
+ * Parse a `local_triggers.trigger_config` column into a plain object.
+ *
+ * The sqlite adapter already JSON.parses the column for us, so the value
+ * arrives as an object at runtime even though LocalTrigger types it as
+ * `string`. Older readers did `typeof raw === 'string' ? JSON.parse(raw) : {}`
+ * which silently fell to `{}` and dropped every cron, event_type, etc.
+ * Handle both shapes so we survive adapter changes and legacy strings.
+ */
+function parseTriggerConfig(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+  }
+  if (typeof raw === 'object') return raw as Record<string, unknown>;
+  return {};
+}
+
 export class LocalScheduler {
   private nextFireTimeout: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -131,6 +149,7 @@ export class LocalScheduler {
    */
   private async tick(): Promise<void> {
     const now = new Date().toISOString();
+    logger.debug(`[LocalScheduler] tick() at ${now} (triggerEvaluator=${this.triggerEvaluator ? 'set' : 'null'})`);
 
     // 1. Agent/workflow schedules (from agent_workforce_schedules)
     const { data } = await this.db
@@ -228,9 +247,7 @@ export class LocalScheduler {
         if (triggers) {
           for (const row of triggers ?? []) {
             try {
-              const config = typeof row.trigger_config === 'string'
-                ? JSON.parse(row.trigger_config) as Record<string, unknown>
-                : {};
+              const config = parseTriggerConfig(row.trigger_config);
               const cron = config.cron as string;
               if (!cron) continue;
               const nextRun = await this.computeNextRunFrom(cron, row.last_fired_at);
@@ -284,18 +301,24 @@ export class LocalScheduler {
         .eq('trigger_type', 'schedule')
         .eq('enabled', 1);
 
+      logger.debug(`[LocalScheduler] tickAutomationSchedules: ${triggers?.length ?? 0} schedule trigger(s) enabled`);
+
       if (!triggers) return;
 
       for (const row of triggers ?? []) {
         try {
-          const config = typeof row.trigger_config === 'string'
-            ? JSON.parse(row.trigger_config) as Record<string, unknown>
-            : {};
+          const config = parseTriggerConfig(row.trigger_config);
           const cron = config.cron as string;
-          if (!cron) continue;
+          if (!cron) {
+            logger.debug(`[LocalScheduler] Skip ${row.name}: no cron in trigger_config`);
+            continue;
+          }
 
           // Compute next run from cron + last_fired_at
           const nextRun = await this.computeNextRunFrom(cron, row.last_fired_at);
+          logger.debug(
+            `[LocalScheduler] Eval ${row.name}: cron="${cron}" lastFiredAt=${row.last_fired_at ?? 'null'} nextRun=${nextRun ?? 'null'} now=${now} pastDue=${nextRun !== null && nextRun <= now}`,
+          );
           if (!nextRun || nextRun > now) continue;
 
           // Fire the automation via trigger evaluator
