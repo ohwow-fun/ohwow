@@ -153,20 +153,20 @@ export class AgentTaskCostWatcherExperiment extends BusinessExperiment {
   ): Promise<{ taskCount: number; avgCost: number | null }> {
     try {
       const { data } = await db
-        .from<{ cost_cents: number | null; ended_at: string | null }>('agent_workforce_tasks')
-        .select('cost_cents, ended_at')
+        .from<{ cost_cents: number | null; completed_at: string | null }>('agent_workforce_tasks')
+        .select('cost_cents, completed_at')
         .eq('workspace_id', workspaceId)
         .eq('status', 'completed');
 
       const rows = (data ?? []) as Array<{
         cost_cents: number | null;
-        ended_at: string | null;
+        completed_at: string | null;
       }>;
 
       const paid = rows.filter(
         (r) =>
-          r.ended_at &&
-          r.ended_at >= since &&
+          r.completed_at &&
+          r.completed_at >= since &&
           typeof r.cost_cents === 'number' &&
           r.cost_cents > 0,
       );
