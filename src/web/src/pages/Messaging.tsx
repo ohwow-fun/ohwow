@@ -10,19 +10,16 @@ import { api } from '../api/client';
 import { toast } from '../components/Toast';
 
 interface WhatsAppConnection {
-  id: string;
-  phone_number: string | null;
+  connectionId: string | null;
+  phoneNumber: string | null;
+  label: string | null;
+  isDefault: boolean;
   status: string;
-  last_seen: string | null;
-  created_at: string;
-}
-
-interface AllowedChat {
-  chat_id: string;
 }
 
 export function MessagingPage() {
-  const { data: connections, loading, refetch } = useApi<WhatsAppConnection[]>('/api/whatsapp/connections');
+  const { data, loading, refetch } = useApi<{ connections: WhatsAppConnection[] }>('/api/whatsapp/connections');
+  const connections = data?.connections;
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [newChatId, setNewChatId] = useState('');
@@ -87,8 +84,9 @@ export function MessagingPage() {
     }
   };
 
-  const isEmpty = !loading && (!connections || connections.length === 0);
-  const activeConn = connections?.find(c => c.status === 'connected' || c.status === 'active');
+  const realConnections = connections?.filter(c => c.connectionId) ?? [];
+  const isEmpty = !loading && realConnections.length === 0;
+  const activeConn = realConnections.find(c => c.status === 'connected' || c.status === 'active');
 
   return (
     <div className="p-6 max-w-4xl">
@@ -136,18 +134,18 @@ export function MessagingPage() {
         <div className="space-y-6">
           {/* Connection cards */}
           <div className="border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
-            {connections!.map(conn => (
-              <div key={conn.id} className="flex items-center justify-between px-4 py-4">
+            {realConnections.map((conn, i) => (
+              <div key={conn.connectionId ?? i} className="flex items-center justify-between px-4 py-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center">
                     <ChatCircleDots size={20} className="text-green-400" />
                   </div>
                   <div>
                     <p className="text-sm font-medium">
-                      {conn.phone_number || 'WhatsApp'}
+                      {conn.phoneNumber || conn.label || 'WhatsApp'}
                     </p>
                     <p className="text-xs text-neutral-500">
-                      {conn.last_seen ? `Last seen ${new Date(conn.last_seen).toLocaleString()}` : 'No activity yet'}
+                      {conn.status === 'connected' ? 'Connected' : 'No activity yet'}
                     </p>
                   </div>
                 </div>
