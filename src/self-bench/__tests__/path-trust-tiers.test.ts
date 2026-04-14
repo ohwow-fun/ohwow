@@ -45,16 +45,19 @@ describe('resolvePathTier — default registry (behavior-preserving)', () => {
     expect(resolvePathTier('src/self-bench/experiments/../engine.ts').tier).toBe('tier-3');
   });
 
-  it('today\'s default registry has ZERO tier-2 entries (no behavior change)', () => {
-    // Layer 9 lands as infrastructure. Adding tier-2 paths is a
-    // future deliberate policy change, not implicit.
+  it('every default registry prefix resolves to its declared tier', () => {
+    // Guards against logic drift in resolvePathTier: each registered
+    // prefix must round-trip back to the same tier when probed. tier-2
+    // entries are allowed (deliberate policy choices, see the audit
+    // log alongside each one in path-trust-tiers.ts) but every entry
+    // must resolve consistently.
     const allowed = getAllowedPrefixes();
     expect(allowed.length).toBeGreaterThan(0);
-    // tier-1 only in the default registry — resolve each prefix's
-    // probe path and confirm none are tier-2.
     for (const prefix of allowed) {
       const probePath = prefix.endsWith('/') ? `${prefix}x.ts` : prefix;
-      expect(resolvePathTier(probePath).tier).toBe('tier-1');
+      const resolved = resolvePathTier(probePath);
+      expect(resolved.entry).not.toBeNull();
+      expect(resolved.tier).toBe(resolved.entry?.tier);
     }
   });
 });

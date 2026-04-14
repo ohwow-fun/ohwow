@@ -74,6 +74,22 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     tier: 'tier-1',
     rationale: 'append-only toolchain-test probe registry (Layer 1)',
   },
+  // ─── First tier-2 entry — see Layer 9 audit log ────────────────────
+  // Pure ms→string formatter, fully covered by
+  // __tests__/format-duration.test.ts, single internal caller.
+  // A patch here must carry a Fixes-Finding-Id trailer (Layer 2)
+  // pointing at a recent warning|fail finding whose affected_files
+  // intersects this path. The Layer 3 invariant suite blocks commits
+  // that break the formatter test; Layer 4's AST bound limits the
+  // patch to the single top-level `formatDuration` symbol; Layer 5b
+  // cool-off + auto-revert close the heal cycle if the patch
+  // misbehaves in production.
+  {
+    prefix: 'src/lib/format-duration.ts',
+    tier: 'tier-2',
+    rationale:
+      'pure ms→string formatter, fully test-covered, single caller — first tier-2 trial',
+  },
 ];
 
 let registryOverride: PathTierEntry[] | null = null;
