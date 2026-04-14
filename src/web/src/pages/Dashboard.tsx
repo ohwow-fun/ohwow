@@ -7,6 +7,12 @@ import { StatusBadge } from '../components/StatusBadge';
 import { CardSkeleton, RowSkeleton } from '../components/Skeleton';
 import { PageHeader } from '../components/PageHeader';
 
+interface DayBucket7d {
+  date: string;
+  completed: number;
+  failed: number;
+}
+
 interface SystemStats {
   uptime: number;
   memoryMb: number;
@@ -16,6 +22,9 @@ interface SystemStats {
   pendingApprovals: number;
   totalTokens: number;
   totalCostCents: number;
+  completedToday: number;
+  successRate: number | null;
+  dayBuckets7d: DayBucket7d[];
 }
 
 interface Agent {
@@ -33,54 +42,28 @@ interface Task {
   created_at: string;
 }
 
-interface ActivityEntry {
-  type: string;
-  created_at: string;
-}
-
-interface DayBucket {
+interface LabelledBucket {
   label: string;
   completed: number;
   failed: number;
 }
 
-function buildDayBuckets(entries: ActivityEntry[]): DayBucket[] {
+function TaskActivityChart({ buckets: src }: { buckets: DayBucket7d[] | null }) {
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const buckets: DayBucket[] = [];
-  const now = new Date();
-
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    buckets.push({
-      label: dayNames[d.getDay()],
-      completed: 0,
-      failed: 0,
-    });
-  }
-
-  for (const entry of entries) {
-    const entryDate = new Date(entry.created_at);
-    const diffMs = now.getTime() - entryDate.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    if (diffDays < 0 || diffDays > 6) continue;
-    const bucketIdx = 6 - diffDays;
-    if (entry.type === 'task_completed') buckets[bucketIdx].completed++;
-    if (entry.type === 'task_failed') buckets[bucketIdx].failed++;
-  }
-
-  return buckets;
-}
-
-function TaskActivityChart({ activity }: { activity: ActivityEntry[] | null }) {
-  const buckets = activity ? buildDayBuckets(activity) : [];
+  const buckets: LabelledBucket[] = src
+    ? src.map(b => ({
+        label: dayNames[new Date(b.date + 'T00:00:00').getDay()],
+        completed: b.completed,
+        failed: b.failed,
+      }))
+    : [];
   const maxVal = Math.max(1, ...buckets.map(b => b.completed + b.failed));
   const barWidth = 28;
   const gap = 12;
   const chartHeight = 80;
   const svgWidth = buckets.length * (barWidth + gap) - gap;
 
-  if (!activity) {
+  if (!src) {
     return (
       <div className="border border-white/[0.08] rounded-lg p-4 mb-8">
         <p className="text-[11px] text-neutral-500 uppercase tracking-wider mb-3">Task Activity (7 days)</p>
@@ -172,17 +155,10 @@ function TaskActivityChart({ activity }: { activity: ActivityEntry[] | null }) {
   );
 }
 
-function QuickStatsRow({ agents, tasks }: { agents: Agent[] | null; tasks: Task[] | null }) {
+function QuickStatsRow({ agents, stats }: { agents: Agent[] | null; stats: SystemStats | null }) {
   const activeAgents = agents ? agents.filter(a => a.status === 'working').length : 0;
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const todayTasks = tasks
-    ? tasks.filter(t => t.status === 'completed' && t.created_at.startsWith(todayStr)).length
-    : 0;
-
-  const completed = tasks ? tasks.filter(t => t.status === 'completed').length : 0;
-  const failed = tasks ? tasks.filter(t => t.status === 'failed').length : 0;
-  const successRate = completed + failed > 0 ? Math.round((completed / (completed + failed)) * 100) : 100;
+  const todayTasks = stats?.completedToday ?? 0;
+  const successRate = stats?.successRate ?? null;
 
   return (
     <div className="flex gap-3 mb-8">
@@ -196,8 +172,13 @@ function QuickStatsRow({ agents, tasks }: { agents: Agent[] | null; tasks: Task[
       </div>
       <div className="flex-1 border border-white/[0.06] rounded-lg px-4 py-3 bg-white/[0.02]">
         <p className="text-[10px] text-neutral-500 uppercase tracking-wider">Success Rate</p>
-        <p className={`text-lg font-semibold mt-0.5 ${successRate >= 80 ? 'text-success' : successRate >= 50 ? 'text-warning' : 'text-critical'}`}>
-          {successRate}%
+        <p className={`text-lg font-semibold mt-0.5 ${
+          successRate === null ? 'text-neutral-500'
+            : successRate >= 80 ? 'text-success'
+            : successRate >= 50 ? 'text-warning'
+            : 'text-critical'
+        }`}>
+          {successRate === null ? '—' : `${successRate}%`}
         </p>
       </div>
     </div>
@@ -224,7 +205,6 @@ export function DashboardPage() {
   const { data: stats, loading: statsLoading } = useApi<SystemStats>('/api/system/stats', [wsTick]);
   const { data: agents } = useApi<Agent[]>('/api/agents', [wsTick]);
   const { data: tasks } = useApi<Task[]>('/api/tasks?limit=5', [wsTick]);
-  const { data: activity } = useApi<ActivityEntry[]>('/api/activity', [wsTick]);
 
   return (
     <div className="p-6 max-w-5xl">
@@ -250,10 +230,10 @@ export function DashboardPage() {
       </div>
 
       {/* Task activity chart */}
-      <TaskActivityChart activity={activity} />
+      <TaskActivityChart buckets={stats?.dayBuckets7d ?? null} />
 
       {/* Quick stats */}
-      <QuickStatsRow agents={agents} tasks={tasks} />
+      <QuickStatsRow agents={agents} stats={stats} />
 
       {/* Agent cards grid */}
       <div className="mb-8">

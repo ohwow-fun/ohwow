@@ -133,6 +133,62 @@ export function createSystemRouter(
         // llm_calls may not exist in older DBs
       }
 
+      // Authoritative task rollups for Dashboard quick-stats + 7-day chart.
+      // Computed directly from DB so they aren't capped by a /api/tasks?limit=N window.
+      let completedToday = 0;
+      let completedTotal = 0;
+      let failedTotal = 0;
+      const dayBuckets7d: Array<{ date: string; completed: number; failed: number }> = [];
+      try {
+        const todayRow = rawDb.prepare(`
+          SELECT COUNT(*) AS c FROM agent_workforce_tasks
+          WHERE workspace_id = ? AND status = 'completed'
+            AND date(completed_at) = date('now')
+        `).get(workspaceId) as { c: number } | undefined;
+        completedToday = todayRow?.c ?? 0;
+
+        const totalsRow = rawDb.prepare(`
+          SELECT
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS c,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS f
+          FROM agent_workforce_tasks
+          WHERE workspace_id = ?
+        `).get(workspaceId) as { c: number | null; f: number | null } | undefined;
+        completedTotal = totalsRow?.c ?? 0;
+        failedTotal = totalsRow?.f ?? 0;
+
+        const bucketRows = rawDb.prepare(`
+          SELECT
+            date(completed_at) AS d,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+          FROM agent_workforce_tasks
+          WHERE workspace_id = ?
+            AND completed_at IS NOT NULL
+            AND date(completed_at) >= date('now', '-6 days')
+          GROUP BY d
+          ORDER BY d
+        `).all(workspaceId) as Array<{ d: string; completed: number; failed: number }>;
+        const byDate = new Map(bucketRows.map(r => [r.d, r]));
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setUTCDate(d.getUTCDate() - i);
+          const iso = d.toISOString().slice(0, 10);
+          const row = byDate.get(iso);
+          dayBuckets7d.push({
+            date: iso,
+            completed: row?.completed ?? 0,
+            failed: row?.failed ?? 0,
+          });
+        }
+      } catch {
+        // Older DBs may be missing completed_at; fall through with zeros.
+      }
+
+      const successRate = (completedTotal + failedTotal) > 0
+        ? Math.round((completedTotal / (completedTotal + failedTotal)) * 100)
+        : null;
+
       const uptimeSeconds = Math.round((Date.now() - startTime) / 1000);
       const memUsage = process.memoryUsage();
 
@@ -146,6 +202,9 @@ export function createSystemRouter(
           pendingApprovals: pendingApprovals || 0,
           totalTokens,
           totalCostCents,
+          completedToday,
+          successRate,
+          dayBuckets7d,
         },
       });
     } catch (err) {
