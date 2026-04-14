@@ -33,6 +33,7 @@ import { OrchestratorRuntimeConfig, type RagConfigOptions, type InferenceCapabil
 import { PermissionBroker } from './orchestrator-approvals.js';
 import { activateBrowserSession } from './orchestrator-sessions.js';
 import { McpLifecycle, type McpReloadStatus } from './orchestrator-mcp-lifecycle.js';
+import { assembleOrchestratorToolSurface } from './orchestrator-tool-surface.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -1628,110 +1629,21 @@ export class LocalOrchestrator {
     maxPriority?: 1 | 2 | 3,
     userMessageForToolExtraction?: string,
   ): Promise<Tool[]> {
-    // Base tool surface: the orchestrator catalog, the five real LSP
-    // tools, and the Center of Operations extension toolset (operational
-    // pillars, person model, team, persona, onboarding, transitions,
-    // routing, growth, observation, collective). All three are statically
-    // defined but stay as separate exports so the intent layering
-    // elsewhere in the codebase can pick them apart if it ever needs to.
-    const allBaseTools = [
-      ...ORCHESTRATOR_TOOL_DEFINITIONS,
-      ...LSP_TOOL_DEFINITIONS,
-      ...COS_EXTENSION_TOOL_DEFINITIONS,
-    ];
-    let tools = options?.excludedTools?.length
-      ? allBaseTools.filter((t) => !options.excludedTools.includes(t.name))
-      : [...allBaseTools];
-
-    // Add browser tools: if pre-activated or already activated from a previous turn,
-    // skip the gateway and inject full browser tools directly
-    if (browserPreActivated || this.browserActivated) {
-      tools = [...BROWSER_TOOL_DEFINITIONS, LIST_CHROME_PROFILES_TOOL, ...tools];
-    } else {
-      tools = [REQUEST_BROWSER_TOOL, LIST_CHROME_PROFILES_TOOL, ...tools];
-    }
-
-    // Add desktop tools: gated by an explicit-intent + workspace allow check.
-    // The legacy behavior was to always inject REQUEST_DESKTOP_TOOL; that let
-    // a confused model fall into a desktop_screenshot loop on routine tasks
-    // and read window contents from unrelated applications, leaking
-    // cross-workspace data into the response. Default-off; opt in either by
-    // workspace setting or by the intent classifier explicitly recognizing
-    // a desktop request. Once activated this turn, stay activated so
-    // multi-step desktop workflows keep their tool surface.
-    const desktopAllowed =
-      this.config.desktopToolsEnabled
-      || desktopPreActivated === true
-      || this.desktopActivated;
-    if (desktopAllowed) {
-      if (desktopPreActivated || this.desktopActivated) {
-        tools = [...DESKTOP_TOOL_DEFINITIONS, ...tools];
-      } else {
-        tools = [REQUEST_DESKTOP_TOOL, ...tools];
-      }
-    }
-
-    // Add filesystem/bash tools: if already activated this session or paths exist in DB,
-    // include full tools directly. Otherwise show the gateway tool.
-    if (this.filesystemActivated || await this.hasOrchestratorFileAccess()) {
-      tools = [...tools, ...FILESYSTEM_TOOL_DEFINITIONS, ...BASH_TOOL_DEFINITIONS];
-    } else {
-      tools = [...tools, REQUEST_FILE_ACCESS_TOOL];
-    }
-
-    // Append MCP tools (skip intent filtering — MCP tools aren't in TOOL_SECTION_MAP)
-    const mcpTools = this.mcp.getToolDefinitions();
-
-    // Filter by intent sections and priority when provided. Explicit
-    // tool names mentioned in the user message bypass the filter — if
-    // the user writes "call upload_knowledge" or mentions any other
-    // snake_case tool name, that tool must always be loaded regardless
-    // of intent classification. This is the safety valve for classifier
-    // misses, especially around word-boundary quirks with underscores.
-    if (sections) {
-      const explicitNames = userMessageForToolExtraction
-        ? extractExplicitToolNames(userMessageForToolExtraction, tools)
-        : undefined;
-      tools = filterToolsByIntent(tools, sections, maxPriority, explicitNames);
-    }
-
-    // Add MCP tools after filtering (they pass through since they're not mapped)
-    if (mcpTools.length > 0) {
-      tools = [...tools, ...mcpTools];
-    }
-
-    // Append runtime-registered code skills (synthesized tools loaded
-    // hot from the workspace skills dir). They bypass intent filtering
-    // the same way MCP tools do: once a synthesized tool is promoted
-    // out of probation it should always be visible to the LLM. The
-    // registry itself hides probation skills behind OHWOW_SYNTHESIS_DEBUG
-    // so agents don't see half-tested tools during normal operation.
-    const runtimeSkillDefs = runtimeToolRegistry.getToolDefinitions();
-    if (runtimeSkillDefs.length > 0) {
-      tools = [...tools, ...runtimeSkillDefs];
-    }
-
-    // Observability: log the assembled tool surface so operators can verify
-    // MCP tools actually landed in what the model sees. The "configured but
-    // empty" case is the regression signal — it means a server is registered
-    // but ensureMcpConnected/reload silently failed and getMcpStatus() will
-    // tell you why.
-    const mcpConfigured = this.mcp.getServerCount() > 0;
-    if (mcpTools.length > 0 || mcpConfigured) {
-      const overLong = tools.filter(t => t.name.length > 64).map(t => t.name);
-      logger.info(
-        {
-          totalTools: tools.length,
-          mcpToolCount: mcpTools.length,
-          mcpServerCount: this.mcp.getServerCount(),
-          mcpToolNames: mcpTools.slice(0, 5).map(t => t.name),
-          overLongNames: overLong.length > 0 ? overLong : undefined,
-        },
-        '[orchestrator] tool surface assembled',
-      );
-    }
-
-    return tools;
+    return assembleOrchestratorToolSurface({
+      excludedTools: options?.excludedTools,
+      browserPreActivated,
+      browserActivated: this.browserActivated,
+      desktopPreActivated,
+      desktopActivated: this.desktopActivated,
+      desktopToolsEnabled: this.config.desktopToolsEnabled,
+      filesystemActivated: this.filesystemActivated,
+      hasOrchestratorFileAccess: () => this.hasOrchestratorFileAccess(),
+      mcpTools: this.mcp.getToolDefinitions(),
+      mcpServerCount: this.mcp.getServerCount(),
+      sections,
+      maxPriority,
+      userMessageForToolExtraction,
+    });
   }
 
   // ==========================================================================
