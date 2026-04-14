@@ -59,8 +59,16 @@ import { writeFinding } from '../findings-store.js';
 
 /** How many recent llm_calls rows to inspect per model for latency stats. */
 const SAMPLE_WINDOW = 200;
-/** Minimum calls a model needs before it's eligible for a proposal. */
-const MIN_CALLS_FOR_PROPOSAL = 20;
+/**
+ * Minimum calls a model needs before it's eligible for a proposal.
+ * Lowered from 20 → 5 for the supervised observation loop: on the
+ * current daemon's traffic shape (~5 distinct models, most with <20
+ * samples in a week), a 20-sample floor starved the pipeline of
+ * new proposals. 5 samples is enough to establish rough p50/p90/p99
+ * for threshold derivation; if the resulting experiment produces
+ * noisy findings, the adaptive scheduler will stretch its cadence.
+ */
+const MIN_CALLS_FOR_PROPOSAL = 5;
 /** How far back to look for existing proposals to avoid duplicates. */
 const DEDUPE_WINDOW_DAYS = 14;
 
