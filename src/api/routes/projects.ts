@@ -11,7 +11,8 @@ import type { DatabaseAdapter } from '../../db/adapter-types.js';
 export function createProjectsRouter(db: DatabaseAdapter, _eventBus: TypedEventBus<RuntimeEvents>): Router {
   const router = Router();
 
-  // List projects
+  // List projects with per-project task rollups so the UI doesn't have to
+  // fan-out to /api/tasks per card.
   router.get('/api/projects', async (req, res) => {
     try {
       const { workspaceId } = req;
@@ -21,7 +22,33 @@ export function createProjectsRouter(db: DatabaseAdapter, _eventBus: TypedEventB
         .order('created_at', { ascending: false });
 
       if (error) { res.status(500).json({ error: error.message }); return; }
-      res.json({ data: data || [] });
+
+      // Rollup: task counts + open-task count per project. A single scan of
+      // agent_workforce_tasks filtered by workspace + project_id not null.
+      const rollups = new Map<string, { total: number; open: number }>();
+      try {
+        const { data: taskRows } = await db.from('agent_workforce_tasks')
+          .select('project_id,status')
+          .eq('workspace_id', workspaceId);
+        for (const row of (taskRows as Array<{ project_id: string | null; status: string }> | null) ?? []) {
+          if (!row.project_id) continue;
+          const r = rollups.get(row.project_id) ?? { total: 0, open: 0 };
+          r.total += 1;
+          if (row.status !== 'completed' && row.status !== 'approved' && row.status !== 'failed' && row.status !== 'rejected') {
+            r.open += 1;
+          }
+          rollups.set(row.project_id, r);
+        }
+      } catch {
+        // best-effort; cards still render with undefined task counts
+      }
+
+      const enriched = (data ?? []).map((p: Record<string, unknown>) => {
+        const r = rollups.get(p.id as string) ?? { total: 0, open: 0 };
+        return { ...p, task_count: r.total, open_task_count: r.open };
+      });
+
+      res.json({ data: enriched });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

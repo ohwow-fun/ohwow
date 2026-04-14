@@ -16,6 +16,8 @@ interface Project {
   status: string;
   color: string | null;
   created_at: string;
+  task_count?: number;
+  open_task_count?: number;
 }
 
 const STATUSES = ['all', 'active', 'completed', 'archived'] as const;
@@ -122,7 +124,15 @@ export function ProjectsPage() {
               {project.description && (
                 <p className="text-xs text-neutral-400 line-clamp-2">{project.description}</p>
               )}
-              <p className="text-xs text-neutral-400 mt-2">{new Date(project.created_at).toLocaleDateString()}</p>
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-xs text-neutral-400">
+                  {project.task_count ?? 0} {(project.task_count ?? 0) === 1 ? 'task' : 'tasks'}
+                  {!!project.open_task_count && (
+                    <span className="text-warning ml-1.5">· {project.open_task_count} open</span>
+                  )}
+                </p>
+                <p className="text-xs text-neutral-500">{new Date(project.created_at).toLocaleDateString()}</p>
+              </div>
             </Link>
           ))}
         </div>
