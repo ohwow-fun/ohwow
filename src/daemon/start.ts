@@ -62,6 +62,7 @@ import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcome
 import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/autonomous-author-quality.js';
 import { AutonomousPatchRollbackExperiment } from '../self-bench/experiments/autonomous-patch-rollback.js';
 import { PatchAuthorExperiment } from '../self-bench/experiments/patch-author.js';
+import { FormatDurationFuzzExperiment } from '../self-bench/experiments/format-duration-fuzz.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1446,6 +1447,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // Layer 2 trailer + safeSelfCommit. See the experiment header
         // for the gating criteria.
         experimentRunner.register(new PatchAuthorExperiment());
+        // Phase B — first surprise-source experiment. Property-tests
+        // src/lib/format-duration.ts (a tier-2 path) on a deterministic
+        // seeded corpus. On a correct implementation this stays at zero
+        // violations forever (heartbeat over the contract). If the
+        // formatter ever drifts, it emits a fail finding with
+        // affected_files = ['src/lib/format-duration.ts'] — exactly
+        // what PatchAuthorExperiment is watching for.
+        experimentRunner.register(new FormatDurationFuzzExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
