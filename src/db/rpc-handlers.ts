@@ -21,7 +21,7 @@ export function createRpcHandlers(db: Database.Database): Record<string, (params
       const id = generateId();
       const stmt = db.prepare(`
         INSERT INTO agent_workforce_activity (id, workspace_id, activity_type, title, description, agent_id, task_id, metadata, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -33,6 +33,7 @@ export function createRpcHandlers(db: Database.Database): Record<string, (params
         params.p_agent_id ?? null,
         params.p_task_id ?? null,
         JSON.stringify(params.p_metadata ?? {}),
+        new Date().toISOString(),
       );
 
       return { id };

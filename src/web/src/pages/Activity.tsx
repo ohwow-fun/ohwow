@@ -1,11 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { ClockCounterClockwise, MagnifyingGlass } from '@phosphor-icons/react';
-import { useApi } from '../hooks/useApi';
 import { useWsRefresh } from '../hooks/useWebSocket';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { RowSkeleton } from '../components/Skeleton';
+import { api } from '../api/client';
 
 interface ActivityEntry {
   id: string;
@@ -16,17 +16,25 @@ interface ActivityEntry {
   created_at: string;
 }
 
+interface TypeCount { type: string; count: number }
+
 const TYPE_COLORS: Record<string, string> = {
   task_completed: 'text-success',
   task_failed: 'text-critical',
   task_started: 'text-white',
   task_needs_approval: 'text-warning',
+  trigger_fired: 'text-warning',
   schedule_fired: 'text-warning',
   agent_created: 'text-white',
+  orchestrator_tool: 'text-neutral-300',
+  orchestrator_tool_failed: 'text-critical',
+  permission_requested: 'text-warning',
+  permission_approved: 'text-success',
+  permission_denied: 'text-critical',
   memory_extracted: 'text-warning',
 };
 
-const ACTIVITY_TYPES = ['all', 'task_completed', 'task_failed', 'task_started', 'task_needs_approval', 'schedule_fired', 'agent_created', 'memory_extracted'] as const;
+const PAGE_SIZE = 50;
 
 type DateRange = 'all' | 'today' | '7d' | '30d';
 
@@ -46,10 +54,21 @@ function getDateCutoff(range: DateRange): Date | null {
   return now;
 }
 
+function parseUtc(dateStr: string): Date {
+  // Server now normalizes to ISO-8601 UTC. Older legacy strings without a
+  // timezone suffix are still treated as UTC to match historical writer intent.
+  if (!dateStr) return new Date(NaN);
+  if (/Z$|[+-]\d\d:?\d\d$/.test(dateStr)) return new Date(dateStr);
+  return new Date(dateStr.replace(' ', 'T') + 'Z');
+}
+
 function getTimeAgo(dateStr: string): string {
-  const diffMs = Date.now() - new Date(dateStr).getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return 'just now';
+  const diffMs = Date.now() - parseUtc(dateStr).getTime();
+  if (diffMs < 0) return 'just now';
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 30) return 'just now';
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `${diffMin}m ago`;
   const diffHr = Math.floor(diffMin / 60);
   if (diffHr < 24) return `${diffHr}h ago`;
@@ -58,28 +77,59 @@ function getTimeAgo(dateStr: string): string {
 
 export function ActivityPage() {
   const wsTick = useWsRefresh(['task:started', 'task:completed', 'task:failed', 'memory:extracted']);
-  const { data: activity, loading } = useApi<ActivityEntry[]>('/api/activity', [wsTick]);
 
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<DateRange>('all');
   const [search, setSearch] = useState('');
 
+  const [activity, setActivity] = useState<ActivityEntry[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [types, setTypes] = useState<TypeCount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const buildQuery = useCallback((offset: number) => {
+    const parts = [`limit=${PAGE_SIZE}`, `offset=${offset}`];
+    if (typeFilter !== 'all') parts.push(`activityType=${typeFilter}`);
+    return `/api/activity?${parts.join('&')}`;
+  }, [typeFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api<{ data: ActivityEntry[]; total: number; types: TypeCount[] }>(buildQuery(0))
+      .then(res => {
+        if (cancelled) return;
+        setActivity(res.data);
+        setTotal(res.total);
+        setTypes(res.types);
+      })
+      .catch(() => { if (!cancelled) { setActivity([]); setTotal(0); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [buildQuery, wsTick]);
+
+  const loadMore = async () => {
+    if (!activity || loadingMore || activity.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const res = await api<{ data: ActivityEntry[]; total: number }>(buildQuery(activity.length));
+      setActivity([...activity, ...res.data]);
+      setTotal(res.total);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const filtered = useMemo(() => {
     if (!activity) return [];
     let result = activity;
 
-    // Type filter
-    if (typeFilter !== 'all') {
-      result = result.filter(e => e.activity_type === typeFilter);
-    }
-
-    // Date range filter
+    // Date range and search are still client-side (operates on loaded window).
     const cutoff = getDateCutoff(dateRange);
     if (cutoff) {
-      result = result.filter(e => new Date(e.created_at) >= cutoff);
+      result = result.filter(e => parseUtc(e.created_at) >= cutoff);
     }
-
-    // Search
     if (search.trim()) {
       const q = search.toLowerCase();
       result = result.filter(e =>
@@ -87,25 +137,37 @@ export function ActivityPage() {
         (e.description || '').toLowerCase().includes(q)
       );
     }
-
     return result;
-  }, [activity, typeFilter, dateRange, search]);
+  }, [activity, dateRange, search]);
 
   return (
     <div className="p-6 max-w-4xl">
-      <PageHeader title="Activity" subtitle="Recent events" />
+      <PageHeader
+        title="Activity"
+        subtitle={total > 0
+          ? `${activity?.length ?? 0} of ${total}${typeFilter === 'all' ? '' : ` ${typeFilter.replace(/_/g, ' ')}`} shown`
+          : 'Recent events'}
+      />
 
-      {/* Type filter */}
+      {/* Type filter — derived from real DB distribution */}
       <div className="flex gap-1 mb-3 overflow-x-auto">
-        {ACTIVITY_TYPES.map(t => (
+        <button
+          onClick={() => setTypeFilter('all')}
+          className={`px-3 py-1 rounded text-xs whitespace-nowrap transition-colors ${
+            typeFilter === 'all' ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
+          }`}
+        >
+          All
+        </button>
+        {types.map(({ type, count }) => (
           <button
-            key={t}
-            onClick={() => setTypeFilter(t)}
+            key={type}
+            onClick={() => setTypeFilter(type)}
             className={`px-3 py-1 rounded text-xs whitespace-nowrap transition-colors ${
-              typeFilter === t ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
+              typeFilter === type ? 'bg-white/10 text-white' : 'text-neutral-400 hover:text-white'
             }`}
           >
-            {t === 'all' ? 'All' : t.replace(/_/g, ' ')}
+            {type.replace(/_/g, ' ')} <span className="text-neutral-500">{count}</span>
           </button>
         ))}
       </div>
@@ -168,6 +230,17 @@ export function ActivityPage() {
               </span>
             </motion.div>
           ))}
+          {!loading && activity && activity.length < total && !search && dateRange === 'all' && (
+            <div className="flex justify-center pt-3">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-4 py-2 text-xs text-neutral-300 border border-white/10 rounded-md hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                {loadingMore ? 'Loading...' : `Load ${Math.min(PAGE_SIZE, total - activity.length)} more`}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
