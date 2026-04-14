@@ -244,6 +244,11 @@ export async function finalizeTaskSuccess(
             : deferredAction.params?.to ? `${deferredAction.type.replace(/_/g, ' ')} to ${deferredAction.params.to}`
             : `${deferredAction.type.replace(/_/g, ' ')}: ${task.title}`;
 
+          // Explicit ISO-8601 so list_deliverables' since filter can
+          // lexicographically compare against .toISOString() values.
+          // Default datetime('now') produces space-separated form that
+          // silently loses against ISO filters — bug found in M0.21.
+          const deliverableNow = new Date().toISOString();
           await this.db.from('agent_workforce_deliverables').insert({
             workspace_id: workspaceId,
             task_id: taskId,
@@ -254,6 +259,8 @@ export async function finalizeTaskSuccess(
             content: JSON.stringify(deferredAction?.params || { text: cleanContent }),
             status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
             auto_created: 0,
+            created_at: deliverableNow,
+            updated_at: deliverableNow,
           });
         } catch (err) {
           logger.error({ err }, '[RuntimeEngine] Deliverable creation failed');
@@ -274,6 +281,9 @@ export async function finalizeTaskSuccess(
             sourceType,
           });
           if (auto.create) {
+            // Explicit ISO-8601 to match list_deliverables' since-filter
+            // comparator — see comment on the explicit-create path above.
+            const autoNow = new Date().toISOString();
             await this.db.from('agent_workforce_deliverables').insert({
               workspace_id: workspaceId,
               task_id: taskId,
@@ -283,6 +293,8 @@ export async function finalizeTaskSuccess(
               content: JSON.stringify({ text: cleanContent }),
               status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
               auto_created: 1,
+              created_at: autoNow,
+              updated_at: autoNow,
             });
           }
         } catch (err) {

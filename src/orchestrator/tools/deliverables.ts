@@ -79,6 +79,12 @@ export async function saveDeliverable(
     return { success: false, error: 'Content exceeds 500KB limit' };
   }
 
+  // Explicit ISO-8601 timestamps so the row is lexicographically
+  // comparable against `.toISOString()` filter values in list_deliverables.
+  // The schema default (`datetime('now')`) produces a space-separated
+  // form that silently loses to ISO filters — bug found in M0.21.
+  const nowIso = new Date().toISOString();
+
   try {
     const { data, error } = await ctx.db.from('agent_workforce_deliverables').insert({
       workspace_id: ctx.workspaceId,
@@ -90,6 +96,8 @@ export async function saveDeliverable(
       content: JSON.stringify({ text: content }),
       status: 'approved',
       auto_created: 0,
+      created_at: nowIso,
+      updated_at: nowIso,
     }).select('id').single();
 
     if (error) {
