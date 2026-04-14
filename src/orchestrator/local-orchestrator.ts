@@ -34,6 +34,11 @@ import { PermissionBroker } from './orchestrator-approvals.js';
 import { activateBrowserSession } from './orchestrator-sessions.js';
 import { McpLifecycle, type McpReloadStatus } from './orchestrator-mcp-lifecycle.js';
 import { assembleOrchestratorToolSurface } from './orchestrator-tool-surface.js';
+import {
+  createEmptyPhilosophicalLayers,
+  initPhilosophicalLayers,
+  type PhilosophicalLayers,
+} from './orchestrator-philosophical-layers.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -172,15 +177,17 @@ export class LocalOrchestrator {
   /** Body State Service: unified system health reporting. */
   private bodyStateService: BodyStateService | null = null;
 
-  // ---- New philosophical layers (lazy init) ----
-  private affectEngine: import('../affect/affect-engine.js').AffectEngine | null = null;
-  private endocrineSystem: import('../endocrine/endocrine-system.js').EndocrineSystem | null = null;
-  private homeostasisController: import('../homeostasis/homeostasis-controller.js').HomeostasisController | null = null;
-  private immuneSystem: import('../immune/immune-system.js').ImmuneSystem | null = null;
-  private narrativeEngine: import('../narrative/narrative-engine.js').NarrativeEngine | null = null;
-  private ethicsEngine: import('../ethos/ethics-engine.js').EthicsEngine | null = null;
-  private habitEngine: import('../hexis/habit-engine.js').HabitEngine | null = null;
-  private sleepCycle: import('../oneiros/sleep-cycle.js').SleepCycle | null = null;
+  // Philosophical layers — lazy, non-blocking init. All 8 populate
+  // asynchronously via initPhilosophicalLayers (helpers/fire-and-forget).
+  private layers: PhilosophicalLayers = createEmptyPhilosophicalLayers();
+  private get affectEngine() { return this.layers.affectEngine; }
+  private get endocrineSystem() { return this.layers.endocrineSystem; }
+  private get homeostasisController() { return this.layers.homeostasisController; }
+  private get immuneSystem() { return this.layers.immuneSystem; }
+  private get narrativeEngine() { return this.layers.narrativeEngine; }
+  private get ethicsEngine() { return this.layers.ethicsEngine; }
+  private get habitEngine() { return this.layers.habitEngine; }
+  private get sleepCycle() { return this.layers.sleepCycle; }
 
   private get sessionDeps(): SessionDeps {
     return { db: this.db, workspaceId: this.workspaceId };
@@ -377,72 +384,13 @@ export class LocalOrchestrator {
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
 
-    // Initialize philosophical layers and wire into Brain
-    this.initPhilosophicalLayers();
-  }
-
-  /**
-   * Initialize the 8 philosophical layers and wire them into BOTH brains.
-   *
-   * The orchestrator and the RuntimeEngine each construct their own Brain
-   * instance — this.brain (orchestrator chat) and this.engine.getBrain()
-   * (per-agent task execution + the brain that LocalToolContext exposes
-   * to chat tools). Without dual wiring, get_body_state called from a
-   * chat tool reads the engine's brain, finds no bpp modules, and returns
-   * an empty bpp block even though the orchestrator's brain has them.
-   * P4.14 proprioception bench caught exactly this. All layers are
-   * optional — Brain works without them.
-   */
-  private initPhilosophicalLayers(): void {
-    const engineBrain = this.engine.getBrain();
-
-    import('../affect/affect-engine.js').then(({ AffectEngine }) => {
-      this.affectEngine = new AffectEngine(this.db, this.workspaceId);
-      this.brain?.setAffectEngine(this.affectEngine);
-      engineBrain?.setAffectEngine(this.affectEngine);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../endocrine/endocrine-system.js').then(({ EndocrineSystem }) => {
-      this.endocrineSystem = new EndocrineSystem(this.db, this.workspaceId);
-      this.brain?.setEndocrineSystem(this.endocrineSystem);
-      engineBrain?.setEndocrineSystem(this.endocrineSystem);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../homeostasis/homeostasis-controller.js').then(({ HomeostasisController }) => {
-      this.homeostasisController = new HomeostasisController(this.db, this.workspaceId);
-      this.brain?.setHomeostasisController(this.homeostasisController);
-      engineBrain?.setHomeostasisController(this.homeostasisController);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../immune/immune-system.js').then(({ ImmuneSystem }) => {
-      this.immuneSystem = new ImmuneSystem(this.db, this.workspaceId);
-      this.brain?.setImmuneSystem(this.immuneSystem);
-      engineBrain?.setImmuneSystem(this.immuneSystem);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../narrative/narrative-engine.js').then(({ NarrativeEngine }) => {
-      this.narrativeEngine = new NarrativeEngine(this.db, this.workspaceId);
-      this.brain?.setNarrativeEngine(this.narrativeEngine);
-      engineBrain?.setNarrativeEngine(this.narrativeEngine);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../ethos/ethics-engine.js').then(({ EthicsEngine }) => {
-      this.ethicsEngine = new EthicsEngine(this.db, this.workspaceId);
-      this.brain?.setEthicsEngine(this.ethicsEngine);
-      engineBrain?.setEthicsEngine(this.ethicsEngine);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../hexis/habit-engine.js').then(({ HabitEngine }) => {
-      this.habitEngine = new HabitEngine(this.db, this.workspaceId);
-      this.brain?.setHabitEngine(this.habitEngine);
-      engineBrain?.setHabitEngine(this.habitEngine);
-    }).catch(() => { /* non-fatal */ });
-
-    import('../oneiros/sleep-cycle.js').then(({ SleepCycle }) => {
-      this.sleepCycle = new SleepCycle();
-      this.brain?.setSleepCycle(this.sleepCycle);
-      engineBrain?.setSleepCycle(this.sleepCycle);
-    }).catch(() => { /* non-fatal */ });
+    // Lazy, non-blocking init of the 8 philosophical layers. Wires every
+    // layer into BOTH this.brain (orchestrator chat) and this.engine's
+    // brain (per-agent task execution) so chat tools reading
+    // get_body_state from LocalToolContext see the same bpp state. P4.14
+    // proprioception bench caught exactly this when the engine brain was
+    // left empty.
+    initPhilosophicalLayers(this.db, this.workspaceId, this.layers, this.brain, this.engine.getBrain());
   }
 
   /** Get the Brain instance (for external access if needed). */
