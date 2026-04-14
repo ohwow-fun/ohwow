@@ -81,14 +81,14 @@ export class ExperimentAuthorExperiment implements Experiment {
   category = 'other' as const;
   hypothesis =
     'Unclaimed experiment proposals in the ledger can be safely turned into committed code via the Phase 7-B template + Phase 7-A safe-commit pipeline, producing new experiments without human intervention.';
-  // runOnBoot: true so the first tick fires immediately after the
-  // daemon picks up a new build. Operators can then watch the
-  // audit log + git log for the first live authoring. Subsequent
-  // runs are hourly. safeSelfCommit is still gated behind the
-  // kill switch file, so enabling runOnBoot doesn't change the
-  // safety posture — it just makes the first live run observable
-  // at restart time instead of an hour later.
-  cadence = { everyMs: 60 * 60 * 1000, runOnBoot: true };
+  // runOnBoot: true so the first tick fires immediately after a
+  // daemon restart. Cadence matches the proposal generator (10m)
+  // so each loop iteration has generator → author handoff without
+  // a lag window where fresh briefs sit unconsumed. safeSelfCommit
+  // is still gated behind the kill switch file, so a faster
+  // cadence doesn't change the safety posture — it just makes
+  // the full loop observable in single-digit minutes.
+  cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const proposals = await this.readUnclaimedProposals(ctx);
