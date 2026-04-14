@@ -12,6 +12,7 @@ import {
   type SelfCommitOptions,
   type FindingLookup,
 } from '../self-commit.js';
+import { _setPathTierRegistryForTests } from '../path-trust-tiers.js';
 
 /**
  * Real git operations in a temporary repo. Creates a fresh git
@@ -88,6 +89,7 @@ afterEach(() => {
 afterEach(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   _resetSelfCommitForTests();
+  _setPathTierRegistryForTests(null);
   delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
 });
 
@@ -357,6 +359,86 @@ describe('safeSelfCommit — git state', () => {
     }));
     const status = execSync('git status --porcelain', { cwd: tempRoot, encoding: 'utf-8' });
     expect(status).toContain('?? unrelated.txt');
+  });
+});
+
+describe('safeSelfCommit — Layer 9 tier-2 paths require a finding receipt', () => {
+  const TIER2_PATH = 'src/lib/formatting/date.ts';
+  const FINDING_ID = '99999999-aaaa-bbbb-cccc-dddddddddddd';
+
+  function wireTier2() {
+    _setPathTierRegistryForTests([
+      {
+        prefix: 'src/self-bench/experiments/',
+        tier: 'tier-1',
+        rationale: 'sandbox',
+      },
+      {
+        prefix: 'src/lib/formatting/',
+        tier: 'tier-2',
+        rationale: 'pure formatters — needs receipt',
+      },
+    ]);
+  }
+
+  function seedTier2File() {
+    // Pre-existing one-symbol file so Layer 4's modify check passes
+    // when we replace its single declaration.
+    fs.mkdirSync(path.join(tempRoot, 'src/lib/formatting'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, TIER2_PATH),
+      `export function formatDate(d: Date) { return d.toISOString(); }\n`,
+    );
+    execSync(`git add ${TIER2_PATH} && git commit -m "seed"`, { cwd: tempRoot, stdio: 'pipe' });
+  }
+
+  it('refuses a tier-2 path without a Fixes-Finding-Id', async () => {
+    wireTier2();
+    seedTier2File();
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: TIER2_PATH, content: `export function formatDate(d: Date) { return 'x'; }\n` }],
+      commitMessage: 'feat(self-bench): tier-2 refused without a receipt test',
+      experimentId: 'l9-writer',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('tier-2');
+    expect(result.reason).toContain('Fixes-Finding-Id');
+  });
+
+  it('allows a tier-2 path when a valid Fixes-Finding-Id + resolver are supplied', async () => {
+    wireTier2();
+    seedTier2File();
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: TIER2_PATH, content: `export function formatDate(d: Date) { return 'x'; }\n` }],
+      commitMessage: 'feat(self-bench): tier-2 allowed with valid receipt',
+      experimentId: 'l9-writer',
+      fixesFindingId: FINDING_ID,
+      findingResolver: async () => ({
+        id: FINDING_ID,
+        verdict: 'warning',
+        ranAt: new Date().toISOString(),
+        affectedFiles: [TIER2_PATH],
+      }),
+    }));
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a tier-3 path regardless of any finding receipt', async () => {
+    wireTier2();
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/orchestrator/engine.ts', content: 'export const x = 1;' }],
+      commitMessage: 'feat(self-bench): tier-3 never-autonomous refusal check',
+      experimentId: 'l9-writer',
+      fixesFindingId: FINDING_ID,
+      findingResolver: async () => ({
+        id: FINDING_ID,
+        verdict: 'fail',
+        ranAt: new Date().toISOString(),
+        affectedFiles: ['src/orchestrator/engine.ts'],
+      }),
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('not allowed');
   });
 });
 

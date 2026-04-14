@@ -75,6 +75,7 @@ import { execSync } from 'node:child_process';
 import { logger } from '../lib/logger.js';
 import { runInvariantsForPaths } from './patch-invariants.js';
 import { diffTopLevelSymbols, changedSymbolCount } from './patch-ast-bounds.js';
+import { resolvePathTier, getAllowedPrefixes } from './path-trust-tiers.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -183,25 +184,11 @@ export interface SelfCommitAuditEntry {
   fixes_finding_id: string | null;
 }
 
-const ALLOWED_PATH_PREFIXES = [
-  'src/self-bench/experiments/',
-  'src/self-bench/__tests__/',
-  // The auto-registry is the one file the author is allowed to update
-  // (not just create). It is append-only by convention — the author
-  // only adds factory lines, never removes them. Listing the exact path
-  // (not a prefix) keeps the allowlist tight.
-  'src/self-bench/auto-registry.ts',
-  // Layer 1 of the autonomous-fixing safety floor: registries are how
-  // the author expresses "another instance of an existing parameterized
-  // probe class" instead of generating a fresh templated TS file. The
-  // two specific registries below are append-only by convention; each
-  // is also listed in MODIFY_ALLOWED_EXACT_PATHS to widen the
-  // new-file-only default for them. Listed as exact paths (not the
-  // 'src/self-bench/registries/' prefix) so adding a brand-new registry
-  // remains a deliberate human action.
-  'src/self-bench/registries/migration-schema-registry.ts',
-  'src/self-bench/registries/toolchain-test-registry.ts',
-] as const;
+// Layer 9 (per-directory trust tiers) is now the source of truth for
+// which paths are allowed. The tier registry in path-trust-tiers.ts
+// replaces the old flat ALLOWED_PATH_PREFIXES list. getAllowedPrefixes()
+// reads the registry at call time so test-only tier overrides take
+// effect without rewiring.
 
 /**
  * Paths that may be modified (not just created) via safeSelfCommit.
@@ -305,15 +292,13 @@ function isKillSwitchOpen(): boolean {
 
 function isPathAllowed(relPath: string): boolean {
   if (!relPath) return false;
-  // Normalize to forward slashes for consistent matching
   const normalized = path.normalize(relPath).replace(/\\/g, '/');
-  // Reject any traversal
   if (normalized.includes('..')) return false;
-  // Reject absolute paths
   if (normalized.startsWith('/')) return false;
   if (path.isAbsolute(normalized)) return false;
-  // Must match one of the allowed prefixes
-  return ALLOWED_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  // Tier-1 and tier-2 are allowed; tier-3 (default) is refused.
+  const { tier } = resolvePathTier(normalized);
+  return tier === 'tier-1' || tier === 'tier-2';
 }
 
 /**
@@ -393,14 +378,35 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     };
   }
 
-  // 1. Path allowlist validation
+  // 1. Path allowlist validation (tier-3 denies)
   for (const f of opts.files) {
     if (!isPathAllowed(f.path)) {
       return { ok: false, reason: `path not allowed: ${f.path}` };
     }
   }
 
-  // 2. New-file-only check (exempts MODIFY_ALLOWED_EXACT_PATHS).
+  // 1b. Layer 9 — tier-2 paths require a Fixes-Finding-Id receipt.
+  //     Tier-1 paths (the self-bench sandbox) are unaffected; tier-2
+  //     paths are reserved for future bug-fix territory and must
+  //     carry a justifying finding. This is enforcement of the Layer
+  //     2 primitive; the actual lookup/intersect happens in the
+  //     Layer 2 gate below.
+  for (const f of opts.files) {
+    const { tier, entry } = resolvePathTier(f.path);
+    if (tier === 'tier-2' && (!opts.fixesFindingId || !opts.findingResolver)) {
+      return {
+        ok: false,
+        reason: `tier-2 path ${f.path} requires a Fixes-Finding-Id receipt (rationale: ${entry?.rationale ?? 'unknown'})`,
+      };
+    }
+  }
+
+  // 2. New-file-only check. Modify is allowed when either the path
+  //    is in the legacy MODIFY_ALLOWED_EXACT_PATHS set (Layer 1
+  //    registries + auto-registry) OR the path resolves to tier-2
+  //    under the Layer 9 tier registry — tier-2 paths exist-then-
+  //    get-patched by design and were already required to carry a
+  //    Fixes-Finding-Id receipt by gate 1b above.
   //    Also snapshots pre-write bytes for modify paths so Layer 4's
   //    AST gate can diff against them after the write.
   const absPaths: string[] = [];
@@ -408,7 +414,9 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   for (const f of opts.files) {
     const abs = path.join(repoRoot, f.path);
     const normalized = path.normalize(f.path).replace(/\\/g, '/');
-    const modifyOk = MODIFY_ALLOWED_EXACT_PATHS.has(normalized);
+    const legacyModifyOk = MODIFY_ALLOWED_EXACT_PATHS.has(normalized);
+    const tier2ModifyOk = resolvePathTier(normalized).tier === 'tier-2';
+    const modifyOk = legacyModifyOk || tier2ModifyOk;
     if (fs.existsSync(abs)) {
       if (!modifyOk) {
         return { ok: false, reason: `target already exists: ${f.path}` };
@@ -750,7 +758,7 @@ export function getSelfCommitStatus(): {
     killSwitchOpen: isKillSwitchOpen(),
     repoRootConfigured: getRepoRoot() !== null,
     repoRoot: getRepoRoot(),
-    allowedPathPrefixes: ALLOWED_PATH_PREFIXES,
+    allowedPathPrefixes: getAllowedPrefixes(),
     auditLogPath: getAuditLogPath(),
   };
 }
