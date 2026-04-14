@@ -50,6 +50,7 @@ import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { ContentCadenceTunerExperiment } from '../self-bench/experiments/content-cadence-tuner.js';
+import { ContentCadenceLoopHealthExperiment } from '../self-bench/experiments/content-cadence-loop-health.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
 import { ExperimentProposalGenerator } from '../self-bench/experiments/experiment-proposal-generator.js';
@@ -1461,6 +1462,18 @@ export async function startDaemon(): Promise<DaemonHandle> {
           const cadenceScheduler = new ContentCadenceScheduler(db, engine, workspaceId);
           cadenceScheduler.start();
           logger.info('[daemon] content-cadence-scheduler started');
+
+          // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
+          // that detects silent failures across the closed loop's stages.
+          // Three real bugs already shipped without any infra experiment
+          // catching them (scheduler agent filter, scheduler column name,
+          // goal seed semantics); this watcher fires on the vital signs
+          // (scheduler tick freshness, dispatch count, completion ratio,
+          // tuner cadence, validation-chain integrity) so the next class
+          // of silent failure surfaces in the ledger inside an hour
+          // instead of after a day of grep-by-hand log inspection.
+          experimentRunner.register(new ContentCadenceLoopHealthExperiment());
+          logger.info('[daemon] content-cadence-loop-health registered');
         }
 
         // Phase 8-A.1: LLM provider availability — watches failure rates
