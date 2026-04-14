@@ -35,7 +35,7 @@ export function createAutomationsRouter(
   router.get('/api/automations', async (_req, res) => {
     try {
       const automations = await service.list();
-      res.json({ automations });
+      res.json({ data: automations });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
