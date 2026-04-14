@@ -3,7 +3,74 @@
  * Manages event-based triggers that auto-run workflows.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const WORKFLOW_TRIGGER_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_workflow_triggers',
+    description:
+      'List event-based workflow triggers. Optionally filter by workflow.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'Filter by workflow ID' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'create_workflow_trigger',
+    description:
+      'Create an event-based trigger that auto-runs a workflow. Confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'The workflow to trigger' },
+        name: { type: 'string', description: 'Trigger name' },
+        trigger_event: {
+          type: 'string',
+          enum: ['task_completed', 'task_failed', 'task_needs_approval', 'task_approved', 'task_rejected', 'human_task_completed', 'task_handoff', 'email_received', 'contact_created'],
+          description: 'Event that fires the trigger',
+        },
+        conditions: { type: 'object', description: 'Optional conditions for the trigger' },
+        cooldown_seconds: { type: 'number', description: 'Minimum seconds between trigger fires' },
+        enabled: { type: 'boolean', description: 'Whether the trigger is active (default true)' },
+      },
+      required: ['workflow_id', 'name', 'trigger_event'],
+    },
+  },
+  {
+    name: 'update_workflow_trigger',
+    description:
+      'Update a workflow trigger (enable/disable, change event, reconfigure).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        trigger_id: { type: 'string', description: 'The trigger ID' },
+        name: { type: 'string' },
+        enabled: { type: 'boolean' },
+        trigger_event: { type: 'string', enum: ['task_completed', 'task_failed', 'task_needs_approval', 'task_approved', 'task_rejected', 'human_task_completed', 'task_handoff', 'email_received', 'contact_created'] },
+        conditions: { type: 'object' },
+        cooldown_seconds: { type: 'number' },
+        workflow_id: { type: 'string' },
+      },
+      required: ['trigger_id'],
+    },
+  },
+  {
+    name: 'delete_workflow_trigger',
+    description:
+      'Delete a workflow trigger. Always confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        trigger_id: { type: 'string', description: 'The trigger ID' },
+      },
+      required: ['trigger_id'],
+    },
+  },
+];
 
 const VALID_TRIGGER_EVENTS = [
   'task_completed',

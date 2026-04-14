@@ -2,7 +2,39 @@
  * Schedule orchestrator tools: get_agent_schedules, update_agent_schedule
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const AGENT_SCHEDULE_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_agent_schedules',
+    description:
+      'Get all cron schedules for agents and workflows.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'update_agent_schedule',
+    description:
+      'Update an existing cron schedule by schedule_id. For new schedules, prefer using propose_automation with trigger_type="schedule" and a run_agent step instead. Only use this to update existing standalone schedules.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        schedule_id: { type: 'string', description: 'Existing schedule ID to update' },
+        agent_id: { type: 'string', description: 'Agent ID for new schedule' },
+        workflow_id: { type: 'string', description: 'Workflow ID for new schedule' },
+        cron: { type: 'string', description: 'Cron expression (e.g., "0 9 * * *")' },
+        enabled: { type: 'boolean', description: 'Whether schedule is enabled' },
+        label: { type: 'string', description: 'Optional label' },
+        task_prompt: { type: 'string', description: 'What the agent should do when fired' },
+      },
+      required: ['cron'],
+    },
+  },
+];
 
 export async function getAgentSchedules(ctx: LocalToolContext): Promise<ToolResult> {
   const { data, error } = await ctx.db

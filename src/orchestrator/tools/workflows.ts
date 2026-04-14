@@ -2,8 +2,108 @@
  * Workflow orchestrator tools: list, run, get detail, create, update, delete
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
+
+export const WORKFLOW_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_workflows',
+    description:
+      'Get all workflows in the workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'run_workflow',
+    description:
+      'Execute a workflow by ID. Always confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'The workflow ID' },
+      },
+      required: ['workflow_id'],
+    },
+  },
+  {
+    name: 'get_workflow_detail',
+    description:
+      'Get full details of a workflow including its step definitions and recent run history.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'The workflow ID' },
+      },
+      required: ['workflow_id'],
+    },
+  },
+  {
+    name: 'generate_workflow',
+    description:
+      'Generate a workflow from a natural language description using AI. Auto-saves by default. Confirm before generating.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        description: { type: 'string', description: 'Natural language description of the workflow' },
+        auto_save: { type: 'boolean', description: 'Auto-save the generated workflow (default true)' },
+      },
+      required: ['description'],
+    },
+  },
+  {
+    name: 'create_workflow',
+    description:
+      'Create a workflow with explicit step definitions. Use generate_workflow for natural language descriptions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Workflow name' },
+        description: { type: 'string', description: 'Optional description' },
+        definition: {
+          type: 'object',
+          description: 'Workflow definition with a steps array',
+          properties: {
+            steps: { type: 'array', description: 'Array of workflow steps' },
+          },
+          required: ['steps'],
+        },
+      },
+      required: ['name', 'definition'],
+    },
+  },
+  {
+    name: 'update_workflow',
+    description:
+      'Update a workflow\'s name, description, status, or step definitions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'The workflow ID' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        status: { type: 'string', enum: ['active', 'paused'] },
+        definition: { type: 'object', description: 'Updated definition with steps' },
+      },
+      required: ['workflow_id'],
+    },
+  },
+  {
+    name: 'delete_workflow',
+    description:
+      'Delete a workflow. Always confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        workflow_id: { type: 'string', description: 'The workflow ID' },
+      },
+      required: ['workflow_id'],
+    },
+  },
+];
 
 export async function listWorkflows(ctx: LocalToolContext): Promise<ToolResult> {
   const { data, error } = await ctx.db
