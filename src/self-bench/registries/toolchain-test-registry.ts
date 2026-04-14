@@ -44,6 +44,7 @@ export const TOOLCHAIN_TEST_REGISTRY: readonly ToolchainTestProbeConfig[] = [
   { slug: 'investigate-shell-allowlist' },
   { slug: 'list-deliverables-since' },
   { slug: 'observation' },
+  { slug: 'person-model' },
   { slug: 'synthesis-tester' },
   { slug: 'synthesis-probe' },
   { slug: 'tasks' },

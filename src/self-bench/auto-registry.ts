@@ -49,7 +49,6 @@ import { TOOLCHAIN_TEST_REGISTRY } from './registries/toolchain-test-registry.js
  * Array of zero-arg experiment factories. daemon/start.ts iterates this
  * and calls register(factory()) for each entry.
  */
-import { ToolchainToolTestPersonModelExperiment } from './experiments/toolchain-tool-test-person-model.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   // Migration schema probes — one factory per registry row.
   ...MIGRATION_SCHEMA_REGISTRY.map(
@@ -59,5 +58,4 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   ...TOOLCHAIN_TEST_REGISTRY.map(
     (config) => () => new ToolchainTestProbeExperiment(config),
   ),
-  () => new ToolchainToolTestPersonModelExperiment(),
 ];
