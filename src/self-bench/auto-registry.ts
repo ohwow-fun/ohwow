@@ -48,6 +48,7 @@ import { MigrationSchema119RuntimeConfigOverridesExperiment } from './experiment
  */
 import { ToolchainToolTestStateExperiment } from './experiments/toolchain-tool-test-state.js';
 import { ToolchainToolTestSynthesizeForGoalExperiment } from './experiments/toolchain-tool-test-synthesize-for-goal.js';
+import { ToolchainToolTestWhatsappExperiment } from './experiments/toolchain-tool-test-whatsapp.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema010LocalCrmExperiment(),
   () => new MigrationSchema012OrchestratorMemoryExperiment(),
@@ -68,4 +69,5 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema119RuntimeConfigOverridesExperiment(),
   () => new ToolchainToolTestStateExperiment(),
   () => new ToolchainToolTestSynthesizeForGoalExperiment(),
+  () => new ToolchainToolTestWhatsappExperiment(),
 ];
