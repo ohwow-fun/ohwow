@@ -68,6 +68,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check-env": "tsx scripts/check-env.ts",
+    "probe-loop-health": "tsx scripts/probe-loop-health.ts",
     "prepare": "husky || true"
   },
   "lint-staged": {

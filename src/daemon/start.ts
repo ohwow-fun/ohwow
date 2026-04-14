@@ -1472,8 +1472,29 @@ export async function startDaemon(): Promise<DaemonHandle> {
           // tuner cadence, validation-chain integrity) so the next class
           // of silent failure surfaces in the ledger inside an hour
           // instead of after a day of grep-by-hand log inspection.
-          experimentRunner.register(new ContentCadenceLoopHealthExperiment());
-          logger.info('[daemon] content-cadence-loop-health registered');
+          //
+          // Env var: OHWOW_CONTENT_CADENCE_LOOP_HEALTH_FAST=1 accelerates
+          // the watcher to 5-minute cadence for live observation runs (e.g.
+          // verifying the verdict shifts as the loop heals after a fix).
+          // Unset, the watcher inherits its class default (1h) so production
+          // gets ~24 ticks/day — enough granularity for a meta-watcher
+          // without flooding the ledger.
+          const loopHealth = new ContentCadenceLoopHealthExperiment();
+          const loopHealthFast = process.env.OHWOW_CONTENT_CADENCE_LOOP_HEALTH_FAST;
+          if (loopHealthFast === '1' || loopHealthFast === 'true') {
+            loopHealth.cadence = {
+              everyMs: 5 * 60 * 1000,
+              runOnBoot: true,
+            };
+          }
+          experimentRunner.register(loopHealth);
+          logger.info(
+            {
+              fastCadence: loopHealthFast === '1' || loopHealthFast === 'true',
+              everyMs: loopHealth.cadence.everyMs,
+            },
+            '[daemon] content-cadence-loop-health registered',
+          );
         }
 
         // Phase 8-A.1: LLM provider availability — watches failure rates
