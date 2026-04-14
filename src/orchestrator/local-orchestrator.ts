@@ -731,6 +731,15 @@ export class LocalOrchestrator {
     // place as the legacy fallback for callers that haven't migrated.
     const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
 
+    // Per-chat structured logger (bug #6 fix 6d). Every log line in this
+    // turn carries chatTraceId so a future hang can be diagnosed with one
+    // grep against the daemon log instead of correlating timestamps by hand.
+    // Falls back to the first 8 chars of sessionId when no explicit trace
+    // id was passed (e.g. legacy callers via the SSE path).
+    const chatTraceId = turn?.chatTraceId ?? sessionId.slice(0, 8);
+    const chatLog = logger.child({ chatTraceId });
+    chatLog.debug({ effectiveModel, hasSeed: !!seedMessages }, '[orchestrator] chat turn entry');
+
     // Lazily connect MCP servers on first chat
     await this.ensureMcpConnected();
 
@@ -1803,6 +1812,7 @@ export class LocalOrchestrator {
     // Per-turn config snapshot (bug #6 fix). Read effectiveModel from the
     // turn options first; fall back to the instance field for legacy callers.
     const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
+    const chatLog = logger.child({ chatTraceId: turn?.chatTraceId ?? sessionId.slice(0, 8) });
     const traceId = crypto.randomUUID();
 
     // Classify intent, inheriting previous intent for confirmations
@@ -1993,7 +2003,7 @@ export class LocalOrchestrator {
     const rawTools = await this.getTools(options, browserPreActivated || this.browserActivated, sections, desktopPreActivated || this.desktopActivated, undefined, userMessage);
     const embeddedTools = this.brain ? this.brain.applyEmbodiment(rawTools) : rawTools;
     let openaiTools = convertToolsToOpenAI(embeddedTools);
-    logger.info({ toolCount: openaiTools.length, sections: [...(sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
+    chatLog.info({ toolCount: openaiTools.length, sections: [...(sections ?? [])] }, '[orchestrator] OpenRouter path tool list');
 
     // DELIBERATE: Dialectic check for complex plans (Hegel)
     if (perception && enriched.planFirst && this.brain) {
@@ -2161,7 +2171,7 @@ export class LocalOrchestrator {
       const iterModel = activePersona?.modelDefault
         ?? this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
       if (iteration === 0 || iterModel !== (effectiveModel || 'x-ai/grok-4.1-fast')) {
-        logger.debug({ iteration, model: iterModel, persona: activePersona?.name }, '[orchestrator] iteration model selected');
+        chatLog.debug({ iteration, model: iterModel, persona: activePersona?.name }, '[orchestrator] iteration model selected');
       }
       iterHadErrors = false;
 
@@ -2209,7 +2219,7 @@ export class LocalOrchestrator {
         }
       } catch (err) {
         if (err instanceof TimeoutError) {
-          logger.warn({ err: err.message, model: iterModel, iteration }, '[orchestrator] OpenRouter model call timed out');
+          chatLog.warn({ err: err.message, model: iterModel, iteration }, '[orchestrator] OpenRouter model call timed out');
           yield { type: 'text', content: `Model call timed out after ${Math.round(err.elapsedMs / 1000)}s (${iterModel}). Try again or pick a different model.` };
           throw err; // propagate so the async dispatch flips status='error'
         }
@@ -2599,6 +2609,7 @@ export class LocalOrchestrator {
   ): AsyncGenerator<OrchestratorEvent> {
     // Per-turn config snapshot (bug #6 fix).
     const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
+    const chatLog = logger.child({ chatTraceId: turn?.chatTraceId ?? sessionId.slice(0, 8) });
     // Generate trace ID for this Ollama orchestrator turn
     const ollamaTraceId = crypto.randomUUID();
 
@@ -2862,7 +2873,7 @@ export class LocalOrchestrator {
         }
       } catch (err) {
         if (err instanceof TimeoutError) {
-          logger.warn({ err: err.message, model: effectiveModel, iteration }, '[orchestrator] Ollama model call timed out');
+          chatLog.warn({ err: err.message, model: effectiveModel, iteration }, '[orchestrator] Ollama model call timed out');
           yield { type: 'text', content: `Model call timed out after ${Math.round(err.elapsedMs / 1000)}s. Try again with a smaller prompt or a faster model.` };
           throw err;
         }
@@ -2914,7 +2925,7 @@ export class LocalOrchestrator {
             return;
           } catch (fallbackErr) {
             if (fallbackErr instanceof TimeoutError) {
-              logger.warn({ err: fallbackErr.message }, '[orchestrator] Ollama fallback stream timed out');
+              chatLog.warn({ err: fallbackErr.message }, '[orchestrator] Ollama fallback stream timed out');
               yield { type: 'text', content: `Model fallback call timed out after ${Math.round(fallbackErr.elapsedMs / 1000)}s.` };
             }
             throw fallbackErr;
