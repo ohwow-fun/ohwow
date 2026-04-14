@@ -19,6 +19,7 @@ import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerAgentManagementTools } from './tools/agents.js';
 import { registerPermissionRequestTools } from './tools/permission-requests.js';
 import { registerFailingTriggersTools } from './tools/failing-triggers.js';
+import { registerFindingsTools } from './tools/findings.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -35,4 +36,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerAgentManagementTools(server, client);
   registerPermissionRequestTools(server, client);
   registerFailingTriggersTools(server, client);
+  registerFindingsTools(server, client);
 }
