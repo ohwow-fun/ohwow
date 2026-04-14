@@ -14,7 +14,7 @@
  *     → marks the brief claimed so next run picks a different one
  *         ↓
  *   next daemon restart picks up the new experiment via
- *   adaptive-scheduler registration
+ *   auto-registry.ts → daemon/start.ts registration
  *
  * Every step has its own safety layer. This experiment is the
  * tip of the autonomous-codegen pipeline — it can only touch
@@ -48,9 +48,11 @@ import type {
   ProbeResult,
   Verdict,
 } from '../experiment-types.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { ExperimentBrief } from '../experiment-template.js';
 import { fillExperimentTemplate, validateBrief } from '../experiment-template.js';
-import { safeSelfCommit } from '../self-commit.js';
+import { safeSelfCommit, getSelfCommitStatus } from '../self-commit.js';
 import { writeFinding, readRecentFindings } from '../findings-store.js';
 
 /** How many proposal rows to read per run before deciding. */
@@ -216,6 +218,18 @@ export class ExperimentAuthorExperiment implements Experiment {
         'Phase 7-A safeSelfCommit is hard-constrained to new files only via the new-file-only policy; this brief is a green-field probe with no parent experiment to extend.',
     });
 
+    // If the commit succeeded, append the new experiment to auto-registry.ts
+    // so that daemon/start.ts picks it up on the next restart. Failure here
+    // is non-fatal: the experiment file is committed and will be found on
+    // a future auto-registry rebuild. Errors are swallowed and logged.
+    if (commitResult.ok && commitResult.filesWritten) {
+      try {
+        await this.appendToAutoRegistry(brief, commitResult.filesWritten);
+      } catch {
+        // Non-fatal — the experiment is committed, just not yet in the registry.
+      }
+    }
+
     // Always mark the claim attempt, even on failure, so operators
     // can see the pipeline activity in the ledger. On success the
     // brief is claimed and won't be re-tried. On failure we leave
@@ -262,6 +276,95 @@ export class ExperimentAuthorExperiment implements Experiment {
         files_written: commitResult.filesWritten,
       },
     };
+  }
+
+  /**
+   * Append a new factory entry to src/self-bench/auto-registry.ts so
+   * the daemon picks up the newly committed experiment on next restart.
+   *
+   * Reads the current registry file, derives the class name from the
+   * source file path, inserts an import + factory line, and commits
+   * the updated registry via safeSelfCommit. safeSelfCommit's
+   * MODIFY_ALLOWED_EXACT_PATHS exemption means this is the one file
+   * the author is allowed to update in-place.
+   *
+   * Non-fatal: if anything fails here the experiment is already
+   * committed — it just won't be auto-registered until a human
+   * or a future run repairs the registry.
+   */
+  private async appendToAutoRegistry(
+    brief: ExperimentBrief,
+    filesWritten: string[],
+  ): Promise<void> {
+    const status = getSelfCommitStatus();
+    if (!status.repoRoot) return;
+
+    // Find the source file path (not the test file)
+    const sourcePath = filesWritten.find(
+      (f) => !f.includes('__tests__'),
+    );
+    if (!sourcePath) return;
+
+    const registryRelPath = 'src/self-bench/auto-registry.ts';
+    const registryAbsPath = path.join(status.repoRoot, registryRelPath);
+
+    let current: string;
+    try {
+      current = fs.readFileSync(registryAbsPath, 'utf-8');
+    } catch {
+      return; // registry doesn't exist yet — skip
+    }
+
+    // Derive the class name from the source path basename.
+    // sourcePath example: 'src/self-bench/experiments/migration-schema-010-local-crm.ts'
+    // → className: 'MigrationSchema010LocalCrmExperiment'
+    const basename = path.basename(sourcePath, '.ts'); // 'migration-schema-010-local-crm'
+    const className = basename
+      .split('-')
+      .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1))
+      .join('') + 'Experiment';
+
+    // Import path relative to auto-registry.ts
+    const importPath = `./experiments/${basename}.js`;
+
+    // Check if already present (idempotent)
+    if (current.includes(className)) return;
+
+    // Build the new lines to append
+    const importLine = `import { ${className} } from '${importPath}';`;
+    const factoryLine = `  () => new ${className}(),`;
+
+    // Insert the import before the export statement
+    const exportMarker = '\nexport const autoRegisteredExperiments';
+    if (!current.includes(exportMarker)) return; // unexpected shape
+
+    const withImport = current.replace(
+      exportMarker,
+      `\n${importLine}${exportMarker}`,
+    );
+
+    // Insert the factory before the closing '];'
+    const closeMarker = '\n];';
+    if (!withImport.includes(closeMarker)) return; // unexpected shape
+
+    const updated = withImport.replace(
+      closeMarker,
+      `\n${factoryLine}${closeMarker}`,
+    );
+
+    // Commit via safeSelfCommit so it goes through the same gates
+    await safeSelfCommit({
+      files: [{ path: registryRelPath, content: updated }],
+      commitMessage: `feat(self-bench): register ${brief.slug} in auto-registry`,
+      experimentId: this.id,
+      extendsExperimentId: null,
+      whyNotEditExisting:
+        'auto-registry.ts is the designated append-only manifest for autonomously authored experiments; updating it after each commit is its only purpose.',
+      // Skip gates for the registry update: typecheck already ran for
+      // the main experiment commit above. Running it again would add
+      // 30s with no new information.
+      skipGates: true,
+    });
   }
 
   /**

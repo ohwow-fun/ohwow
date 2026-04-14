@@ -133,7 +133,22 @@ export interface SelfCommitAuditEntry {
 const ALLOWED_PATH_PREFIXES = [
   'src/self-bench/experiments/',
   'src/self-bench/__tests__/',
+  // The auto-registry is the one file the author is allowed to update
+  // (not just create). It is append-only by convention — the author
+  // only adds factory lines, never removes them. Listing the exact path
+  // (not a prefix) keeps the allowlist tight.
+  'src/self-bench/auto-registry.ts',
 ] as const;
+
+/**
+ * Paths that may be modified (not just created) via safeSelfCommit.
+ * Every path here must also appear in ALLOWED_PATH_PREFIXES.
+ * The default constraint is new-file-only; this set widens it for
+ * specific files that are explicitly designed to grow over time.
+ */
+const MODIFY_ALLOWED_EXACT_PATHS = new Set([
+  'src/self-bench/auto-registry.ts',
+]);
 
 /** Test-only env var that bypasses the kill-switch file check. */
 const TEST_BYPASS_ENV = 'OHWOW_SELF_COMMIT_TEST_ALLOW';
@@ -294,11 +309,13 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     }
   }
 
-  // 2. New-file-only check
+  // 2. New-file-only check (exempts MODIFY_ALLOWED_EXACT_PATHS)
   const absPaths: string[] = [];
   for (const f of opts.files) {
     const abs = path.join(repoRoot, f.path);
-    if (fs.existsSync(abs)) {
+    const normalized = path.normalize(f.path).replace(/\\/g, '/');
+    const modifyOk = MODIFY_ALLOWED_EXACT_PATHS.has(normalized);
+    if (!modifyOk && fs.existsSync(abs)) {
       return { ok: false, reason: `target already exists: ${f.path}` };
     }
     absPaths.push(abs);

@@ -1464,6 +1464,26 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // target value in cents). Warns when avg exceeds target; no
         // intervention until Phase 8-B.2 adds a routing knob.
         experimentRunner.register(new AgentTaskCostWatcherExperiment());
+
+        // Auto-registry: every experiment autonomously authored by
+        // ExperimentAuthorExperiment is listed in auto-registry.ts.
+        // Dynamic import here so daemon restart is the only coupling —
+        // the author commits the registry update, the daemon picks it
+        // up on the next boot without any code change to this file.
+        try {
+          const { autoRegisteredExperiments } = await import('../self-bench/auto-registry.js');
+          for (const factory of autoRegisteredExperiments) {
+            experimentRunner.register(factory());
+          }
+          logger.info(
+            { count: autoRegisteredExperiments.length },
+            '[daemon] auto-registry experiments registered',
+          );
+        } catch (err) {
+          // Non-fatal: auto-registry may not exist yet (fresh install).
+          logger.debug({ err }, '[daemon] auto-registry not found or failed to load');
+        }
+
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
