@@ -32,7 +32,7 @@
  *
  *   - Cheap model by default: picked via the `generation` purpose
  *     on runLlmCall, with difficulty='moderate' so the router lands
- *     on FAST/BALANCED tier (qwen/qwen3.5-9b or deepseek-v3.2).
+ *     on FAST/BALANCED tier (qwen/qwen3.5-35b-a3b or deepseek-v3.2).
  *     Never STRONG — the 408k-token launch-eve failure is the
  *     archetype we're replacing, and it ran on STRONG.
  *

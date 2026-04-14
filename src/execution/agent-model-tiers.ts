@@ -22,7 +22,7 @@ import type { DifficultyLevel } from './difficulty-scorer.js';
  */
 export const AGENT_MODEL_TIERS = {
   FREE: 'xiaomi/mimo-v2-flash',             // FREE, 262K ctx, tools
-  FAST: 'qwen/qwen3.5-9b',                  // $0.05/$0.15 per M, 262K ctx, tools+vision, very cheap
+  FAST: 'qwen/qwen3.5-35b-a3b',             // $0.16/$1.30 per M, 262K ctx, tools+vision. MoE w/ ~3B active params. Reliably emits OpenAI-format tool_calls — the 9B sibling returns text <function=...> pseudo-calls instead, which the router parses as 0 tool calls and trips the hallucination gate on work-shaped tasks.
   BALANCED: 'deepseek/deepseek-v3.2',       // $0.26/$0.38 per M, 163K ctx, tools
   STRONG: 'google/gemini-3.1-pro-preview',  // $2/$12 per M, 1M ctx, tools+vision, reliable tool calling
   VISION: 'google/gemini-3.1-flash-lite-preview', // 1M ctx, vision+tools, cheap
