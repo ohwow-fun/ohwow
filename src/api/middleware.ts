@@ -50,7 +50,10 @@ export function createAuthMiddleware(
     // no workspace data. Web UI polls these on load to decide whether to
     // offer voice controls, so requiring auth just floods the console with
     // 401s while the user is still on the login screen or signed out.
-    if (req.path === '/api/voice/providers' || req.path === '/api/voice/health') {
+    // Middleware is mounted at /api, so req.path is relative (e.g. /voice/providers).
+    // req.originalUrl preserves the full path and may include a querystring.
+    const fullPath = req.originalUrl.split('?')[0];
+    if (fullPath === '/api/voice/providers' || fullPath === '/api/voice/health') {
       next();
       return;
     }
