@@ -871,10 +871,14 @@ export class LocalOrchestrator {
   async runDelegateSubtask(prompt: string, focus: string, options?: ChannelChatOptions, depth = 0): Promise<SubOrchestratorResult> {
     // Per-focus iteration budgets. Janitorial work (wiki cleanup) needs
     // headroom to walk a backlog of lint findings — one read+write pair
-    // per finding, plus the bracketing lint calls. The default 5 caps
-    // out after fixing 1-2 issues.
+    // per finding, plus the bracketing lint calls. Investigations get a
+    // similar boost because bisection rounds add up: expand → 5 search
+    // calls → 5 reads → bisect each hypothesis → conclude. The default
+    // 5 caps out before any of that lands. The 6 min timeout in
+    // FOCUS_TIMEOUTS_MS is the matching ceiling.
     const focusIterations: Record<string, number> = {
       wiki: 18,
+      investigate: 15,
     };
     return runSubOrchestrator({
       prompt,
@@ -890,6 +894,7 @@ export class LocalOrchestrator {
       depth,
       maxIterations: focusIterations[focus],
       timeoutMs: getTimeoutForFocus(focus),
+      focus,
     });
   }
 

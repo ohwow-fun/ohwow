@@ -18,15 +18,15 @@ export const ORCHESTRATION_HELPER_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'delegate_subtask',
     description:
-      'Delegate a focused subtask to a lightweight sub-orchestrator. Use for multi-step research, data gathering, or analysis that would bloat your context. The sub-orchestrator runs its own tool loop and returns only a summary.',
+      'Delegate a focused subtask to a lightweight sub-orchestrator. Use for multi-step research, data gathering, or analysis that would bloat your context. The sub-orchestrator runs its own tool loop and returns only a summary. Use focus=investigate when a self-check disagreed with itself and you need to bisect the codebase to find the root cause — the investigator runs read-only with a structured-output schema enforced by the parser.',
     input_schema: {
       type: 'object' as const,
       properties: {
         prompt: { type: 'string', description: 'Clear description of the subtask to complete' },
         focus: {
           type: 'string',
-          enum: ['research', 'agents', 'crm', 'projects', 'data'],
-          description: 'Focus area: determines which tools the sub-orchestrator can use',
+          enum: ['research', 'agents', 'crm', 'projects', 'data', 'investigate'],
+          description: 'Focus area: determines which tools the sub-orchestrator can use. Use "investigate" for code-level bisection of self-disagreement (read-only tool surface, structured output schema, no nested investigations).',
         },
       },
       required: ['prompt', 'focus'],
