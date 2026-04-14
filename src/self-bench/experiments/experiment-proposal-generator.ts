@@ -9,8 +9,8 @@
  * cadence, and template-specific parameters — exactly the shape
  * fillExperimentTemplate (Phase 7-B) consumes.
  *
- * For Phase 7, the proposal generator is narrow on purpose. It
- * runs one rule:
+ * The proposal generator is narrow on purpose and grows one rule
+ * at a time. Today it runs two:
  *
  *   Rule 1 (model_latency_probe proposal):
  *     For each model_id in llm_calls that has at least MIN_SAMPLES
@@ -22,11 +22,20 @@
  *     so the generated experiment's alert shape matches the
  *     baseline at generation time.
  *
+ *   Rule 2 (migration_schema_probe proposal):
+ *     Code-reading rule. Scans src/db/migrations/*.sql at runtime,
+ *     regex-extracts every `CREATE TABLE [IF NOT EXISTS] <name>`
+ *     statement, and proposes one schema-drift canary per migration
+ *     file whose slug hasn't been seen in the dedupe window. The
+ *     generated probes are read-only — a single SELECT on
+ *     sqlite_master — so they're safe to run frequently. Bounded
+ *     per tick by MAX_MIGRATION_PROPOSALS_PER_TICK so the author
+ *     side doesn't get a 120-brief backlog on a fresh DB.
+ *
  * Future rules could cover: per-tool reliability probes,
  * per-trigger-type coverage probes, per-agent-config health probes,
  * per-provider cost probes. Each additional rule is another pass
- * through probe() that adds to the proposals list. This commit
- * keeps Rule 1 only.
+ * through probe() that adds to the proposals list.
  *
  * Why this is a separate experiment from the author
  * -------------------------------------------------
@@ -43,6 +52,8 @@
  *     the author side
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
 import type {
   Experiment,
   ExperimentContext,
@@ -53,9 +64,12 @@ import type {
 } from '../experiment-types.js';
 import type {
   ExperimentBrief,
+  MigrationSchemaProbeParams,
   ModelLatencyProbeParams,
 } from '../experiment-template.js';
+import { validateBrief } from '../experiment-template.js';
 import { writeFinding } from '../findings-store.js';
+import { getSelfCommitStatus } from '../self-commit.js';
 
 /** How many recent llm_calls rows to inspect per model for latency stats. */
 const SAMPLE_WINDOW = 200;
@@ -72,6 +86,23 @@ const MIN_CALLS_FOR_PROPOSAL = 5;
 /** How far back to look for existing proposals to avoid duplicates. */
 const DEDUPE_WINDOW_DAYS = 14;
 
+/**
+ * Rule 2 throttle: never emit more than N brand-new migration
+ * proposals in a single tick. The repo has ~120 migration files,
+ * so on the first run after this rule ships every slug would be
+ * "new" and the author (5m cadence) would fall hours behind. We
+ * fan the work out across ticks — dedupe catches the already-
+ * emitted briefs, and the next tick picks up where this one
+ * stopped.
+ */
+const MAX_MIGRATION_PROPOSALS_PER_TICK = 3;
+/** Default cadence baked into the generated schema probes. */
+const MIGRATION_PROBE_EVERY_MS = 60 * 60 * 1000; // 1h
+/** Hard cap on expected_tables per brief — mirrors validateBrief. */
+const MIGRATION_MAX_TABLES_PER_PROBE = 50;
+/** Slug length ceiling (validateBrief enforces the same value). */
+const SLUG_MAX_LENGTH = 50;
+
 interface LlmCallRow {
   model: string;
   latency_ms: number;
@@ -83,6 +114,10 @@ interface ProposalGeneratorEvidence extends Record<string, unknown> {
   existing_proposals: number;
   new_proposals: number;
   skipped_due_to_low_samples: number;
+  migrations_scanned: number;
+  migration_files_with_tables: number;
+  new_migration_proposals: number;
+  migration_repo_root_unavailable: boolean;
   proposals: ExperimentBrief[];
 }
 
@@ -96,6 +131,47 @@ function modelToSlug(modelId: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return `${cleaned}-latency`;
+}
+
+/**
+ * Turn a migration basename like "016-dashboard-tables.sql" into
+ * "migration-schema-016-dashboard-tables". Strips the .sql suffix,
+ * lowercases, and sanitizes — leading digits are fine because the
+ * full slug is prefixed with "migration-schema-" (which starts
+ * with a letter as required by validateBrief).
+ */
+function migrationFileToSlug(basename: string): string {
+  const noExt = basename.replace(/\.sql$/i, '');
+  const cleaned = noExt
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `migration-schema-${cleaned}`;
+}
+
+/**
+ * Regex-extract every `CREATE TABLE [IF NOT EXISTS] <name>`
+ * statement from a .sql file's contents. Case-insensitive, tolerates
+ * whitespace variation, dedupes within one file, and preserves the
+ * order of first appearance so the emitted brief is deterministic
+ * across runs. Quoted/bracketed identifiers are NOT unwrapped —
+ * if a migration uses `"foo"` or `[foo]` this parser skips them.
+ * That's fine: the goal is coverage of the common case, not a
+ * full SQL parser.
+ */
+function parseCreateTables(sqlContent: string): string[] {
+  const ident = /create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = ident.exec(sqlContent)) !== null) {
+    const name = match[1];
+    if (!seen.has(name)) {
+      seen.add(name);
+      result.push(name);
+    }
+  }
+  return result;
 }
 
 /** Percentile of a sorted ascending array. Linear interpolation, clamped. */
@@ -203,20 +279,34 @@ export class ExperimentProposalGenerator implements Experiment {
       proposals.push(brief);
     }
 
+    // 3. Rule 2 — migration schema probes. Code-reading rule:
+    //    scan src/db/migrations/*.sql, extract CREATE TABLE names,
+    //    emit one brief per migration file (newest first), capped
+    //    per tick. Dedupe is handled by the same slug-collision
+    //    mechanism Rule 1 uses.
+    const migrationSummary = this.proposeMigrationSchemaProbes(
+      proposals,
+      existingProposals,
+    );
+
     const evidence: ProposalGeneratorEvidence = {
       inspected_models: byModel.size,
       existing_proposals: existingProposals.size,
       new_proposals: proposals.length,
       skipped_due_to_low_samples: skippedLowSamples,
+      migrations_scanned: migrationSummary.migrations_scanned,
+      migration_files_with_tables: migrationSummary.migration_files_with_tables,
+      new_migration_proposals: migrationSummary.new_migration_proposals,
+      migration_repo_root_unavailable: migrationSummary.repo_root_unavailable,
       proposals,
     };
 
     const summary =
-      byModel.size === 0
-        ? 'no llm_calls rows in the last 7 days — nothing to propose'
+      byModel.size === 0 && migrationSummary.migrations_scanned === 0
+        ? 'no llm_calls rows and no migrations readable — nothing to propose'
         : proposals.length === 0
-          ? `inspected ${byModel.size} model(s), nothing new to propose (${existingProposals.size} already covered)`
-          : `inspected ${byModel.size} model(s), generated ${proposals.length} new proposal(s)`;
+          ? `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s), nothing new to propose (${existingProposals.size} already covered)`
+          : `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s), generated ${proposals.length} new proposal(s) (${migrationSummary.new_migration_proposals} migration)`;
 
     return {
       subject: null,
@@ -227,10 +317,13 @@ export class ExperimentProposalGenerator implements Experiment {
 
   judge(result: ProbeResult, _history: Finding[]): Verdict {
     const ev = result.evidence as ProposalGeneratorEvidence;
-    // No models seen = warning (the generator can't do its job)
-    if (ev.inspected_models === 0) return 'warning';
-    // Always pass when we're producing proposals — they're not
-    // problems, they're work queue entries for the author.
+    // Rule 1 and Rule 2 are both signal sources. If BOTH are
+    // silent (no models AND no migrations readable), the generator
+    // can't do its job — warning. Otherwise any proposals landing
+    // in the ledger are work queue entries, not problems, so pass.
+    if (ev.inspected_models === 0 && ev.migrations_scanned === 0) {
+      return 'warning';
+    }
     return 'pass';
   }
 
@@ -318,5 +411,121 @@ export class ExperimentProposalGenerator implements Experiment {
     } catch {
       return new Set();
     }
+  }
+
+  /**
+   * Rule 2 — scan src/db/migrations/*.sql and emit briefs.
+   * Mutates the passed-in `proposals` array (appending new briefs)
+   * and returns a small summary struct for the evidence field. Runs
+   * synchronously because it's just fs + regex — no async work to
+   * do. Fails closed: any unreadable path, missing repo root, or
+   * parse error results in zero new proposals and a flagged
+   * evidence field, never a thrown exception that would take down
+   * the Rule 1 pass.
+   *
+   * Dedupe reuses the same `existingProposals` set that Rule 1
+   * uses — slug collisions are the only dedupe key — so a
+   * migration brief that's already in the ledger is silently
+   * skipped here on the next tick.
+   */
+  private proposeMigrationSchemaProbes(
+    proposals: ExperimentBrief[],
+    existingProposals: Set<string>,
+  ): {
+    migrations_scanned: number;
+    migration_files_with_tables: number;
+    new_migration_proposals: number;
+    repo_root_unavailable: boolean;
+  } {
+    const status = getSelfCommitStatus();
+    if (!status.repoRoot) {
+      return {
+        migrations_scanned: 0,
+        migration_files_with_tables: 0,
+        new_migration_proposals: 0,
+        repo_root_unavailable: true,
+      };
+    }
+
+    const migrationsDir = path.join(status.repoRoot, 'src', 'db', 'migrations');
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(migrationsDir);
+    } catch {
+      return {
+        migrations_scanned: 0,
+        migration_files_with_tables: 0,
+        new_migration_proposals: 0,
+        repo_root_unavailable: true,
+      };
+    }
+
+    // Newest-first so the per-tick cap emits recent migrations
+    // before legacy ones. Migration files are numerically prefixed
+    // (001-, 002-, ...); a lexical descending sort is the right
+    // order because the prefixes are zero-padded.
+    const sqlFiles = entries
+      .filter((name) => name.endsWith('.sql'))
+      .sort((a, b) => b.localeCompare(a));
+
+    let filesWithTables = 0;
+    let newCount = 0;
+
+    for (const basename of sqlFiles) {
+      if (newCount >= MAX_MIGRATION_PROPOSALS_PER_TICK) break;
+
+      const slug = migrationFileToSlug(basename);
+      if (slug.length > SLUG_MAX_LENGTH) continue; // validateBrief would reject anyway
+      if (existingProposals.has(slug)) continue;
+
+      let tables: string[];
+      try {
+        const contents = fs.readFileSync(
+          path.join(migrationsDir, basename),
+          'utf-8',
+        );
+        tables = parseCreateTables(contents);
+      } catch {
+        continue;
+      }
+
+      if (tables.length === 0) continue;
+      filesWithTables += 1;
+
+      // Hard cap at MIGRATION_MAX_TABLES_PER_PROBE — a single
+      // migration should never create 50+ tables, but if one does
+      // we truncate the list and log that fact via evidence. The
+      // probe will still be useful for the first N tables.
+      const expectedTables = tables.slice(0, MIGRATION_MAX_TABLES_PER_PROBE);
+
+      const brief: ExperimentBrief = {
+        slug,
+        name: `Migration schema probe: ${basename}`,
+        hypothesis: `All tables created in ${basename} remain present in the live sqlite schema.`,
+        everyMs: MIGRATION_PROBE_EVERY_MS,
+        template: 'migration_schema_probe',
+        params: {
+          migration_file: basename,
+          expected_tables: expectedTables,
+        } satisfies MigrationSchemaProbeParams,
+      };
+
+      // Validate before pushing. If validation fails for any
+      // reason (e.g. a migration file we mis-parse), skip silently
+      // rather than letting the generator emit a brief the author
+      // will refuse 30 seconds later.
+      if (validateBrief(brief) !== null) continue;
+
+      proposals.push(brief);
+      existingProposals.add(slug); // prevent same-tick duplicates
+      newCount += 1;
+    }
+
+    return {
+      migrations_scanned: sqlFiles.length,
+      migration_files_with_tables: filesWithTables,
+      new_migration_proposals: newCount,
+      repo_root_unavailable: false,
+    };
   }
 }

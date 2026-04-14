@@ -59,10 +59,18 @@ export interface ExperimentBrief {
   hypothesis: string;
   /** Cadence in milliseconds. */
   everyMs: number;
-  /** Template variant. Phase 7-B ships only 'model_latency_probe'. */
-  template: 'model_latency_probe';
+  /**
+   * Template variant. Phase 7-B shipped only 'model_latency_probe'.
+   * Phase 7-C Rule 2 adds 'migration_schema_probe' — a schema-drift
+   * canary that reads sqlite_master and compares against the table
+   * list parsed out of a specific migration file at generation time.
+   */
+  template: 'model_latency_probe' | 'migration_schema_probe';
   /** Template-specific parameters. Shape depends on `template`. */
-  params: ModelLatencyProbeParams | Record<string, unknown>;
+  params:
+    | ModelLatencyProbeParams
+    | MigrationSchemaProbeParams
+    | Record<string, unknown>;
 }
 
 /** Parameters for the model_latency_probe template. */
@@ -77,6 +85,27 @@ export interface ModelLatencyProbeParams {
   fail_latency_ms: number;
   /** Minimum sample count before a verdict can be returned. */
   min_samples: number;
+}
+
+/**
+ * Parameters for the migration_schema_probe template. Produced by
+ * the proposal generator's migration-scan rule: it reads one
+ * src/db/migrations/<file>.sql at generation time, regex-extracts
+ * every `CREATE TABLE [IF NOT EXISTS] <name>` statement, and stamps
+ * the list into the brief. The generated experiment then verifies
+ * those tables still exist in the live sqlite schema every tick.
+ * Read-only — the probe issues a single `SELECT name FROM
+ * sqlite_master WHERE type='table'` and compares set membership.
+ */
+export interface MigrationSchemaProbeParams {
+  /** Basename of the migration file, e.g. "016-dashboard-tables.sql". */
+  migration_file: string;
+  /**
+   * Table names the migration creates. Each must match
+   * /^[a-zA-Z_][a-zA-Z0-9_]*$/ so the brief never embeds anything
+   * weird into the generated source file. Capped at 50 entries.
+   */
+  expected_tables: string[];
 }
 
 export interface GeneratedExperimentFiles {
@@ -135,26 +164,50 @@ export function validateBrief(brief: ExperimentBrief): string | null {
   if (typeof brief.everyMs !== 'number' || brief.everyMs < 60_000 || brief.everyMs > 24 * 60 * 60 * 1000) {
     return 'everyMs must be between 1 minute and 24 hours';
   }
-  if (brief.template !== 'model_latency_probe') {
-    return `unknown template: ${brief.template}`;
+  if (brief.template === 'model_latency_probe') {
+    const p = brief.params as ModelLatencyProbeParams;
+    if (!p.model_id || typeof p.model_id !== 'string' || p.model_id.length > 200) {
+      return 'params.model_id missing or too long';
+    }
+    if (typeof p.sample_size !== 'number' || p.sample_size < 5 || p.sample_size > 1000) {
+      return 'params.sample_size must be 5..1000';
+    }
+    if (typeof p.warn_latency_ms !== 'number' || p.warn_latency_ms < 1) {
+      return 'params.warn_latency_ms must be > 0';
+    }
+    if (typeof p.fail_latency_ms !== 'number' || p.fail_latency_ms <= p.warn_latency_ms) {
+      return 'params.fail_latency_ms must be > warn_latency_ms';
+    }
+    if (typeof p.min_samples !== 'number' || p.min_samples < 1 || p.min_samples > p.sample_size) {
+      return 'params.min_samples must be 1..sample_size';
+    }
+    return null;
   }
-  const p = brief.params as ModelLatencyProbeParams;
-  if (!p.model_id || typeof p.model_id !== 'string' || p.model_id.length > 200) {
-    return 'params.model_id missing or too long';
+
+  if (brief.template === 'migration_schema_probe') {
+    const p = brief.params as MigrationSchemaProbeParams;
+    if (!p.migration_file || typeof p.migration_file !== 'string' || p.migration_file.length > 200) {
+      return 'params.migration_file missing or too long';
+    }
+    // Refuse migration paths, null bytes, or anything that isn't a
+    // plain kebab-ish basename. The generator only ever passes a
+    // basename, so anything else is either a bug or tampering.
+    if (p.migration_file.includes('/') || p.migration_file.includes('\\') || p.migration_file.includes('..')) {
+      return 'params.migration_file must be a bare basename';
+    }
+    if (!Array.isArray(p.expected_tables) || p.expected_tables.length === 0 || p.expected_tables.length > 50) {
+      return 'params.expected_tables must be 1..50 entries';
+    }
+    const tableIdent = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+    for (const t of p.expected_tables) {
+      if (typeof t !== 'string' || !tableIdent.test(t) || t.length > 100) {
+        return `params.expected_tables contains invalid table name: ${String(t).slice(0, 40)}`;
+      }
+    }
+    return null;
   }
-  if (typeof p.sample_size !== 'number' || p.sample_size < 5 || p.sample_size > 1000) {
-    return 'params.sample_size must be 5..1000';
-  }
-  if (typeof p.warn_latency_ms !== 'number' || p.warn_latency_ms < 1) {
-    return 'params.warn_latency_ms must be > 0';
-  }
-  if (typeof p.fail_latency_ms !== 'number' || p.fail_latency_ms <= p.warn_latency_ms) {
-    return 'params.fail_latency_ms must be > warn_latency_ms';
-  }
-  if (typeof p.min_samples !== 'number' || p.min_samples < 1 || p.min_samples > p.sample_size) {
-    return 'params.min_samples must be 1..sample_size';
-  }
-  return null;
+
+  return `unknown template: ${(brief as { template?: unknown }).template}`;
 }
 
 /**
@@ -172,7 +225,11 @@ export function fillExperimentTemplate(brief: ExperimentBrief): GeneratedExperim
     return fillModelLatencyProbe(brief, brief.params as ModelLatencyProbeParams);
   }
 
-  throw new Error(`unknown template: ${brief.template}`);
+  if (brief.template === 'migration_schema_probe') {
+    return fillMigrationSchemaProbe(brief, brief.params as MigrationSchemaProbeParams);
+  }
+
+  throw new Error(`unknown template: ${(brief as { template?: unknown }).template}`);
 }
 
 function fillModelLatencyProbe(
@@ -337,6 +394,184 @@ describe('${className} (auto-generated)', () => {
     expect(ev.model).toBe(${tsString(params.model_id)});
     expect(ev.warn_threshold_ms).toBe(${params.warn_latency_ms});
     expect(ev.fail_threshold_ms).toBe(${params.fail_latency_ms});
+  });
+});
+`;
+
+  return {
+    sourcePath: `src/self-bench/experiments/${brief.slug}.ts`,
+    sourceContent,
+    testPath: `src/self-bench/__tests__/${brief.slug}.test.ts`,
+    testContent,
+  };
+}
+
+function fillMigrationSchemaProbe(
+  brief: ExperimentBrief,
+  params: MigrationSchemaProbeParams,
+): GeneratedExperimentFiles {
+  const className = slugToClassName(brief.slug);
+  const experimentId = brief.slug;
+  // Emit the expected tables list as a frozen TS literal so the
+  // generated source stays self-contained. Each element runs through
+  // tsString for quote-escaping even though validateBrief already
+  // constrained them to a strict identifier regex — belt + braces.
+  const expectedTablesLiteral =
+    '[' + params.expected_tables.map((t) => tsString(t)).join(', ') + ']';
+  const expectedCount = params.expected_tables.length;
+  const firstTable = params.expected_tables[0];
+  const subjectLiteral = tsString(`migration:${params.migration_file}`);
+
+  const sourceContent = `/**
+ * ${brief.name}
+ *
+ * AUTO-GENERATED by Phase 7-D ExperimentAuthorExperiment from a
+ * brief in self_findings with category='experiment_proposal'.
+ *
+ * Hypothesis: ${brief.hypothesis}
+ *
+ * Template: migration_schema_probe
+ * Migration: ${params.migration_file}
+ * Expected tables (${expectedCount}): ${params.expected_tables.join(', ')}
+ *
+ * Read-only schema-drift canary. Runs a single SELECT on
+ * sqlite_master and asserts every table the migration was supposed
+ * to create still exists in the live schema. Verdict=fail on any
+ * missing table — the operator's tripwire for a silently dropped
+ * or renamed table.
+ */
+
+import type {
+  Experiment,
+  ExperimentContext,
+  Finding,
+  ProbeResult,
+  Verdict,
+} from '../experiment-types.js';
+
+interface ${className}Evidence extends Record<string, unknown> {
+  migration_file: string;
+  expected_tables: string[];
+  present_count: number;
+  missing_tables: string[];
+}
+
+interface ${className}Row {
+  name: string | null;
+}
+
+const EXPECTED_TABLES: readonly string[] = Object.freeze(${expectedTablesLiteral});
+
+export class ${className} implements Experiment {
+  id = ${tsString(experimentId)};
+  name = ${tsString(brief.name)};
+  category = 'other' as const;
+  hypothesis = ${tsString(brief.hypothesis)};
+  cadence = { everyMs: ${brief.everyMs}, runOnBoot: false };
+
+  async probe(ctx: ExperimentContext): Promise<ProbeResult> {
+    const { data } = await ctx.db
+      .from<${className}Row>('sqlite_master')
+      .select('name')
+      .eq('type', 'table')
+      .limit(1000);
+
+    const rows = (data ?? []) as ${className}Row[];
+    const present = new Set<string>();
+    for (const row of rows) {
+      if (typeof row.name === 'string' && row.name.length > 0) {
+        present.add(row.name);
+      }
+    }
+
+    const missing = EXPECTED_TABLES.filter((t) => !present.has(t));
+
+    const evidence: ${className}Evidence = {
+      migration_file: ${tsString(params.migration_file)},
+      expected_tables: [...EXPECTED_TABLES],
+      present_count: present.size,
+      missing_tables: missing,
+    };
+
+    const summary =
+      missing.length === 0
+        ? \`\${EXPECTED_TABLES.length} expected table(s) present for \${${tsString(params.migration_file)}}\`
+        : \`\${missing.length} missing table(s) for \${${tsString(params.migration_file)}}: \${missing.join(', ')}\`;
+
+    return {
+      subject: ${subjectLiteral},
+      summary,
+      evidence,
+    };
+  }
+
+  judge(result: ProbeResult, _history: Finding[]): Verdict {
+    const ev = result.evidence as ${className}Evidence;
+    if (ev.missing_tables.length > 0) return 'fail';
+    return 'pass';
+  }
+}
+`;
+
+  const testContent = `import { describe, it, expect } from 'vitest';
+import { ${className} } from '../experiments/${brief.slug}.js';
+import type { ExperimentContext } from '../experiment-types.js';
+
+function fakeDb(rows: Array<{ name: string }>) {
+  const chain = {
+    select: () => chain,
+    eq: () => chain,
+    limit: () => Promise.resolve({ data: rows, error: null }),
+  };
+  return { from: () => chain };
+}
+
+function makeCtx(rows: Array<{ name: string }>): ExperimentContext {
+  return {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    db: fakeDb(rows) as any,
+    workspaceId: 'ws-test',
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    engine: {} as any,
+    recentFindings: async () => [],
+  };
+}
+
+const EXPECTED = ${expectedTablesLiteral};
+
+describe('${className} (auto-generated)', () => {
+  const exp = new ${className}();
+
+  it('returns pass when every expected table is present', async () => {
+    const rows = EXPECTED.map((name) => ({ name }));
+    const result = await exp.probe(makeCtx(rows));
+    expect(exp.judge(result, [])).toBe('pass');
+    const ev = result.evidence as { missing_tables: string[] };
+    expect(ev.missing_tables).toEqual([]);
+  });
+
+  it('returns fail when expected tables are missing', async () => {
+    const result = await exp.probe(makeCtx([]));
+    expect(exp.judge(result, [])).toBe('fail');
+    const ev = result.evidence as { missing_tables: string[] };
+    expect(ev.missing_tables).toEqual(EXPECTED);
+  });
+
+  it('extras in the live schema do not change the verdict', async () => {
+    const rows = [
+      ...EXPECTED.map((name) => ({ name })),
+      { name: 'unrelated_other_table' },
+    ];
+    const result = await exp.probe(makeCtx(rows));
+    expect(exp.judge(result, [])).toBe('pass');
+  });
+
+  it('evidence carries migration_file and the expected list', async () => {
+    const rows = [{ name: ${tsString(firstTable)} }];
+    const result = await exp.probe(makeCtx(rows));
+    const ev = result.evidence as { migration_file: string; expected_tables: string[] };
+    expect(ev.migration_file).toBe(${tsString(params.migration_file)});
+    expect(ev.expected_tables).toEqual(EXPECTED);
   });
 });
 `;

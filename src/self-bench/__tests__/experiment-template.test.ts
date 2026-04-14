@@ -7,6 +7,7 @@ import {
   fillExperimentTemplate,
   validateBrief,
   type ExperimentBrief,
+  type MigrationSchemaProbeParams,
   type ModelLatencyProbeParams,
 } from '../experiment-template.js';
 
@@ -134,8 +135,111 @@ describe('fillExperimentTemplate — static shape', () => {
   });
 });
 
+const goodMigrationBrief: ExperimentBrief = {
+  slug: 'migration-schema-016-dashboard-tables',
+  name: 'Migration schema probe: 016-dashboard-tables.sql',
+  hypothesis: 'All tables created in 016-dashboard-tables.sql remain present in the live sqlite schema.',
+  everyMs: 60 * 60 * 1000,
+  template: 'migration_schema_probe',
+  params: {
+    migration_file: '016-dashboard-tables.sql',
+    expected_tables: ['dashboards', 'dashboard_widgets'],
+  } satisfies MigrationSchemaProbeParams,
+};
+
+describe('validateBrief — migration_schema_probe', () => {
+  it('accepts a well-formed migration brief', () => {
+    expect(validateBrief(goodMigrationBrief)).toBeNull();
+  });
+
+  it('rejects an empty migration_file', () => {
+    const b: ExperimentBrief = {
+      ...goodMigrationBrief,
+      params: { ...(goodMigrationBrief.params as MigrationSchemaProbeParams), migration_file: '' },
+    };
+    expect(validateBrief(b)).toContain('migration_file');
+  });
+
+  it('rejects a migration_file containing a path separator', () => {
+    const b: ExperimentBrief = {
+      ...goodMigrationBrief,
+      params: {
+        ...(goodMigrationBrief.params as MigrationSchemaProbeParams),
+        migration_file: '../etc/passwd',
+      },
+    };
+    expect(validateBrief(b)).toContain('bare basename');
+  });
+
+  it('rejects an empty expected_tables array', () => {
+    const b: ExperimentBrief = {
+      ...goodMigrationBrief,
+      params: { ...(goodMigrationBrief.params as MigrationSchemaProbeParams), expected_tables: [] },
+    };
+    expect(validateBrief(b)).toContain('expected_tables');
+  });
+
+  it('rejects an invalid table identifier in expected_tables', () => {
+    const b: ExperimentBrief = {
+      ...goodMigrationBrief,
+      params: {
+        ...(goodMigrationBrief.params as MigrationSchemaProbeParams),
+        expected_tables: ['good_table', 'bad-table'],
+      },
+    };
+    expect(validateBrief(b)).toContain('bad-table');
+  });
+});
+
+describe('fillExperimentTemplate — migration_schema_probe', () => {
+  it('returns expected source and test paths', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    expect(out.sourcePath).toBe(
+      'src/self-bench/experiments/migration-schema-016-dashboard-tables.ts',
+    );
+    expect(out.testPath).toBe(
+      'src/self-bench/__tests__/migration-schema-016-dashboard-tables.test.ts',
+    );
+  });
+
+  it('embeds the migration file name and expected tables in source', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    expect(out.sourceContent).toContain('016-dashboard-tables.sql');
+    expect(out.sourceContent).toContain('dashboards');
+    expect(out.sourceContent).toContain('dashboard_widgets');
+  });
+
+  it('includes AUTO-GENERATED marker', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    expect(out.sourceContent).toContain('AUTO-GENERATED');
+  });
+
+  it('emits a class derived from the slug', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    expect(out.sourceContent).toContain('class MigrationSchema016DashboardTablesExperiment');
+    expect(out.testContent).toContain('MigrationSchema016DashboardTablesExperiment');
+  });
+
+  it('test content includes pass and fail cases', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    expect(out.testContent).toContain("toBe('pass')");
+    expect(out.testContent).toContain("toBe('fail')");
+  });
+
+  it('throws on invalid brief', () => {
+    const bad: ExperimentBrief = {
+      ...goodMigrationBrief,
+      params: {
+        ...(goodMigrationBrief.params as MigrationSchemaProbeParams),
+        expected_tables: [],
+      },
+    };
+    expect(() => fillExperimentTemplate(bad)).toThrow('invalid brief');
+  });
+});
+
 describe('fillExperimentTemplate — compilation smoke test', () => {
-  it('generated source compiles against the real Experiment interface', () => {
+  it('model_latency_probe generated source compiles against the real Experiment interface', () => {
     const out = fillExperimentTemplate(goodBrief);
 
     // Write to a temp file inside the real repo's src/self-bench/
@@ -161,6 +265,33 @@ describe('fillExperimentTemplate — compilation smoke test', () => {
     try {
       // Run tsc against just this file via the workspace tsconfig.
       // Any type error here means the template produced broken code.
+      execSync('npx tsc --noEmit --skipLibCheck', {
+        cwd: repoRoot,
+        stdio: 'pipe',
+      });
+    } finally {
+      try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
+    }
+  });
+
+  it('migration_schema_probe generated source compiles against the real Experiment interface', () => {
+    const out = fillExperimentTemplate(goodMigrationBrief);
+    const tmpSlug = `mig-smoke-${Date.now()}`;
+    const repoRoot = path.resolve(__dirname, '..', '..', '..');
+    const tmpSourcePath = path.join(
+      repoRoot,
+      'src',
+      'self-bench',
+      'experiments',
+      `${tmpSlug}.ts`,
+    );
+
+    const adjusted = out.sourceContent
+      .replace(/migration-schema-016-dashboard-tables/g, tmpSlug)
+      .replace(/MigrationSchema016DashboardTablesExperiment/g, 'MigSmokeExperiment');
+
+    fs.writeFileSync(tmpSourcePath, adjusted, 'utf-8');
+    try {
       execSync('npx tsc --noEmit --skipLibCheck', {
         cwd: repoRoot,
         stdio: 'pipe',
