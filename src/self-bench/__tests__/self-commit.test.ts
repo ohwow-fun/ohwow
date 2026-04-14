@@ -360,6 +360,38 @@ describe('safeSelfCommit — git state', () => {
   });
 });
 
+describe('safeSelfCommit — Layer 3 invariant suite', () => {
+  it('refuses a patched experiment that imports from orchestrator/', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/experiments/bad.ts',
+        content: `import { x } from '../../orchestrator/engine.js';\nexport const y = 1;\n`,
+      }],
+      commitMessage: 'feat(self-bench): layer-3 blast-radius invariant refusal test',
+      experimentId: 'l3-writer',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('forbidden module');
+    // File rolled back
+    expect(fs.existsSync(path.join(tempRoot, 'src/self-bench/experiments/bad.ts'))).toBe(false);
+    // No audit line written (gate refusal is pre-audit)
+    expect(fs.existsSync(auditLogPath)).toBe(false);
+  });
+
+  it('refuses a patched test file with a .only focus', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/__tests__/focused.test.ts',
+        content: `import { it, expect } from 'vitest';\nit.only('x', () => expect(1).toBe(1));\n`,
+      }],
+      commitMessage: 'feat(self-bench): layer-3 tests-shape .only refusal case',
+      experimentId: 'l3-writer',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('.only');
+  });
+});
+
 describe('safeSelfCommit — Layer 2 fixesFindingId gate', () => {
   const EXAMPLE_UUID = '11111111-2222-3333-4444-555555555555';
   const PATCHED_FILE = 'src/self-bench/experiments/layer2-target.ts';

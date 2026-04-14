@@ -73,6 +73,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { logger } from '../lib/logger.js';
+import { runInvariantsForPaths } from './patch-invariants.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -419,6 +420,21 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
         return { ok: false, reason: `vitest gate failed: ${extractErrorSummary(err)}` };
       }
     }
+  }
+
+  // 4a. Layer 3 — pre-patch invariant suite. Runs after files are
+  //     on disk so checks see the post-write state, before Layer 2's
+  //     fixesFindingId gate so a broken neighborhood is refused even
+  //     when the finding linkage is skipped (greenfield probe writes).
+  //     Every check is fs-read only and side-effect-free; a failure
+  //     rolls the candidate files back.
+  const invariantResult = runInvariantsForPaths(
+    repoRoot,
+    opts.files.map((f) => f.path),
+  );
+  if (!invariantResult.ok) {
+    rollbackFiles(absPaths);
+    return { ok: false, reason: invariantResult.reason };
   }
 
   // 4b. Layer 2 — fixesFindingId gate. Verifies the justifying
