@@ -360,6 +360,80 @@ describe('safeSelfCommit — git state', () => {
   });
 });
 
+describe('safeSelfCommit — Layer 7 daily commit budget', () => {
+  afterEach(() => {
+    delete process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET;
+  });
+
+  it('refuses when 24h autonomous commit count has reached the budget', async () => {
+    // Seed 3 autonomous commits carrying the trailer, set budget=3.
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(tempRoot, `a${i}.ts`), `export const x${i} = ${i};\n`);
+      execSync(`git add a${i}.ts`, { cwd: tempRoot, stdio: 'pipe' });
+      const msgFile = path.join(tempRoot, '.git', 'COMMIT_MSG');
+      fs.writeFileSync(msgFile, `chore: seed ${i}\n\nSelf-authored by experiment: seeder\n`);
+      execSync(`git commit -F "${msgFile}"`, { cwd: tempRoot, stdio: 'pipe' });
+    }
+    process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET = '3';
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/budget-hit.ts', content: 'export const z = 1;' }],
+      commitMessage: 'feat(self-bench): should be refused by daily budget cap',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('daily autonomous commit budget');
+    expect(result.reason).toContain('3/3');
+    // File was not written (refusal is pre-write)
+    expect(fs.existsSync(path.join(tempRoot, 'src/self-bench/experiments/budget-hit.ts'))).toBe(false);
+  });
+
+  it('allows the commit when under budget', async () => {
+    // 1 autonomous commit seeded, budget=5 → under budget.
+    fs.writeFileSync(path.join(tempRoot, 'one.ts'), `export const x = 1;\n`);
+    execSync(`git add one.ts`, { cwd: tempRoot, stdio: 'pipe' });
+    const msgFile = path.join(tempRoot, '.git', 'COMMIT_MSG');
+    fs.writeFileSync(msgFile, `chore: seed\n\nSelf-authored by experiment: seeder\n`);
+    execSync(`git commit -F "${msgFile}"`, { cwd: tempRoot, stdio: 'pipe' });
+    process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET = '5';
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/under-budget.ts', content: 'export const z = 1;' }],
+      commitMessage: 'feat(self-bench): under-budget path happy test case',
+    }));
+    expect(result.ok).toBe(true);
+  });
+
+  it('ignores non-autonomous commits when counting', async () => {
+    // 5 commits without the trailer — should not count against budget.
+    for (let i = 0; i < 5; i++) {
+      fs.writeFileSync(path.join(tempRoot, `h${i}.ts`), `export const x${i} = ${i};\n`);
+      execSync(`git add h${i}.ts && git commit -m "chore: hand-written ${i}"`, {
+        cwd: tempRoot,
+        stdio: 'pipe',
+      });
+    }
+    process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET = '1';
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/human-doesnt-count.ts', content: 'export const z = 1;' }],
+      commitMessage: 'feat(self-bench): hand-written commits ignored by budget',
+    }));
+    expect(result.ok).toBe(true);
+  });
+
+  it('falls back to default budget when env var is invalid', async () => {
+    // With budget=0 via env, any commit would be refused. A non-numeric
+    // env var should NOT silently disable the cap; it should fall
+    // back to the default of 24.
+    process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET = 'not-a-number';
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/env-fallback.ts', content: 'export const z = 1;' }],
+      commitMessage: 'feat(self-bench): invalid env falls back to default',
+    }));
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('safeSelfCommit — Layer 4 AST-bounded patch surface', () => {
   const REGISTRY = 'src/self-bench/registries/toolchain-test-registry.ts';
 

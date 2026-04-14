@@ -243,6 +243,17 @@ const COMMIT_MESSAGE_PREFIX = 'feat(self-bench): ';
 const WHY_NOT_EDIT_MIN_LENGTH = 10;
 /** Max age of a justifying finding. Older findings are considered stale. */
 const FINDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Layer 7 — hard cap on autonomous commits per 24h window. Counted
+ * via git log against commits carrying the Self-authored by
+ * experiment: trailer. Overridable via OHWOW_SELF_COMMIT_DAILY_BUDGET
+ * for ops flexibility (unplanned incident response, throttling
+ * tighter than default, or smoke-testing a new layer).
+ */
+const DAILY_AUTONOMOUS_COMMIT_BUDGET_DEFAULT = 24;
+const DAILY_BUDGET_ENV = 'OHWOW_SELF_COMMIT_DAILY_BUDGET';
+/** Trailer every safeSelfCommit writes — used to count autonomous commits. */
+const AUTONOMOUS_COMMIT_TRAILER = 'Self-authored by experiment:';
 
 // Module-level state. Set at daemon boot via the setter.
 // Tests override via their beforeEach hooks.
@@ -366,6 +377,19 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return {
       ok: false,
       reason: `whyNotEditExisting must be at least ${WHY_NOT_EDIT_MIN_LENGTH} characters`,
+    };
+  }
+
+  // 0b. Layer 7 — daily autonomous commit budget. Count the
+  //     autonomous commits in the last 24h via git log; refuse
+  //     once the count reaches the budget. Cheap early refusal
+  //     so a budget-hit attempt doesn't write files or run gates.
+  const budget = resolveDailyBudget();
+  const autonomousCount24h = countAutonomousCommitsLast24h(repoRoot);
+  if (autonomousCount24h >= budget) {
+    return {
+      ok: false,
+      reason: `daily autonomous commit budget reached (${autonomousCount24h}/${budget}); wait for the 24h rolling window to clear or raise ${DAILY_BUDGET_ENV}`,
     };
   }
 
@@ -658,6 +682,41 @@ function rollbackFiles(
         fs.unlinkSync(abs);
       }
     } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Read the daily budget from the env override, falling back to the
+ * default. Parses NaN / non-integer / negative values as "use default"
+ * so a mistyped env var doesn't silently disable the cap.
+ */
+function resolveDailyBudget(): number {
+  const raw = process.env[DAILY_BUDGET_ENV];
+  if (raw === undefined || raw === '') return DAILY_AUTONOMOUS_COMMIT_BUDGET_DEFAULT;
+  const parsed = parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DAILY_AUTONOMOUS_COMMIT_BUDGET_DEFAULT;
+  return parsed;
+}
+
+/**
+ * Count autonomous commits in the last 24h. Defensive: any git
+ * failure returns 0 so a transient error produces a permissive
+ * (under-budget) result — the alternative would be fail-closed when
+ * git is unavailable, which would block legit commits during
+ * environmental flakes.
+ */
+function countAutonomousCommitsLast24h(repoRoot: string): number {
+  try {
+    const out = execSync(
+      `git log --since="24 hours ago" --pretty=format:%B --no-merges`,
+      { cwd: repoRoot, encoding: 'utf-8', timeout: 10_000 },
+    );
+    // Count each occurrence of the trailer. One autonomous commit
+    // writes exactly one trailer line, so count == commits.
+    const matches = out.match(new RegExp(`^${AUTONOMOUS_COMMIT_TRAILER}`, 'gm'));
+    return matches ? matches.length : 0;
+  } catch {
+    return 0;
   }
 }
 
