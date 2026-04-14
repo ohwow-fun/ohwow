@@ -20,6 +20,10 @@ import type { TypedEventBus } from '../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../tui/types.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { loadWorkspaceDefaultPaths } from '../db/workspace-paths.js';
+import {
+  parseResponseMeta,
+  shouldAutoCreateDeliverable,
+} from './response-classifier.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
 import {
@@ -504,7 +508,7 @@ export class RuntimeEngine {
       const durationSeconds = Math.round((Date.now() - startTime) / 1000);
 
       // Parse response classification
-      const { type: responseType, cleanContent } = this.parseResponseMeta(content);
+      const { type: responseType, cleanContent } = parseResponseMeta(content);
 
       // Autonomy-level status routing
       const autonomyLevel = (agentConfig.autonomy_level as number | undefined) ?? 2;
@@ -1816,7 +1820,7 @@ export class RuntimeEngine {
       }
 
       // Parse response classification
-      const { type: responseType, cleanContent } = this.parseResponseMeta(fullContent);
+      const { type: responseType, cleanContent } = parseResponseMeta(fullContent);
 
       const totalTokens = totalInputTokens + totalOutputTokens;
       // Use provider-reported cost (OpenRouter) when available, otherwise estimate
@@ -1987,7 +1991,7 @@ export class RuntimeEngine {
             .eq('id', taskId)
             .single();
           const sourceType = (taskMeta as Record<string, unknown> | null)?.source_type as string | null;
-          const auto = this.shouldAutoCreateDeliverable(cleanContent, {
+          const auto = shouldAutoCreateDeliverable(cleanContent, {
             title: task.title,
             sourceType,
           });
@@ -3223,106 +3227,4 @@ ${opts.taskDescription ? `Description: ${wrapUserData(opts.taskDescription)}` : 
 ${opts.agentPrompt}`;
   }
 
-  private parseResponseMeta(content: string): {
-    type: 'deliverable' | 'informational' | null;
-    cleanContent: string;
-  } {
-    const match = content.match(/^<!--response_meta:(.*?)-->\s*/);
-    if (!match) return { type: null, cleanContent: content };
-    try {
-      const meta = JSON.parse(match[1]);
-      if (meta.type === 'deliverable' || meta.type === 'informational') {
-        return {
-          type: meta.type,
-          cleanContent: content.replace(/^<!--response_meta:.*?-->\s*/, ''),
-        };
-      }
-    } catch {
-      // Unparseable
-    }
-    return { type: null, cleanContent: content };
-  }
-
-  /** Heuristic: determine if an untagged response should auto-create a deliverable */
-  private shouldAutoCreateDeliverable(
-    content: string,
-    task: { title: string; sourceType?: string | null },
-  ): { create: boolean; inferredType: string } {
-    const NO = { create: false, inferredType: 'other' };
-
-    // Skip trivially short responses
-    if (content.length < 200) return NO;
-
-    // Skip system/heartbeat/internal tasks
-    const lowerTitle = task.title.toLowerCase();
-    const systemPrefixes = ['heartbeat', 'health check', 'system:', 'internal:', 'ping', 'cron:'];
-    if (systemPrefixes.some(p => lowerTitle.startsWith(p))) return NO;
-    if (task.sourceType === 'heartbeat' || task.sourceType === 'system') return NO;
-
-    // Structure signals
-    const hasHeaders = /^#{1,3}\s/m.test(content);
-    const hasList = /^[-*]\s/m.test(content) || /^\d+\.\s/m.test(content);
-    const hasCodeBlock = /```[\s\S]*?```/.test(content);
-    const hasTable = /\|.*\|.*\|/m.test(content);
-    const structureScore = [hasHeaders, hasList, hasCodeBlock, hasTable].filter(Boolean).length;
-
-    // Substantial content (>500 chars) with any structure = deliverable
-    if (content.length > 500 && structureScore >= 1) {
-      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
-    }
-
-    // Very long content (>1500 chars) even without structure
-    if (content.length > 1500) {
-      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
-    }
-
-    // Medium content (200-500) with strong structure (2+ signals)
-    if (content.length >= 200 && structureScore >= 2) {
-      return { create: true, inferredType: this.inferTypeFromContent(content, lowerTitle) };
-    }
-
-    return NO;
-  }
-
-  /** Infer deliverable type from content patterns and task title */
-  private inferTypeFromContent(content: string, lowerTitle: string): string {
-    // Email patterns
-    if (/subject:|dear |regards|sincerely/i.test(content) &&
-        (lowerTitle.includes('email') || lowerTitle.includes('outreach') || lowerTitle.includes('message'))) {
-      return 'email';
-    }
-
-    // Code patterns
-    if (/```(ts|js|python|tsx|jsx|rust|go|java|sql|html|css|sh|bash)/i.test(content) ||
-        lowerTitle.includes('code') || lowerTitle.includes('implement') || lowerTitle.includes('script')) {
-      return 'code';
-    }
-
-    // Report patterns
-    if (lowerTitle.includes('report') || lowerTitle.includes('analysis') || lowerTitle.includes('audit') ||
-        /executive summary|key findings|recommendations|conclusion/i.test(content)) {
-      return 'report';
-    }
-
-    // Plan patterns
-    if (lowerTitle.includes('plan') || lowerTitle.includes('strategy') || lowerTitle.includes('roadmap') ||
-        /phase \d|step \d|timeline|milestone/i.test(content)) {
-      return 'plan';
-    }
-
-    // Data patterns
-    if (lowerTitle.includes('data') || lowerTitle.includes('spreadsheet') || lowerTitle.includes('csv') ||
-        /\|.*\|.*\|/m.test(content)) {
-      return 'data';
-    }
-
-    // Creative patterns
-    if (lowerTitle.includes('write') || lowerTitle.includes('draft') || lowerTitle.includes('blog') ||
-        lowerTitle.includes('post') || lowerTitle.includes('article') || lowerTitle.includes('copy') ||
-        lowerTitle.includes('creative') || lowerTitle.includes('story')) {
-      return 'creative';
-    }
-
-    return 'document';
-  }
 }
