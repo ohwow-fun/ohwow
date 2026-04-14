@@ -1,12 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`tool-definitions snapshot (regression net for refactor) > LSP_TOOL_DEFINITIONS preserves tool names and source order 1`] = `
+exports[`tool-definitions snapshot (regression net for refactor) > COS_EXTENSION_TOOL_DEFINITIONS preserves tool names and source order 1`] = `
 [
-  "lsp_diagnostics",
-  "lsp_hover",
-  "lsp_go_to_definition",
-  "lsp_references",
-  "lsp_completions",
   "assess_operations",
   "get_pillar_detail",
   "build_pillar",
@@ -54,6 +49,16 @@ exports[`tool-definitions snapshot (regression net for refactor) > LSP_TOOL_DEFI
   "schedule_team_council",
   "get_collective_briefing",
   "rebalance_workload",
+]
+`;
+
+exports[`tool-definitions snapshot (regression net for refactor) > LSP_TOOL_DEFINITIONS preserves tool names and source order 1`] = `
+[
+  "lsp_diagnostics",
+  "lsp_hover",
+  "lsp_go_to_definition",
+  "lsp_references",
+  "lsp_completions",
 ]
 `;
 
@@ -1843,7 +1848,8 @@ exports[`tool-definitions snapshot (regression net for refactor) > filterToolsBy
 
 exports[`tool-definitions snapshot (regression net for refactor) > union catalog tool count 1`] = `
 {
-  "lsp": 52,
+  "cosExtension": 47,
+  "lsp": 5,
   "orchestrator": 139,
   "union": 191,
 }

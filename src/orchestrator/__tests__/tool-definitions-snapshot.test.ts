@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ORCHESTRATOR_TOOL_DEFINITIONS,
   LSP_TOOL_DEFINITIONS,
+  COS_EXTENSION_TOOL_DEFINITIONS,
   filterToolsByIntent,
   type IntentSection,
 } from '../tool-definitions.js';
@@ -22,7 +23,11 @@ const ALL_INTENT_SECTIONS: IntentSection[] = [
   'dev',
 ];
 
-const UNION_TOOLS = [...ORCHESTRATOR_TOOL_DEFINITIONS, ...LSP_TOOL_DEFINITIONS];
+const UNION_TOOLS = [
+  ...ORCHESTRATOR_TOOL_DEFINITIONS,
+  ...LSP_TOOL_DEFINITIONS,
+  ...COS_EXTENSION_TOOL_DEFINITIONS,
+];
 
 describe('tool-definitions snapshot (regression net for refactor)', () => {
   it('ORCHESTRATOR_TOOL_DEFINITIONS preserves tool names and source order', () => {
@@ -33,10 +38,15 @@ describe('tool-definitions snapshot (regression net for refactor)', () => {
     expect(LSP_TOOL_DEFINITIONS.map((t) => t.name)).toMatchSnapshot();
   });
 
+  it('COS_EXTENSION_TOOL_DEFINITIONS preserves tool names and source order', () => {
+    expect(COS_EXTENSION_TOOL_DEFINITIONS.map((t) => t.name)).toMatchSnapshot();
+  });
+
   it('union catalog tool count', () => {
     expect({
       orchestrator: ORCHESTRATOR_TOOL_DEFINITIONS.length,
       lsp: LSP_TOOL_DEFINITIONS.length,
+      cosExtension: COS_EXTENSION_TOOL_DEFINITIONS.length,
       union: UNION_TOOLS.length,
     }).toMatchSnapshot();
   });

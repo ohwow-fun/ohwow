@@ -149,15 +149,21 @@ import { OBSERVATION_TOOL_DEFINITIONS } from './tools/observation.js';
 import { COLLECTIVE_INTELLIGENCE_TOOL_DEFINITIONS } from './tools/collective-intelligence.js';
 
 // =========================================================================
-// LSP CODE INTELLIGENCE + CENTER OF OPERATIONS TOOLS
+// LSP CODE INTELLIGENCE TOOLS
 // =========================================================================
-// Historically this was called LSP_TOOL_DEFINITIONS but it also holds the
-// operational-pillars, person-model, team, persona, onboarding, transition,
-// routing, growth, observation, and collective-intelligence schemas. The
-// name is kept for now so existing callers (local-orchestrator.ts:20) don't
-// need to change; a follow-up commit renames it.
-export const LSP_TOOL_DEFINITIONS: Tool[] = [
-  ...LSP_CODE_TOOL_DEFINITIONS,
+// The five real LSP tools — lsp_diagnostics, lsp_hover, lsp_go_to_definition,
+// lsp_references, lsp_completions.
+export const LSP_TOOL_DEFINITIONS: Tool[] = [...LSP_CODE_TOOL_DEFINITIONS];
+
+// =========================================================================
+// CENTER OF OPERATIONS EXTENSION TOOLS
+// =========================================================================
+// Schemas for the COS toolset that was historically bundled under
+// LSP_TOOL_DEFINITIONS: operational pillars, person model, team, persona,
+// onboarding plan, transition engine, work router, human growth,
+// observation layer, and collective intelligence. Merged into the
+// orchestrator catalog by the caller (local-orchestrator.ts).
+export const COS_EXTENSION_TOOL_DEFINITIONS: Tool[] = [
   ...OPERATIONAL_PILLARS_TOOL_DEFINITIONS,
   ...PERSON_MODEL_TOOL_DEFINITIONS,
   ...TEAM_TOOL_DEFINITIONS,

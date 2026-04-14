@@ -17,7 +17,7 @@ import type {
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { CLAUDE_CONTEXT_LIMITS } from '../execution/ai-types.js';
-import { ORCHESTRATOR_TOOL_DEFINITIONS, LSP_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
+import { ORCHESTRATOR_TOOL_DEFINITIONS, LSP_TOOL_DEFINITIONS, COS_EXTENSION_TOOL_DEFINITIONS, FILESYSTEM_TOOL_DEFINITIONS, BASH_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, filterToolsByIntent, extractExplicitToolNames, getToolPriorityLimit, type IntentSection } from './tool-definitions.js';
 import { runtimeToolRegistry } from './runtime-tool-registry.js';
 import { loadConversationPersona } from './conversation-persona.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
@@ -1890,14 +1890,17 @@ export class LocalOrchestrator {
     maxPriority?: 1 | 2 | 3,
     userMessageForToolExtraction?: string,
   ): Promise<Tool[]> {
-    // LSP_TOOL_DEFINITIONS is a historically misnamed bucket that actually
-    // holds a mix of tools (LSP, operational pillars, person models, team
-    // members, transition engine, work router, human growth, observation,
-    // collective intelligence). It was never imported here, which meant a
-    // large slice of orchestrator tools was orphaned and invisible to the
-    // model. Fold it into the base set so every registered tool handler has
-    // a corresponding definition the model can call.
-    const allBaseTools = [...ORCHESTRATOR_TOOL_DEFINITIONS, ...LSP_TOOL_DEFINITIONS];
+    // Base tool surface: the orchestrator catalog, the five real LSP
+    // tools, and the Center of Operations extension toolset (operational
+    // pillars, person model, team, persona, onboarding, transitions,
+    // routing, growth, observation, collective). All three are statically
+    // defined but stay as separate exports so the intent layering
+    // elsewhere in the codebase can pick them apart if it ever needs to.
+    const allBaseTools = [
+      ...ORCHESTRATOR_TOOL_DEFINITIONS,
+      ...LSP_TOOL_DEFINITIONS,
+      ...COS_EXTENSION_TOOL_DEFINITIONS,
+    ];
     let tools = options?.excludedTools?.length
       ? allBaseTools.filter((t) => !options.excludedTools.includes(t.name))
       : [...allBaseTools];
