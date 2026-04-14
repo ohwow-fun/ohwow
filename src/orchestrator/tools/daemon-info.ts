@@ -6,6 +6,11 @@
  * like "~/.ohwow/ohwow.sqlite" (wrong) when writing sqlite3 commands,
  * or "ops-monitoring-playbook.md" (relative, resolves to daemon cwd)
  * when reading files. One canonical source of truth prevents all of it.
+ *
+ * Post-multi-workspace migration, the daemon's real data dir is
+ * ~/.ohwow/workspaces/<name>/ — NOT the legacy ~/.ohwow/data/ path.
+ * This tool calls resolveActiveWorkspace() so the paths it returns are
+ * always correct for whichever workspace this daemon is running under.
  */
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
@@ -13,6 +18,8 @@ import { join, dirname } from 'path';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+import { resolveActiveWorkspace, loadConfig } from '../../config.js';
+import { VERSION } from '../../version.js';
 
 export const DAEMON_INFO_TOOL_DEFINITIONS: Tool[] = [
   {
@@ -29,14 +36,24 @@ export const DAEMON_INFO_TOOL_DEFINITIONS: Tool[] = [
 export async function getDaemonInfo(
   ctx: LocalToolContext,
 ): Promise<ToolResult> {
+  // Live runtime layout — always correct regardless of which workspace
+  // the daemon is running under. Post-migration this is
+  // ~/.ohwow/workspaces/<name>/, NOT the legacy ~/.ohwow/data/ path.
   const ohwowDir = join(homedir(), '.ohwow');
-  const dataDir = join(ohwowDir, 'data');
-  const runtimeDb = join(dataDir, 'runtime.db');
+  const activeWs = resolveActiveWorkspace();
+  const runtimeDb = activeWs.dbPath;
+  const dataDir = activeWs.dataDir;
   const daemonToken = join(dataDir, 'daemon.token');
-  const configPath = join(ohwowDir, 'config.json');
-  const screenshotsDir = join(dataDir, 'screenshots');
-  const mediaDir = join(ohwowDir, 'media');
   const daemonLog = join(dataDir, 'daemon.log');
+  const screenshotsDir = join(dataDir, 'screenshots');
+  const configPath = join(ohwowDir, 'config.json');
+  const mediaDir = join(ohwowDir, 'media');
+
+  // Live config — expose the real port + model instead of hardcoding 7700
+  // and guessing at the model name.
+  const config = loadConfig();
+  const daemonPort = config.port;
+  const daemonBaseUrl = `http://localhost:${daemonPort}`;
 
   // Repo paths (best-effort — daemon might be running from anywhere)
   const cwd = ctx.workingDirectory || process.cwd();
@@ -46,10 +63,23 @@ export async function getDaemonInfo(
   return {
     success: true,
     data: {
+      // Runtime identity
+      version: VERSION,
       workspaceId: ctx.workspaceId,
-      daemonPort: 7700,
-      daemonBaseUrl: 'http://localhost:7700',
-      daemonHealthUrl: 'http://localhost:7700/health',
+      workspaceName: activeWs.name,
+      pid: process.pid,
+      uptimeSeconds: Math.round(process.uptime()),
+      // Model + provider selection
+      orchestratorModel: config.orchestratorModel || null,
+      cloudModel: config.cloudModel || null,
+      ollamaModel: config.ollamaModel || null,
+      modelSource: config.modelSource,
+      cloudProvider: config.cloudProvider,
+      // Network
+      daemonPort,
+      daemonBaseUrl,
+      daemonHealthUrl: `${daemonBaseUrl}/health`,
+      // Filesystem layout
       daemonTokenPath: daemonToken,
       configPath,
       paths: {
@@ -62,9 +92,9 @@ export async function getDaemonInfo(
         ohwowRepo,
         ohwowFunRepo,
       },
+      // Examples the model can cite verbatim without guessing paths
       sqliteCliExample: `sqlite3 ${runtimeDb} "SELECT name FROM sqlite_master WHERE type='table' LIMIT 20;"`,
-      authHeaderExample:
-        'Authorization: Bearer $(cat ~/.ohwow/data/daemon.token)',
+      authHeaderExample: `Authorization: Bearer $(cat ${daemonToken})`,
       keyTables: [
         'agent_workforce_agents',
         'agent_workforce_tasks',
