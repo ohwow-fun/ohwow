@@ -29,12 +29,55 @@
  * we refuse and tell the caller to keep the interview going.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { logger } from '../../lib/logger.js';
 import { syncResource, hexToUuid } from '../../control-plane/sync-resources.js';
 import { syncTaskById } from './tasks.js';
 import { syncGoalById } from './goals.js';
+
+export const ONBOARDING_PLAN_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'propose_first_month_plan',
+    description: 'CRITICAL: when a new human team member has gone through enough intake (at least 3 populated person_model dimensions), STOP asking interview questions and call this tool. It synthesizes a grounded 4-week ramp plan from what you already know about them and returns a markdown draft you should present in the chat. Do not ask the member "what do you want to accomplish in your first month" — new hires are the least-qualified to answer that. Propose, then invite pushback.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member to generate the plan for' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'accept_onboarding_plan',
+    description: 'Materialize a draft onboarding plan into real tasks + goals. Only call this AFTER the member has actually agreed to the plan shown in chat. Creates one goal per week and one task per week task, routes human-owned tasks to the member via work_routing_decisions, and emits an activity feed event.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string', description: 'Plan id returned from propose_first_month_plan' },
+      },
+      required: ['plan_id'],
+    },
+  },
+  {
+    name: 'get_onboarding_plan',
+    description: 'Fetch an onboarding plan by plan_id, or the most recent plan for a team_member_id. Returns status, rationale, weeks, and materialization state.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        plan_id: { type: 'string' },
+        team_member_id: { type: 'string' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_onboarding_plans',
+    description: 'List onboarding plans in the workspace, newest first.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+];
 
 /**
  * Reshape a local onboarding_plan row into the payload the cloud

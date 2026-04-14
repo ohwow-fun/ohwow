@@ -3,10 +3,81 @@
  * Phase 4 of Center of Operations.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { HumanGrowthEngine } from '../../hexis/human-growth.js';
 import { SkillPathsEngine } from '../../hexis/skill-paths.js';
 import type { ProgressionSource } from '../../hexis/skill-paths.js';
+
+export const HUMAN_GROWTH_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_human_growth',
+    description: 'Get a person\'s growth arc: competence, autonomy, specialization, relationship health. Computes a fresh snapshot from recent data. Detects burnout risk, plateau, motivation drift, and role evolution.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'get_skill_paths',
+    description: 'Get active skill development paths for a person. Shows milestones, progress, scaffolding levels, and suggested tasks.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'create_skill_path',
+    description: 'Generate a skill development path with progressive milestones. Scaffolding decreases as difficulty increases (high at beginner, none at expert).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+        skill_name: { type: 'string', description: 'Skill to develop (e.g., content_writing, sales, analytics)' },
+        target_level: { type: 'number', description: 'Target proficiency 0-1 (default: 0.75 = advanced)' },
+      },
+      required: ['person_id', 'skill_name'],
+    },
+  },
+  {
+    name: 'get_team_health',
+    description: 'Assess team-wide health: who is growing, plateauing, or declining. Surfaces burnout signals, motivation drift, and plateau alerts with severity levels and suggested interventions.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_delegation_metrics',
+    description: 'Get founder delegation tracking: total decisions, delegation rate, trend, successes vs reverts. Suggests tasks that could be delegated to agents.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID (typically the founder)' },
+      },
+      required: ['person_id'],
+    },
+  },
+  {
+    name: 'record_skill_assessment',
+    description: 'Log a skill assessment (self-report or peer observation). Updates the person\'s skill level and checks milestone achievements.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        person_id: { type: 'string', description: 'Person model ID' },
+        skill_name: { type: 'string', description: 'Skill name' },
+        new_level: { type: 'number', description: 'New proficiency level 0-1' },
+        source: { type: 'string', enum: ['self_assessment', 'peer_observation', 'task_outcome', 'training', 'routing_feedback'], description: 'Source of the assessment' },
+        task_id: { type: 'string', description: 'Optional: task that prompted this assessment' },
+        notes: { type: 'string', description: 'Optional: notes about the assessment' },
+      },
+      required: ['person_id', 'skill_name', 'new_level'],
+    },
+  },
+];
 
 export async function getHumanGrowth(
   ctx: LocalToolContext,

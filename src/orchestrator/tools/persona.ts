@@ -20,12 +20,48 @@
  * explicit with `activate_persona` when they already know the agent id.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import {
   activateConversationPersona,
   deactivateConversationPersona,
   loadConversationPersona,
 } from '../conversation-persona.js';
+
+export const PERSONA_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'activate_guide_persona',
+    description: 'Install a team member\'s assigned guide agent (Chief of Staff) as the driver of this chat session. From the next turn on, replies use the agent\'s system prompt, model_policy, and voice instead of the generic orchestrator. Call this the moment a human team member starts being onboarded or asks to talk to their guide directly.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member whose assigned guide should take over' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'activate_persona',
+    description: 'Install any agent in the workspace as the driver of this chat session, without requiring a team_member. Useful when a sales, support, or specialist agent should take over a thread directly.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'Agent id to install as persona' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'deactivate_persona',
+    description: 'Clear the active persona for this chat session and return control to the orchestrator voice.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'get_active_persona',
+    description: 'Check whether this chat session currently has an agent persona active, and if so which one.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // activate_guide_persona — look up the member's assigned guide agent and
