@@ -24,18 +24,35 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       const db = getDb();
       const targetType = req.query.target_type as string | undefined;
       const targetId = req.query.target_id as string | undefined;
+      const limNum = Math.max(1, Math.min(200, parseInt(req.query.limit as string, 10) || 50));
+      const offNum = Math.max(0, parseInt(req.query.offset as string, 10) || 0);
+
+      let countQuery = db.from('orchestrator_chat_sessions').select('id', { count: 'exact', head: true });
+      if (targetType) countQuery = countQuery.eq('target_type', targetType);
+      if (targetId) countQuery = countQuery.eq('target_id', targetId);
+      const { count: total } = await countQuery;
 
       let query = db
         .from('orchestrator_chat_sessions')
         .select('id, title, messages, message_count, device_name, target_type, target_id, created_at, updated_at')
         .order('updated_at', { ascending: false })
-        .limit(50);
+        .range(offNum, offNum + limNum - 1);
 
       if (targetType) query = query.eq('target_type', targetType);
       if (targetId) query = query.eq('target_id', targetId);
 
       const { data, error } = await query;
       if (error) { res.status(500).json({ error: error.message }); return; }
+
+      // Some rows were written with SQLite's datetime('now'), which omits the
+      // timezone suffix; JS parses those as local time and the UI's
+      // getTimeAgo clamps everything to "Just now". Normalize to ISO-8601
+      // UTC on read so relative time renders correctly without a backfill.
+      const toIso = (ts: unknown): string | null => {
+        if (!ts || typeof ts !== 'string') return (ts as string | null) ?? null;
+        if (ts.endsWith('Z') || /[+-]\d\d:?\d\d$/.test(ts)) return ts;
+        return ts.replace(' ', 'T') + 'Z';
+      };
 
       const sessions = (data || []).map((row: any) => {
         // Use stored message_count; fall back to parsing messages JSON if 0
@@ -51,12 +68,12 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
           device_name: row.device_name || null,
           target_type: row.target_type || 'orchestrator',
           target_id: row.target_id || null,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
+          created_at: toIso(row.created_at),
+          updated_at: toIso(row.updated_at),
         };
       });
 
-      res.json({ sessions });
+      res.json({ sessions, total: total ?? 0, limit: limNum, offset: offNum });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

@@ -60,8 +60,15 @@ function normalizeContent(content: unknown): string {
   return String(content || '');
 }
 
+function parseUtc(dateStr: string): Date {
+  if (!dateStr) return new Date(NaN);
+  if (/Z$|[+-]\d\d:?\d\d$/.test(dateStr)) return new Date(dateStr);
+  return new Date(dateStr.replace(' ', 'T') + 'Z');
+}
+
 function relativeTime(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
+  const diff = Date.now() - parseUtc(dateStr).getTime();
+  if (diff < 0) return 'Just now';
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'Just now';
   if (mins < 60) return `${mins}m ago`;
@@ -69,7 +76,7 @@ function relativeTime(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
+  return parseUtc(dateStr).toLocaleDateString();
 }
 
 /* ─── Main Page ─────────────────────────────────────────────────────── */
@@ -81,6 +88,8 @@ export function MessagesPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [sessionsTotal, setSessionsTotal] = useState(0);
+  const [sessionsLoadingMore, setSessionsLoadingMore] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const conversationRef = useRef<{ role: 'user' | 'assistant'; content: string }[]>([]);
@@ -89,8 +98,11 @@ export function MessagesPage() {
 
   // Load sessions and agents on mount
   useEffect(() => {
-    api<{ sessions: SessionSummary[] }>('/api/orchestrator/sessions')
-      .then((data) => setSessions(data.sessions || []))
+    api<{ sessions: SessionSummary[]; total: number }>('/api/orchestrator/sessions?limit=50&offset=0')
+      .then((data) => {
+        setSessions(data.sessions || []);
+        setSessionsTotal(data.total || 0);
+      })
       .catch(() => {})
       .finally(() => setSessionsLoading(false));
 
@@ -98,6 +110,20 @@ export function MessagesPage() {
       .then((data) => setAgents(data.data || []))
       .catch(() => {});
   }, []);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (sessionsLoadingMore || sessions.length >= sessionsTotal) return;
+    setSessionsLoadingMore(true);
+    try {
+      const data = await api<{ sessions: SessionSummary[]; total: number }>(
+        `/api/orchestrator/sessions?limit=50&offset=${sessions.length}`,
+      );
+      setSessions((prev) => [...prev, ...(data.sessions || [])]);
+      setSessionsTotal(data.total || 0);
+    } finally {
+      setSessionsLoadingMore(false);
+    }
+  }, [sessions.length, sessionsTotal, sessionsLoadingMore]);
 
   // Determine active target name
   const activeSession = sessions.find((s) => s.id === activeSessionId);
@@ -257,6 +283,9 @@ export function MessagesPage() {
             onSelect={selectSession}
             onNewConversation={createSession}
             onDelete={deleteSession}
+            total={sessionsTotal}
+            onLoadMore={loadMoreSessions}
+            loadingMore={sessionsLoadingMore}
           />
         </div>
 
@@ -290,6 +319,9 @@ export function MessagesPage() {
                     onNewConversation={createSession}
                     onDelete={deleteSession}
                     onClose={() => setMobileSidebarOpen(false)}
+                    total={sessionsTotal}
+                    onLoadMore={loadMoreSessions}
+                    loadingMore={sessionsLoadingMore}
                   />
                 </motion.div>
               </>
@@ -322,6 +354,9 @@ function LocalSessionList({
   onNewConversation,
   onDelete,
   onClose,
+  total,
+  onLoadMore,
+  loadingMore,
 }: {
   sessions: SessionSummary[];
   activeSessionId: string | null;
@@ -331,6 +366,9 @@ function LocalSessionList({
   onNewConversation: (type: 'orchestrator' | 'agent', targetId: string | null, name?: string) => void;
   onDelete: (id: string) => void;
   onClose?: () => void;
+  total: number;
+  onLoadMore: () => void;
+  loadingMore: boolean;
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -411,6 +449,18 @@ function LocalSessionList({
         {!isLoading && [...agentGroups.entries()].map(([agentId, group]) => (
           <SessionGroup key={agentId} label={group.name} icon={<Robot size={12} weight="bold" className="text-terminal" />} sessions={group.sessions} activeId={activeSessionId} confirmId={confirmId} onSelect={onSelect} onDelete={handleDelete} />
         ))}
+        {!isLoading && sessions.length > 0 && sessions.length < total && (
+          <div className="flex flex-col items-center gap-1 py-3">
+            <button
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="text-xs text-neutral-400 hover:text-white transition-colors disabled:opacity-50"
+            >
+              {loadingMore ? 'Loading...' : `Load ${Math.min(50, total - sessions.length)} more`}
+            </button>
+            <span className="text-[10px] text-neutral-600">{sessions.length} of {total}</span>
+          </div>
+        )}
       </div>
     </div>
   );
