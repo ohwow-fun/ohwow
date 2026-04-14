@@ -18,7 +18,12 @@ export const runAgentDispatcher: ActionDispatcher = {
     trigger: LocalTrigger,
   ): Promise<ActionOutput> {
     const agentId = config.agent_id as string;
-    const promptTemplate = (config.prompt as string) || `Handle ${trigger.name} event`;
+    // The schema + every writer stores the agent instruction under `task_prompt`
+    // (see src/triggers/action-config-schemas.ts and automation-service). Reading
+    // only `config.prompt` dropped the real prompt on every fire and fell back
+    // to the generic stub, which made scheduled automations look like they ran
+    // but produced hollow output.
+    const promptTemplate = (config.task_prompt as string) || (config.prompt as string) || `Handle ${trigger.name} event`;
 
     if (!agentId) {
       throw new Error('run_agent action requires agent_id in action_config');
