@@ -26,6 +26,7 @@ import { createActivityRouter } from './routes/activity.js';
 import { createApprovalsRouter } from './routes/approvals.js';
 import { createDeliverablesRouter } from './routes/deliverables.js';
 import { createSchedulesRouter } from './routes/schedules.js';
+import { createKnowledgeRouter } from './routes/knowledge.js';
 import { createSystemRouter } from './routes/system.js';
 import { createOrchestratorRouter } from './routes/orchestrator.js';
 import { createVoiceRouter } from './routes/voice.js';
@@ -496,6 +497,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createApprovalsRouter(db));
   app.use(createDeliverablesRouter(db));
   app.use(createSchedulesRouter(db, onScheduleChange));
+  app.use(createKnowledgeRouter(db));
   app.use(createSystemRouter(db, rawDb, startTime));
   if (orchestrator) {
     app.use(createOrchestratorRouter(orchestrator));
