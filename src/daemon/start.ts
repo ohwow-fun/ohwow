@@ -133,7 +133,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const startTime = Date.now();
   const bus = new TypedEventBus<RuntimeEvents>();
 
-  // 3b. Clean up orphaned tasks/agents from previous crash
+  // 3b. Clean up orphaned tasks/agents/conversations from previous crash
   try {
     const now = new Date().toISOString();
     const stuckTasks = rawDb.prepare(
@@ -142,8 +142,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
     const stuckAgents = rawDb.prepare(
       "UPDATE agent_workforce_agents SET status = 'idle', updated_at = ? WHERE status = 'working'"
     ).run(now);
-    if (stuckTasks.changes > 0 || stuckAgents.changes > 0) {
-      logger.info(`[daemon] Recovered ${stuckTasks.changes} orphaned task(s), ${stuckAgents.changes} stuck agent(s)`);
+    // Any 'running' conversation on startup is orphaned: orchestrator messages are
+    // buffered in memory across a turn and lost if the daemon exits mid-turn.
+    const stuckConvs = rawDb.prepare(
+      "UPDATE orchestrator_conversations SET status = 'error', last_error = 'orphaned by daemon restart' WHERE status = 'running'"
+    ).run();
+    if (stuckTasks.changes > 0 || stuckAgents.changes > 0 || stuckConvs.changes > 0) {
+      logger.info(`[daemon] Recovered ${stuckTasks.changes} orphaned task(s), ${stuckAgents.changes} stuck agent(s), ${stuckConvs.changes} orphaned conversation(s)`);
     }
   } catch (err) {
     logger.warn(`[daemon] Orphan cleanup failed: ${err instanceof Error ? err.message : err}`);
