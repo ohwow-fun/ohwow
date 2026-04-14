@@ -292,6 +292,12 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
       // Opt-in via ?async=1. Create the conversation row immediately,
       // dispatch the orchestrator turn in the background, return 202 so the
       // caller can poll GET /api/chat/:id for completion.
+      //
+      // CRITICAL: this path uses ChatTurnOptions to pass model + chat actor
+      // PER-CALL instead of mutating instance state via setOrchestratorModel /
+      // setChatActor / setModelSource. With four concurrent dispatches landing
+      // in the same event loop tick, the legacy setters race (last writer wins)
+      // and the earlier generators read the wrong config. Bug #6.
       if (wantsAsync) {
         const db = getDb();
         const now = new Date().toISOString();
@@ -328,9 +334,32 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
             });
         }
 
-        // Set model overrides up-front (same as the streaming path).
-        if (model) orchestrator.setOrchestratorModel(model);
-        if (modelSource) orchestrator.setModelSource(modelSource);
+        // Resolve chat actor (team_member + guide agent) without touching
+        // instance state. Stash on the per-session map so the in-flight
+        // generator can read it via resolveChatActorTeamMemberId(sessionId).
+        let asyncChatActor: { teamMemberId: string | null; guideAgentId: string | null } | null = null;
+        if (chatUserEmail || personaAgentId) {
+          try {
+            let tmRow: { id: string; assigned_guide_agent_id: string | null } | null = null;
+            if (chatUserEmail) {
+              const { data } = await db
+                .from('agent_workforce_team_members')
+                .select('id, assigned_guide_agent_id')
+                .eq('email', chatUserEmail)
+                .maybeSingle();
+              tmRow = (data as { id: string; assigned_guide_agent_id: string | null } | null) ?? null;
+            }
+            asyncChatActor = {
+              teamMemberId: tmRow?.id ?? null,
+              guideAgentId: tmRow?.assigned_guide_agent_id ?? (personaAgentId || null),
+            };
+            orchestrator.setChatActorForSession(session, asyncChatActor);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('[api/chat async] chat actor resolution failed', err);
+          }
+        }
+        void chatUserName;
 
         // Dispatch the orchestrator turn in the background. Drain the
         // iterator so its side effects (persistExchange, brain updates,
@@ -340,9 +369,19 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
           ? messages.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }))
           : undefined;
 
+        // Build the per-call options. ChatTurnOptions carries model + actor
+        // through the call stack so concurrent dispatches stop sharing state.
+        const turnOptions = {
+          orchestratorModel: model,
+          modelSource,
+          chatActor: asyncChatActor,
+          personaAgentId: personaAgentId ?? null,
+          chatTraceId: session,
+        };
+
         void (async () => {
           try {
-            for await (const _event of orchestrator.chat(message, session, seedMessagesAsync)) {
+            for await (const _event of orchestrator.chat(message, session, seedMessagesAsync, turnOptions)) {
               void _event;
             }
             await setConversationStatus(session, 'done');
@@ -352,7 +391,8 @@ export function createOrchestratorRouter(orchestrator: LocalOrchestrator): Route
             console.warn('[api/chat async] turn failed', errMsg);
             await setConversationStatus(session, 'error', errMsg);
           } finally {
-            try { orchestrator.setChatActor(null); } catch { /* noop */ }
+            // Clean up the per-session chat actor so the map doesn't leak.
+            try { orchestrator.clearChatActorForSession(session); } catch { /* noop */ }
           }
         })();
 

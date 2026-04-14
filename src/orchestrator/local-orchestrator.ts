@@ -63,6 +63,7 @@ import {
   type OrchestratorEvent,
   type ClassifiedIntent,
   type ChannelChatOptions,
+  type ChatTurnOptions,
   MODEL,
   MAX_ITERATIONS,
   MODE_MAX_ITERATIONS,
@@ -134,7 +135,7 @@ import { BodyStateService } from '../body/body-state.js';
 import { Soul } from '../persona/soul.js';
 import crypto from 'crypto';
 
-export type { OrchestratorEvent, ChannelChatOptions } from './orchestrator-types.js';
+export type { OrchestratorEvent, ChannelChatOptions, ChatTurnOptions } from './orchestrator-types.js';
 export type { IntentSection } from './tool-definitions.js';
 
 export class LocalOrchestrator {
@@ -320,22 +321,71 @@ export class LocalOrchestrator {
       // Per-turn chat actor context: when the cloud chat bridge forwards
       // a member-impersonated turn (chatUserName + personaAgentId), the
       // /api/chat handler stashes the resolved team_member id + guide
-      // agent id on the orchestrator instance so they propagate into
-      // every tool ctx the turn produces. Used by the deliverables
+      // agent id on a per-session map so concurrent dispatches don't
+      // race on a single instance field. Used by the deliverables
       // recorder to attribute artifacts to the right member + actor.
-      currentTeamMemberId: this._chatActorTeamMemberId,
-      currentGuideAgentId: this._chatActorGuideAgentId,
+      // Falls back to the legacy single-instance fields when no
+      // session-scoped actor is set (preserves channel chat behavior).
+      currentTeamMemberId: this.resolveChatActorTeamMemberId(sessionId),
+      currentGuideAgentId: this.resolveChatActorGuideAgentId(sessionId),
     };
   }
 
   /**
-   * Stash the current chat actor (the team_member the runtime is
-   * chatting on behalf of, plus their guide agent). Set by the
-   * /api/chat handler before invoking orchestrator.chat() and cleared
-   * after the turn completes. Lives on the instance instead of the
-   * chat() method signature because the tool ctx builder is called
-   * from many code paths inside the iteration loop and we don't want
-   * to thread a new arg through every one.
+   * Per-session chat actor map. Keyed by sessionId so concurrent dispatches
+   * with different sessions don't clobber each other. Bug #6 fix — replaces
+   * the single-instance _chatActorTeamMemberId / _chatActorGuideAgentId
+   * fields that race when the route handler set+cleared them around the
+   * background generator dispatch.
+   */
+  private _chatActorBySession = new Map<string, { teamMemberId?: string; guideAgentId?: string }>();
+
+  /**
+   * Set the chat actor for a specific session. The /api/chat handler calls
+   * this before dispatching the background generator, then clearChatActorForSession
+   * in the finally. Old callers still using the legacy setter (setChatActor)
+   * continue to write to the single-instance field which serves as the
+   * fallback when no per-session entry exists.
+   */
+  setChatActorForSession(
+    sessionId: string,
+    actor: { teamMemberId: string | null; guideAgentId: string | null } | null,
+  ): void {
+    if (actor === null) {
+      this._chatActorBySession.delete(sessionId);
+      return;
+    }
+    this._chatActorBySession.set(sessionId, {
+      teamMemberId: actor.teamMemberId ?? undefined,
+      guideAgentId: actor.guideAgentId ?? undefined,
+    });
+  }
+
+  /** Clear the per-session chat actor entry (called by the async dispatch finally). */
+  clearChatActorForSession(sessionId: string): void {
+    this._chatActorBySession.delete(sessionId);
+  }
+
+  private resolveChatActorTeamMemberId(sessionId?: string): string | undefined {
+    if (sessionId) {
+      const entry = this._chatActorBySession.get(sessionId);
+      if (entry) return entry.teamMemberId;
+    }
+    return this._chatActorTeamMemberId;
+  }
+
+  private resolveChatActorGuideAgentId(sessionId?: string): string | undefined {
+    if (sessionId) {
+      const entry = this._chatActorBySession.get(sessionId);
+      if (entry) return entry.guideAgentId;
+    }
+    return this._chatActorGuideAgentId;
+  }
+
+  /**
+   * Stash the current chat actor on the instance (legacy single-flight path).
+   * Kept for backward compatibility with callers that haven't migrated to the
+   * per-session API. New concurrent-safe code should use setChatActorForSession.
    */
   setChatActor(actor: { teamMemberId: string | null; guideAgentId: string | null } | null): void {
     this._chatActorTeamMemberId = actor?.teamMemberId ?? undefined;
@@ -631,13 +681,20 @@ export class LocalOrchestrator {
   /**
    * Chat with the orchestrator. Yields events for streaming UI (TUI).
    * When seedMessages is provided (cloud proxy path), uses those instead of loadHistory().
+   *
+   * `turn` is the per-call config snapshot — model override, model source,
+   * chat actor attribution, persona hint, trace id. Passed by the route
+   * handler instead of mutating instance state via setOrchestratorModel /
+   * setChatActor / setModelSource setters that would race with concurrent
+   * dispatches. Bug #6 fix.
    */
   async *chat(
     userMessage: string,
     sessionId: string,
     seedMessages?: MessageParam[],
+    turn?: ChatTurnOptions,
   ): AsyncGenerator<OrchestratorEvent> {
-    yield* this.runChat(userMessage, sessionId, undefined, seedMessages);
+    yield* this.runChat(userMessage, sessionId, turn?.channel, seedMessages, turn);
   }
 
   /**
@@ -666,7 +723,14 @@ export class LocalOrchestrator {
     sessionId: string,
     options?: ChannelChatOptions,
     seedMessages?: MessageParam[],
+    turn?: ChatTurnOptions,
   ): AsyncGenerator<OrchestratorEvent> {
+    // Per-turn config snapshot (bug #6 fix). When the route handler passes
+    // explicit `turn` options, prefer them over instance fields. The instance
+    // setters (setOrchestratorModel, setChatActor, setModelSource) stay in
+    // place as the legacy fallback for callers that haven't migrated.
+    const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
+
     // Lazily connect MCP servers on first chat
     await this.ensureMcpConnected();
 
@@ -704,7 +768,7 @@ export class LocalOrchestrator {
       // Silent fallback guard: if the user chose a local model but Ollama was
       // unreachable, getProvider() silently falls back to Anthropic. Detect this
       // and surface a clear error instead of burning cloud credits.
-      if (provider.name === 'anthropic' && this.orchestratorModel && !this.orchestratorModel.startsWith('claude-')) {
+      if (provider.name === 'anthropic' && effectiveModel && !effectiveModel.startsWith('claude-')) {
         yield { type: 'text', content: "Ollama isn't reachable. Make sure it's running, or switch to a cloud model with **Ctrl+O**." };
         yield { type: 'done', inputTokens: 0, outputTokens: 0 };
         return;
@@ -713,15 +777,15 @@ export class LocalOrchestrator {
       // Ollama provider → use the Ollama tool loop (or text-only fallback)
       if (provider.name === 'ollama') {
         if (provider.createMessageWithTools) {
-          yield* this.runOllamaToolLoop(userMessage, sessionId, provider as ModelProvider & { createMessageWithTools: NonNullable<ModelProvider['createMessageWithTools']> }, options, seedMessages);
+          yield* this.runOllamaToolLoop(userMessage, sessionId, provider as ModelProvider & { createMessageWithTools: NonNullable<ModelProvider['createMessageWithTools']> }, options, seedMessages, turn);
         } else {
-          const textParamTier = getParameterTier(this.orchestratorModel || '');
+          const textParamTier = getParameterTier(effectiveModel || '');
           const textPromptMode: boolean | 'micro' = textParamTier === 'micro' ? 'micro' : textParamTier === 'small' ? true : false;
           let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage, textPromptMode || undefined);
           let systemPrompt = staticPart + '\n\n' + dynamicPart;
           const device = detectDevice();
           const tqBits = this.config.getTurboQuantTierBits();
-          const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBits);
+          const numCtx = getWorkingNumCtx(effectiveModel || '', undefined, device, tqBits);
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
 
@@ -761,7 +825,7 @@ export class LocalOrchestrator {
             // for-await iterator forever (bug #6 fix).
             const thinkFilter = new ThinkTagFilter();
             const streamTimer = createTimeoutController(
-              `provider.createMessageStreaming (${provider.name}, ${this.orchestratorModel || 'default'})`,
+              `provider.createMessageStreaming (${provider.name}, ${effectiveModel || 'default'})`,
               MODEL_CALL_TIMEOUT_MS,
             );
             const streamParams = {
@@ -805,7 +869,7 @@ export class LocalOrchestrator {
           } else {
             // Wrapped in withTimeout (bug #6 fix).
             const response = await withTimeout(
-              `provider.createMessage (${provider.name}, ${this.orchestratorModel || 'default'}, text-only)`,
+              `provider.createMessage (${provider.name}, ${effectiveModel || 'default'}, text-only)`,
               MODEL_CALL_TIMEOUT_MS,
               (signal) => provider.createMessage({
                 system: systemPrompt,
@@ -830,7 +894,7 @@ export class LocalOrchestrator {
 
       // OpenRouter provider → dedicated tool loop with native OpenAI format + streaming
       if (provider.name === 'openrouter' && provider instanceof OpenRouterProvider) {
-        yield* this.runOpenRouterToolLoop(userMessage, sessionId, provider, options, seedMessages);
+        yield* this.runOpenRouterToolLoop(userMessage, sessionId, provider, options, seedMessages, turn);
         return;
       }
       // Anthropic provider → fall through to the full Anthropic SDK path below
@@ -1000,9 +1064,9 @@ export class LocalOrchestrator {
     // ---- PHILOSOPHICAL LAYERS: Only injected for large-context models ----
     // Claude models and unspecified models (defaults) have 100K+ context.
     // Small local models routed through Anthropic SDK shim may not.
-    const hasAbundantContext = !this.orchestratorModel ||
-      this.orchestratorModel.startsWith('claude-') ||
-      (CLAUDE_CONTEXT_LIMITS[this.orchestratorModel as keyof typeof CLAUDE_CONTEXT_LIMITS] ?? 0) > 100_000;
+    const hasAbundantContext = !effectiveModel ||
+      effectiveModel.startsWith('claude-') ||
+      (CLAUDE_CONTEXT_LIMITS[effectiveModel as keyof typeof CLAUDE_CONTEXT_LIMITS] ?? 0) > 100_000;
 
     if (hasAbundantContext) {
       // Emotional Context (Damasio's somatic markers)
@@ -1200,13 +1264,13 @@ export class LocalOrchestrator {
       // withTimeout so a hung upstream API can't freeze the chat turn forever
       // (bug #6). The signal flows through to the Anthropic SDK so the abort
       // actually frees the in-flight HTTP connection.
-      const anthropicCallLabel = `anthropic.messages.create (${this.orchestratorModel || MODEL}, iter ${iteration})`;
+      const anthropicCallLabel = `anthropic.messages.create (${effectiveModel || MODEL}, iter ${iteration})`;
       const response = await withTimeout(
         anthropicCallLabel,
         MODEL_CALL_TIMEOUT_MS,
         (signal) => this.anthropic.messages.create(
           {
-            model: this.orchestratorModel || MODEL,
+            model: effectiveModel || MODEL,
             max_tokens: 4096,
             system: systemBlocks,
             messages: loopMessages,
@@ -1734,7 +1798,11 @@ export class LocalOrchestrator {
     provider: OpenRouterProvider,
     options?: ChannelChatOptions,
     seedMessages?: MessageParam[],
+    turn?: ChatTurnOptions,
   ): AsyncGenerator<OrchestratorEvent> {
+    // Per-turn config snapshot (bug #6 fix). Read effectiveModel from the
+    // turn options first; fall back to the instance field for legacy callers.
+    const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
     const traceId = crypto.randomUUID();
 
     // Classify intent, inheriting previous intent for confirmations
@@ -1973,7 +2041,7 @@ export class LocalOrchestrator {
 
     const toolTokenCount = estimateToolTokens(openaiTools);
     // Grok models have 2M context; other OpenRouter models typically 128K+
-    const modelId = this.orchestratorModel || 'x-ai/grok-4.20';
+    const modelId = effectiveModel || 'x-ai/grok-4.20';
     const contextLimit = modelId.includes('grok') ? 2_000_000 : 128_000;
     const budget = new ContextBudget(contextLimit, 4096);
     budget.setSystemPrompt(systemPrompt);
@@ -2092,7 +2160,7 @@ export class LocalOrchestrator {
       // is the source of truth while it's in control.
       const iterModel = activePersona?.modelDefault
         ?? this.selectModelForIteration(iteration, loopMessages, prevIterToolCount, iterHadErrors);
-      if (iteration === 0 || iterModel !== (this.orchestratorModel || 'x-ai/grok-4.1-fast')) {
+      if (iteration === 0 || iterModel !== (effectiveModel || 'x-ai/grok-4.1-fast')) {
         logger.debug({ iteration, model: iterModel, persona: activePersona?.name }, '[orchestrator] iteration model selected');
       }
       iterHadErrors = false;
@@ -2527,7 +2595,10 @@ export class LocalOrchestrator {
     provider: ModelProvider & { createMessageWithTools: NonNullable<ModelProvider['createMessageWithTools']> },
     options?: ChannelChatOptions,
     seedMessages?: MessageParam[],
+    turn?: ChatTurnOptions,
   ): AsyncGenerator<OrchestratorEvent> {
+    // Per-turn config snapshot (bug #6 fix).
+    const effectiveModel = (turn?.orchestratorModel?.trim()) || this.orchestratorModel;
     // Generate trace ID for this Ollama orchestrator turn
     const ollamaTraceId = crypto.randomUUID();
 
@@ -2565,9 +2636,9 @@ export class LocalOrchestrator {
     // Determine model capability tier for prompt/tool selection
     const device = detectDevice();
     const tqBitsToolLoop = this.config.getTurboQuantTierBits();
-    const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBitsToolLoop);
-    const paramTier = getParameterTier(this.orchestratorModel || '');
-    const modelEntry = MODEL_CATALOG.find(m => m.tag === (this.orchestratorModel || ''));
+    const numCtx = getWorkingNumCtx(effectiveModel || '', undefined, device, tqBitsToolLoop);
+    const paramTier = getParameterTier(effectiveModel || '');
+    const modelEntry = MODEL_CATALOG.find(m => m.tag === (effectiveModel || ''));
     const modelSizeGB = modelEntry?.sizeGB ?? 2.5;
     const priorityLimit = getToolPriorityLimit(modelSizeGB, numCtx);
 
@@ -2749,7 +2820,7 @@ export class LocalOrchestrator {
       let response: ModelResponseWithTools;
       // Bug #6: per-iteration timeout for the streaming Ollama tool loop.
       const ollamaStreamTimer = createTimeoutController(
-        `Ollama stream (${this.orchestratorModel || 'default'}, iter ${iteration})`,
+        `Ollama stream (${effectiveModel || 'default'}, iter ${iteration})`,
         MODEL_CALL_TIMEOUT_MS,
       );
       try {
@@ -2757,7 +2828,7 @@ export class LocalOrchestrator {
         // only when no tool_calls deltas are detected, then returns the final response.
         const thinkFilter = new ThinkTagFilter();
         const streamMsgParams = {
-          model: this.orchestratorModel || undefined,
+          model: effectiveModel || undefined,
           system: systemPrompt,
           messages: loopMessages.map(m => ({
             role: m.role,
@@ -2791,7 +2862,7 @@ export class LocalOrchestrator {
         }
       } catch (err) {
         if (err instanceof TimeoutError) {
-          logger.warn({ err: err.message, model: this.orchestratorModel, iteration }, '[orchestrator] Ollama model call timed out');
+          logger.warn({ err: err.message, model: effectiveModel, iteration }, '[orchestrator] Ollama model call timed out');
           yield { type: 'text', content: `Model call timed out after ${Math.round(err.elapsedMs / 1000)}s. Try again with a smaller prompt or a faster model.` };
           throw err;
         }
@@ -2800,7 +2871,7 @@ export class LocalOrchestrator {
         // ollamaStreamTimer is cleared by the outer finally.
         if (iteration === 0) {
           const fallbackTimer = createTimeoutController(
-            `Ollama fallback stream (${this.orchestratorModel || 'default'})`,
+            `Ollama fallback stream (${effectiveModel || 'default'})`,
             MODEL_CALL_TIMEOUT_MS,
           );
           try {

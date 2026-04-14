@@ -76,6 +76,51 @@ export interface ChannelChatOptions {
 }
 
 // ============================================================================
+// CHAT TURN OPTIONS — per-call config snapshot (bug #6 fix)
+// ============================================================================
+
+/**
+ * Per-turn configuration passed into LocalOrchestrator.chat(). Every field
+ * here is a snapshot of state that the route handler USED to set on the
+ * orchestrator instance via setOrchestratorModel / setModelSource /
+ * setChatActor — but those setters race when 4 concurrent dispatches
+ * land within the same event loop tick. ChatTurnOptions moves the config
+ * onto the call stack so each chat carries its own snapshot.
+ *
+ * The instance setters stay in place for backward compatibility with
+ * callers that haven't migrated yet (channel chat, voice, peer relay).
+ * When `options` is omitted, runChat falls back to reading the instance
+ * fields, preserving the legacy single-flight behavior.
+ */
+export interface ChatTurnOptions {
+  /** Model id override for this turn only. Falls back to the orchestrator's
+   *  instance-level orchestratorModel field. Set by the /api/chat handler
+   *  from the request body's `model` field. */
+  orchestratorModel?: string;
+  /** Model source override (local | cloud | auto). Falls back to the model
+   *  router's persistent setting. */
+  modelSource?: 'local' | 'cloud' | 'auto';
+  /** Team-member + guide-agent attribution for this turn. Used by the
+   *  deliverables recorder to stamp `for_team_member_id` / produced-by
+   *  fields. Replaces the setChatActor + finally-clear pattern that races
+   *  with concurrent dispatches. Pass `null` to explicitly clear (no
+   *  attribution); omit to fall back to the instance field. */
+  chatActor?: { teamMemberId: string | null; guideAgentId: string | null } | null;
+  /** Cloud-bridge persona hint. The route handler still calls
+   *  activateConversationPersona() before dispatch — this field lets the
+   *  orchestrator double-check or re-resolve if needed. */
+  personaAgentId?: string | null;
+  /** Channel-specific options (existing shape, kept separate from the
+   *  per-turn snapshot fields so callers like chatForChannel can still
+   *  pass it via the runChat() second arg). */
+  channel?: ChannelChatOptions;
+  /** Optional structured trace id for log correlation. The route handler
+   *  populates this from the conversation id so every log line in this
+   *  turn can be grep'd by chatTraceId. Bug #6 observability (fix 6d). */
+  chatTraceId?: string;
+}
+
+// ============================================================================
 // CONSTANTS
 // ============================================================================
 
