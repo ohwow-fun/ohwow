@@ -1163,8 +1163,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // Wire bios boundary check: defer schedules during off-hours
         try {
           const { inferBoundary, isBoundaryActive } = await import('../bios/boundary-guardian.js');
-          // Gather recent activity timestamps for boundary inference
-          const { data: activity } = await db.from('agent_activity')
+          // Gather recent activity timestamps for boundary inference.
+          // Real table is agent_workforce_activity — the legacy agent_activity
+          // name was never migrated here, so the query silently returned empty
+          // and every workspace fell back to the hardcoded 9-17 default.
+          const { data: activity } = await db.from('agent_workforce_activity')
             .select('created_at')
             .eq('workspace_id', workspaceId)
             .order('created_at', { ascending: false })

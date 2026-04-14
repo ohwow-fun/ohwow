@@ -75,12 +75,18 @@ export function inferBoundary(actionTimestamps: number[]): WorkLifeBoundary {
 
 /**
  * Check if the current moment falls outside the work boundary.
+ *
+ * Only a 'strict' boundary actually gates scheduled work. 'flexible' is
+ * advisory — the inferred window is surfaced elsewhere but must not stop
+ * the scheduler from firing explicit crons. A 24/7 runtime that was
+ * blocking every evening schedule hurt proprioception experiment #2
+ * until this semantic was corrected.
  */
 export function isBoundaryActive(
   boundary: WorkLifeBoundary,
   now?: Date
 ): boolean {
-  if (boundary.respectLevel === 'none') {
+  if (boundary.respectLevel !== 'strict') {
     return false;
   }
 
