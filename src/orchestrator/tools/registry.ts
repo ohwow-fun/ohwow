@@ -40,7 +40,7 @@ import { listConnectors, addConnector, removeConnector, syncConnector, testConne
 import { youtubeTranscript, readRssFeed, githubSearch } from './internet.js';
 import { transcribeAudio } from './audio.js';
 import { startMeetingListener, stopMeetingListener, getMeetingNotes } from './meeting.js';
-import { saveDeliverable } from './deliverables.js';
+import { saveDeliverable, listDeliverables } from './deliverables.js';
 import { lspDiagnostics, lspHover, lspGoToDefinition, lspReferences, lspCompletions } from './lsp.js';
 import { cloudListContacts, cloudListSchedules, cloudListAgents, cloudListTasks, cloudGetAnalytics, cloudListMembers } from './cloud-data.js';
 import { assessOperations, getPillarDetail, buildPillar, updatePillarStatus } from './operational-pillars.js';
@@ -280,6 +280,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
 
   // Deliverables
   ['save_deliverable', (ctx, input) => saveDeliverable(ctx, input)],
+  ['list_deliverables', (ctx, input) => listDeliverables(ctx, input)],
 
   // LSP (code intelligence)
   ['lsp_diagnostics', (ctx, input) => lspDiagnostics(ctx, input)],

@@ -27,6 +27,30 @@ export const DELIVERABLE_TOOL_DEFINITIONS: Tool[] = [
       required: ['title', 'content', 'type'],
     },
   },
+  {
+    name: 'list_deliverables',
+    description:
+      'List deliverables stored in the workspace with summary metadata (no content body). Filter by status, type, agent, or task. Use when the user asks what work products exist, for a workspace census, or before pulling a specific deliverable body via get_deliverable-style queries.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['pending_review', 'approved', 'rejected', 'delivered', 'archived'],
+          description: 'Filter by deliverable status',
+        },
+        type: {
+          type: 'string',
+          enum: ['document', 'email', 'report', 'code', 'creative', 'plan', 'data', 'other'],
+          description: 'Filter by deliverable type',
+        },
+        agent_id: { type: 'string', description: 'Filter to deliverables produced by a specific agent' },
+        task_id: { type: 'string', description: 'Filter to deliverables produced by a specific task' },
+        limit: { type: 'number', description: 'Max rows to return (default 20, max 200)' },
+      },
+      required: [],
+    },
+  },
 ];
 
 const VALID_TYPES = ['document', 'email', 'report', 'code', 'creative', 'plan', 'data', 'other'];
@@ -82,4 +106,80 @@ export async function saveDeliverable(
     logger.error({ err }, '[save_deliverable] Unexpected error');
     return { success: false, error: 'Couldn\'t save deliverable' };
   }
+}
+
+interface DeliverableRow {
+  id: string;
+  deliverable_type: string;
+  title: string;
+  status: string;
+  agent_id: string | null;
+  task_id: string | null;
+  for_team_member_id: string | null;
+  produced_by_type: string | null;
+  auto_created: number | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export async function listDeliverables(
+  ctx: LocalToolContext,
+  input?: Record<string, unknown>,
+): Promise<ToolResult> {
+  const rawLimit = typeof input?.limit === 'number' ? (input.limit as number) : 20;
+  const limit = Math.max(1, Math.min(200, Math.floor(rawLimit)));
+
+  let query = ctx.db
+    .from<DeliverableRow>('agent_workforce_deliverables')
+    .select('id, deliverable_type, title, status, agent_id, task_id, for_team_member_id, produced_by_type, auto_created, created_at, updated_at')
+    .eq('workspace_id', ctx.workspaceId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (input?.status) query = query.eq('status', input.status as string);
+  if (input?.type) query = query.eq('deliverable_type', input.type as string);
+  if (input?.agent_id) query = query.eq('agent_id', input.agent_id as string);
+  if (input?.task_id) query = query.eq('task_id', input.task_id as string);
+
+  const { data, error } = await query;
+  if (error) {
+    logger.error({ error }, '[list_deliverables] query failed');
+    return { success: false, error: error.message };
+  }
+
+  // Get the total count separately so callers doing a workspace census can
+  // report "N total, showing M" without having to make a second trip.
+  let totalCountQuery = ctx.db
+    .from('agent_workforce_deliverables')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', ctx.workspaceId);
+  if (input?.status) totalCountQuery = totalCountQuery.eq('status', input.status as string);
+  if (input?.type) totalCountQuery = totalCountQuery.eq('deliverable_type', input.type as string);
+  if (input?.agent_id) totalCountQuery = totalCountQuery.eq('agent_id', input.agent_id as string);
+  if (input?.task_id) totalCountQuery = totalCountQuery.eq('task_id', input.task_id as string);
+  const { count: totalCount } = await totalCountQuery;
+
+  const rows = (data || []) as unknown as DeliverableRow[];
+
+  return {
+    success: true,
+    data: {
+      total: totalCount ?? rows.length,
+      returned: rows.length,
+      limit,
+      deliverables: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        type: r.deliverable_type,
+        status: r.status,
+        agentId: r.agent_id ?? undefined,
+        taskId: r.task_id ?? undefined,
+        forTeamMemberId: r.for_team_member_id ?? undefined,
+        producedByType: r.produced_by_type ?? undefined,
+        autoCreated: r.auto_created === 1,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at ?? undefined,
+      })),
+    },
+  };
 }
