@@ -76,13 +76,14 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
         .catch((err) => {
           logger.error(`[Webhook] Trigger evaluation error: ${err}`);
         })
-        .finally(() => {
-          db.from('webhook_events')
-            .update({ processed: 1 })
-            .eq('id', eventId)
-            .catch((err: unknown) => {
-              logger.warn({ err, eventId }, '[Webhook] Failed to mark ghl event processed');
-            });
+        .finally(async () => {
+          try {
+            await db.from('webhook_events')
+              .update({ processed: 1 })
+              .eq('id', eventId);
+          } catch (err) {
+            logger.warn({ err, eventId }, '[Webhook] Failed to mark ghl event processed');
+          }
         });
 
       // 6. Emit event on bus
@@ -143,26 +144,23 @@ export function createWebhookRouter(deps: WebhookHandlerDeps): Router {
       // 7. If trigger is enabled, dispatch async and mark the row processed
       // on completion. Disabled triggers get marked immediately — no work to
       // do, and the audit UI shouldn't strand them at "pending" forever.
+      const markProcessed = async (label: string) => {
+        try {
+          await db.from('webhook_events')
+            .update({ processed: 1 })
+            .eq('id', eventId);
+        } catch (err) {
+          logger.warn({ err, eventId }, `[Webhook] Failed to mark ${label} event processed`);
+        }
+      };
       if (trigger.enabled) {
         void triggerEvaluator.evaluateCustom(trigger, payload)
           .catch((err) => {
             logger.error(`[Webhook] Custom trigger evaluation error: ${err}`);
           })
-          .finally(() => {
-            db.from('webhook_events')
-              .update({ processed: 1 })
-              .eq('id', eventId)
-              .catch((err: unknown) => {
-                logger.warn({ err, eventId }, '[Webhook] Failed to mark custom event processed');
-              });
-          });
+          .finally(() => { void markProcessed('custom'); });
       } else {
-        void db.from('webhook_events')
-          .update({ processed: 1 })
-          .eq('id', eventId)
-          .catch((err: unknown) => {
-            logger.warn({ err, eventId }, '[Webhook] Failed to mark disabled-trigger event processed');
-          });
+        void markProcessed('disabled-trigger');
       }
 
       // 8. Emit event
