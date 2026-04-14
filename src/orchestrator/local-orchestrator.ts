@@ -108,6 +108,22 @@ import { CircuitBreaker, ConsecutiveToolBreaker } from './error-recovery.js';
 import { ToolCache } from './tool-cache.js';
 import { runSubOrchestrator, getFocusSections, getTimeoutForFocus, type SubOrchestratorResult } from './sub-orchestrator.js';
 import { logger } from '../lib/logger.js';
+import { withTimeout, createTimeoutController, TimeoutError } from '../lib/with-timeout.js';
+
+/**
+ * Per-iteration model call timeout. Applies to every provider.createMessage,
+ * anthropic.messages.create, and the first-chunk wait on streaming calls.
+ * 5 minutes is generous enough for healthy slow responses (large context,
+ * complex tool use) but short enough that a hung upstream API gets caught
+ * within the user's patience window. Override via OHWOW_MODEL_CALL_TIMEOUT_MS.
+ *
+ * Bug #6 fix: without this, a hanging upstream API freezes the chat turn
+ * forever — no error, no recovery, only daemon restart.
+ */
+const MODEL_CALL_TIMEOUT_MS = (() => {
+  const fromEnv = parseInt(process.env.OHWOW_MODEL_CALL_TIMEOUT_MS || '', 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 300_000;
+})();
 import { hashToolCall } from '../lib/stagnation.js';
 import { Brain } from '../brain/brain.js';
 import { enrichIntent } from '../brain/intentionality.js';
@@ -711,34 +727,46 @@ export class LocalOrchestrator {
           logger.debug(`[orchestrator] Context budget (text-only): ${budgetState.utilizationPct}% used | sys:${budgetState.systemPromptTokens} hist:${budgetState.historyTokens} msgs:${budgetState.messageCount} | capacity:${budgetState.modelCapacity} available:${budgetState.availableTokens}`);
 
           if (provider instanceof OllamaProvider) {
-            // Stream tokens incrementally
+            // Stream tokens incrementally. createTimeoutController gives the
+            // stream an abort signal so a hung upstream API can't lock the
+            // for-await iterator forever (bug #6 fix).
             const thinkFilter = new ThinkTagFilter();
+            const streamTimer = createTimeoutController(
+              `provider.createMessageStreaming (${provider.name}, ${this.orchestratorModel || 'default'})`,
+              MODEL_CALL_TIMEOUT_MS,
+            );
             const streamParams = {
               system: systemPrompt,
               messages: trimmedMessages,
               maxTokens: 4096,
               temperature: 0.5,
               numCtx,
+              signal: streamTimer.signal,
             };
-            const stream = provider.createMessageStreaming(streamParams);
-            let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponse>;
-            let finalResponse: ModelResponse | undefined;
-            while (true) {
-              streamResult = await stream.next();
-              if (streamResult.done) {
-                finalResponse = streamResult.value;
-                break;
+            let resp: ModelResponse;
+            try {
+              const stream = provider.createMessageStreaming(streamParams);
+              let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponse>;
+              let finalResponse: ModelResponse | undefined;
+              while (true) {
+                streamResult = await stream.next();
+                if (streamResult.done) {
+                  finalResponse = streamResult.value;
+                  break;
+                }
+                const filtered = thinkFilter.feed(streamResult.value.content);
+                if (filtered) {
+                  yield { type: 'text', content: filtered };
+                }
               }
-              const filtered = thinkFilter.feed(streamResult.value.content);
-              if (filtered) {
-                yield { type: 'text', content: filtered };
+              const flushed = thinkFilter.flush();
+              if (flushed) {
+                yield { type: 'text', content: flushed };
               }
+              resp = finalResponse!;
+            } finally {
+              streamTimer.cancel();
             }
-            const flushed = thinkFilter.flush();
-            if (flushed) {
-              yield { type: 'text', content: flushed };
-            }
-            const resp = finalResponse!;
             await saveToSession(this.sessionDeps, sessionId, [
               { role: 'user', content: userMessage },
               { role: 'assistant', content: stripThinkTags(resp.content) },
@@ -746,13 +774,19 @@ export class LocalOrchestrator {
             this.exchangeCount++;
             yield { type: 'done', inputTokens: resp.inputTokens, outputTokens: resp.outputTokens };
           } else {
-            const response = await provider.createMessage({
-              system: systemPrompt,
-              messages: trimmedMessages,
-              maxTokens: 4096,
-              temperature: 0.5,
-              numCtx,
-            });
+            // Wrapped in withTimeout (bug #6 fix).
+            const response = await withTimeout(
+              `provider.createMessage (${provider.name}, ${this.orchestratorModel || 'default'}, text-only)`,
+              MODEL_CALL_TIMEOUT_MS,
+              (signal) => provider.createMessage({
+                system: systemPrompt,
+                messages: trimmedMessages,
+                maxTokens: 4096,
+                temperature: 0.5,
+                numCtx,
+                signal,
+              }),
+            );
             yield { type: 'text', content: response.content };
             await saveToSession(this.sessionDeps, sessionId, [
               { role: 'user', content: userMessage },
@@ -1133,16 +1167,27 @@ export class LocalOrchestrator {
         break;
       }
 
-      // Non-streaming: get full response then yield text blocks
-      const response = await this.anthropic.messages.create({
-        model: this.orchestratorModel || MODEL,
-        max_tokens: 4096,
-        system: systemBlocks,
-        messages: loopMessages,
-        tools,
-        tool_choice: currentToolChoice,
-        temperature: 0.5,
-      });
+      // Non-streaming: get full response then yield text blocks. Wrapped in
+      // withTimeout so a hung upstream API can't freeze the chat turn forever
+      // (bug #6). The signal flows through to the Anthropic SDK so the abort
+      // actually frees the in-flight HTTP connection.
+      const anthropicCallLabel = `anthropic.messages.create (${this.orchestratorModel || MODEL}, iter ${iteration})`;
+      const response = await withTimeout(
+        anthropicCallLabel,
+        MODEL_CALL_TIMEOUT_MS,
+        (signal) => this.anthropic.messages.create(
+          {
+            model: this.orchestratorModel || MODEL,
+            max_tokens: 4096,
+            system: systemBlocks,
+            messages: loopMessages,
+            tools,
+            tool_choice: currentToolChoice,
+            temperature: 0.5,
+          },
+          { signal },
+        ),
+      );
 
       // Yield text blocks from the response
       for (const block of response.content) {
@@ -2024,6 +2069,15 @@ export class LocalOrchestrator {
       iterHadErrors = false;
 
       let response: ModelResponseWithTools;
+      // Per-iteration timeout via AbortController. The signal flows through
+      // to the underlying fetch so a hung upstream OpenRouter API gets
+      // cancelled cleanly instead of freezing the for-await iterator forever
+      // (bug #6 fix). On TimeoutError we yield an explanatory message and
+      // break the loop so the async dispatch can flip status='error'.
+      const orStreamTimer = createTimeoutController(
+        `OpenRouter stream (${iterModel}, iter ${iteration})`,
+        MODEL_CALL_TIMEOUT_MS,
+      );
       try {
         const thinkFilter = new ThinkTagFilter();
         const stream = provider.createMessageWithToolsStreaming({
@@ -2038,6 +2092,7 @@ export class LocalOrchestrator {
           maxTokens: 4096,
           temperature: activePersona?.temperature ?? 0.5,
           tools: openaiTools,
+          signal: orStreamTimer.signal,
         });
         let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponseWithTools>;
         while (true) {
@@ -2056,9 +2111,16 @@ export class LocalOrchestrator {
           yield { type: 'text', content: flushed };
         }
       } catch (err) {
+        if (err instanceof TimeoutError) {
+          logger.warn({ err: err.message, model: iterModel, iteration }, '[orchestrator] OpenRouter model call timed out');
+          yield { type: 'text', content: `Model call timed out after ${Math.round(err.elapsedMs / 1000)}s (${iterModel}). Try again or pick a different model.` };
+          throw err; // propagate so the async dispatch flips status='error'
+        }
         logger.error({ err }, '[orchestrator] OpenRouter tool loop error');
         yield { type: 'text', content: 'Something went wrong with the AI provider. Try again.' };
         break;
+      } finally {
+        orStreamTimer.cancel();
       }
 
       totalInputTokens += response.inputTokens;
@@ -2656,6 +2718,11 @@ export class LocalOrchestrator {
       }
 
       let response: ModelResponseWithTools;
+      // Bug #6: per-iteration timeout for the streaming Ollama tool loop.
+      const ollamaStreamTimer = createTimeoutController(
+        `Ollama stream (${this.orchestratorModel || 'default'}, iter ${iteration})`,
+        MODEL_CALL_TIMEOUT_MS,
+      );
       try {
         // Stream tokens — createMessageWithToolsStreaming yields text tokens
         // only when no tool_calls deltas are detected, then returns the final response.
@@ -2673,6 +2740,7 @@ export class LocalOrchestrator {
           temperature: 0.5,
           tools: openaiTools,
           numCtx,
+          signal: ollamaStreamTimer.signal,
         };
         const stream = ollamaProvider.createMessageWithToolsStreaming(streamMsgParams);
         let streamResult: IteratorResult<{ type: 'token'; content: string }, ModelResponseWithTools>;
@@ -2693,46 +2761,70 @@ export class LocalOrchestrator {
           yield { type: 'text', content: flushed };
         }
       } catch (err) {
-        // If tool calling fails (unsupported model), fall back to streaming text-only
+        if (err instanceof TimeoutError) {
+          logger.warn({ err: err.message, model: this.orchestratorModel, iteration }, '[orchestrator] Ollama model call timed out');
+          yield { type: 'text', content: `Model call timed out after ${Math.round(err.elapsedMs / 1000)}s. Try again with a smaller prompt or a faster model.` };
+          throw err;
+        }
+        // If tool calling fails (unsupported model), fall back to streaming
+        // text-only. The fallback gets its own timer below; the outer
+        // ollamaStreamTimer is cleared by the outer finally.
         if (iteration === 0) {
-          const thinkFilter = new ThinkTagFilter();
-          const fallbackStream = ollamaProvider.createMessageStreaming({
-            system: systemPrompt,
-            messages: loopMessages.map(m => ({
-              role: m.role === 'tool' ? 'user' : m.role,
-              content: m.content,
-            })),
-            maxTokens: 4096,
-            temperature: 0.5,
-            numCtx,
-          });
-          let fallbackResult: IteratorResult<{ type: 'token'; content: string }, ModelResponse>;
-          let textResponse: ModelResponse | undefined;
-          while (true) {
-            fallbackResult = await fallbackStream.next();
-            if (fallbackResult.done) {
-              textResponse = fallbackResult.value;
-              break;
+          const fallbackTimer = createTimeoutController(
+            `Ollama fallback stream (${this.orchestratorModel || 'default'})`,
+            MODEL_CALL_TIMEOUT_MS,
+          );
+          try {
+            const thinkFilter = new ThinkTagFilter();
+            const fallbackStream = ollamaProvider.createMessageStreaming({
+              system: systemPrompt,
+              messages: loopMessages.map(m => ({
+                role: m.role === 'tool' ? 'user' : m.role,
+                content: m.content,
+              })),
+              maxTokens: 4096,
+              temperature: 0.5,
+              numCtx,
+              signal: fallbackTimer.signal,
+            });
+            let fallbackResult: IteratorResult<{ type: 'token'; content: string }, ModelResponse>;
+            let textResponse: ModelResponse | undefined;
+            while (true) {
+              fallbackResult = await fallbackStream.next();
+              if (fallbackResult.done) {
+                textResponse = fallbackResult.value;
+                break;
+              }
+              const filtered = thinkFilter.feed(fallbackResult.value.content);
+              if (filtered) {
+                yield { type: 'text', content: filtered };
+              }
             }
-            const filtered = thinkFilter.feed(fallbackResult.value.content);
-            if (filtered) {
-              yield { type: 'text', content: filtered };
+            const flushed = thinkFilter.flush();
+            if (flushed) {
+              yield { type: 'text', content: flushed };
             }
+            const resp = textResponse!;
+            await saveToSession(this.sessionDeps, sessionId, [
+              { role: 'user', content: userMessage },
+              { role: 'assistant', content: stripThinkTags(resp.content) },
+            ], userMessage.slice(0, 100));
+            this.exchangeCount++;
+            yield { type: 'done', inputTokens: resp.inputTokens, outputTokens: resp.outputTokens };
+            return;
+          } catch (fallbackErr) {
+            if (fallbackErr instanceof TimeoutError) {
+              logger.warn({ err: fallbackErr.message }, '[orchestrator] Ollama fallback stream timed out');
+              yield { type: 'text', content: `Model fallback call timed out after ${Math.round(fallbackErr.elapsedMs / 1000)}s.` };
+            }
+            throw fallbackErr;
+          } finally {
+            fallbackTimer.cancel();
           }
-          const flushed = thinkFilter.flush();
-          if (flushed) {
-            yield { type: 'text', content: flushed };
-          }
-          const resp = textResponse!;
-          await saveToSession(this.sessionDeps, sessionId, [
-            { role: 'user', content: userMessage },
-            { role: 'assistant', content: stripThinkTags(resp.content) },
-          ], userMessage.slice(0, 100));
-          this.exchangeCount++;
-          yield { type: 'done', inputTokens: resp.inputTokens, outputTokens: resp.outputTokens };
-          return;
         }
         throw err;
+      } finally {
+        ollamaStreamTimer.cancel();
       }
 
       totalInputTokens += response.inputTokens;

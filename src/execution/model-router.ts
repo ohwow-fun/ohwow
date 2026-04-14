@@ -30,6 +30,21 @@ import type {
 // PROVIDER INTERFACE
 // ============================================================================
 
+/**
+ * Combine an internal AbortSignal (e.g. fetch-level timeout) with an
+ * optional caller-supplied signal so abort fires when EITHER triggers.
+ * Used by every provider's fetch call to honor an outer withTimeout()
+ * cancellation without losing the per-call internal deadline. AbortSignal.any
+ * is in Node 20+; we depend on it explicitly via package.json engines field.
+ */
+function combineAbortSignals(
+  internal: AbortSignal,
+  external?: AbortSignal,
+): AbortSignal {
+  if (!external) return internal;
+  return AbortSignal.any([internal, external]);
+}
+
 export type MessageContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -87,6 +102,15 @@ export interface CreateMessageParams {
   temperature?: number;
   /** Ollama num_ctx override — sets the context window size for the request. */
   numCtx?: number;
+  /**
+   * Optional AbortSignal forwarded to the underlying SDK / fetch call so
+   * the orchestrator can cancel a hung upstream request via withTimeout().
+   * Provider implementations should pass this straight through to their
+   * underlying transport (anthropic SDK, fetch, etc.) so the cancellation
+   * actually frees server-side resources rather than orphaning the call.
+   * Bug #6 fix.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ModelProvider {
@@ -120,13 +144,16 @@ export class AnthropicProvider implements ModelProvider {
           : this.convertToAnthropicContent(m.content),
       }));
 
-    const response = await this.client.messages.create({
-      model: params.model || 'claude-haiku-4-5-20251001',
-      max_tokens: params.maxTokens || 4096,
-      temperature: params.temperature ?? 0.5,
-      system: params.system,
-      messages,
-    });
+    const response = await this.client.messages.create(
+      {
+        model: params.model || 'claude-haiku-4-5-20251001',
+        max_tokens: params.maxTokens || 4096,
+        temperature: params.temperature ?? 0.5,
+        system: params.system,
+        messages,
+      },
+      params.signal ? { signal: params.signal } : undefined,
+    );
 
     const textContent = response.content
       .filter((b): b is TextBlock => b.type === 'text')
@@ -197,15 +224,18 @@ export class AnthropicProvider implements ModelProvider {
       }
     }
 
-    const response = await this.client.messages.create({
-      model: params.model || 'claude-haiku-4-5-20251001',
-      max_tokens: params.maxTokens || 4096,
-      temperature: params.temperature ?? 0.5,
-      system: params.system,
-      messages,
-      tools: anthropicTools,
-      tool_choice: { type: 'auto' },
-    });
+    const response = await this.client.messages.create(
+      {
+        model: params.model || 'claude-haiku-4-5-20251001',
+        max_tokens: params.maxTokens || 4096,
+        temperature: params.temperature ?? 0.5,
+        system: params.system,
+        messages,
+        tools: anthropicTools,
+        tool_choice: { type: 'auto' },
+      },
+      params.signal ? { signal: params.signal } : undefined,
+    );
 
     // Extract text content and tool calls from response
     let textContent = '';
@@ -320,7 +350,7 @@ export class OllamaProvider implements ModelProvider {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -392,7 +422,7 @@ export class OllamaProvider implements ModelProvider {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -518,7 +548,7 @@ export class OllamaProvider implements ModelProvider {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -597,7 +627,7 @@ export class OllamaProvider implements ModelProvider {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -1035,7 +1065,7 @@ export class OpenRouterProvider implements ModelProvider {
       response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -1107,7 +1137,7 @@ export class OpenRouterProvider implements ModelProvider {
       response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
@@ -1208,7 +1238,7 @@ export class OpenRouterProvider implements ModelProvider {
       response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
-        signal: AbortSignal.timeout(120_000),
+        signal: combineAbortSignals(AbortSignal.timeout(120_000), params.signal),
         body: JSON.stringify({
           model,
           messages,
