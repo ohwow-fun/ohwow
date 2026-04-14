@@ -26,6 +26,7 @@ import {
 } from './response-classifier.js';
 import { buildAgentSystemPrompt, assembleSystemPrompt } from './system-prompt.js';
 import { resolveTaskCapabilities } from './task-capabilities.js';
+import { buildTaskToolList } from './tool-list.js';
 import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
@@ -932,103 +933,14 @@ export class RuntimeEngine {
       // inside `selectAgentModelForIteration`.
       const modelId = MODEL_MAP['claude-sonnet-4-5'];
 
-      // Connect MCP clients (global servers merged with per-agent servers)
-      let mcpClients: McpClientManager | null = null;
-      if (mcpEnabled) {
-        // Global servers: config file takes precedence; fall back to runtime_settings table.
-        // The SQLite adapter auto-parses JSON columns on read, so `value` may already
-        // be an array. Accept either shape so historical rows still load.
-        let globalServers: McpServerConfig[] = this.config.mcpServers ?? [];
-        if (globalServers.length === 0) {
-          const { data: mcpSetting } = await this.db
-            .from('runtime_settings')
-            .select('value')
-            .eq('key', 'global_mcp_servers')
-            .maybeSingle();
-          if (mcpSetting) {
-            const raw = (mcpSetting as { value: unknown }).value;
-            if (Array.isArray(raw)) {
-              globalServers = raw as McpServerConfig[];
-            } else if (typeof raw === 'string') {
-              try {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) globalServers = parsed as McpServerConfig[];
-              } catch {
-                globalServers = [];
-              }
-            }
-          }
-        }
-        // When an allowlist references specific MCP servers, load only those.
-        // The operator said "exactly these mcp__<server>__<tool> names" — we
-        // should not connect to every registered server on every task, both
-        // for latency and for blast-radius reasons.
-        const filteredGlobalServers = toolPolicy.requiresMcp
-          ? globalServers.filter((s) => toolPolicy.referencedMcpServers.has(s.name))
-          : globalServers;
-        if (toolPolicy.requiresMcp) {
-          const missing = [...toolPolicy.referencedMcpServers].filter(
-            (name) => !globalServers.some((s) => s.name === name) && !agentMcpServers.some((s) => s.name === name),
-          );
-          if (missing.length > 0) {
-            logger.warn(
-              { agentId, taskId, missing },
-              '[RuntimeEngine] Agent allowlist references MCP servers that are not registered in this workspace',
-            );
-          }
-        }
-        const allServers = [...filteredGlobalServers, ...agentMcpServers];
-        if (allServers.length > 0) {
-          mcpClients = await McpClientManager.connect(allServers, {
-            onElicitation: async (serverName, message, schema) => {
-              const requestId = crypto.randomUUID();
-              this.emit('mcp:elicitation', { requestId, taskId, serverName, message, schema });
-              return new Promise<Record<string, unknown> | null>((resolve) => {
-                this.pendingElicitations.set(requestId, resolve);
-                // Auto-decline after 5 minutes to prevent indefinite hangs
-                setTimeout(() => {
-                  if (this.pendingElicitations.has(requestId)) {
-                    this.pendingElicitations.delete(requestId);
-                    resolve(null);
-                  }
-                }, 5 * 60 * 1000);
-              });
-            },
-          });
-        }
-      }
-
-      // Build combined tool list — request_browser is lightweight, included by default
-      let tools: Array<WebSearchTool20250305 | Tool> = [];
-      // State tools always available — agents need cross-task persistence
-      tools.push(...STATE_TOOL_DEFINITIONS);
-      if (webSearchEnabled) tools.push(WEB_SEARCH_TOOL);
-
-      // When SOP explicitly says "Do NOT use request_browser", exclude it from tools
-      // so the model can't even call it. Same for desktop exclusion.
-      const sopTaskInput = String(task.input || '');
-      const sopExcludesBrowser = sopTaskInput.includes('Do NOT use request_browser');
-      const sopExcludesDesktop = sopTaskInput.includes('Do NOT use request_desktop');
-
-      if (browserEnabled && !sopExcludesBrowser) tools.push(REQUEST_BROWSER_TOOL);
-      if (desktopEnabled) tools.push(REQUEST_DESKTOP_TOOL);
-      // If SOP excludes desktop, still include it — desktop is rarely excluded
-      // When real Chrome is available via CDP, skip Scrapling — Chrome handles
-      // both public and authenticated pages. Scrapling is only useful as a
-      // lightweight fallback when no browser is available.
-      const useScrapling = scraplingEnabled && this.config.browserTarget !== 'chrome';
-      if (useScrapling) tools.push(...SCRAPLING_TOOL_DEFINITIONS);
-      if (useScrapling) tools.push(...DOC_MOUNT_TOOL_DEFINITIONS);
-      if (localFilesEnabled && fileAccessGuard) tools.push(...FILESYSTEM_TOOL_DEFINITIONS);
-      if (bashEnabled && fileAccessGuard) tools.push(...BASH_TOOL_DEFINITIONS);
-      if (approvalRequired) tools.push(...DRAFT_TOOL_DEFINITIONS);
-      if (mcpClients) tools.push(...mcpClients.getToolDefinitions());
-
-      // Per-agent tool scoping: filter tools by the resolved policy.
-      // In allowlist mode the filter is strict — only names in the list
-      // survive, which is what lets a narrow `ohwow_create_agent`
-      // allowlist produce an exactly-that-many-tools tool surface.
-      tools = filterToolsByPolicy(tools, toolPolicy);
+      // Connect MCP clients + assemble + policy-filter the base tool surface.
+      const { tools: initialTools, mcpClients } = await buildTaskToolList.call(this, {
+        caps,
+        taskInput: task.input,
+        agentId,
+        taskId,
+      });
+      const tools: Array<WebSearchTool20250305 | Tool> = initialTools;
 
       // Browser service is created lazily when request_browser is called
       let browserService: LocalBrowserService | null = null;
