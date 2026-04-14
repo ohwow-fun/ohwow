@@ -137,20 +137,42 @@ export async function finalizeTaskSuccess(
         } catch { /* non-fatal */ }
       }
 
+      // Dispatcher-signaled trust override. Dispatchers (e.g. ContentCadenceScheduler)
+      // that know their output is pre-trusted can set metadata.trust_output=true on
+      // insert, which collapses the L<=2 + deliverable routing into 'completed'.
+      // The autonomy-level policy still applies to everything else, including
+      // verifier escalations (those override trust because they signal the agent
+      // may have misbehaved, not that the caller distrusts the output).
+      let trustOutput = false;
+      try {
+        const { data: trustRow } = await this.db.from('agent_workforce_tasks')
+          .select('metadata')
+          .eq('id', taskId)
+          .maybeSingle();
+        const rawMeta = (trustRow as { metadata?: unknown } | null)?.metadata;
+        const meta = typeof rawMeta === 'string'
+          ? (JSON.parse(rawMeta || '{}') as Record<string, unknown>)
+          : ((rawMeta as Record<string, unknown>) ?? {});
+        trustOutput = meta.trust_output === true;
+      } catch {
+        // Metadata read is best-effort; fall through to default routing.
+      }
+
       // Autonomy-level-based status routing
       let finalStatus: 'completed' | 'needs_approval' = 'completed';
 
       // L1 (Observer): All non-informational actions need approval
-      if (autonomyLevel === 1) {
+      if (autonomyLevel === 1 && !trustOutput) {
         finalStatus = responseType === 'informational' ? 'completed' : 'needs_approval';
       }
 
       // L2 (Supervised): Deliverable outputs need approval
-      if (autonomyLevel <= 2 && responseType === 'deliverable') {
+      if (autonomyLevel <= 2 && responseType === 'deliverable' && !trustOutput) {
         finalStatus = 'needs_approval';
       }
 
-      // L1-L3: Verifier escalation
+      // L1-L3: Verifier escalation (overrides trust — verifier disagreeing with
+      // agent output is a correctness signal, not a dispatch-time intent)
       if (autonomyLevel <= 3 && verifierEscalated) {
         finalStatus = 'needs_approval';
       }
