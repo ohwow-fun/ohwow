@@ -39,8 +39,13 @@ interface SelfFindingRow {
   created_at: string;
 }
 
-function parseJsonSafe<T>(raw: string | null | undefined, fallback: T): T {
-  if (!raw) return fallback;
+function parseJsonSafe<T>(raw: unknown, fallback: T): T {
+  if (raw === null || raw === undefined) return fallback;
+  // Some DB adapters return TEXT JSON columns already parsed as
+  // objects — accept both shapes so readers don't silently land {}
+  // when the adapter was helpful.
+  if (typeof raw === 'object') return raw as T;
+  if (typeof raw !== 'string') return fallback;
   try {
     return JSON.parse(raw) as T;
   } catch {
