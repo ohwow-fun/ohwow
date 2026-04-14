@@ -17,13 +17,23 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   router.get('/api/tasks', async (req, res) => {
     try {
       const { workspaceId } = req;
-      const { agentId, status, limit = '50' } = req.query;
+      const { agentId, status, limit = '50', offset = '0' } = req.query;
+      const limNum = Math.max(1, Math.min(500, parseInt(limit as string, 10) || 50));
+      const offNum = Math.max(0, parseInt(offset as string, 10) || 0);
+
+      // Count first so the client can paginate without a second round trip.
+      let countQuery = db.from('agent_workforce_tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('workspace_id', workspaceId);
+      if (agentId) countQuery = countQuery.eq('agent_id', agentId as string);
+      if (status) countQuery = countQuery.eq('status', status as string);
+      const { count: total } = await countQuery;
 
       let query = db.from('agent_workforce_tasks')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false })
-        .limit(parseInt(limit as string, 10));
+        .range(offNum, offNum + limNum - 1);
 
       if (agentId) {
         query = query.eq('agent_id', agentId as string);
@@ -39,7 +49,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
         return;
       }
 
-      res.json({ data: data || [] });
+      res.json({ data: data || [], total: total ?? 0, limit: limNum, offset: offNum });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

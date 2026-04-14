@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ListChecks, Plus, MagnifyingGlass, FileText } from '@phosphor-icons/react';
 import { useApi } from '../hooks/useApi';
@@ -35,7 +35,8 @@ interface DeliverableRow {
   created_at: string;
 }
 
-const STATUSES = ['all', 'pending', 'in_progress', 'completed', 'needs_approval', 'failed'] as const;
+const STATUSES = ['all', 'pending', 'in_progress', 'needs_approval', 'approved', 'completed', 'failed'] as const;
+const PAGE_SIZE = 50;
 const DELIVERABLE_STATUSES = ['all', 'pending_review', 'approved', 'delivered', 'rejected'] as const;
 
 type SortMode = 'date' | 'priority' | 'status';
@@ -52,9 +53,51 @@ export function TasksPage() {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortMode>('date');
 
-  const statusParam = filter === 'all' ? '' : `&status=${filter}`;
-  const { data: tasks, loading, refetch } = useApi<Task[]>(`/api/tasks?limit=50${statusParam}`, [wsTick, filter]);
   const { data: agents } = useApi<Agent[]>('/api/agents');
+
+  // Paginated task list. Refetch resets the list; "Load more" appends.
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const buildQuery = useCallback((offset: number) => {
+    const parts = [`limit=${PAGE_SIZE}`, `offset=${offset}`];
+    if (filter !== 'all') parts.push(`status=${filter}`);
+    return `/api/tasks?${parts.join('&')}`;
+  }, [filter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api<{ data: Task[]; total: number }>(buildQuery(0))
+      .then(res => {
+        if (cancelled) return;
+        setTasks(res.data);
+        setTotal(res.total);
+      })
+      .catch(() => { if (!cancelled) { setTasks([]); setTotal(0); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [buildQuery, wsTick]);
+
+  const refetch = useCallback(() => {
+    api<{ data: Task[]; total: number }>(buildQuery(0))
+      .then(res => { setTasks(res.data); setTotal(res.total); })
+      .catch(() => {});
+  }, [buildQuery]);
+
+  const loadMore = async () => {
+    if (!tasks || loadingMore || tasks.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const res = await api<{ data: Task[]; total: number }>(buildQuery(tasks.length));
+      setTasks([...tasks, ...res.data]);
+      setTotal(res.total);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const delStatusParam = delFilter === 'all' ? '' : `?status=${delFilter}`;
   const { data: deliverables, loading: delLoading } = useApi<DeliverableRow[]>(
@@ -104,7 +147,9 @@ export function TasksPage() {
     <div className="p-6 max-w-4xl">
       <PageHeader
         title="Tasks"
-        subtitle="All agent tasks"
+        subtitle={viewMode === 'tasks' && total > 0
+          ? `${tasks?.length ?? 0} of ${total}${filter === 'all' ? '' : ` ${filter.replace(/_/g, ' ')}`} shown`
+          : 'All agent tasks'}
         action={
           <button
             onClick={() => setShowDispatch(!showDispatch)}
@@ -203,6 +248,17 @@ export function TasksPage() {
                   </div>
                 </Link>
               ))}
+            </div>
+          )}
+          {!loading && tasks && tasks.length < total && !search && (
+            <div className="flex justify-center mt-4">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-4 py-2 text-xs text-neutral-300 border border-white/10 rounded-md hover:bg-white/5 transition-colors disabled:opacity-50"
+              >
+                {loadingMore ? 'Loading...' : `Load ${Math.min(PAGE_SIZE, total - tasks.length)} more`}
+              </button>
             </div>
           )}
         </>
