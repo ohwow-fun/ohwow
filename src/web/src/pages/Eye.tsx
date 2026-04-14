@@ -32,6 +32,7 @@ import {
 } from '@phosphor-icons/react';
 import { useCameraPresence } from '../hooks/useCameraPresence';
 import { useVoiceChat } from '../hooks/useVoiceChat';
+import { useTier } from '../hooks/useTier';
 import { useHandGestures, type HandGesture } from '../hooks/useHandGestures';
 import { HandLandmarkOverlay } from '../components/eye/HandLandmarkOverlay';
 import { GestureFeedback, type GestureAction } from '../components/eye/GestureFeedback';
@@ -100,6 +101,7 @@ export function EyePage() {
 
   // ---- Voice (direct WebSocket to local runtime) ----
   const voice = useVoiceChat('orchestrator');
+  const { tier } = useTier();
 
   const isVoiceActive = voice.state !== 'idle';
   const isSpeaking = voice.state === 'speaking';
@@ -438,7 +440,7 @@ export function EyePage() {
               <WifiSlash size={12} className="text-neutral-700" />
             )}
             <span className="text-[10px] text-neutral-700">
-              <span className="text-green-500/50">local</span>
+              <span className="text-green-500/50">{tier === 'free' ? 'local' : 'cloud'}</span>
               {voice.mode ? ` · ${voice.mode}` : ''}
             </span>
           </div>
