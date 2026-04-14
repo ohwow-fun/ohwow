@@ -49,6 +49,7 @@ export type ExperimentCategory =
   | 'prompt_calibration'
   | 'canary'
   | 'validation'
+  | 'experiment_proposal'
   | 'other';
 
 /**

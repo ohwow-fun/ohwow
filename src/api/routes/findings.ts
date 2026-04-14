@@ -32,6 +32,8 @@ function asCategory(raw: unknown): ExperimentCategory | undefined {
     'handler_audit',
     'prompt_calibration',
     'canary',
+    'validation',
+    'experiment_proposal',
     'other',
   ];
   return valid.includes(raw as ExperimentCategory) ? (raw as ExperimentCategory) : undefined;
