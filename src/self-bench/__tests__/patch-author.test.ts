@@ -8,6 +8,8 @@ import {
   extractAffectedFiles,
   listTier2Prefixes,
   collectFindingIdsAlreadyPatched,
+  isPatchAuthorEnabled,
+  stripCodeFences,
   type PatchCandidate,
 } from '../experiments/patch-author.js';
 import {
@@ -114,6 +116,95 @@ describe('collectFindingIdsAlreadyPatched', () => {
     expect(ids.has('aaaa-1111')).toBe(true);
     expect(ids.has('bbbb-2222')).toBe(true);
     expect(ids.size).toBe(2);
+  });
+});
+
+describe('stripCodeFences', () => {
+  it('returns input unchanged when there are no fences', () => {
+    expect(stripCodeFences('export const x = 1;')).toBe('export const x = 1;');
+  });
+
+  it('strips a single ```typescript fenced block', () => {
+    const wrapped = '```typescript\nexport const x = 1;\n```';
+    expect(stripCodeFences(wrapped)).toBe('export const x = 1;');
+  });
+
+  it('strips a bare ``` fenced block', () => {
+    expect(stripCodeFences('```\nfoo\n```')).toBe('foo');
+  });
+
+  it('trims surrounding whitespace either way', () => {
+    expect(stripCodeFences('  \nexport const x = 1;\n  ')).toBe('export const x = 1;');
+  });
+});
+
+describe('isPatchAuthorEnabled', () => {
+  it('returns false when neither file nor env bypass is set', () => {
+    const prior = process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+    delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+    try {
+      expect(isPatchAuthorEnabled()).toBe(false);
+    } finally {
+      if (prior !== undefined) process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = prior;
+    }
+  });
+
+  it('returns true when the env bypass is set to 1', () => {
+    const prior = process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+    process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = '1';
+    try {
+      expect(isPatchAuthorEnabled()).toBe(true);
+    } finally {
+      if (prior === undefined) delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+      else process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = prior;
+    }
+  });
+});
+
+describe('PatchAuthorExperiment.intervene', () => {
+  afterEach(() => {
+    _setPathTierRegistryForTests(null);
+    delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+  });
+
+  it('returns null when verdict is pass', async () => {
+    const exp = new PatchAuthorExperiment();
+    const r = await exp.intervene!(
+      'pass',
+      { summary: '', evidence: { candidates: [] } },
+      fakeCtx([]),
+    );
+    expect(r).toBeNull();
+  });
+
+  it('returns observe-only when the kill switch is closed', async () => {
+    _setPathTierRegistryForTests([
+      { prefix: 'src/lib/format-duration.ts', tier: 'tier-2', rationale: 't' },
+    ]);
+    const candidate: PatchCandidate = {
+      findingId: 'f1',
+      experimentId: 'e1',
+      subject: null,
+      verdict: 'fail',
+      ranAt: new Date().toISOString(),
+      tier2Files: ['src/lib/format-duration.ts'],
+    };
+    const exp = new PatchAuthorExperiment();
+    const r = await exp.intervene!(
+      'warning',
+      {
+        summary: '',
+        evidence: {
+          repo_root: '/tmp/nope',
+          tier2_prefixes: ['src/lib/format-duration.ts'],
+          findings_scanned: 1,
+          candidates: [candidate],
+        },
+      },
+      fakeCtx([]),
+    );
+    expect(r?.description).toContain('observe-only');
+    expect((r?.details as { mode?: string })?.mode).toBe('observe-only');
   });
 });
 
