@@ -59,6 +59,7 @@ import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handl
 import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
 import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
+import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/autonomous-author-quality.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1419,6 +1420,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // while an agent can be silently drowning in failed tasks.
         // Per-agent failure-rate watchdog on a 24h rolling window.
         experimentRunner.register(new AgentOutcomesExperiment());
+        // Step 2 of the autonomous-fixing safety floor: meta-watcher over
+        // the autonomous code-authoring pipeline. Surfaces commit volume,
+        // templated-family slop, ghost probes, and verdict-mix collapse
+        // as evidence so the operator can decide whether to widen the
+        // patch allowlist or throttle the author back. Pure observer.
+        experimentRunner.register(new AutonomousAuthorQualityExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
