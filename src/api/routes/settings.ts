@@ -23,6 +23,7 @@ const ALLOWED_SETTINGS = new Set([
   'ghl_webhook_secret',
   'ghl_location_id',
   'ghl_api_key',
+  'license_key',
 ]);
 
 const SENSITIVE_SETTINGS = new Set([
@@ -30,6 +31,7 @@ const SENSITIVE_SETTINGS = new Set([
   'openrouter_api_key',
   'ghl_webhook_secret',
   'ghl_api_key',
+  'license_key',
 ]);
 
 function maskSensitiveValue(value: string): string {
