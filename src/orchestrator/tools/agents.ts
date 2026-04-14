@@ -38,14 +38,14 @@ export const AGENT_TASK_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'list_tasks',
     description:
-      'Get recent tasks. Can filter by status (pending, running, completed, failed, needs_approval, cancelled) and/or agent ID.',
+      'Get recent tasks with their status breakdown. Returns { total, returned, limit, tasks }. `total` is the unfiltered-by-limit count matching the filter stack — use it to tell whether `tasks` is the complete set or only the first page. Filter by status (pending, running, completed, failed, needs_approval, cancelled, approved) and/or agent_id / project_id. Default limit 50, max 500.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'needs_approval', 'cancelled'] },
+        status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'needs_approval', 'cancelled', 'approved'] },
         agent_id: { type: 'string', description: 'Filter by agent ID' },
         project_id: { type: 'string', description: 'Filter by project ID' },
-        limit: { type: 'number', description: 'Max tasks to return (default 10)' },
+        limit: { type: 'number', description: 'Max tasks to return (default 50, max 500)' },
       },
       required: [],
     },

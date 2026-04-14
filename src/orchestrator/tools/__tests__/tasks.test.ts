@@ -66,19 +66,32 @@ describe('listTasks', () => {
     const result = await listTasks(ctx, {});
 
     expect(result.success).toBe(true);
-    const data = result.data as Array<{ id: string; agentName: string; projectName?: string }>;
-    expect(data).toHaveLength(2);
-    expect(data[0].agentName).toBe('Writer');
-    expect(data[1].agentName).toBe('Researcher');
-    expect(data[1].projectName).toBe('Q1 Goals');
+    // Post-E4 shape: { total, returned, limit, tasks }. Assert both
+    // the envelope fields and the task array so a future regression
+    // that drops `total` or flips the shape back surfaces loudly.
+    const envelope = result.data as {
+      total: number;
+      returned: number;
+      limit: number;
+      tasks: Array<{ id: string; agentName: string; projectName?: string }>;
+    };
+    expect(envelope.tasks).toHaveLength(2);
+    expect(envelope.returned).toBe(2);
+    expect(envelope.limit).toBe(50);
+    expect(envelope.tasks[0].agentName).toBe('Writer');
+    expect(envelope.tasks[1].agentName).toBe('Researcher');
+    expect(envelope.tasks[1].projectName).toBe('Q1 Goals');
   });
 
-  it('returns empty array when no tasks exist', async () => {
+  it('returns an empty envelope when no tasks exist', async () => {
     const ctx = makeCtx({ agent_workforce_tasks: { data: [] } });
     const result = await listTasks(ctx, {});
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual([]);
+    const envelope = result.data as { total: number; returned: number; limit: number; tasks: unknown[] };
+    expect(envelope.tasks).toEqual([]);
+    expect(envelope.returned).toBe(0);
+    expect(envelope.total).toBe(0);
   });
 
   it('filters by status parameter', async () => {

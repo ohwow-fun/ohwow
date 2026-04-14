@@ -10,10 +10,12 @@ export const WORKFLOW_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'list_workflows',
     description:
-      'Get all workflows in the workspace.',
+      'List workflows in the workspace. Returns { total, returned, limit, workflows }. `total` is the unfiltered-by-limit count — use it to tell whether `workflows` is the complete set or only the first page. Default limit 50, max 500.',
     input_schema: {
       type: 'object' as const,
-      properties: {},
+      properties: {
+        limit: { type: 'number', description: 'Max workflows to return (default 50, max 500)' },
+      },
       required: [],
     },
   },
@@ -105,17 +107,47 @@ export const WORKFLOW_TOOL_DEFINITIONS: Tool[] = [
   },
 ];
 
-export async function listWorkflows(ctx: LocalToolContext): Promise<ToolResult> {
+export async function listWorkflows(
+  ctx: LocalToolContext,
+  input?: Record<string, unknown>,
+): Promise<ToolResult> {
+  // Before E4 this handler had a hardcoded limit(20) with no caller
+  // override and no total field — the most severe of the list_* bugs
+  // the fuzz surfaced, because there was no escape hatch at all. A
+  // workspace with 21+ workflows would silently lose visibility into
+  // every extra row forever. Accept a limit param with a sane default
+  // and always return a total companion.
+  const rawLimit = typeof input?.limit === 'number' ? (input.limit as number) : 50;
+  const limit = Math.max(1, Math.min(500, Math.floor(rawLimit)));
+
   const { data, error } = await ctx.db
     .from('agent_workforce_workflows')
     .select('id, name, description, status, created_at, run_count')
     .eq('workspace_id', ctx.workspaceId)
     .order('created_at', { ascending: false })
-    .limit(20);
+    .limit(limit);
 
   if (error) return { success: false, error: error.message };
 
-  return { success: true, data: data || [] };
+  // Total-count companion so the caller can tell whether the
+  // returned page is the complete set. No filter stack to mirror
+  // here — list_workflows only filters by workspace_id.
+  const { count: totalCount } = await ctx.db
+    .from('agent_workforce_workflows')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', ctx.workspaceId);
+
+  const workflows = (data || []) as Array<Record<string, unknown>>;
+
+  return {
+    success: true,
+    data: {
+      total: totalCount ?? workflows.length,
+      returned: workflows.length,
+      limit,
+      workflows,
+    },
+  };
 }
 
 export async function runWorkflow(

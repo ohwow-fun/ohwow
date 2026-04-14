@@ -90,7 +90,13 @@ export async function listTasks(
   ctx: LocalToolContext,
   input: Record<string, unknown>,
 ): Promise<ToolResult> {
-  const limit = (input.limit as number) || 10;
+  // Bumped from 10 → 50 in response to the E4 fuzz finding: real
+  // workspaces routinely have 100+ tasks, and the prior default hid
+  // so much of the table that the orchestrator repeatedly miscounted
+  // in the B0.13 bench. Still clamp to [1, 500] so a runaway prompt
+  // can't pull the whole table.
+  const rawLimit = typeof input.limit === 'number' ? (input.limit as number) : 50;
+  const limit = Math.max(1, Math.min(500, Math.floor(rawLimit)));
 
   let query = ctx.db
     .from('agent_workforce_tasks')
@@ -105,6 +111,19 @@ export async function listTasks(
 
   const { data, error } = await query;
   if (error) return { success: false, error: error.message };
+
+  // Total-count companion query — lets the caller tell whether the
+  // returned page is the whole set or only the first `limit` rows.
+  // Mirrors the same filter stack as the data query so total and
+  // rows count the same population.
+  let totalCountQuery = ctx.db
+    .from('agent_workforce_tasks')
+    .select('id', { count: 'exact', head: true })
+    .eq('workspace_id', ctx.workspaceId);
+  if (input.status) totalCountQuery = totalCountQuery.eq('status', input.status as string);
+  if (input.agent_id) totalCountQuery = totalCountQuery.eq('agent_id', input.agent_id as string);
+  if (input.project_id) totalCountQuery = totalCountQuery.eq('project_id', input.project_id as string);
+  const { count: totalCount } = await totalCountQuery;
 
   // Resolve agent names
   const rows = (data || []) as Array<Record<string, unknown>>;
@@ -127,7 +146,7 @@ export async function listTasks(
     }
   }
 
-  const result = rows.map((t) => ({
+  const tasks = rows.map((t) => ({
     id: t.id,
     title: t.title,
     status: t.status,
@@ -138,7 +157,15 @@ export async function listTasks(
     error: t.error_message || undefined,
   }));
 
-  return { success: true, data: result };
+  return {
+    success: true,
+    data: {
+      total: totalCount ?? tasks.length,
+      returned: tasks.length,
+      limit,
+      tasks,
+    },
+  };
 }
 
 export async function getTaskDetail(

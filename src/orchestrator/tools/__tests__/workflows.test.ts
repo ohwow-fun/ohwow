@@ -8,7 +8,7 @@ import { makeCtx, mockEngine } from '../../../__tests__/helpers/mock-db.js';
 describe('listWorkflows', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns workflows from the database', async () => {
+  it('returns workflows from the database in the paginated envelope shape', async () => {
     const workflows = [
       { id: 'wf1', name: 'Daily Report', description: 'Generate daily report', status: 'active', run_count: 5 },
     ];
@@ -16,7 +16,13 @@ describe('listWorkflows', () => {
     const result = await listWorkflows(ctx);
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual(workflows);
+    // Post-E4 shape: { total, returned, limit, workflows }. Assert
+    // the full envelope so a future regression that drops `total`
+    // or reverts to a bare array surfaces loudly.
+    const envelope = result.data as { total: number; returned: number; limit: number; workflows: unknown[] };
+    expect(envelope.workflows).toEqual(workflows);
+    expect(envelope.returned).toBe(1);
+    expect(envelope.limit).toBe(50);
   });
 
   it('returns error when db query fails', async () => {
@@ -49,11 +55,14 @@ describe('listWorkflows', () => {
     expect(result.error).toContain('DB connection lost');
   });
 
-  it('returns empty array when no workflows exist', async () => {
+  it('returns an empty envelope when no workflows exist', async () => {
     const ctx = makeCtx({ agent_workforce_workflows: { data: [] } });
     const result = await listWorkflows(ctx);
     expect(result.success).toBe(true);
-    expect(result.data).toEqual([]);
+    const envelope = result.data as { total: number; returned: number; limit: number; workflows: unknown[] };
+    expect(envelope.workflows).toEqual([]);
+    expect(envelope.returned).toBe(0);
+    expect(envelope.total).toBe(0);
   });
 });
 

@@ -117,7 +117,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['update_agent_schedule', (ctx, input) => updateAgentSchedule(ctx, input)],
 
   // Workflow tools
-  ['list_workflows', (ctx) => listWorkflows(ctx)],
+  ['list_workflows', (ctx, input) => listWorkflows(ctx, input)],
   ['run_workflow', (ctx, input) => runWorkflow(ctx, input)],
   ['get_workflow_detail', (ctx, input) => getWorkflowDetail(ctx, input)],
   ['create_workflow', (ctx, input) => createWorkflow(ctx, input)],
