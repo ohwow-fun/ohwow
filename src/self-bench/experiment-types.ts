@@ -50,6 +50,7 @@ export type ExperimentCategory =
   | 'canary'
   | 'validation'
   | 'experiment_proposal'
+  | 'business_outcome'
   | 'other';
 
 /**
