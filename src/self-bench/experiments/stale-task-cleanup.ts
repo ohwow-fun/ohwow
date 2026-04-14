@@ -58,9 +58,22 @@ import type {
   ValidationResult,
   Verdict,
 } from '../experiment-types.js';
+import { getRuntimeConfig } from '../runtime-config.js';
 
-/** Tasks with updated_at older than this are considered abandoned. */
-const STALE_THRESHOLD_MS = 10 * 60 * 1000;
+/**
+ * Tasks with updated_at older than this are considered abandoned.
+ * Default is 10 minutes; the StaleTaskThresholdTunerExperiment
+ * (Phase 5-C) may override this at runtime via
+ * runtime_config_overrides. Reading through getRuntimeConfig means
+ * the current threshold always reflects the latest tuner decision
+ * without a code deploy.
+ */
+const STALE_THRESHOLD_MS_DEFAULT = 10 * 60 * 1000;
+export const STALE_THRESHOLD_CONFIG_KEY = 'stale_task_cleanup.threshold_ms';
+
+export function currentStaleThresholdMs(): number {
+  return getRuntimeConfig<number>(STALE_THRESHOLD_CONFIG_KEY, STALE_THRESHOLD_MS_DEFAULT);
+}
 
 interface StaleTaskRow {
   id: string;
@@ -108,7 +121,8 @@ export class StaleTaskCleanupExperiment implements Experiment {
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const now = Date.now();
-    const cutoffIso = new Date(now - STALE_THRESHOLD_MS).toISOString();
+    const thresholdMs = currentStaleThresholdMs();
+    const cutoffIso = new Date(now - thresholdMs).toISOString();
 
     const { data } = await ctx.db
       .from<StaleTaskRow>('agent_workforce_tasks')
@@ -131,7 +145,7 @@ export class StaleTaskCleanupExperiment implements Experiment {
     const evidence: StaleCleanupEvidence = {
       stale_tasks: stale,
       stale_count: stale.length,
-      stale_threshold_ms: STALE_THRESHOLD_MS,
+      stale_threshold_ms: thresholdMs,
       stale_cutoff_iso: cutoffIso,
     };
 
@@ -239,7 +253,7 @@ export class StaleTaskCleanupExperiment implements Experiment {
     // the original cleanup reset. A new stale task owned by a reset
     // agent is a rebound — the cleanup didn't actually fix the
     // underlying cause.
-    const cutoffIso = new Date(Date.now() - STALE_THRESHOLD_MS).toISOString();
+    const cutoffIso = new Date(Date.now() - currentStaleThresholdMs()).toISOString();
     const { data } = await ctx.db
       .from<StaleTaskRow>('agent_workforce_tasks')
       .select('id, agent_id, title, started_at, updated_at, status')

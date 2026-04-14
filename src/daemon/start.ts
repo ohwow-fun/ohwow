@@ -48,6 +48,7 @@ import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-st
 import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
+import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import {
   refreshRuntimeConfigCache,
@@ -1340,6 +1341,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // probe budget follow signal instead of running every
         // experiment on a static schedule forever.
         experimentRunner.register(new AdaptiveSchedulerExperiment());
+        // Phase 5-C: StaleTaskThresholdTunerExperiment is the first
+        // experiment that uses the full reversible-config loop:
+        // reads recent stale-task-cleanup patterns, proposes a
+        // threshold widening via runtime_config_overrides, validates
+        // the change after 20 minutes, and rolls back automatically
+        // if the adjustment didn't help.
+        experimentRunner.register(new StaleTaskThresholdTunerExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
