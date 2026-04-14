@@ -48,4 +48,5 @@ export const TOOLCHAIN_TEST_REGISTRY: readonly ToolchainTestProbeConfig[] = [
   { slug: 'synthesis-probe' },
   { slug: 'tasks' },
   { slug: 'transitions' },
+  { slug: 'wiki' },
 ];
