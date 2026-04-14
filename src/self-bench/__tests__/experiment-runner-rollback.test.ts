@@ -136,6 +136,7 @@ describe('ExperimentRunner — rollback', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {} as any,
       'ws-1',
+      'default',
       { tickIntervalMs: 60_000, now: () => currentTime },
     );
   }

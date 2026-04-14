@@ -116,7 +116,7 @@ describe('ExperimentRunner', () => {
 
   function buildRunner() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new ExperimentRunner(env.db as any, {} as any, 'ws-1', {
+    return new ExperimentRunner(env.db as any, {} as any, 'ws-1', 'default', {
       tickIntervalMs: 60_000,
       now: () => currentTime,
     });

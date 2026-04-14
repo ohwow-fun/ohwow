@@ -131,6 +131,7 @@ export class ExperimentRunner implements ExperimentScheduler {
     private readonly db: DatabaseAdapter,
     private readonly engine: RuntimeEngine,
     private readonly workspaceId: string,
+    private readonly workspaceSlug: string,
     opts: ExperimentRunnerOptions = {},
   ) {
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS;
@@ -486,6 +487,7 @@ export class ExperimentRunner implements ExperimentScheduler {
     return {
       db: this.db,
       workspaceId: this.workspaceId,
+      workspaceSlug: this.workspaceSlug,
       engine: this.engine,
       recentFindings: (experimentId: string, limit?: number) =>
         readRecentFindings(this.db, experimentId, limit),

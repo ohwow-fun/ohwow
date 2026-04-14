@@ -86,13 +86,22 @@ function makeCtx(
   env: ReturnType<typeof buildDb>,
   opts: {
     workspaceId?: string;
+    workspaceSlug?: string;
     historyByExperiment?: Record<string, Finding[]>;
   } = {},
 ): ExperimentContext {
   return {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     db: env.db as any,
+    // Row id used for SQL scoping. In prod this is the consolidated
+    // cloud UUID or 'local' sentinel; in tests we just use 'default'
+    // so the seeded goal rows (which also carry workspace_id='default')
+    // match the SQL filter inside findActiveGoalByMetric.
     workspaceId: opts.workspaceId ?? 'default',
+    // Human-readable slug the BusinessExperiment guard matches on.
+    // Defaults to 'default' so unguarded tests match the
+    // BusinessExperiment's allowedWorkspace default.
+    workspaceSlug: opts.workspaceSlug ?? 'default',
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     engine: {} as any,
     recentFindings: async (experimentId) =>
@@ -148,10 +157,14 @@ beforeEach(() => {
 });
 
 describe('BusinessExperiment — workspace guard (via ContentCadenceTunerExperiment)', () => {
-  it('skips probe when workspaceId does not match allowedWorkspace', async () => {
+  it('skips probe when workspaceSlug does not match allowedWorkspace', async () => {
     const env = buildDb();
-    seedGoal(env, { workspace_id: 'someone-elses-workspace' });
-    const ctx = makeCtx(env, { workspaceId: 'customer-7' });
+    seedGoal(env);
+    // Simulate a customer workspace: different slug, whatever row id.
+    const ctx = makeCtx(env, {
+      workspaceId: 'cloud-uuid-whatever',
+      workspaceSlug: 'customer-7',
+    });
     const exp = new ContentCadenceTunerExperiment();
 
     const result = await exp.probe(ctx);
@@ -161,9 +174,33 @@ describe('BusinessExperiment — workspace guard (via ContentCadenceTunerExperim
     expect(exp.judge(result, [])).toBe('pass');
   });
 
+  it('does NOT skip when workspaceId looks wrong but workspaceSlug matches', async () => {
+    const env = buildDb();
+    // Production shape: workspaceId is the consolidated cloud UUID
+    // (or 'local' sentinel), NOT the human-readable slug. The SQL
+    // scoping filter matches on workspaceId, so we seed the goal with
+    // the same UUID; the BusinessExperiment guard separately matches
+    // on workspaceSlug, so the UUID row id shouldn't open or close it.
+    const cloudUuid = '11111111-2222-3333-4444-555555555555';
+    seedGoal(env, {
+      workspace_id: cloudUuid,
+      current_value: 0,
+      target_value: 7,
+    });
+    const ctx = makeCtx(env, {
+      workspaceId: cloudUuid,
+      workspaceSlug: 'default',
+    });
+    const exp = new ContentCadenceTunerExperiment();
+
+    const result = await exp.probe(ctx);
+    expect((result.evidence as { skipped?: boolean }).skipped).not.toBe(true);
+    expect((result.evidence as { goal_id?: string }).goal_id).toBe('goal-1');
+  });
+
   it('intervene returns null on a skipped probe', async () => {
     const env = buildDb();
-    const ctx = makeCtx(env, { workspaceId: 'customer-7' });
+    const ctx = makeCtx(env, { workspaceSlug: 'customer-7' });
     const exp = new ContentCadenceTunerExperiment();
 
     const result = await exp.probe(ctx);
@@ -171,15 +208,30 @@ describe('BusinessExperiment — workspace guard (via ContentCadenceTunerExperim
     expect(intervention).toBeNull();
   });
 
-  it('runs normally when workspaceId matches allowedWorkspace', async () => {
+  it('falls back to OHWOW_WORKSPACE env var when workspaceSlug is absent', async () => {
     const env = buildDb();
     seedGoal(env, { current_value: 0, target_value: 7 });
-    const ctx = makeCtx(env, { workspaceId: 'default' });
-    const exp = new ContentCadenceTunerExperiment();
-
-    const result = await exp.probe(ctx);
-    expect((result.evidence as { skipped?: boolean }).skipped).not.toBe(true);
-    expect((result.evidence as { goal_id?: string }).goal_id).toBe('goal-1');
+    const prior = process.env.OHWOW_WORKSPACE;
+    try {
+      process.env.OHWOW_WORKSPACE = 'avenued';
+      // No workspaceSlug in the context.
+      const ctx: ExperimentContext = {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        db: env.db as any,
+        workspaceId: 'row-id',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        engine: {} as any,
+        recentFindings: async () => [],
+      };
+      const exp = new ContentCadenceTunerExperiment();
+      const result = await exp.probe(ctx);
+      // env says 'avenued', experiment defaults to 'default' → skip.
+      expect((result.evidence as { skipped?: boolean }).skipped).toBe(true);
+      expect((result.evidence as { actual_workspace?: string }).actual_workspace).toBe('avenued');
+    } finally {
+      if (prior === undefined) delete process.env.OHWOW_WORKSPACE;
+      else process.env.OHWOW_WORKSPACE = prior;
+    }
   });
 });
 

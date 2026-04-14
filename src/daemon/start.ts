@@ -1342,7 +1342,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
       }
 
       if (engine) {
-        const experimentRunner = new ExperimentRunner(db, engine, workspaceId);
+        // workspaceId is the consolidated row id (cloud UUID or 'local');
+        // workspaceSlug is the human-readable name ('default', 'avenued', ...)
+        // that business experiments match against.
+        const workspaceSlug = resolveActiveWorkspace().name;
+        const experimentRunner = new ExperimentRunner(db, engine, workspaceId, workspaceSlug);
         experimentRunner.register(new ModelHealthExperiment());
         experimentRunner.register(new TriggerStabilityExperiment());
         // Phase 2: CanaryExperiment runs the direct-dispatch tool

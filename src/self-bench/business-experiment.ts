@@ -18,11 +18,14 @@
  * has to get right, so subclasses can't forget:
  *
  *   1. **Workspace guard.** probe() is wrapped so it short-circuits
- *      into a 'skipped' result when ctx.workspaceId is not the
+ *      into a 'skipped' result when ctx.workspaceSlug is not the
  *      allowedWorkspace (default: 'default', the GTM dogfood slot).
- *      judge() returns 'pass' on skipped probes. intervene() returns
- *      null on skipped probes or mismatched workspaces. All three
- *      gates are belt-and-braces — any one of them is sufficient.
+ *      Matches on the slug, not the consolidated workspaceId row id,
+ *      because the id is rewritten to the cloud UUID / 'local'
+ *      sentinel at daemon boot and stops being the human-readable
+ *      name. judge() returns 'pass' on skipped probes. intervene()
+ *      returns null on skipped probes or mismatched workspaces. All
+ *      three gates are belt-and-braces — any one of them is sufficient.
  *
  *   2. **Goal anchoring.** Business experiments probe against
  *      agent_workforce_goals via findActiveGoalByMetric(). Goals
@@ -157,14 +160,15 @@ export abstract class BusinessExperiment implements Experiment {
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     if (!this.isAllowedWorkspace(ctx)) {
+      const actual = this.resolveSlug(ctx);
       return {
         subject: null,
-        summary: `skipped: ${this.id} only runs on '${this.allowedWorkspace}' workspace, got '${ctx.workspaceId}'`,
+        summary: `skipped: ${this.id} only runs on '${this.allowedWorkspace}' workspace, got '${actual}'`,
         evidence: {
           [SKIP_MARKER]: true,
           reason: 'workspace_guard',
           allowed_workspace: this.allowedWorkspace,
-          actual_workspace: ctx.workspaceId,
+          actual_workspace: actual,
         },
       };
     }
@@ -189,7 +193,25 @@ export abstract class BusinessExperiment implements Experiment {
   // Helpers subclasses use inside business* hooks.
 
   protected isAllowedWorkspace(ctx: ExperimentContext): boolean {
-    return ctx.workspaceId === this.allowedWorkspace;
+    return this.resolveSlug(ctx) === this.allowedWorkspace;
+  }
+
+  /**
+   * Resolve the workspace slug for guard matching. Prefers the
+   * runner-provided ctx.workspaceSlug, falls back to OHWOW_WORKSPACE
+   * when a test harness constructs a context directly without
+   * populating the field, and finally defaults to DEFAULT_BUSINESS_WORKSPACE
+   * so a missing env var in tests doesn't accidentally open the guard.
+   * Never reads ctx.workspaceId for this decision — that's the
+   * consolidated row id, not the slug.
+   */
+  protected resolveSlug(ctx: ExperimentContext): string {
+    if (typeof ctx.workspaceSlug === 'string' && ctx.workspaceSlug.length > 0) {
+      return ctx.workspaceSlug;
+    }
+    const fromEnv = process.env.OHWOW_WORKSPACE?.trim();
+    if (fromEnv && fromEnv.length > 0) return fromEnv;
+    return DEFAULT_BUSINESS_WORKSPACE;
   }
 
   /**

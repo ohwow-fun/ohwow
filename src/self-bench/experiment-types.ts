@@ -157,7 +157,30 @@ export interface ExperimentScheduler {
  */
 export interface ExperimentContext {
   db: DatabaseAdapter;
+  /**
+   * The resolved workspace row id used to scope SQL queries. After
+   * daemon consolidation this is either the cloud workspace UUID
+   * (when a license key is configured) or the 'local' sentinel.
+   * NEVER equals the human-readable workspace slug — use
+   * workspaceSlug for that.
+   */
   workspaceId: string;
+  /**
+   * The human-readable workspace slug (e.g. 'default', 'avenued')
+   * resolved from OHWOW_WORKSPACE / the workspace pointer / the
+   * default-workspace fallback. Distinct from workspaceId because
+   * consolidation rewrites workspaceId to the cloud UUID or 'local',
+   * losing the operator-visible name. Experiments that need to
+   * behave differently per workspace (e.g. business experiments that
+   * only run on the GTM dogfood slot) match on workspaceSlug, not
+   * workspaceId.
+   *
+   * Optional on this interface so test helpers that construct
+   * contexts directly don't have to know about it — the runner
+   * always populates it in production. Consumers that depend on it
+   * must handle undefined with a safe fallback.
+   */
+  workspaceSlug?: string;
   engine: RuntimeEngine;
   /** Read recent findings for this experiment id (most recent first). */
   recentFindings(experimentId: string, limit?: number): Promise<Finding[]>;
