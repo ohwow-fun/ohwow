@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { CalendarBlank, Lightning, ArrowRight, Timer, ClockCounterClockwise, Plug, GitBranch } from '@phosphor-icons/react';
 import { PageHeader } from '../components/PageHeader';
+import { useApi } from '../hooks/useApi';
 
 const cards = [
   {
@@ -42,6 +43,13 @@ const colorMap: Record<string, { border: string; bg: string; iconBg: string }> =
 };
 
 export function WorkflowsHub() {
+  const { data: schedules } = useApi<Array<{ id: string }>>('/api/schedules');
+  const { data: automations } = useApi<Array<{ id: string }>>('/api/automations');
+  const counts: Record<string, number> = {
+    '/schedules': schedules?.length ?? 0,
+    '/automations': automations?.length ?? 0,
+  };
+
   return (
     <div className="p-6 max-w-4xl">
       <PageHeader
@@ -52,6 +60,7 @@ export function WorkflowsHub() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {cards.map((card, i) => {
           const colors = colorMap[card.color];
+          const count = counts[card.to] ?? 0;
           return (
             <motion.div
               key={card.to}
@@ -67,10 +76,13 @@ export function WorkflowsHub() {
                   <div className={`w-10 h-10 rounded-lg ${colors.iconBg} flex items-center justify-center`}>
                     <card.icon size={20} weight="bold" className="text-white" />
                   </div>
-                  <ArrowRight
-                    size={16}
-                    className="text-neutral-500 group-hover:text-white group-hover:translate-x-0.5 transition-all"
-                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-neutral-400">{count} {count === 1 ? 'item' : 'items'}</span>
+                    <ArrowRight
+                      size={16}
+                      className="text-neutral-500 group-hover:text-white group-hover:translate-x-0.5 transition-all"
+                    />
+                  </div>
                 </div>
                 <h3 className="text-sm font-semibold text-white mb-1">{card.title}</h3>
                 <p className="text-xs text-neutral-400 mb-4 leading-relaxed">{card.description}</p>
