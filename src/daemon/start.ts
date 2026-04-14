@@ -42,7 +42,9 @@ import { NotionConnector } from '../integrations/connectors/notion-connector.js'
 import { MessageRouter } from '../integrations/message-router.js';
 import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ModelRouter } from '../execution/model-router.js';
-import { refreshDemotedAgentModels, DEMOTION_REFRESH_INTERVAL_MS } from '../execution/agent-model-tiers.js';
+import { ExperimentRunner } from '../self-bench/experiment-runner.js';
+import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js';
+import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1281,16 +1283,33 @@ export async function startDaemon(): Promise<DaemonHandle> {
       logger.debug('[daemon] Person model refinement scheduled (1h interval)');
     }
 
-    // Agent-tier demotion cache: recomputes the "which models can't
-    // tool-call on work-shaped tasks" set from rolling llm_calls data.
-    // Fires immediately on boot so selectAgentModelForIteration has fresh
-    // signal before the first task runs, then every 10 minutes.
+    // Self-bench experiment runner: the substrate for continuous
+    // self-testing. Every registered Experiment fires on its cadence,
+    // lands a row in self_findings, and (if it implements intervene)
+    // changes config when its judge says so. Phase 1 registers two
+    // wrappers around existing reliability checks:
+    //   - ModelHealthExperiment: subsumes the old 10-minute
+    //     refreshDemotedAgentModels interval — the probe still calls
+    //     that refresher, but now the refresh outcome lands as a
+    //     finding instead of disappearing into a log line.
+    //   - TriggerStabilityExperiment: polls the trigger watchdog
+    //     counters every 5 minutes so "is any cron silently broken"
+    //     is answerable from the ledger without an operator query.
+    // Phase 2-5 will add canary probes, re-promotion, intervention
+    // validation, and the meta-loop that picks what to probe next.
     {
-      void refreshDemotedAgentModels(db);
-      setInterval(() => {
-        void refreshDemotedAgentModels(db);
-      }, DEMOTION_REFRESH_INTERVAL_MS);
-      logger.debug('[daemon] Agent-tier demotion refresher scheduled (10m interval)');
+      if (engine) {
+        const experimentRunner = new ExperimentRunner(db, engine, workspaceId);
+        experimentRunner.register(new ModelHealthExperiment());
+        experimentRunner.register(new TriggerStabilityExperiment());
+        experimentRunner.start();
+        logger.debug(
+          { experiments: experimentRunner.registeredIds() },
+          '[daemon] self-bench experiment runner started',
+        );
+      } else {
+        logger.debug('[daemon] engine unavailable — experiment runner skipped');
+      }
     }
 
     // Human Growth Engine: compute growth snapshots alongside refinement
