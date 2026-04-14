@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { executeBashTool } from '../bash/bash-executor.js';
 import { FileAccessGuard } from '../filesystem/filesystem-guard.js';
+import { PermissionDeniedError } from '../filesystem/permission-error.js';
 
 describe('executeBashTool', () => {
   let tmpDir: string;
@@ -31,13 +32,31 @@ describe('executeBashTool', () => {
     expect(result.content).toContain('Exit code: 1');
   });
 
-  it('rejects working directory outside guard', async () => {
-    const result = await executeBashTool(guard, 'run_bash', {
-      command: 'echo hi',
-      working_directory: '/tmp/nonexistent-bash-test-dir-xyz',
-    });
-    expect(result.is_error).toBe(true);
-    expect(result.content).toContain('outside allowed paths');
+  it('throws PermissionDeniedError for working directory outside guard', async () => {
+    await expect(
+      executeBashTool(guard, 'run_bash', {
+        command: 'echo hi',
+        working_directory: '/tmp/nonexistent-bash-test-dir-xyz',
+      }),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+  });
+
+  it('permission-denied carries structured details', async () => {
+    try {
+      await executeBashTool(guard, 'run_bash', {
+        command: 'echo hi',
+        working_directory: '/tmp/another-denied-dir-abc',
+      });
+      throw new Error('expected PermissionDeniedError to be thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(PermissionDeniedError);
+      const details = (err as PermissionDeniedError).details;
+      expect(details.toolName).toBe('run_bash');
+      expect(details.attemptedPath).toBe('/tmp/another-denied-dir-abc');
+      expect(details.suggestedExact).toContain('another-denied-dir-abc');
+      expect(details.suggestedParent).toBe(path.dirname(details.suggestedExact));
+      expect(details.guardReason.length).toBeGreaterThan(0);
+    }
   });
 
   it('blocks rm -rf /', async () => {

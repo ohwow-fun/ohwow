@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { FileAccessGuard } from '../filesystem/filesystem-guard.js';
+import { PermissionDeniedError, resolveSuggestedPath } from '../filesystem/permission-error.js';
 import { scrubEnvironment, scrubEnvironmentForGit, scrubBashOutput } from '../../lib/env-scrub.js';
 
 // ============================================================================
@@ -196,7 +197,14 @@ export async function executeBashTool(
     const resolved = path.resolve(workingDirectory);
     const check = guard.isAllowed(resolved);
     if (!check.allowed) {
-      return { content: `Error: Working directory is outside allowed paths. ${check.reason || ''}`.trim(), is_error: true };
+      const suggestedExact = resolveSuggestedPath(workingDirectory);
+      throw new PermissionDeniedError({
+        toolName: 'run_bash',
+        attemptedPath: workingDirectory,
+        suggestedExact,
+        suggestedParent: path.dirname(suggestedExact),
+        guardReason: check.reason ?? 'Working directory is outside the allowed directories.',
+      });
     }
     cwd = resolved;
   } else {

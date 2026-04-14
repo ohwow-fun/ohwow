@@ -4,6 +4,7 @@
 
 import type { ToolExecutor, ToolExecutionContext, ToolCallResult } from './types.js';
 import { isBashTool, executeBashTool } from '../bash/index.js';
+import { PermissionDeniedError } from '../filesystem/index.js';
 
 export const bashExecutor: ToolExecutor = {
   canHandle(toolName: string): boolean {
@@ -28,6 +29,9 @@ export const bashExecutor: ToolExecutor = {
         is_error: result.is_error,
       };
     } catch (err) {
+      // Let PermissionDeniedError propagate so the task routes to
+      // needs_approval rather than handing the model a string error.
+      if (err instanceof PermissionDeniedError) throw err;
       return {
         content: `Error: ${err instanceof Error ? err.message : 'Bash tool failed'}`,
         is_error: true,

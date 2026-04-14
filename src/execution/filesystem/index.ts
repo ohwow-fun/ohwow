@@ -7,6 +7,8 @@ export {
 } from './filesystem-tools.js';
 export { executeFilesystemTool } from './filesystem-executor.js';
 export type { FilesystemToolResult } from './filesystem-executor.js';
+export { PermissionDeniedError, resolveSuggestedPath } from './permission-error.js';
+export type { PermissionDeniedDetails } from './permission-error.js';
 export {
   REQUEST_FILE_ACCESS_TOOL,
   FILE_ACCESS_ACTIVATION_MESSAGE,

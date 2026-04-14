@@ -8,6 +8,7 @@ import path from 'node:path';
 import { logger } from '../../lib/logger.js';
 import type { FileAccessGuard } from './filesystem-guard.js';
 import { expandTilde } from './filesystem-guard.js';
+import { PermissionDeniedError, resolveSuggestedPath } from './permission-error.js';
 import {
   SKIP_DIRECTORIES,
   MAX_FILE_SIZE,
@@ -68,6 +69,28 @@ export interface FilesystemToolResult {
   is_error?: boolean;
 }
 
+/**
+ * Check a path against the guard. On deny, throw PermissionDeniedError so
+ * the ReAct loop unwinds and the task lands in needs_approval with a
+ * structured permission request. On allow, return normally.
+ */
+function enforceGuard(
+  guard: FileAccessGuard,
+  rawPath: string,
+  toolName: string,
+): void {
+  const check = guard.isAllowed(rawPath);
+  if (check.allowed) return;
+  const suggestedExact = resolveSuggestedPath(rawPath);
+  throw new PermissionDeniedError({
+    toolName,
+    attemptedPath: rawPath,
+    suggestedExact,
+    suggestedParent: path.dirname(suggestedExact),
+    guardReason: check.reason ?? 'Path is outside the allowed directories.',
+  });
+}
+
 // ============================================================================
 // TOOL HANDLERS
 // ============================================================================
@@ -79,8 +102,7 @@ async function executeListDirectory(
   const rawPath = (input.path as string | undefined) ?? '.';
   const dirPath = path.resolve(expandTilde(rawPath));
 
-  const check = guard.isAllowed(rawPath);
-  if (!check.allowed) return { content: `Error: ${check.reason}`, is_error: true };
+  enforceGuard(guard, rawPath, 'local_list_directory');
 
   const recursive = input.recursive === true;
   const pattern = input.pattern as string | undefined;
@@ -157,8 +179,7 @@ async function executeReadFile(
   if (!rawPath) return { content: 'Error: path is required', is_error: true };
   const filePath = path.resolve(expandTilde(rawPath));
 
-  const check = guard.isAllowed(rawPath);
-  if (!check.allowed) return { content: `Error: ${check.reason}`, is_error: true };
+  enforceGuard(guard, rawPath, 'local_read_file');
 
   try {
     const stat = await fs.promises.stat(filePath);
@@ -296,8 +317,7 @@ async function executeSearchContent(
 
   let searchRoots: string[];
   if (searchPath) {
-    const check = guard.isAllowed(searchPath);
-    if (!check.allowed) return { content: `Error: ${check.reason}`, is_error: true };
+    enforceGuard(guard, searchPath, 'local_search_content');
     searchRoots = [path.resolve(expandTilde(searchPath))];
   } else {
     searchRoots = guard.getAllowedPaths();
@@ -494,8 +514,7 @@ async function executeWriteFile(
   if (content === undefined || content === null) return { content: 'Error: content is required', is_error: true };
   const filePath = path.resolve(expandTilde(rawPath));
 
-  const check = guard.isAllowed(rawPath);
-  if (!check.allowed) return { content: `Error: ${check.reason}`, is_error: true };
+  enforceGuard(guard, rawPath, 'local_write_file');
 
   try {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
@@ -518,8 +537,7 @@ async function executeEditFile(
   if (newString === undefined || newString === null) return { content: 'Error: new_string is required', is_error: true };
   const filePath = path.resolve(expandTilde(rawPath));
 
-  const check = guard.isAllowed(rawPath);
-  if (!check.allowed) return { content: `Error: ${check.reason}`, is_error: true };
+  enforceGuard(guard, rawPath, 'local_edit_file');
 
   try {
     const fileContent = await fs.promises.readFile(filePath, 'utf-8');
