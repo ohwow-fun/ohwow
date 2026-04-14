@@ -21,7 +21,15 @@ export function createGoalsRouter(db: DatabaseAdapter, _eventBus: TypedEventBus<
         .order('position', { ascending: true });
 
       if (error) { res.status(500).json({ error: error.message }); return; }
-      res.json({ data: data || [] });
+      // Remap title -> name to match the frontend interface, same as the
+      // create/update endpoints do. Without this every goal card renders
+      // without a title because the UI reads goal.name.
+      const remapped = (data || []).map((row) => {
+        const r = row as Record<string, unknown>;
+        if (r.title !== undefined && r.name === undefined) r.name = r.title;
+        return r;
+      });
+      res.json({ data: remapped });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
