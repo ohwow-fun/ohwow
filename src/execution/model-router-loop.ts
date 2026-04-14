@@ -29,6 +29,8 @@ import { parseToolArguments } from './tool-parse.js';
 import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import { getToolReversibility } from '../lib/tool-reversibility.js';
 import { hashToolCall, REFLECTION_PROMPT } from '../lib/stagnation.js';
+import { looksLikeToolWork } from './hallucination-gate.js';
+import { recordLlmCallTelemetry } from './llm-organ.js';
 import { logger } from '../lib/logger.js';
 
 // Mirror of the private LocalReActStep interface in engine.ts.
@@ -62,6 +64,12 @@ export interface ModelRouterLoopOpts {
   gitEnabled?: boolean;
   /** When present, forces tool_choice: 'required' on first iteration */
   skillsDocument?: string;
+  /**
+   * Raw task input string used for task_shape telemetry classification.
+   * Threaded from engine.ts so the loop can emit 'work' vs 'chat' into
+   * llm_calls per iteration without re-reading the task row.
+   */
+  taskInput?: string;
 }
 
 export interface ModelRouterLoopResult {
@@ -132,6 +140,12 @@ export async function runModelRouterLoop(
     let providerCostCents = 0;
     let fullContent = '';
     const reactTrace: LocalReActStep[] = [];
+
+    // Classify the task shape once per run so every iteration emits the
+    // same task_shape value. NULL when the caller didn't pass taskInput.
+    const taskShape: 'work' | 'chat' | undefined = opts.taskInput
+      ? (looksLikeToolWork(opts.taskInput) ? 'work' : 'chat')
+      : undefined;
 
     // Browser and desktop state for on-demand activation
     let browserService: LocalBrowserService | null = null;
@@ -260,14 +274,41 @@ export async function runModelRouterLoop(
           fullContent = response.content;
         }
 
+        const iterationToolCallCount = response.toolCalls?.length ?? 0;
+
         // Log tool call status for debugging
         logger.debug({
           iteration,
-          toolCallCount: response.toolCalls?.length ?? 0,
+          toolCallCount: iterationToolCallCount,
           hasContent: !!response.content,
           contentPreview: response.content?.slice(0, 100),
           model: response.model,
         }, '[engine] agent iteration response');
+
+        // Fire-and-forget telemetry: every agent iteration lands a row
+        // in llm_calls with the actual model used and whether the model
+        // produced any tool_calls. This is the raw signal the agent-tier
+        // selector consults to auto-demote models that can't tool-call.
+        void recordLlmCallTelemetry(
+          {
+            db: this.db,
+            workspaceId: opts.workspaceId,
+            currentAgentId: opts.agentId,
+            currentTaskId: opts.taskId,
+          },
+          {
+            purpose: 'agent_task',
+            provider: provider.name,
+            model: response.model,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+            costCents: response.costCents ?? 0,
+            latencyMs: Date.now() - iterationStart,
+            success: true,
+            toolCallCount: iterationToolCallCount,
+            taskShape,
+          },
+        );
 
         // No tool calls = done
         if (!response.toolCalls || response.toolCalls.length === 0) {

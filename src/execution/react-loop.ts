@@ -35,6 +35,8 @@ import {
   LocalDesktopService as LocalDesktopServiceClass,
 } from './desktop/index.js';
 import { FileAccessGuard, FILESYSTEM_TOOL_DEFINITIONS } from './filesystem/index.js';
+import { looksLikeToolWork } from './hallucination-gate.js';
+import { recordLlmCallTelemetry } from './llm-organ.js';
 import type { McpClientManager } from '../mcp/index.js';
 import type { ReActStep } from './task-completion.js';
 import type { ClaudeModel } from './ai-types.js';
@@ -150,6 +152,11 @@ export async function runAnthropicReActLoop(
   let totalOutputTokens = 0;
   const reactTrace: ReActStep[] = [];
 
+  // Classify the task shape once per run so every iteration emits the
+  // same task_shape value into llm_calls telemetry.
+  const taskInputStr = typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? '');
+  const taskShape: 'work' | 'chat' = looksLikeToolWork(taskInputStr) ? 'work' : 'chat';
+
   while (iterations < MAX_TOOL_LOOP_ITERATIONS) {
     iterations++;
     const iterationStart = Date.now();
@@ -210,6 +217,39 @@ export async function runAnthropicReActLoop(
 
     const textBlocks = response.content.filter((b): b is TextBlock => b.type === 'text');
     const textContent = textBlocks.map((b) => b.text).join('\n');
+
+    // Fire-and-forget telemetry: every agent iteration lands a row in
+    // llm_calls with the actual model, input/output tokens, and whether
+    // the model emitted any tool_use blocks. Skip cached responses so
+    // the rolling tool-call rate reflects real provider behavior, not
+    // cache hits. The agent-tier selector consults these rows to
+    // auto-demote models that stop tool-calling reliably.
+    const iterationToolCallCount = response.content.filter(
+      (b) => b.type === 'tool_use',
+    ).length;
+    const isCachedResponse = response.id.startsWith('msg_cached_');
+    if (!isCachedResponse) {
+      void recordLlmCallTelemetry(
+        {
+          db: this.db,
+          workspaceId,
+          currentAgentId: agentId,
+          currentTaskId: taskId,
+        },
+        {
+          purpose: 'agent_task',
+          provider: 'anthropic',
+          model: modelId,
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          costCents: 0, // calculated downstream; keep consistent with existing llm_calls rows
+          latencyMs: Date.now() - iterationStart,
+          success: true,
+          toolCallCount: iterationToolCallCount,
+          taskShape,
+        },
+      );
+    }
 
     // Budget guard: mid-loop per-task cost check
     if (agentBudget) {

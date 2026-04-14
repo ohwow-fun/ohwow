@@ -966,6 +966,7 @@ export class RuntimeEngine {
             difficulty,
             gitEnabled: bashEnabled,
             skillsDocument: skillsDoc || undefined,
+            taskInput: typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? ''),
           });
           fullContent = routerResult.fullContent;
           totalInputTokens = routerResult.totalInputTokens;
