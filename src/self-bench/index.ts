@@ -31,3 +31,13 @@ export {
   markValidationError,
   markValidationRolledBack,
 } from './validation-store.js';
+
+export {
+  getRuntimeConfig,
+  setRuntimeConfig,
+  deleteRuntimeConfig,
+  refreshRuntimeConfigCache,
+  getRuntimeConfigLastRefreshAt,
+  getRuntimeConfigCacheSnapshot,
+  RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
+} from './runtime-config.js';

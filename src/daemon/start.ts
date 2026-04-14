@@ -49,6 +49,10 @@ import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
+import {
+  refreshRuntimeConfigCache,
+  RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
+} from '../self-bench/runtime-config.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1302,6 +1306,16 @@ export async function startDaemon(): Promise<DaemonHandle> {
     // Phase 2-5 will add canary probes, re-promotion, intervention
     // validation, and the meta-loop that picks what to probe next.
     {
+      // Phase 5-B: runtime config overrides cache. Experiments read
+      // runtime-mutable settings via getRuntimeConfig() which
+      // synchronously reads this cache. Prime on boot + refresh every
+      // 60 seconds so writes from other processes (or other
+      // experiment runs) become visible within a minute.
+      void refreshRuntimeConfigCache(db);
+      setInterval(() => {
+        void refreshRuntimeConfigCache(db);
+      }, RUNTIME_CONFIG_REFRESH_INTERVAL_MS);
+
       if (engine) {
         const experimentRunner = new ExperimentRunner(db, engine, workspaceId);
         experimentRunner.register(new ModelHealthExperiment());
