@@ -8,6 +8,7 @@ import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { FileAccessGuard, executeFilesystemTool } from '../../execution/filesystem/index.js';
 import { recordDeliverable, type DeliverableType } from '../deliverables-recorder.js';
 import { loadWorkspaceDefaultPaths } from '../../db/workspace-paths.js';
+import { DEFAULT_CONFIG_DIR } from '../../config.js';
 
 /** Cached guard per workspace+cwd combination to avoid re-querying on every tool call. */
 let cachedGuard: FileAccessGuard | null = null;
@@ -33,7 +34,13 @@ async function getGuard(ctx: LocalToolContext): Promise<FileAccessGuard | null> 
     .eq('workspace_id', ctx.workspaceId);
 
   const configuredPaths = data ? (data as Array<{ path: string }>).map((p) => p.path) : [];
-  const paths = Array.from(new Set([...workspacePaths, ...configuredPaths]));
+  // Always allow the orchestrator to read/write its own data directory
+  // (~/.ohwow by default). Without this, any self-management task that
+  // touches config.json, workspace layout, logs, or skills has to go
+  // through a permission prompt that doesn't exist in async-dispatch mode.
+  // The path is resolved from config.ts (which honors OHWOW_HOME), so it
+  // stays portable across machines and CI — never a hardcoded home path.
+  const paths = Array.from(new Set([...workspacePaths, ...configuredPaths, DEFAULT_CONFIG_DIR]));
   if (paths.length === 0) return null;
 
   cachedGuard = new FileAccessGuard(paths);

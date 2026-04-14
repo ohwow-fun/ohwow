@@ -13,12 +13,26 @@
 import crypto from 'node:crypto';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { invalidateFileAccessCache } from './tools/filesystem.js';
+import { logger } from '../lib/logger.js';
 
 type PermissionResolver = (granted: boolean) => void;
 type CostApprovalResolver = (approved: boolean) => void;
 type ElicitationResolver = (response: Record<string, unknown> | null) => void;
 
 const DEFAULT_ELICITATION_TIMEOUT_MS = 30_000;
+
+/**
+ * Safety cap on permission gates. If no UI/API resolves the request within
+ * this window, auto-deny and let the model self-correct on the next
+ * iteration. Without this cap, async-dispatched chats (MCP, /api/chat?async=1,
+ * webhooks) deadlock forever because there's no interactive consumer to
+ * resolve the promise. Override via OHWOW_PERMISSION_TIMEOUT_MS for tests.
+ * Bug #8.
+ */
+const DEFAULT_PERMISSION_TIMEOUT_MS = (() => {
+  const fromEnv = parseInt(process.env.OHWOW_PERMISSION_TIMEOUT_MS || '', 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 60_000;
+})();
 
 export class PermissionBroker {
   private pendingPermissions = new Map<string, PermissionResolver>();
@@ -32,9 +46,24 @@ export class PermissionBroker {
 
   // -- Permission gates (filesystem, browser, desktop activations etc.) --
 
-  waitForPermission(requestId: string): Promise<boolean> {
+  /**
+   * Wait for a caller to resolve permission for `requestId`. Falls back to
+   * auto-deny after `timeoutMs` (default 60s) so async-dispatched chats
+   * can't deadlock when no interactive UI is listening. Bug #8.
+   */
+  waitForPermission(
+    requestId: string,
+    timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       this.pendingPermissions.set(requestId, resolve);
+      setTimeout(() => {
+        if (this.pendingPermissions.has(requestId)) {
+          this.pendingPermissions.delete(requestId);
+          logger.warn({ requestId, timeoutMs }, '[permission-broker] permission request timed out, auto-deny');
+          resolve(false);
+        }
+      }, timeoutMs);
     });
   }
 
@@ -48,9 +77,24 @@ export class PermissionBroker {
 
   // -- Cost approval gates (cloud media tools, etc.) --
 
-  waitForCostApproval(requestId: string): Promise<boolean> {
+  /**
+   * Wait for a caller to resolve cost approval for `requestId`. Same
+   * auto-deny safety cap as waitForPermission so async-dispatched chats
+   * can't deadlock on an approve-me prompt nobody sees. Bug #8.
+   */
+  waitForCostApproval(
+    requestId: string,
+    timeoutMs: number = DEFAULT_PERMISSION_TIMEOUT_MS,
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       this.pendingCostApprovals.set(requestId, resolve);
+      setTimeout(() => {
+        if (this.pendingCostApprovals.has(requestId)) {
+          this.pendingCostApprovals.delete(requestId);
+          logger.warn({ requestId, timeoutMs }, '[permission-broker] cost approval timed out, auto-deny');
+          resolve(false);
+        }
+      }, timeoutMs);
     });
   }
 
