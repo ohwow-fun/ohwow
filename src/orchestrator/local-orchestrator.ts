@@ -29,6 +29,7 @@ import { ContextBudget, estimateTokens, estimateToolTokens } from './context-bud
 import type { LocalToolContext, ToolResult } from './local-tool-types.js';
 import type { ChannelRegistry } from '../integrations/channel-registry.js';
 import type { ConnectorRegistry } from '../integrations/connector-registry.js';
+import { OrchestratorRuntimeConfig, type RagConfigOptions, type InferenceCapabilities } from './orchestrator-runtime-config.js';
 import type { ControlPlaneClient } from '../control-plane/client.js';
 import { type ModelRouter, type ModelResponse, type ModelResponseWithTools, type ModelProvider, type ModelSourceOption, OllamaProvider, OpenRouterProvider } from '../execution/model-router.js';
 import { convertToolsToOpenAI, compressToolsForContext } from '../execution/tool-format.js';
@@ -141,20 +142,10 @@ export class LocalOrchestrator {
   private desktopService: LocalDesktopService | null = null;
   private desktopActivated = false;
   private filesystemActivated = false;
-  private onScheduleChange?: () => void;
-  private _ollamaUrl?: string;
-  private _embeddingModel?: string;
-  private _ollamaModel?: string;
-  private _ragBm25Weight?: number;
-  private _rerankerEnabled?: boolean;
-  private _meshRagEnabled?: boolean;
-  private _chromeProfileAliases: Record<string, string> = {};
+  private config = new OrchestratorRuntimeConfig();
   private exchangeCount = 0;
   private pendingPermissions = new Map<string, (granted: boolean) => void>();
   private pendingCostApprovals = new Map<string, (approved: boolean) => void>();
-  private skipMediaCostConfirmation = false;
-  private turboQuantActive = false;
-  private turboQuantBits: 0 | 2 | 3 | 4 = 0;
   private pendingElicitations = new Map<string, (response: Record<string, unknown> | null) => void>();
   private lastIntentBySession = new Map<string, ClassifiedIntent>();
   private circuitBreaker = new CircuitBreaker();
@@ -170,8 +161,8 @@ export class LocalOrchestrator {
    * screenshot of an unrelated app and laundering its contents into the
    * response" pathology. Enable per-workspace via workspace.json
    * `desktopToolsEnabled: true` or globally via OHWOW_DESKTOP_TOOLS_ENABLED.
+   * Stored on `this.config.desktopToolsEnabled`.
    */
-  private desktopToolsEnabled: boolean;
   /**
    * Snapshot of the most recent MCP reload outcome. Updated by
    * reloadMcpServers() and ensureMcpConnected() so daemon health endpoints
@@ -185,16 +176,12 @@ export class LocalOrchestrator {
     errors: Array<{ serverName: string; error: string }>;
     lastUpdatedMs: number;
   } | null = null;
-  private _lspManager?: import('../lsp/lsp-manager.js').LspManager;
-  private _meetingSession?: import('../meeting/meeting-session.js').MeetingSession;
   /** Unified Brain: philosophical cognitive coordinator. */
   private brain: Brain | null = null;
   /** Soul: deep human persona awareness (Aristotle's Psyche). */
   private soul = new Soul();
   /** Digital Body: the agent's embodied capabilities (Merleau-Ponty). */
   private digitalBody: DigitalBody | null = null;
-  /** Connector registry for data source sync. */
-  private _connectorRegistry: ConnectorRegistry | null = null;
   /** Body State Service: unified system health reporting. */
   private bodyStateService: BodyStateService | null = null;
 
@@ -265,7 +252,7 @@ export class LocalOrchestrator {
           );
           const resolved = resolveChromeProfile(profileDir, {
             profiles: discoverChromeProfiles(),
-            aliases: this._chromeProfileAliases,
+            aliases: this.config.chromeProfileAliases,
           });
           if (resolved) {
             profileDir = resolved;
@@ -345,17 +332,17 @@ export class LocalOrchestrator {
       scraplingService: this.scraplingService,
       anthropicApiKey: this.anthropicApiKey,
       modelRouter: this.modelRouter,
-      onScheduleChange: this.onScheduleChange,
+      onScheduleChange: this.config.onScheduleChange,
       workingDirectory: this.workingDirectory || undefined,
-      ollamaUrl: this._ollamaUrl,
-      embeddingModel: this._embeddingModel,
-      ollamaModel: this._ollamaModel,
-      ragBm25Weight: this._ragBm25Weight,
-      rerankerEnabled: this._rerankerEnabled,
-      meshRagEnabled: this._meshRagEnabled,
-      connectorRegistry: this._connectorRegistry || undefined,
-      lspManager: this._lspManager,
-      meetingSession: this._meetingSession,
+      ollamaUrl: this.config.ollamaUrl,
+      embeddingModel: this.config.embeddingModel,
+      ollamaModel: this.config.ollamaModel,
+      ragBm25Weight: this.config.ragBm25Weight,
+      rerankerEnabled: this.config.rerankerEnabled,
+      meshRagEnabled: this.config.meshRagEnabled,
+      connectorRegistry: this.config.connectorRegistry || undefined,
+      lspManager: this.config.lspManager,
+      meetingSession: this.config.meetingSession,
       sessionId,
       // Per-turn chat actor context: when the cloud chat bridge forwards
       // a member-impersonated turn (chatUserName + personaAgentId), the
@@ -398,7 +385,7 @@ export class LocalOrchestrator {
       delegateSubtask: (prompt: string, focus: string) => this.runDelegateSubtask(prompt, focus, options),
       mcpClients: this.mcpClients,
       waitForCostApproval: (id: string) => this.waitForCostApproval(id),
-      skipMediaCostConfirmation: this.skipMediaCostConfirmation,
+      skipMediaCostConfirmation: this.config.skipMediaCostConfirmation,
       immuneSystem: this.immuneSystem,
     };
   }
@@ -463,7 +450,7 @@ export class LocalOrchestrator {
     this.chromeCdpPort = chromeCdpPort || 9222;
     this.dataDir = dataDir || '';
     this.mcpServers = mcpServers || [];
-    this.desktopToolsEnabled = desktopToolsEnabled === true;
+    this.config.desktopToolsEnabled = desktopToolsEnabled === true;
 
     // Initialize the unified Brain (philosophical cognitive coordinator)
     this.brain = new Brain({ modelRouter: this.modelRouter });
@@ -607,52 +594,46 @@ export class LocalOrchestrator {
 
   /** Set whether to skip cost confirmation for cloud media tools. */
   setSkipMediaCostConfirmation(skip: boolean): void {
-    this.skipMediaCostConfirmation = skip;
+    this.config.setSkipMediaCostConfirmation(skip);
   }
 
   /** Set connector registry for data source sync. */
   setConnectorRegistry(registry: ConnectorRegistry): void {
-    this._connectorRegistry = registry;
+    this.config.setConnectorRegistry(registry);
   }
 
   /** Set RAG embedding config (Ollama URL, models, weights). */
-  setRagConfig(opts: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string; ragBm25Weight?: number; rerankerEnabled?: boolean; meshRagEnabled?: boolean }): void {
-    this._ollamaUrl = opts.ollamaUrl;
-    this._embeddingModel = opts.embeddingModel;
-    this._ollamaModel = opts.ollamaModel;
-    this._ragBm25Weight = opts.ragBm25Weight;
-    this._rerankerEnabled = opts.rerankerEnabled;
-    this._meshRagEnabled = opts.meshRagEnabled;
+  setRagConfig(opts: RagConfigOptions): void {
+    this.config.setRagConfig(opts);
   }
 
   /** Set Chrome profile aliases (email → profile directory) from config. */
   setChromeProfileAliases(aliases: Record<string, string>): void {
-    this._chromeProfileAliases = aliases || {};
+    this.config.setChromeProfileAliases(aliases);
     // Propagate to any already-constructed desktop service
     if (this.desktopService) {
-      this.desktopService.setChromeProfileAliases(this._chromeProfileAliases);
+      this.desktopService.setChromeProfileAliases(this.config.chromeProfileAliases);
     }
   }
 
   /** Set LSP manager for code intelligence tools. */
   setLspManager(manager: import('../lsp/lsp-manager.js').LspManager): void {
-    this._lspManager = manager;
+    this.config.setLspManager(manager);
   }
 
   /** Set the active meeting session for live audio capture. */
   setMeetingSession(session: import('../meeting/meeting-session.js').MeetingSession): void {
-    this._meetingSession = session;
+    this.config.setMeetingSession(session);
   }
 
   /** Set TurboQuant KV cache compression bits (0 = disabled, 2/3/4 = enabled). */
   setTurboQuantBits(bits: 0 | 2 | 3 | 4): void {
-    this.turboQuantBits = bits;
+    this.config.setTurboQuantBits(bits);
   }
 
   /** Set confirmed inference capabilities (gates context inflation on turboQuantActive). */
-  setInferenceCapabilities(caps: { turboQuantActive: boolean; turboQuantBits: 0 | 2 | 3 | 4 }): void {
-    this.turboQuantActive = caps.turboQuantActive;
-    this.turboQuantBits = caps.turboQuantBits;
+  setInferenceCapabilities(caps: InferenceCapabilities): void {
+    this.config.setInferenceCapabilities(caps);
   }
 
   /** Set the Anthropic API key at runtime (e.g. after user enters it in model picker). */
@@ -871,7 +852,7 @@ export class LocalOrchestrator {
 
   /** Set the schedule change callback for notifying the scheduler on CRUD. */
   setScheduleChangeCallback(callback: () => void): void {
-    this.onScheduleChange = callback;
+    this.config.setScheduleChangeCallback(callback);
   }
 
   /** Resolve a pending permission request. Called by the API route. */
@@ -1006,7 +987,7 @@ export class LocalOrchestrator {
           let { staticPart, dynamicPart } = await buildFullPrompt(this.promptDeps, userMessage, textPromptMode || undefined);
           let systemPrompt = staticPart + '\n\n' + dynamicPart;
           const device = detectDevice();
-          const tqBits = this.turboQuantActive ? this.turboQuantBits as 2 | 3 | 4 : undefined;
+          const tqBits = this.config.getTurboQuantTierBits();
           const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBits);
           const budget = new ContextBudget(numCtx, 4096);
           budget.setSystemPrompt(systemPrompt);
@@ -1166,7 +1147,7 @@ export class LocalOrchestrator {
     if (desktopPreActivated && !this.desktopActivated) {
       yield { type: 'status', message: '[debug] Desktop control launching (pre-activation)' };
       logger.debug('[desktop] Pre-activating desktop control');
-      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
@@ -1610,7 +1591,7 @@ export class LocalOrchestrator {
 
         // Handle desktop activation: same pattern as browser
         if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-          this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+          this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
           this.desktopActivated = true;
           const idx = tools.indexOf(REQUEST_DESKTOP_TOOL);
           if (idx !== -1) tools.splice(idx, 1, ...DESKTOP_TOOL_DEFINITIONS);
@@ -1940,7 +1921,7 @@ export class LocalOrchestrator {
     // a desktop request. Once activated this turn, stay activated so
     // multi-step desktop workflows keep their tool surface.
     const desktopAllowed =
-      this.desktopToolsEnabled
+      this.config.desktopToolsEnabled
       || desktopPreActivated === true
       || this.desktopActivated;
     if (desktopAllowed) {
@@ -2135,7 +2116,7 @@ export class LocalOrchestrator {
     const desktopPreActivated = sections.has('desktop') && classified.intent === 'desktop';
     if (desktopPreActivated && !this.desktopActivated) {
       logger.debug('[desktop] Pre-activating desktop control (openrouter)');
-      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
@@ -2591,7 +2572,7 @@ export class LocalOrchestrator {
 
           // Handle desktop activation
           if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
             this.desktopActivated = true;
             const desktopOpenAI = convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_desktop');
@@ -2886,14 +2867,14 @@ export class LocalOrchestrator {
     if (desktopPreActivated && !this.desktopActivated) {
       yield { type: 'status', message: '[debug] Desktop control launching (pre-activation)' };
       logger.debug('[desktop] Pre-activating desktop control (ollama)');
-      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+      this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
       this.desktopActivated = true;
       this.syncOrganToBody();
     }
 
     // Determine model capability tier for prompt/tool selection
     const device = detectDevice();
-    const tqBitsToolLoop = this.turboQuantActive ? this.turboQuantBits as 2 | 3 | 4 : undefined;
+    const tqBitsToolLoop = this.config.getTurboQuantTierBits();
     const numCtx = getWorkingNumCtx(this.orchestratorModel || '', undefined, device, tqBitsToolLoop);
     const paramTier = getParameterTier(this.orchestratorModel || '');
     const modelEntry = MODEL_CATALOG.find(m => m.tag === (this.orchestratorModel || ''));
@@ -3293,7 +3274,7 @@ export class LocalOrchestrator {
 
           // Handle desktop activation: same pattern as browser
           if (outcome.toolsModified && outcome.toolName === 'request_desktop' && !this.desktopActivated) {
-            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this._chromeProfileAliases });
+            this.desktopService = new LocalDesktopService({ chromeProfileAliases: this.config.chromeProfileAliases });
             this.desktopActivated = true;
             const desktopOpenAI = convertToolsToOpenAI(DESKTOP_TOOL_DEFINITIONS);
             openaiTools = openaiTools.filter((t) => t.function.name !== 'request_desktop');
