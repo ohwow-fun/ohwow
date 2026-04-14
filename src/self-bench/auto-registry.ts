@@ -47,6 +47,7 @@ import { MigrationSchema119RuntimeConfigOverridesExperiment } from './experiment
  * Entries are append-only — removal is manual.
  */
 import { ToolchainToolTestStateExperiment } from './experiments/toolchain-tool-test-state.js';
+import { ToolchainToolTestSynthesizeForGoalExperiment } from './experiments/toolchain-tool-test-synthesize-for-goal.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema010LocalCrmExperiment(),
   () => new MigrationSchema012OrchestratorMemoryExperiment(),
@@ -66,4 +67,5 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema117ExperimentValidationsExperiment(),
   () => new MigrationSchema119RuntimeConfigOverridesExperiment(),
   () => new ToolchainToolTestStateExperiment(),
+  () => new ToolchainToolTestSynthesizeForGoalExperiment(),
 ];
