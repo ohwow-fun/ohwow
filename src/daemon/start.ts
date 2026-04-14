@@ -45,6 +45,8 @@ import { ModelRouter } from '../execution/model-router.js';
 import { ExperimentRunner } from '../self-bench/experiment-runner.js';
 import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js';
 import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
+import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
+import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1302,6 +1304,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         const experimentRunner = new ExperimentRunner(db, engine, workspaceId);
         experimentRunner.register(new ModelHealthExperiment());
         experimentRunner.register(new TriggerStabilityExperiment());
+        // Phase 2: CanaryExperiment runs the direct-dispatch tool
+        // suite every 15m so substrate regressions surface even when
+        // no real task traffic is exercising the executors.
+        experimentRunner.register(new CanaryExperiment());
+        // Phase 2: LedgerHealthExperiment watches the runner itself
+        // — reads its own ledger to detect stalled or erroring peers.
+        experimentRunner.register(new LedgerHealthExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
