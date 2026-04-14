@@ -1,20 +1,22 @@
 /**
- * Orchestrator Tool Definitions (Local Runtime)
- * Anthropic tool_use schema for the orchestrator chat.
- * Adapted from web app — removed navigate_user, get_credits, get_integration_status.
+ * Orchestrator Tool Definitions (Local Runtime) — barrel.
+ *
+ * Schemas colocated with their runtime executors in `./tools/*.ts`. This
+ * file assembles the three top-level catalog exports (ORCHESTRATOR,
+ * LSP, COS extension) and re-exports the filesystem/bash tool schemas
+ * plus the intent-filter helpers so existing callers keep working.
  */
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
-import { PDF_TOOL_DEFINITIONS } from './tools/pdf.js';
-import { CONNECTORS_TOOL_DEFINITIONS } from './tools/connectors.js';
-import { CLOUD_TOOL_DEFINITIONS } from './tools/cloud-data.js';
-import { MEDIA_TOOL_DEFINITIONS } from './tools/media.js';
-import { KNOWLEDGE_TOOL_DEFINITIONS } from './tools/knowledge.js';
-import { WIKI_TOOL_DEFINITIONS } from './tools/wiki.js';
+
+// Runtime-owned tool catalogs (filesystem, bash) exported for callers.
 import {
-  X_POSTING_HEAD_TOOL_DEFINITIONS,
-  X_POSTING_DELETE_TOOL_DEFINITIONS,
-} from './tools/x-posting.js';
+  FILESYSTEM_TOOL_DEFINITIONS,
+  REQUEST_FILE_ACCESS_TOOL,
+} from '../execution/filesystem/index.js';
+import { BASH_TOOL_DEFINITIONS } from '../execution/bash/index.js';
+
+// Orchestrator catalog pieces, colocated with executors.
 import { LLM_TOOL_DEFINITIONS } from './tools/llm.js';
 import { DAEMON_INFO_TOOL_DEFINITIONS } from './tools/daemon-info.js';
 import { WORKSPACE_PULSE_TOOL_DEFINITIONS } from './tools/workspace.js';
@@ -43,9 +45,42 @@ import { CO_EVOLUTION_TOOL_DEFINITIONS } from './tools/co-evolution.js';
 import { AUTOMATION_BUILDER_TOOL_DEFINITIONS } from './tools/automation-builder.js';
 import { AGENT_SUGGESTIONS_TOOL_DEFINITIONS } from './tools/agent-suggestions.js';
 import { SETUP_TOOL_DEFINITIONS } from './tools/setup-agents.js';
+import { MEDIA_TOOL_DEFINITIONS } from './tools/media.js';
+import { KNOWLEDGE_TOOL_DEFINITIONS } from './tools/knowledge.js';
+import { WIKI_TOOL_DEFINITIONS } from './tools/wiki.js';
+import {
+  X_POSTING_HEAD_TOOL_DEFINITIONS,
+  X_POSTING_DELETE_TOOL_DEFINITIONS,
+} from './tools/x-posting.js';
 import { SYNTHESIZE_FOR_GOAL_TOOL_DEFINITIONS } from './tools/synthesize-for-goal.js';
 import { SYNTHESIS_ACCEPTANCE_TOOL_DEFINITIONS } from './tools/synthesis-acceptance.js';
+import { CONNECTORS_TOOL_DEFINITIONS } from './tools/connectors.js';
+import { PDF_TOOL_DEFINITIONS } from './tools/pdf.js';
+import { CLOUD_TOOL_DEFINITIONS } from './tools/cloud-data.js';
 
+// LSP + Center of Operations catalogs.
+import { LSP_CODE_TOOL_DEFINITIONS } from './tools/lsp.js';
+import { OPERATIONAL_PILLARS_TOOL_DEFINITIONS } from './tools/operational-pillars.js';
+import { PERSON_MODEL_TOOL_DEFINITIONS } from './tools/person-model.js';
+import { TEAM_TOOL_DEFINITIONS } from './tools/team.js';
+import { PERSONA_TOOL_DEFINITIONS } from './tools/persona.js';
+import { ONBOARDING_PLAN_TOOL_DEFINITIONS } from './tools/onboarding-plan.js';
+import { TRANSITION_TOOL_DEFINITIONS } from './tools/transitions.js';
+import { WORK_ROUTER_TOOL_DEFINITIONS } from './tools/work-router.js';
+import { HUMAN_GROWTH_TOOL_DEFINITIONS } from './tools/human-growth.js';
+import { OBSERVATION_TOOL_DEFINITIONS } from './tools/observation.js';
+import { COLLECTIVE_INTELLIGENCE_TOOL_DEFINITIONS } from './tools/collective-intelligence.js';
+
+export { FILESYSTEM_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL, BASH_TOOL_DEFINITIONS };
+
+export {
+  type IntentSection,
+  getToolPriorityLimit,
+  extractExplicitToolNames,
+  filterToolsByIntent,
+} from './tool-intent-filter.js';
+
+/** Main orchestrator tool catalog, assembled in canonical source order. */
 export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...LLM_TOOL_DEFINITIONS,
   ...DAEMON_INFO_TOOL_DEFINITIONS,
@@ -94,75 +129,32 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...MEETING_TOOL_DEFINITIONS,
   ...INTERNET_TOOL_DEFINITIONS,
   ...OCR_TOOL_DEFINITIONS,
-
   ...ORCHESTRATION_HELPER_TOOL_DEFINITIONS,
   ...CO_EVOLUTION_TOOL_DEFINITIONS,
   ...AUTOMATION_BUILDER_TOOL_DEFINITIONS,
   ...AGENT_SUGGESTIONS_TOOL_DEFINITIONS,
   ...SETUP_TOOL_DEFINITIONS,
-
   ...MEDIA_TOOL_DEFINITIONS,
   ...KNOWLEDGE_TOOL_DEFINITIONS,
   ...WIKI_TOOL_DEFINITIONS,
-
   ...X_POSTING_HEAD_TOOL_DEFINITIONS,
   ...SYNTHESIZE_FOR_GOAL_TOOL_DEFINITIONS,
   ...SYNTHESIS_ACCEPTANCE_TOOL_DEFINITIONS,
   ...X_POSTING_DELETE_TOOL_DEFINITIONS,
-
   ...CONNECTORS_TOOL_DEFINITIONS,
   ...PDF_TOOL_DEFINITIONS,
   ...CLOUD_TOOL_DEFINITIONS,
 ];
 
-// =========================================================================
-// LOCAL FILE ACCESS (conditionally added)
-// =========================================================================
-
-import {
-  FILESYSTEM_TOOL_DEFINITIONS,
-  REQUEST_FILE_ACCESS_TOOL,
-} from '../execution/filesystem/index.js';
-
-export { FILESYSTEM_TOOL_DEFINITIONS, REQUEST_FILE_ACCESS_TOOL };
-
-// =========================================================================
-// BASH COMMAND EXECUTION (conditionally added)
-// =========================================================================
-
-import {
-  BASH_TOOL_DEFINITIONS,
-} from '../execution/bash/index.js';
-
-export { BASH_TOOL_DEFINITIONS };
-
-import { LSP_CODE_TOOL_DEFINITIONS } from './tools/lsp.js';
-import { OPERATIONAL_PILLARS_TOOL_DEFINITIONS } from './tools/operational-pillars.js';
-import { PERSON_MODEL_TOOL_DEFINITIONS } from './tools/person-model.js';
-import { TEAM_TOOL_DEFINITIONS } from './tools/team.js';
-import { PERSONA_TOOL_DEFINITIONS } from './tools/persona.js';
-import { ONBOARDING_PLAN_TOOL_DEFINITIONS } from './tools/onboarding-plan.js';
-import { TRANSITION_TOOL_DEFINITIONS } from './tools/transitions.js';
-import { WORK_ROUTER_TOOL_DEFINITIONS } from './tools/work-router.js';
-import { HUMAN_GROWTH_TOOL_DEFINITIONS } from './tools/human-growth.js';
-import { OBSERVATION_TOOL_DEFINITIONS } from './tools/observation.js';
-import { COLLECTIVE_INTELLIGENCE_TOOL_DEFINITIONS } from './tools/collective-intelligence.js';
-
-// =========================================================================
-// LSP CODE INTELLIGENCE TOOLS
-// =========================================================================
-// The five real LSP tools — lsp_diagnostics, lsp_hover, lsp_go_to_definition,
-// lsp_references, lsp_completions.
+/** The five real LSP tools: lsp_diagnostics/hover/go_to_definition/references/completions. */
 export const LSP_TOOL_DEFINITIONS: Tool[] = [...LSP_CODE_TOOL_DEFINITIONS];
 
-// =========================================================================
-// CENTER OF OPERATIONS EXTENSION TOOLS
-// =========================================================================
-// Schemas for the COS toolset that was historically bundled under
-// LSP_TOOL_DEFINITIONS: operational pillars, person model, team, persona,
-// onboarding plan, transition engine, work router, human growth,
-// observation layer, and collective intelligence. Merged into the
-// orchestrator catalog by the caller (local-orchestrator.ts).
+/**
+ * Center of Operations extension tools: operational pillars, person model,
+ * team, persona, onboarding plan, transition engine, work router, human
+ * growth, observation layer, collective intelligence. Merged into the
+ * orchestrator catalog by local-orchestrator.ts.
+ */
 export const COS_EXTENSION_TOOL_DEFINITIONS: Tool[] = [
   ...OPERATIONAL_PILLARS_TOOL_DEFINITIONS,
   ...PERSON_MODEL_TOOL_DEFINITIONS,
@@ -175,14 +167,3 @@ export const COS_EXTENSION_TOOL_DEFINITIONS: Tool[] = [
   ...OBSERVATION_TOOL_DEFINITIONS,
   ...COLLECTIVE_INTELLIGENCE_TOOL_DEFINITIONS,
 ];
-
-// Intent-based tool filtering lives in tool-intent-filter.ts. Re-exported
-// here so existing callers that import filtering helpers from
-// `./tool-definitions.js` keep working unchanged.
-export {
-  type IntentSection,
-  getToolPriorityLimit,
-  extractExplicitToolNames,
-  filterToolsByIntent,
-} from './tool-intent-filter.js';
-
