@@ -49,4 +49,5 @@ export const TOOLCHAIN_TEST_REGISTRY: readonly ToolchainTestProbeConfig[] = [
   { slug: 'tasks' },
   { slug: 'transitions' },
   { slug: 'wiki' },
+  { slug: 'work-router' },
 ];
