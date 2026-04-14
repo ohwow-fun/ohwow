@@ -8,17 +8,24 @@
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { BodyStateService } from '../../body/body-state.js';
 
-/** Cached service instance per workspace (avoid re-creating on each call) */
+/** Cached service per workspace. Keyed on both workspaceId AND the
+ *  resolved DigitalBody identity so swapping a workspace (or the body)
+ *  busts the cache automatically. */
 let cachedService: BodyStateService | null = null;
-let cachedWorkspaceId = '';
+let cachedKey: string | null = null;
 
 export async function getBodyState(ctx: LocalToolContext): Promise<ToolResult> {
-  if (!cachedService || cachedWorkspaceId !== ctx.workspaceId) {
-    const digitalBody = ctx.engine.getBrain()?.getProprioception()
-      ? undefined // Body is wired via brain, we'll reconstruct
-      : undefined;
+  // Pull the live DigitalBody off the brain so BodyStateService can
+  // enumerate organs. Previously this was a no-op ternary that always
+  // passed undefined, so the `organs` array came back empty on every call
+  // even though the body had 3 organs wired up at startup. P0.3
+  // proprioception bench caught it.
+  const digitalBody = ctx.engine.getBrain()?.getDigitalBody() ?? undefined;
+  const key = `${ctx.workspaceId}:${digitalBody ? 'body' : 'no-body'}`;
+
+  if (!cachedService || cachedKey !== key) {
     cachedService = new BodyStateService(ctx.db, ctx.workspaceId, digitalBody);
-    cachedWorkspaceId = ctx.workspaceId;
+    cachedKey = key;
   }
 
   try {

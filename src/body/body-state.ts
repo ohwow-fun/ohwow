@@ -186,12 +186,17 @@ export class BodyStateService {
         const a = agent as Record<string, unknown>;
         const agentId = a.id as string;
 
+        // Both counters MUST use the same denominator cohort — "tasks
+        // created in the last 24h" — or the numerator can exceed the
+        // denominator when a task was created before the window but
+        // completed inside it, producing absurd success rates like 267%.
+        // P0.3 bench caught exactly that for Sentinel.
         const [completed, total] = await Promise.all([
           this.db.from('agent_workforce_tasks')
             .select('id', { count: 'exact', head: true })
             .eq('agent_id', agentId)
             .in('status', ['completed', 'approved'])
-            .gte('completed_at', oneDayAgo),
+            .gte('created_at', oneDayAgo),
           this.db.from('agent_workforce_tasks')
             .select('id', { count: 'exact', head: true })
             .eq('agent_id', agentId)
@@ -199,7 +204,7 @@ export class BodyStateService {
         ]);
 
         const totalCount = total.count ?? 0;
-        const completedCount = completed.count ?? 0;
+        const completedCount = Math.min(completed.count ?? 0, totalCount);
 
         if (totalCount > 0) {
           results.push({

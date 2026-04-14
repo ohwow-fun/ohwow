@@ -125,6 +125,13 @@ export class Brain {
     return this.digitalBody?.getProprioception();
   }
 
+  /** Get the underlying digital body instance, if wired. Needed by
+   *  BodyStateService which wants to enumerate organs, not just read the
+   *  snapshot. */
+  getDigitalBody(): import('../body/digital-body.js').DigitalBody | null {
+    return this.digitalBody;
+  }
+
   // --------------------------------------------------------------------------
   // CONSCIOUSNESS BRIDGE — Persist and sync Global Workspace items
   // --------------------------------------------------------------------------
