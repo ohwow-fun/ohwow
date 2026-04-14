@@ -25,6 +25,7 @@ import {
   shouldAutoCreateDeliverable,
 } from './response-classifier.js';
 import { buildAgentSystemPrompt } from './system-prompt.js';
+import { resolveTaskCapabilities } from './task-capabilities.js';
 import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import type { ClaudeModel } from './ai-types.js';
 import { calculateCostCents } from './ai-types.js';
@@ -218,15 +219,24 @@ export class RuntimeEngine {
     this.deviceFetcher = fetcher;
   }
 
+  db: DatabaseAdapter;
+  config: EngineConfig;
+  effects: RuntimeEffects;
+  businessContext: BusinessContext;
+
   constructor(
-    private db: DatabaseAdapter,
-    private config: EngineConfig,
-    private effects: RuntimeEffects,
-    private businessContext: BusinessContext,
+    db: DatabaseAdapter,
+    config: EngineConfig,
+    effects: RuntimeEffects,
+    businessContext: BusinessContext,
     emitter?: TypedEventBus<RuntimeEvents>,
     modelRouter?: ModelRouter,
     scraplingService?: ScraplingService,
   ) {
+    this.db = db;
+    this.config = config;
+    this.effects = effects;
+    this.businessContext = businessContext;
     this.anthropic = config.anthropicApiKey
       ? new Anthropic({ apiKey: config.anthropicApiKey })
       : null;
@@ -844,172 +854,31 @@ export class RuntimeEngine {
       ]);
 
       // 4. Build system prompt
-      // Resolve the agent's unified tool policy. In allowlist mode the
-      // feature-flag defaults below (web_search, browser, scrapling, etc.)
-      // are overridden to `false` unless the tool name is explicitly in the
-      // allowlist — otherwise the defaults silently leak past a narrow
-      // allowlist. Inherit mode preserves the legacy feature-flag behavior.
-      const toolPolicy = resolveAgentToolPolicy(agentConfig);
-      const isAllowlistMode = toolPolicy.mode === 'allowlist';
-
-      const webSearchEnabled = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'web_search')
-        : agentConfig.web_search_enabled === true; // opt-in: default false (narrower than legacy)
-      const browserEnabled = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'request_browser')
-        : agentConfig.browser_enabled !== false;
-      const autonomyLevel: number = agentConfig.autonomy_level ?? 2;
-      const approvalRequired = autonomyLevel === 1;
-
-      const scraplingEnabled = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'scrape_url')
-        : agentConfig.scraping_enabled !== false;
-      // Local file access is enabled when:
-      //   1. Allowlist mode includes a filesystem tool, OR
-      //   2. The agent explicitly opts in via local_files_enabled === true, OR
-      //   3. The workspace has any default_filesystem_paths configured AND the
-      //      agent has not explicitly opted out (local_files_enabled === false).
-      //
-      // The workspace-baseline branch is what actually unblocks SOP-delegated
-      // agents that nobody ever set local_files_enabled on. Without it, every
-      // such agent silently fails any local_write_file call because the gate
-      // is closed regardless of how many paths the workspace has provided.
-      // Explicit opt-out (false) still wins so admins can lock down agents.
-      const explicitFsFlag = agentConfig.local_files_enabled;
-      const workspaceFsBaseline = await loadWorkspaceDefaultPaths(this.db, workspaceId);
-      const localFilesEnabled = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'local_list_directory')
-        : explicitFsFlag === true || (explicitFsFlag !== false && workspaceFsBaseline.length > 0);
-      const bashEnabled = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'bash_execute')
-        : agentConfig.bash_enabled === true;
-      // MCP is enabled when the agent opts in OR when the allowlist contains
-      // any `mcp__<server>__<tool>` entry. The latter is the auto-enable
-      // signal documented for the MCP typed tools — adding an MCP tool name
-      // to the allowlist implicitly asks the engine to load that server.
-      const mcpEnabled = agentConfig.mcp_enabled === true || toolPolicy.requiresMcp;
-      const devopsEnabled = isAllowlistMode
-        ? false
-        : agentConfig.devops_enabled === true;
-      // Desktop/browser can be enabled via agent config OR via SOP in the task input.
-      // The workspace-level desktopToolsEnabled kill switch always wins: when the
-      // workspace has desktop disabled (default), no agent gets desktop tools
-      // regardless of its own opt-in. Agents that previously relied on desktop
-      // need their workspace opted in via workspace.json `desktopToolsEnabled: true`
-      // or globally via OHWOW_DESKTOP_TOOLS_ENABLED=true.
-      const sopTaskInputForCaps = String(task.input || '');
-      const sopNeedsDesktop = sopTaskInputForCaps.includes('request_desktop') || sopTaskInputForCaps.includes('desktop_focus_app');
-      const workspaceDesktopAllowed = this.config.desktopToolsEnabled === true;
-      const desktopEnabledRaw = isAllowlistMode
-        ? allowlistPermits(toolPolicy, 'request_desktop')
-        : (agentConfig.desktop_enabled === true || agentConfig.desktop_enabled === 1 || sopNeedsDesktop);
-      const desktopEnabled = workspaceDesktopAllowed && desktopEnabledRaw;
-      const desktopRecordingEnabled = agentConfig.desktop_recording_enabled === true;
-      const desktopPreActionScreenshots = agentConfig.desktop_pre_action_screenshots === true;
-      const desktopAllowedApps: string[] = agentConfig.desktop_allowed_apps ?? [];
-      const agentMcpServers: McpServerConfig[] = agentConfig.mcp_servers ?? [];
-
-      // Auto-inject GitHub MCP server for devops-enabled agents
-      if (devopsEnabled && mcpEnabled) {
-        const hasGitHub = agentMcpServers.some(s => s.name === 'github');
-        if (!hasGitHub && process.env.GITHUB_PERSONAL_ACCESS_TOKEN) {
-          agentMcpServers.push({
-            name: 'github',
-            transport: 'stdio' as const,
-            command: 'npx',
-            args: ['-y', '@modelcontextprotocol/server-github'],
-            env: { GITHUB_PERSONAL_ACCESS_TOKEN: process.env.GITHUB_PERSONAL_ACCESS_TOKEN },
-          });
-        }
-      }
-
-      // Desktop service options (passed via buildToolContext → request-desktop-executor)
-      const desktopOptions: Partial<DesktopServiceOptions> = {
-        enableRecording: desktopRecordingEnabled,
-        enablePreActionScreenshots: desktopPreActionScreenshots,
-        allowedApps: desktopAllowedApps,
+      // Resolve capabilities: tool policy, feature flags, file access
+      // guard (with doc auto-mount expansion), and goal context.
+      const caps = await resolveTaskCapabilities.call(this, {
+        agentConfig,
+        agentId,
+        workspaceId,
+        task: { input: task.input, goal_id: task.goal_id },
+      });
+      const {
+        toolPolicy,
+        webSearchEnabled,
+        browserEnabled,
+        scraplingEnabled,
+        localFilesEnabled,
+        bashEnabled,
+        mcpEnabled,
+        devopsEnabled,
+        desktopEnabled,
+        approvalRequired,
         autonomyLevel,
-      };
-
-      // Build the file access guard from the workspace baseline (already
-      // loaded above for the gate decision) plus any per-agent path rows.
-      // The workspace baseline is the same source of truth used by
-      // orchestrator chat (filesystem.ts), so admins manage one set of
-      // paths and both the orchestrator and per-agent execution see them.
-      let fileAccessGuard: FileAccessGuard | null = null;
-      if (localFilesEnabled) {
-        const { data: pathData } = await this.db
-          .from('agent_file_access_paths')
-          .select('path')
-          .eq('agent_id', agentId);
-
-        const agentPaths = pathData
-          ? (pathData as Array<{ path: string }>).map((p) => p.path)
-          : [];
-
-        const merged = Array.from(new Set([...workspaceFsBaseline, ...agentPaths]));
-        if (merged.length > 0) {
-          fileAccessGuard = new FileAccessGuard(merged);
-        }
-      }
-
-      // Auto-mount declared documentation for this agent
-      const mountedDocs: string[] = (() => {
-        try {
-          const raw = agentConfig.mounted_docs;
-          if (Array.isArray(raw)) return raw as string[];
-          if (typeof raw === 'string') return JSON.parse(raw) as string[];
-          return [];
-        } catch { return []; }
-      })();
-
-      if (mountedDocs.length > 0) {
-        for (const docUrl of mountedDocs) {
-          try {
-            const existing = await this.docMountManager.getMountByUrl(docUrl, workspaceId);
-            if (existing && existing.status === 'ready') {
-              // Already mounted — expand file access
-              const current = fileAccessGuard?.getAllowedPaths() ?? [];
-              fileAccessGuard = new FileAccessGuard([...current, existing.mountPath]);
-            } else if (!existing) {
-              // Mount in background — don't block task start
-              this.docMountManager.mount(docUrl, workspaceId).catch((err) => {
-                logger.warn({ err, url: docUrl }, '[engine] Background doc mount failed');
-              });
-            } else if (existing.status === 'stale' || existing.status === 'failed') {
-              // Stale/failed — still serve from disk if available, refresh in background
-              const current = fileAccessGuard?.getAllowedPaths() ?? [];
-              fileAccessGuard = new FileAccessGuard([...current, existing.mountPath]);
-              this.docMountManager.refreshIfStale(existing.id).catch((err) => {
-                logger.warn({ err, url: docUrl }, '[engine] Background doc refresh failed');
-              });
-            }
-          } catch (err) {
-            logger.warn({ err, url: docUrl }, '[engine] Auto-mount check failed');
-          }
-        }
-      }
-
-      // Load goal context if task is linked to a goal
-      let goalContext: string | undefined;
-      if (task.goal_id) {
-        const { data: goalData } = await this.db
-          .from('agent_workforce_goals')
-          .select('title, description, target_metric, target_value, current_value, unit')
-          .eq('id', task.goal_id)
-          .single();
-
-        if (goalData) {
-          const g = goalData as { title: string; description?: string; target_metric?: string; target_value?: number; current_value?: number; unit?: string };
-          const parts = [`## Strategic Goal\nThis task contributes to: "${g.title}"`];
-          if (g.description) parts.push(`Why: ${g.description}`);
-          if (g.target_metric) {
-            parts.push(`Target: ${g.current_value ?? 0}${g.unit || ''} \u2192 ${g.target_value}${g.unit || ''} (${g.target_metric})`);
-          }
-          parts.push('Keep this goal in mind when making decisions about scope, tone, and priorities.');
-          goalContext = parts.join('\n');
-        }
-      }
+        agentMcpServers,
+        desktopOptions,
+        goalContext,
+      } = caps;
+      let fileAccessGuard = caps.fileAccessGuard;
 
       // Scan user-provided fields for injection attempts (log-only)
       scanForInjection(
