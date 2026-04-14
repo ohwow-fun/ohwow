@@ -10,6 +10,7 @@ import {
   _setAuditLogPathForTests,
   getSelfCommitStatus,
   type SelfCommitOptions,
+  type FindingLookup,
 } from '../self-commit.js';
 
 /**
@@ -249,6 +250,8 @@ describe('safeSelfCommit — pre-commit audit log', () => {
     expect(entry).toHaveProperty('bailout_check');
     expect(entry).toHaveProperty('extends_experiment_id');
     expect(entry).toHaveProperty('why_not_edit_existing');
+    expect(entry).toHaveProperty('fixes_finding_id');
+    expect(entry.fixes_finding_id).toBeNull();
     expect(typeof entry.ts).toBe('string');
     expect(entry.files_changed).toEqual(['src/self-bench/experiments/audit-1.ts']);
     expect(entry.bailout_check).toBe('none');
@@ -354,6 +357,110 @@ describe('safeSelfCommit — git state', () => {
     }));
     const status = execSync('git status --porcelain', { cwd: tempRoot, encoding: 'utf-8' });
     expect(status).toContain('?? unrelated.txt');
+  });
+});
+
+describe('safeSelfCommit — Layer 2 fixesFindingId gate', () => {
+  const EXAMPLE_UUID = '11111111-2222-3333-4444-555555555555';
+  const PATCHED_FILE = 'src/self-bench/experiments/layer2-target.ts';
+
+  function makeFinding(overrides: Partial<FindingLookup> = {}): FindingLookup {
+    return {
+      id: EXAMPLE_UUID,
+      verdict: 'warning',
+      ranAt: new Date().toISOString(),
+      affectedFiles: [PATCHED_FILE],
+      ...overrides,
+    };
+  }
+
+  function l2Opts(overrides: Partial<SelfCommitOptions> = {}): SelfCommitOptions {
+    return baseOpts({
+      files: [{ path: PATCHED_FILE, content: 'export const t = 1;' }],
+      commitMessage: 'feat(self-bench): layer-2 gate test patch against finding',
+      experimentId: 'layer2-writer',
+      fixesFindingId: EXAMPLE_UUID,
+      findingResolver: async () => makeFinding(),
+      ...overrides,
+    });
+  }
+
+  it('refuses when fixesFindingId is set but resolver is missing', async () => {
+    const result = await safeSelfCommit(l2Opts({ findingResolver: undefined }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('findingResolver is required');
+  });
+
+  it('refuses when the resolver returns null', async () => {
+    const result = await safeSelfCommit(l2Opts({ findingResolver: async () => null }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('not found');
+  });
+
+  it("refuses when the finding's verdict is 'pass'", async () => {
+    const result = await safeSelfCommit(
+      l2Opts({ findingResolver: async () => makeFinding({ verdict: 'pass' }) }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('pass');
+  });
+
+  it('refuses when the finding is older than 7 days', async () => {
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    const result = await safeSelfCommit(
+      l2Opts({ findingResolver: async () => makeFinding({ ranAt: eightDaysAgo }) }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('stale');
+  });
+
+  it('refuses when affected_files does not intersect patched files', async () => {
+    const result = await safeSelfCommit(
+      l2Opts({
+        findingResolver: async () =>
+          makeFinding({ affectedFiles: ['src/self-bench/experiments/something-else.ts'] }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('does not intersect');
+  });
+
+  it('happy path: trailer appears in commit message and audit log records linkage', async () => {
+    const result = await safeSelfCommit(l2Opts());
+    expect(result.ok).toBe(true);
+
+    const msg = lastCommitMessage(tempRoot);
+    expect(msg).toContain(`Fixes-Finding-Id: ${EXAMPLE_UUID}`);
+
+    const lines = fs.readFileSync(auditLogPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(lines[0]);
+    expect(entry.fixes_finding_id).toBe(EXAMPLE_UUID);
+  });
+
+  it('fixesFindingId absent: no trailer, audit line has fixes_finding_id: null (regression guard)', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/no-fix.ts', content: 'export const n = 1;' }],
+      commitMessage: 'feat(self-bench): no-fix path regression guard for layer 2 absence',
+      experimentId: 'nofix-writer',
+    }));
+    expect(result.ok).toBe(true);
+
+    const msg = lastCommitMessage(tempRoot);
+    expect(msg).not.toContain('Fixes-Finding-Id');
+
+    const lines = fs.readFileSync(auditLogPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(lines[0]);
+    expect(entry.fixes_finding_id).toBeNull();
+  });
+
+  it('does not write audit line when the finding gate fails', async () => {
+    await safeSelfCommit(l2Opts({ findingResolver: async () => null }));
+    expect(fs.existsSync(auditLogPath)).toBe(false);
+  });
+
+  it('rolls back file writes when the finding gate fails', async () => {
+    await safeSelfCommit(l2Opts({ findingResolver: async () => null }));
+    expect(fs.existsSync(path.join(tempRoot, PATCHED_FILE))).toBe(false);
   });
 });
 

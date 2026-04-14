@@ -115,6 +115,43 @@ export interface SelfCommitOptions {
    * audit log write — that's always on.
    */
   skipGates?: boolean;
+  /**
+   * Layer 2 of the autonomous-fixing safety floor. UUID of a recent
+   * self_findings row whose verdict ∈ {warning, fail} justifies this
+   * patch. When set:
+   *   - findingResolver MUST be set
+   *   - the resolver must return a finding that is recent (<7d),
+   *     has the right verdict, and whose evidence.affected_files
+   *     intersects opts.files
+   *   - a `Fixes-Finding-Id:` trailer is appended to the commit
+   *   - the audit-log entry records the linkage
+   * Optional today — Layers 4/5 make it mandatory for code patches
+   * outside src/self-bench/experiments/.
+   */
+  fixesFindingId?: string;
+  /**
+   * Callback that resolves a finding id to its {verdict, ranAt,
+   * evidence} tuple. Takes a callback (not a DatabaseAdapter ref)
+   * so self-commit.ts stays free of the DB dep and stays trivially
+   * stubbable from the test scaffold, matching the
+   * _setAuditLogPathForTests pattern. REQUIRED when
+   * fixesFindingId is set.
+   */
+  findingResolver?: (id: string) => Promise<FindingLookup | null>;
+}
+
+/**
+ * Narrow shape the fixesFindingId gate needs from a finding. Kept
+ * minimal so callers can map any db schema into it without coupling
+ * self-commit.ts to the full Finding type. `affectedFiles` is read
+ * from evidence.affected_files by convention — callers normalize it
+ * here rather than in this module.
+ */
+export interface FindingLookup {
+  id: string;
+  verdict: 'pass' | 'warning' | 'fail' | 'error';
+  ranAt: string;
+  affectedFiles: string[];
 }
 
 export interface SelfCommitResult {
@@ -135,6 +172,13 @@ export interface SelfCommitAuditEntry {
   bailout_check: string;
   extends_experiment_id: string | null;
   why_not_edit_existing: string;
+  /**
+   * Layer 2: when the commit was justified by a specific prior
+   * finding, its uuid lands here. Null for greenfield probe writes
+   * (the existing author path). Additive key — operator tailers
+   * that parsed the old shape still work.
+   */
+  fixes_finding_id: string | null;
 }
 
 const ALLOWED_PATH_PREFIXES = [
@@ -195,6 +239,8 @@ export const AUDIT_LOG_PATH = path.join(
 const COMMIT_MESSAGE_MIN_LENGTH = 40;
 const COMMIT_MESSAGE_PREFIX = 'feat(self-bench): ';
 const WHY_NOT_EDIT_MIN_LENGTH = 10;
+/** Max age of a justifying finding. Older findings are considered stale. */
+const FINDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Module-level state. Set at daemon boot via the setter.
 // Tests override via their beforeEach hooks.
@@ -375,6 +421,64 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     }
   }
 
+  // 4b. Layer 2 — fixesFindingId gate. Verifies the justifying
+  //     finding exists, is recent, has the right verdict, and
+  //     overlaps the patched files. Opt-in today; Layers 4/5 make
+  //     it mandatory for code patches outside the experiments dir.
+  if (opts.fixesFindingId !== undefined) {
+    if (typeof opts.fixesFindingId !== 'string' || opts.fixesFindingId.length === 0) {
+      rollbackFiles(absPaths);
+      return { ok: false, reason: 'fixesFindingId must be a non-empty string when set' };
+    }
+    if (typeof opts.findingResolver !== 'function') {
+      rollbackFiles(absPaths);
+      return { ok: false, reason: 'findingResolver is required when fixesFindingId is set' };
+    }
+    let finding: FindingLookup | null;
+    try {
+      finding = await opts.findingResolver(opts.fixesFindingId);
+    } catch (err) {
+      rollbackFiles(absPaths);
+      return { ok: false, reason: `findingResolver threw: ${extractErrorSummary(err)}` };
+    }
+    if (!finding) {
+      rollbackFiles(absPaths);
+      return { ok: false, reason: `fixesFindingId ${opts.fixesFindingId} not found` };
+    }
+    if (finding.verdict !== 'warning' && finding.verdict !== 'fail') {
+      rollbackFiles(absPaths);
+      return {
+        ok: false,
+        reason: `finding ${opts.fixesFindingId} has verdict '${finding.verdict}' — only 'warning' or 'fail' can justify a patch`,
+      };
+    }
+    const ranAtMs = Date.parse(finding.ranAt);
+    if (!Number.isFinite(ranAtMs)) {
+      rollbackFiles(absPaths);
+      return { ok: false, reason: `finding ${opts.fixesFindingId} has unparseable ranAt '${finding.ranAt}'` };
+    }
+    const ageMs = Date.now() - ranAtMs;
+    if (ageMs > FINDING_MAX_AGE_MS) {
+      rollbackFiles(absPaths);
+      return {
+        ok: false,
+        reason: `finding ${opts.fixesFindingId} is stale (${Math.round(ageMs / (24 * 60 * 60 * 1000))}d old, max 7d) — re-run the probe before patching`,
+      };
+    }
+    const patched = new Set(opts.files.map((f) => path.normalize(f.path).replace(/\\/g, '/')));
+    const affected = (finding.affectedFiles ?? []).map((p) =>
+      path.normalize(p).replace(/\\/g, '/'),
+    );
+    const intersect = affected.some((p) => patched.has(p));
+    if (!intersect) {
+      rollbackFiles(absPaths);
+      return {
+        ok: false,
+        reason: `finding ${opts.fixesFindingId} affected_files [${affected.join(', ')}] does not intersect patched files [${[...patched].join(', ')}]`,
+      };
+    }
+  }
+
   // 5. Pre-commit audit log. Fail-closed on write error — no
   //    commit without an audit trail. Happens AFTER gates pass
   //    (so we don't pollute the log with rows whose gates failed)
@@ -387,6 +491,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
       bailout_check: 'none',
       extends_experiment_id: opts.extendsExperimentId,
       why_not_edit_existing: opts.whyNotEditExisting,
+      fixes_finding_id: opts.fixesFindingId ?? null,
     });
   } catch (err) {
     rollbackFiles(absPaths);
@@ -428,7 +533,10 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   //    working-tree content. Crucially, -N only touches the paths
   //    we name — other staged paths in the index are untouched, so
   //    the isolation guarantee holds.
-  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n`;
+  const fixesTrailer = opts.fixesFindingId
+    ? `Fixes-Finding-Id: ${opts.fixesFindingId}\n`
+    : '';
+  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}`;
   const fileArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
   try {
     runInRepo(`git add -N -- ${fileArgs}`, repoRoot);
