@@ -56,6 +56,7 @@ import { ExperimentAuthorExperiment } from '../self-bench/experiments/experiment
 import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handlers-fuzz.js';
 import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
+import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
 import {
   refreshRuntimeConfigCache,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
@@ -1400,6 +1401,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
         experimentRunner.register(new ListHandlersFuzzExperiment());
         experimentRunner.register(new HandlerSchemaDriftExperiment());
         experimentRunner.register(new ProseInvariantDriftExperiment());
+        // Closes the blind spot surfaced by the 2026-04-14 ohwow-self
+        // introspection run: infrastructure-level experiments all pass
+        // while an agent can be silently drowning in failed tasks.
+        // Per-agent failure-rate watchdog on a 24h rolling window.
+        experimentRunner.register(new AgentOutcomesExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
