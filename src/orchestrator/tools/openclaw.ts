@@ -3,8 +3,65 @@
  * Orchestrator tools for managing the OpenClaw integration.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { ToolHandler } from '../local-tool-types.js';
 import { loadConfig } from '../../config.js';
+
+/**
+ * Schemas for the four OpenClaw skill-management tools. Previously the
+ * handlers were registered in tools/registry.ts but no schema surfaced
+ * them, so the orchestrator model could never see or call them — dead
+ * handler code. Found during the S3.12 bug-bounty audit and held over
+ * until now because S3.12 only fixed update_agent_status.
+ */
+export const OPENCLAW_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'openclaw_list_skills',
+    description:
+      'List every skill discoverable through the local OpenClaw binary, marking which are already allowlisted for this workspace. Use before importing a new skill to see what is available, or as a safety check on the current allowlist.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'openclaw_import_skill',
+    description:
+      'Import and allowlist an OpenClaw skill by id. Runs the security audit first — rejects skills that fail audit. Persists the updated allowlist to ~/.ohwow/config.json so the skill is available across restarts. Always confirm with the user before calling.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        skill_id: { type: 'string', description: 'The OpenClaw skill id to import' },
+      },
+      required: ['skill_id'],
+    },
+  },
+  {
+    name: 'openclaw_remove_skill',
+    description:
+      'Remove a skill from the OpenClaw allowlist. The binary itself is untouched — only the allowlist entry is dropped, so the orchestrator will refuse to dispatch the skill on the next call. Always confirm with the user before calling.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        skill_id: { type: 'string', description: 'The OpenClaw skill id to remove from the allowlist' },
+      },
+      required: ['skill_id'],
+    },
+  },
+  {
+    name: 'openclaw_audit_skill',
+    description:
+      'Run the OpenClaw security audit against a skill without importing it. Returns the audit verdict plus any findings — useful for reviewing a skill before allowlisting or debugging why a previous import failed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        skill_id: { type: 'string', description: 'The OpenClaw skill id to audit' },
+      },
+      required: ['skill_id'],
+    },
+  },
+];
 
 export const openclawListSkills: ToolHandler = async () => {
   try {

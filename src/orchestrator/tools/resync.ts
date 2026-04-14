@@ -13,8 +13,29 @@
  * by id. Safe to re-run any time.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { resyncWorkspaceToCloud } from '../../control-plane/sync-resources.js';
+
+/**
+ * Schema for resync_workspace_to_cloud. Previously registered as a
+ * handler in tools/registry.ts but missing from the tool definitions,
+ * so the model could never call it even when a resync was needed.
+ * Surfaces the maintenance tool explicitly with a clear warning about
+ * when it is appropriate to run.
+ */
+export const RESYNC_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'resync_workspace_to_cloud',
+    description:
+      'Maintenance tool: walk every synced table in the workspace and re-fire reportResource for each row against the cloud control plane. Idempotent (upsert on conflict), but expensive — only call when the user is intentionally backfilling a workspace that predates cloud sync, or after a new resource type was added to the registry. Always confirm before running.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
 
 export async function resyncWorkspaceToCloudTool(
   ctx: LocalToolContext,

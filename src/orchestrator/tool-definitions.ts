@@ -19,6 +19,8 @@ import { BASH_TOOL_DEFINITIONS } from '../execution/bash/index.js';
 // Orchestrator catalog pieces, colocated with executors.
 import { LLM_TOOL_DEFINITIONS } from './tools/llm.js';
 import { DAEMON_INFO_TOOL_DEFINITIONS } from './tools/daemon-info.js';
+import { OPENCLAW_TOOL_DEFINITIONS } from './tools/openclaw.js';
+import { RESYNC_TOOL_DEFINITIONS } from './tools/resync.js';
 import { WORKSPACE_PULSE_TOOL_DEFINITIONS } from './tools/workspace.js';
 import { AGENT_TASK_TOOL_DEFINITIONS } from './tools/agents.js';
 import { DELIVERABLE_TOOL_DEFINITIONS } from './tools/deliverables.js';
@@ -144,6 +146,8 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...CONNECTORS_TOOL_DEFINITIONS,
   ...PDF_TOOL_DEFINITIONS,
   ...CLOUD_TOOL_DEFINITIONS,
+  ...OPENCLAW_TOOL_DEFINITIONS,
+  ...RESYNC_TOOL_DEFINITIONS,
 ];
 
 /** The five real LSP tools: lsp_diagnostics/hover/go_to_definition/references/completions. */
