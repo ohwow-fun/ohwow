@@ -3,6 +3,7 @@
  * Used during the conversational onboarding flow to discover and create agents.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { randomUUID } from 'node:crypto';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { BUSINESS_TYPES, type AgentPreset } from '../../tui/data/agent-presets.js';
@@ -13,6 +14,84 @@ import {
 } from '../../lib/onboarding-logic.js';
 import { loadConfig } from '../../config.js';
 import { logger } from '../../lib/logger.js';
+
+export const SETUP_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_available_presets',
+    description:
+      'Browse the agent preset catalog. Returns available agent templates grouped by business type. Use this during initial workspace setup to see what agents can be created. If business_type is provided, returns only agents for that type.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        business_type: {
+          type: 'string',
+          description: 'Filter by business type (e.g. "saas_startup", "ecommerce", "agency", "content_creator", "service_business", "consulting", "tech_company"). Omit to see all types.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'setup_agents',
+    description:
+      'Create AI agents from the preset catalog. Call this after discussing with the user which agents they need. Pass the preset IDs from list_available_presets. Only use during initial workspace setup when the user has no agents yet.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        preset_ids: {
+          type: 'array',
+          description: 'Array of preset agent IDs to create (e.g. ["saas_content_writer", "saas_data_analyst"])',
+          items: { type: 'string' },
+        },
+        business_type: {
+          type: 'string',
+          description: 'Business type to scope the presets (optional, helps resolve IDs)',
+        },
+      },
+      required: ['preset_ids'],
+    },
+  },
+  {
+    name: 'bootstrap_workspace',
+    description:
+      'Set up the full workspace in one call: creates a goal, AI agents from presets, and their automations/schedules. Use this during initial onboarding after understanding the user\'s goal and pain points. Prefer this over setup_agents when a goal has been identified.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        goal_title: {
+          type: 'string',
+          description: 'The user\'s primary business goal (e.g. "Grow content presence and generate consistent leads")',
+        },
+        goal_description: {
+          type: 'string',
+          description: 'Optional longer description of the goal',
+        },
+        goal_metric: {
+          type: 'string',
+          description: 'Optional metric to track (e.g. "leads_per_month", "revenue", "blog_posts")',
+        },
+        goal_target: {
+          type: 'number',
+          description: 'Optional target value for the metric (e.g. 50)',
+        },
+        goal_unit: {
+          type: 'string',
+          description: 'Optional unit for the metric (e.g. "leads", "USD", "posts")',
+        },
+        preset_ids: {
+          type: 'array',
+          description: 'Array of agent preset IDs to create',
+          items: { type: 'string' },
+        },
+        business_type: {
+          type: 'string',
+          description: 'Business type to scope the presets',
+        },
+      },
+      required: ['goal_title', 'preset_ids'],
+    },
+  },
+];
 
 /**
  * List available agent presets from the catalog.

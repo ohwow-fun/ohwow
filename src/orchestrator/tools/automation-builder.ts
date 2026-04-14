@@ -5,9 +5,156 @@
  * create_automation — creates and saves an automation via AutomationService
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { AutomationService } from '../../triggers/automation-service.js';
 import type { AutomationStepType } from '../../triggers/automation-service.js';
+
+export const AUTOMATION_BUILDER_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'discover_capabilities',
+    description:
+      'Survey the workspace to discover what agents, triggers, step types, and channels are available for building an automation. Call this FIRST when the user describes an automation intent.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        intent: {
+          type: 'string',
+          description: 'The user\'s automation intent in natural language',
+        },
+      },
+      required: ['intent'],
+    },
+  },
+  {
+    name: 'propose_automation',
+    description:
+      'Propose a complete automation for the user to review. Always call discover_capabilities first, then ask clarifying questions, then call this.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Short name for the automation' },
+        description: { type: 'string', description: 'What this automation does' },
+        reasoning: {
+          type: 'string',
+          description: 'Your reasoning for this design. Shown to the user as a "Thinking" section.',
+        },
+        trigger: {
+          type: 'object',
+          description: 'The trigger that starts this automation',
+          properties: {
+            type: { type: 'string', enum: ['webhook', 'schedule', 'event', 'manual'] },
+            config: { type: 'object', description: 'Trigger configuration' },
+          },
+          required: ['type'],
+        },
+        steps: {
+          type: 'array',
+          description: 'Ordered list of automation steps',
+          items: {
+            type: 'object',
+            properties: {
+              step_type: {
+                type: 'string',
+                enum: [
+                  'agent_prompt', 'a2a_call', 'run_agent', 'save_contact', 'update_contact',
+                  'log_contact_event', 'webhook_forward', 'transform_data', 'conditional',
+                  'create_task', 'send_notification', 'fill_pdf', 'save_attachment',
+                  'take_screenshot', 'generate_chart',
+                ],
+              },
+              label: { type: 'string', description: 'Human-readable label' },
+              agent_id: { type: 'string' },
+              agent_name: { type: 'string' },
+              prompt: { type: 'string' },
+              action_config: { type: 'object' },
+              required_integrations: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['step_type', 'label'],
+          },
+        },
+        variables: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              description: { type: 'string' },
+              default_value: { type: 'string' },
+            },
+            required: ['name', 'description'],
+          },
+        },
+      },
+      required: ['name', 'description', 'reasoning', 'trigger', 'steps'],
+    },
+  },
+  {
+    name: 'create_automation',
+    description:
+      'Create and save an automation directly. Use this after propose_automation when the user confirms they want to create it (e.g. says "yes", "create it", "looks good"). This saves the automation immediately without requiring a UI approval step.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Short name for the automation' },
+        description: { type: 'string', description: 'What this automation does' },
+        trigger: {
+          type: 'object',
+          description: 'The trigger that starts this automation',
+          properties: {
+            type: { type: 'string', enum: ['webhook', 'schedule', 'event', 'manual'], description: 'Trigger type' },
+            config: { type: 'object', description: 'Trigger configuration (e.g., cron expression, event type)' },
+          },
+          required: ['type'],
+        },
+        steps: {
+          type: 'array',
+          description: 'Ordered list of automation steps (same format as propose_automation)',
+          items: {
+            type: 'object',
+            properties: {
+              step_type: {
+                type: 'string',
+                enum: [
+                  'agent_prompt', 'a2a_call', 'run_agent', 'save_contact', 'update_contact',
+                  'log_contact_event', 'webhook_forward', 'transform_data', 'conditional',
+                  'create_task', 'send_notification', 'fill_pdf', 'save_attachment',
+                  'take_screenshot', 'generate_chart',
+                ],
+                description: 'Type of step',
+              },
+              label: { type: 'string', description: 'Human-readable label for this step' },
+              agent_id: { type: 'string', description: 'Agent ID (for agent_prompt/run_agent steps)' },
+              agent_name: { type: 'string', description: 'Agent name (for display)' },
+              prompt: { type: 'string', description: 'Task prompt for the agent' },
+              action_config: { type: 'object', description: 'All step settings' },
+              required_integrations: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Integration providers this step requires',
+              },
+            },
+            required: ['step_type', 'label'],
+          },
+        },
+        variables: {
+          type: 'array',
+          description: 'Optional automation variables',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              description: { type: 'string' },
+              default_value: { type: 'string' },
+            },
+            required: ['name', 'description'],
+          },
+        },
+      },
+      required: ['name', 'description', 'trigger', 'steps'],
+    },
+  },
+];
 
 // Step type labels (mirrored from web app's automation types)
 const STEP_TYPE_LABELS: Record<string, string> = {

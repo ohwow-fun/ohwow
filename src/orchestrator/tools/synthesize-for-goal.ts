@@ -1,6 +1,8 @@
 /**
  * Synthesize for Goal — autonomous-learning entry point
  *
+ * Tool schema definition lives at the top; runtime handler below.
+ *
  * Thin wrapper around the same probe → generate → test pipeline that
  * `synthesis_run_acceptance` uses, but without requiring a backing
  * `agent_workforce_tasks` row. The orchestrator calls this tool when
@@ -24,6 +26,7 @@
  * stub vision verdict, ALL live side-effect flags default to false.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { resolveActiveWorkspace } from '../../config.js';
@@ -31,6 +34,39 @@ import { probeSurface } from './synthesis-probe.js';
 import { generateCodeSkill } from './synthesis-generator.js';
 import { testSynthesizedSkill } from './synthesis-tester.js';
 import type { SynthesisCandidate } from '../../scheduling/synthesis-failure-detector.js';
+
+export const SYNTHESIZE_FOR_GOAL_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'synthesize_skill_for_goal',
+    description: 'Autonomously synthesize a new deterministic TypeScript skill from a goal + target URL. Runs the real generator LLM (no canned fallback) against the strict template, probes the live surface via CDP, writes the file + inserts the skill row, and dry-run-tests the handler with a stub vision verdict. Always dry-run — no live side effects. Use this to teach ohwow a new read-only web skill on its own initiative.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        goal: {
+          type: 'string',
+          description: 'One-sentence description of what the skill should do. Gets copied into the generator prompt as the goal.',
+        },
+        target_url: {
+          type: 'string',
+          description: 'Absolute http(s) URL the generated tool will drive. The probe navigates here first.',
+        },
+        name_hint: {
+          type: 'string',
+          description: 'Optional human-readable naming hint. The generator LLM is still free to pick its own snake_case name.',
+        },
+        use_canned_llm: {
+          type: 'boolean',
+          description: 'Leave false for real-LLM generation. True is not supported by this tool — it has no canned fallback.',
+        },
+        test_input: {
+          type: 'object',
+          description: 'Optional input object the dry-run tester hands to the generated skill. Defaults to {} (always combined with dry_run: true). Supply this when the skill has required string parameters that would otherwise break with undefined — e.g. a description field the skill will fill in. Values never leave the browser because the tester always runs in dry-run mode.',
+        },
+      },
+      required: ['goal', 'target_url'],
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Types

@@ -3,8 +3,24 @@
  * Returns gap analysis suggestions for expanding the AI team.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { runLocalGapAnalysis, saveLocalSuggestions } from '../../planning/agent-gap-analyzer.js';
+
+export const AGENT_SUGGESTIONS_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'get_agent_suggestions',
+    description:
+      'Analyze the workspace for capability gaps and suggest new agents. If refresh is true, runs a fresh analysis; otherwise returns cached suggestions.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        refresh: { type: 'boolean', description: 'Run fresh analysis (default false, returns cached)' },
+      },
+      required: [],
+    },
+  },
+];
 
 export async function getAgentSuggestions(
   ctx: LocalToolContext,

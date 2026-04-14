@@ -6,7 +6,50 @@
  * 2. Checks if Sequential coordination is warranted
  * 3. Decomposes the prompt into a SequenceDefinition
  * 4. Executes the sequence and returns the merged result
+ *
+ * Also hosts the `delegate_subtask` schema: a related sub-orchestrator
+ * pattern where the tool handler lives in the sub-orchestrator runtime
+ * rather than a dedicated executor file.
  */
+
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
+
+export const ORCHESTRATION_HELPER_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'delegate_subtask',
+    description:
+      'Delegate a focused subtask to a lightweight sub-orchestrator. Use for multi-step research, data gathering, or analysis that would bloat your context. The sub-orchestrator runs its own tool loop and returns only a summary.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'Clear description of the subtask to complete' },
+        focus: {
+          type: 'string',
+          enum: ['research', 'agents', 'crm', 'projects', 'data'],
+          description: 'Focus area: determines which tools the sub-orchestrator can use',
+        },
+      },
+      required: ['prompt', 'focus'],
+    },
+  },
+  {
+    name: 'run_sequence',
+    description:
+      'Run a multi-agent Sequential chain: agents process in order, each seeing what predecessors actually produced. Use when a task benefits from multiple perspectives (research → analysis → synthesis). The system decides which agents participate and in what order.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'The task to accomplish through multi-agent coordination' },
+        agent_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: specific agent IDs to include. If omitted, the system selects relevant agents automatically.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+];
 
 import Anthropic from '@anthropic-ai/sdk';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';

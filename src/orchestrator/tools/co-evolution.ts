@@ -7,7 +7,32 @@
  * 3. Returns the best deliverable
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import Anthropic from '@anthropic-ai/sdk';
+
+export const CO_EVOLUTION_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'evolve_task',
+    description:
+      'Run a co-evolution session: multiple agents independently attempt the same task across multiple rounds, each building on the best prior attempts and scored by an evaluator. Use this instead of run_agent when the user asks to "evolve", "iterate", "refine", "improve", or "optimize" something, OR when the task is creative/strategic (strategy, positioning, writing, proposals, pitches, analysis) and would benefit from diverse expert perspectives competing to produce the best version. Returns the highest-scoring deliverable.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        prompt: { type: 'string', description: 'The task or objective for agents to co-evolve a solution for' },
+        agent_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: specific agent IDs to include (min 2). If omitted, active agents are selected automatically.',
+        },
+        max_rounds: {
+          type: 'number',
+          description: 'Maximum evolution rounds (default 3). More rounds = higher quality but more cost.',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+];
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { executeLocalCoEvolution } from '../co-evolution/co-evolution-executor.js';
 import type { CoEvolutionProgressEvent } from '../co-evolution/co-evolution-executor.js';
