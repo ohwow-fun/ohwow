@@ -108,6 +108,14 @@ interface LoopHealthEvidence extends Record<string, unknown> {
   knob_value?: number | null;
   vital_signs: VitalSigns;
   failures: string[];
+  /**
+   * Layer 2 of the autonomous-fixing safety floor. Source files a
+   * remediating patch would touch, derived per broken vital sign.
+   * Consumed by safeSelfCommit's fixesFindingId gate — the intersect
+   * check proves the patch is scoped to a file this finding
+   * actually justifies.
+   */
+  affected_files: string[];
   reason?: string;
 }
 
@@ -173,6 +181,7 @@ export class ContentCadenceLoopHealthExperiment extends BusinessExperiment {
         tuner_pending_validations: 0,
         vital_signs: blankVitalSigns(),
         failures: [],
+        affected_files: [],
         reason: 'no_goal_yet',
       };
       return {
@@ -231,6 +240,7 @@ export class ContentCadenceLoopHealthExperiment extends BusinessExperiment {
     };
 
     const failures = collectFailures(vitals);
+    const affectedFiles = collectAffectedFiles(vitals);
 
     const evidence: LoopHealthEvidence = {
       goal_exists: true,
@@ -247,6 +257,7 @@ export class ContentCadenceLoopHealthExperiment extends BusinessExperiment {
       knob_value: knobValue,
       vital_signs: vitals,
       failures,
+      affected_files: affectedFiles,
     };
 
     if (loopAgeMs < WARMUP_MS) {
@@ -390,6 +401,28 @@ function collectFailures(v: VitalSigns): string[] {
   if (!v.validation_chain_intact)
     out.push('knob set but no validation row enqueued');
   return out;
+}
+
+/**
+ * Layer 2: map broken vital signs to the source files a remediating
+ * patch would edit. Scheduler vital signs point at the scheduler
+ * module; tuner / validation-chain vital signs point at the tuner.
+ * posts_completing is intentionally omitted — the bug could be in
+ * the scheduler, the dispatch code, or agent execution, and Layer 2
+ * requires the intersect check to be tight. Callers (Layer 4+) who
+ * know which file a concrete patch touches will propose the right
+ * fixesFindingId regardless; emitting a too-broad affected_files
+ * list here would defeat the intersect guard.
+ */
+function collectAffectedFiles(v: VitalSigns): string[] {
+  const out = new Set<string>();
+  if (!v.scheduler_alive || !v.dispatcher_active) {
+    out.add('src/triggers/content-cadence-scheduler.ts');
+  }
+  if (!v.tuner_alive || !v.validation_chain_intact) {
+    out.add('src/self-bench/experiments/content-cadence-tuner.ts');
+  }
+  return [...out];
 }
 
 function parseMetadata(raw: string | null | undefined): Record<string, unknown> {

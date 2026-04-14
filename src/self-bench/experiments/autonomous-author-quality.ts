@@ -124,6 +124,16 @@ interface QualityEvidence extends Record<string, unknown> {
   autonomous_experiment_count: number;
   always_pass_ratio: number;
   failures: string[];
+  /**
+   * Layer 2 of the autonomous-fixing safety floor. Files a remediating
+   * patch would touch. Today this is limited to ghost-probe files
+   * (each ghost lists exactly which autonomous-authored experiment
+   * holds the dangling reference). Commit-volume, templated-family,
+   * and always-pass findings don't surface affected_files — their
+   * remediations are registry refactors or human triage, not
+   * single-file patches autonomously authorable within Layers 4/5.
+   */
+  affected_files: string[];
   reason?: string;
   repo_root: string | null;
 }
@@ -157,6 +167,7 @@ export class AutonomousAuthorQualityExperiment implements Experiment {
         autonomous_experiment_count: 0,
         always_pass_ratio: 0,
         failures: [],
+        affected_files: [],
         reason: 'no_repo_root',
         repo_root: null,
       };
@@ -169,7 +180,8 @@ export class AutonomousAuthorQualityExperiment implements Experiment {
 
     const commitVolume24h = countAutonomousCommits(repoRoot, '24 hours ago');
     const templatedFamilies = countTemplatedFamilies();
-    const ghostProbeCount = countGhostProbes(repoRoot);
+    const ghostProbeFiles = findGhostProbeFiles(repoRoot);
+    const ghostProbeCount = ghostProbeFiles.length;
     const verdictMix = await readAutonomousVerdictMix(ctx);
     const alwaysPassRatio =
       verdictMix.totalAutonomous > 0
@@ -211,6 +223,7 @@ export class AutonomousAuthorQualityExperiment implements Experiment {
       autonomous_experiment_count: verdictMix.totalAutonomous,
       always_pass_ratio: Math.round(alwaysPassRatio * 100) / 100,
       failures,
+      affected_files: ghostProbeFiles,
       repo_root: repoRoot,
     };
 
@@ -304,14 +317,14 @@ export function countTemplatedFamilies(): Record<string, number> {
  * a46f61a class of bug at probe time as a safety net behind the
  * structural ghost guards in the parameterized classes' tests.
  */
-export function countGhostProbes(repoRoot: string): number {
+export function findGhostProbeFiles(repoRoot: string): string[] {
   let entries: string[];
   try {
     entries = readdirSync(EXPERIMENTS_DIR);
   } catch {
-    return 0;
+    return [];
   }
-  let ghosts = 0;
+  const ghosts: string[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.ts')) continue;
     if (entry.endsWith('-probe.ts')) continue;
@@ -327,13 +340,14 @@ export function countGhostProbes(repoRoot: string): number {
     for (const ref of refs) {
       const absPath = join(repoRoot, ref);
       if (!existsSync(absPath)) {
-        ghosts += 1;
-        break; // count each file once
+        ghosts.push(`src/self-bench/experiments/${entry}`);
+        break; // record each ghost file once
       }
     }
   }
   return ghosts;
 }
+
 
 /**
  * Read self_findings to compute, per autonomous experiment_id, whether

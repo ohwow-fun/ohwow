@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   AutonomousAuthorQualityExperiment,
   countTemplatedFamilies,
-  countGhostProbes,
+  findGhostProbeFiles,
   isAutonomousExperimentId,
   readAutonomousVerdictMix,
 } from '../experiments/autonomous-author-quality.js';
@@ -85,12 +85,12 @@ describe('countTemplatedFamilies — against the live experiments dir', () => {
   });
 });
 
-describe('countGhostProbes', () => {
-  it('returns 0 for the current repo state (post-refactor)', () => {
+describe('findGhostProbeFiles', () => {
+  it('returns [] for the current repo state (post-refactor)', () => {
     // Both refactors dropped the per-file probes that referenced
     // non-existent test/migration paths. There should be no ghosts
     // left in src/self-bench/experiments/.
-    expect(countGhostProbes(process.cwd())).toBe(0);
+    expect(findGhostProbeFiles(process.cwd())).toEqual([]);
   });
 });
 
