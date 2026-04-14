@@ -23,6 +23,19 @@ export const AGENT_TASK_TOOL_DEFINITIONS: Tool[] = [
     },
   },
   {
+    name: 'update_agent_status',
+    description: 'Pause or resume an AI agent by ID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        agent_id: { type: 'string', description: 'The agent ID to update' },
+        action: { type: 'string', enum: ['pause', 'resume'] },
+        status: { type: 'string', enum: ['paused', 'idle'], description: 'Legacy field; prefer action' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
     name: 'list_tasks',
     description:
       'Get recent tasks. Can filter by status (pending, running, completed, failed, needs_approval, cancelled) and/or agent ID.',
