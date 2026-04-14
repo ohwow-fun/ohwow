@@ -17,8 +17,12 @@ import { BASH_SYSTEM_PROMPT } from './bash/index.js';
 import { DOC_MOUNT_SYSTEM_PROMPT } from './doc-mounts/index.js';
 import { DEVOPS_SYSTEM_PROMPT } from './devops/devops-prompts.js';
 import { COPYWRITING_RULES } from '../lib/copywriting-rules.js';
-import { wrapUserData } from '../lib/prompt-injection.js';
+import { scanForInjection, wrapUserData } from '../lib/prompt-injection.js';
+import { loadStateContext, loadPreviousTaskContext } from './state/index.js';
+import { logger } from '../lib/logger.js';
 import type { BusinessContext } from './types.js';
+import type { RuntimeEngine } from './engine.js';
+import type { TaskCapabilities } from './task-capabilities.js';
 
 export interface BuildSystemPromptOptions {
   agentName: string;
@@ -109,4 +113,172 @@ ${opts.taskDescription ? `Description: ${wrapUserData(opts.taskDescription)}` : 
 ---
 
 ${opts.agentPrompt}`;
+}
+
+/**
+ * Assemble the full per-task system prompt, including:
+ *   1. The base prompt from buildAgentSystemPrompt (agent + task + caps)
+ *   2. Persistent state context (loadStateContext)
+ *   3. Previous task context for cross-task continuity
+ *   4. Parent task output for delegated dependency chains
+ *   5. Cross-session working memory + session row creation / reuse
+ *
+ * Also scans user-provided fields (title, description, input) for
+ * prompt-injection attempts up-front (log-only). Returns the assembled
+ * string plus the activeSessionId so the completion pipeline can record
+ * the session binding.
+ */
+export async function assembleSystemPrompt(
+  this: RuntimeEngine,
+  args: {
+    agent: { name: string; role: string; system_prompt: string };
+    task: {
+      title: string;
+      description: string | null;
+      input: string | unknown;
+      parent_task_id: string | null;
+      goal_id: string | null;
+    };
+    taskId: string;
+    agentId: string;
+    workspaceId: string;
+    memoryDoc: string;
+    knowledgeDoc: string;
+    skillsDoc: string;
+    caps: TaskCapabilities;
+  },
+): Promise<{ systemPrompt: string; activeSessionId: string | null }> {
+  const { agent, task, taskId, agentId, workspaceId, memoryDoc, knowledgeDoc, skillsDoc, caps } = args;
+
+  // Scan user-provided fields for injection attempts (log-only)
+  scanForInjection(
+    { title: task.title, description: task.description, input: typeof task.input === 'string' ? task.input : null },
+    { taskId, agentId },
+  );
+
+  let systemPrompt = buildAgentSystemPrompt(this.businessContext, {
+    agentName: agent.name,
+    agentRole: agent.role,
+    agentPrompt: agent.system_prompt,
+    taskTitle: task.title,
+    taskDescription: task.description || undefined,
+    memoryDocument: memoryDoc || undefined,
+    knowledgeDocument: knowledgeDoc || undefined,
+    skillsDocument: skillsDoc || undefined,
+    webSearchEnabled: caps.webSearchEnabled,
+    browserEnabled: false, // Browser instructions injected on-demand, not upfront
+    scraplingEnabled: caps.scraplingEnabled,
+    localFilesEnabled: caps.localFilesEnabled && caps.fileAccessGuard !== null,
+    bashEnabled: caps.bashEnabled && caps.fileAccessGuard !== null,
+    devopsEnabled: caps.devopsEnabled,
+    desktopEnabled: caps.desktopEnabled,
+    approvalRequired: caps.approvalRequired,
+    goalContext: caps.goalContext,
+  });
+
+  // 4.1 Inject persistent state context
+  try {
+    const stateDoc = await loadStateContext(this.db, workspaceId, agentId, task.goal_id || undefined);
+    if (stateDoc) {
+      systemPrompt += `\n\n${stateDoc}`;
+    }
+  } catch {
+    logger.warn('[RuntimeEngine] State context injection skipped');
+  }
+
+  // 4.1b Inject previous task context for cross-task continuity
+  try {
+    const prevContext = await loadPreviousTaskContext(this.db, workspaceId, agentId, taskId);
+    if (prevContext) {
+      systemPrompt += `\n\n${prevContext}`;
+    }
+  } catch {
+    logger.warn('[RuntimeEngine] Previous task context injection skipped');
+  }
+
+  // 4.1c Inject parent task output for dependency chains
+  if (task.parent_task_id) {
+    try {
+      const { data: parentData } = await this.db
+        .from('agent_workforce_tasks')
+        .select('title, output')
+        .eq('id', task.parent_task_id)
+        .single();
+      if (parentData) {
+        const parent = parentData as { title: string; output: string | unknown };
+        const parentOutput = typeof parent.output === 'string'
+          ? parent.output
+          : JSON.stringify(parent.output);
+        const trimmed = parentOutput.length > 4000
+          ? parentOutput.slice(0, 4000) + '...'
+          : parentOutput;
+        systemPrompt += `\n\n## Parent Task Output\nFrom task "${parent.title}":\n\n${trimmed}`;
+      }
+    } catch {
+      logger.warn('[RuntimeEngine] Parent task context injection skipped');
+    }
+  }
+
+  // 4.2 Inject cross-session working memory
+  let activeSessionId: string | null = null;
+  try {
+    // Expire stale sessions
+    await this.db
+      .from('agent_workforce_sessions')
+      .update({ status: 'expired' })
+      .eq('workspace_id', workspaceId)
+      .eq('agent_id', agentId)
+      .eq('status', 'active')
+      .lt('expires_at', new Date().toISOString());
+
+    // Find active session
+    const { data: sessionData } = await this.db
+      .from('agent_workforce_sessions')
+      .select('*')
+      .eq('workspace_id', workspaceId)
+      .eq('agent_id', agentId)
+      .eq('status', 'active')
+      .order('last_active_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (sessionData && sessionData.context_summary) {
+      activeSessionId = sessionData.id as string;
+      systemPrompt += `\n\n## Recent Session Context\n${sessionData.context_summary}`;
+      await this.db
+        .from('agent_workforce_tasks')
+        .update({ session_id: activeSessionId })
+        .eq('id', taskId);
+    } else if (sessionData) {
+      activeSessionId = sessionData.id as string;
+      await this.db
+        .from('agent_workforce_tasks')
+        .update({ session_id: activeSessionId })
+        .eq('id', taskId);
+    } else {
+      // Create new session
+      const { data: newSession } = await this.db
+        .from('agent_workforce_sessions')
+        .insert({
+          workspace_id: workspaceId,
+          agent_id: agentId,
+          title: task.title,
+        })
+        .select('id')
+        .single();
+
+      if (newSession) {
+        activeSessionId = newSession.id as string;
+        await this.db
+          .from('agent_workforce_tasks')
+          .update({ session_id: activeSessionId })
+          .eq('id', taskId);
+      }
+    }
+  } catch {
+    // Session context is best-effort; don't fail the task
+    logger.warn('[RuntimeEngine] Session context injection skipped');
+  }
+
+  return { systemPrompt, activeSessionId };
 }

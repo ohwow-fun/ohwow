@@ -24,7 +24,7 @@ import {
   parseResponseMeta,
   shouldAutoCreateDeliverable,
 } from './response-classifier.js';
-import { buildAgentSystemPrompt } from './system-prompt.js';
+import { buildAgentSystemPrompt, assembleSystemPrompt } from './system-prompt.js';
 import { resolveTaskCapabilities } from './task-capabilities.js';
 import { selectAgentModelForIteration } from './agent-model-tiers.js';
 import type { ClaudeModel } from './ai-types.js';
@@ -880,135 +880,19 @@ export class RuntimeEngine {
       } = caps;
       let fileAccessGuard = caps.fileAccessGuard;
 
-      // Scan user-provided fields for injection attempts (log-only)
-      scanForInjection(
-        { title: task.title, description: task.description, input: typeof task.input === 'string' ? task.input : null },
-        { taskId, agentId },
-      );
-
-      let systemPrompt = buildAgentSystemPrompt(this.businessContext, {
-        agentName: agent.name,
-        agentRole: agent.role,
-        agentPrompt: agent.system_prompt,
-        taskTitle: task.title,
-        taskDescription: task.description || undefined,
-        memoryDocument: memoryDoc || undefined,
-        knowledgeDocument: knowledgeDoc || undefined,
-        skillsDocument: skillsDoc || undefined,
-        webSearchEnabled,
-        browserEnabled: false, // Browser instructions injected on-demand, not upfront
-        scraplingEnabled,
-        localFilesEnabled: localFilesEnabled && fileAccessGuard !== null,
-        bashEnabled: bashEnabled && fileAccessGuard !== null,
-        devopsEnabled,
-        desktopEnabled,
-        approvalRequired,
-        goalContext,
+      // 4. Build system prompt + inject state/prev-task/parent/session context
+      const { systemPrompt: initialSystemPrompt, activeSessionId } = await assembleSystemPrompt.call(this, {
+        agent,
+        task,
+        taskId,
+        agentId,
+        workspaceId,
+        memoryDoc,
+        knowledgeDoc,
+        skillsDoc,
+        caps,
       });
-
-      // 4.1 Inject persistent state context
-      try {
-        const stateDoc = await loadStateContext(this.db, workspaceId, agentId, task.goal_id || undefined);
-        if (stateDoc) {
-          systemPrompt += `\n\n${stateDoc}`;
-        }
-      } catch {
-        logger.warn('[RuntimeEngine] State context injection skipped');
-      }
-
-      // 4.1b Inject previous task context for cross-task continuity
-      try {
-        const prevContext = await loadPreviousTaskContext(this.db, workspaceId, agentId, taskId);
-        if (prevContext) {
-          systemPrompt += `\n\n${prevContext}`;
-        }
-      } catch {
-        logger.warn('[RuntimeEngine] Previous task context injection skipped');
-      }
-
-      // 4.1c Inject parent task output for dependency chains
-      if (task.parent_task_id) {
-        try {
-          const { data: parentData } = await this.db
-            .from('agent_workforce_tasks')
-            .select('title, output')
-            .eq('id', task.parent_task_id)
-            .single();
-          if (parentData) {
-            const parent = parentData as { title: string; output: string | unknown };
-            const parentOutput = typeof parent.output === 'string'
-              ? parent.output
-              : JSON.stringify(parent.output);
-            const trimmed = parentOutput.length > 4000
-              ? parentOutput.slice(0, 4000) + '...'
-              : parentOutput;
-            systemPrompt += `\n\n## Parent Task Output\nFrom task "${parent.title}":\n\n${trimmed}`;
-          }
-        } catch {
-          logger.warn('[RuntimeEngine] Parent task context injection skipped');
-        }
-      }
-
-      // 4.2 Inject cross-session working memory
-      let activeSessionId: string | null = null;
-      try {
-        // Expire stale sessions
-        await this.db
-          .from('agent_workforce_sessions')
-          .update({ status: 'expired' })
-          .eq('workspace_id', workspaceId)
-          .eq('agent_id', agentId)
-          .eq('status', 'active')
-          .lt('expires_at', new Date().toISOString());
-
-        // Find active session
-        const { data: sessionData } = await this.db
-          .from('agent_workforce_sessions')
-          .select('*')
-          .eq('workspace_id', workspaceId)
-          .eq('agent_id', agentId)
-          .eq('status', 'active')
-          .order('last_active_at', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (sessionData && sessionData.context_summary) {
-          activeSessionId = sessionData.id as string;
-          systemPrompt += `\n\n## Recent Session Context\n${sessionData.context_summary}`;
-          await this.db
-            .from('agent_workforce_tasks')
-            .update({ session_id: activeSessionId })
-            .eq('id', taskId);
-        } else if (sessionData) {
-          activeSessionId = sessionData.id as string;
-          await this.db
-            .from('agent_workforce_tasks')
-            .update({ session_id: activeSessionId })
-            .eq('id', taskId);
-        } else {
-          // Create new session
-          const { data: newSession } = await this.db
-            .from('agent_workforce_sessions')
-            .insert({
-              workspace_id: workspaceId,
-              agent_id: agentId,
-              title: task.title,
-            })
-            .select('id')
-            .single();
-
-          if (newSession) {
-            activeSessionId = newSession.id as string;
-            await this.db
-              .from('agent_workforce_tasks')
-              .update({ session_id: activeSessionId })
-              .eq('id', taskId);
-          }
-        }
-      } catch {
-        // Session context is best-effort; don't fail the task
-        logger.warn('[RuntimeEngine] Session context injection skipped');
-      }
+      const systemPrompt = initialSystemPrompt;
 
       // 5. Build messages
       const { data: msgData } = await this.db
