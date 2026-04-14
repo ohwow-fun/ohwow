@@ -115,12 +115,15 @@ export class ExperimentProposalGenerator implements Experiment {
   category = 'other' as const;
   hypothesis =
     'Every model that appears in llm_calls with meaningful traffic should have a dedicated latency probe in the self-bench ledger. Models without one are candidates for auto-generation.';
-  // 10m cadence + runOnBoot: true so the proposal generator fires
-  // every 10 minutes (not the prior hourly) and also on the first
-  // tick after daemon restart. The generator is read-only — probe
-  // + intervene just scan llm_calls and write briefs to the ledger.
-  // No git mutation, no LLM, no cost. Safe to run frequently.
-  cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
+  // 2m cadence + runOnBoot: true during the supervised observability
+  // window. The generator is read-only — probe + intervene just scan
+  // llm_calls and dedupe against the ledger, no git mutation, no LLM,
+  // no cost — so it's safe to run frequently. Paired with the
+  // experiment-author on a 5m cadence: every generator tick can
+  // surface a new model, and the author picks them up within a few
+  // minutes rather than hours. Revert to 10m once we're bored
+  // watching the self-improvement loop live.
+  cadence = { everyMs: 2 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     // 1. Pull recent llm_calls grouped by model. One broader query,

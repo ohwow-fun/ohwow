@@ -81,14 +81,18 @@ export class ExperimentAuthorExperiment implements Experiment {
   category = 'other' as const;
   hypothesis =
     'Unclaimed experiment proposals in the ledger can be safely turned into committed code via the Phase 7-B template + Phase 7-A safe-commit pipeline, producing new experiments without human intervention.';
-  // runOnBoot: true so the first tick fires immediately after a
-  // daemon restart. Cadence matches the proposal generator (10m)
-  // so each loop iteration has generator → author handoff without
-  // a lag window where fresh briefs sit unconsumed. safeSelfCommit
-  // is still gated behind the kill switch file, so a faster
-  // cadence doesn't change the safety posture — it just makes
-  // the full loop observable in single-digit minutes.
-  cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
+  // 5m cadence + runOnBoot: true during the supervised observability
+  // window. Paired with the proposal generator on a 2m cadence: fresh
+  // briefs sit in the ledger for at most ~5 minutes before the author
+  // picks them up. The author is the expensive side of the loop
+  // (typecheck + vitest + husky hooks run ~30-90s per intervene),
+  // so it gets a slower cadence than the generator. The runner's
+  // per-experiment inFlight guard means a slow intervene never
+  // blocks the generator — the two sides stay decoupled. Revert
+  // to 10m once we're bored watching. safeSelfCommit is still
+  // gated behind the kill switch file, so the faster cadence
+  // doesn't change the safety posture.
+  cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const proposals = await this.readUnclaimedProposals(ctx);
