@@ -13,6 +13,17 @@ import { loadConfig, tryLoadConfig, isFirstRun, DEFAULT_PORT, updateConfigFile }
 const TEST_DIR = join(tmpdir(), `ohwow-config-test-${Date.now()}`);
 const TEST_CONFIG = join(TEST_DIR, 'config.json');
 
+// Snapshot the workspace env so afterEach can restore it. Necessary because
+// loadConfig() always calls resolveActiveWorkspace() (which reads
+// OHWOW_WORKSPACE then ~/.ohwow/current-workspace) and applyWorkspaceOverrides
+// (which reads the active workspace's workspace.json). If a parallel session
+// has switched the pointer to a cloud-mode workspace with a license key, the
+// loadConfig tests would inherit tier='connected' from the override layer
+// instead of seeing the test config's settings. Pinning OHWOW_WORKSPACE to
+// 'default' makes the resolver hermetic — the default workspace has no
+// workspace.json so no overrides apply.
+const ORIGINAL_OHWOW_WORKSPACE = process.env.OHWOW_WORKSPACE;
+
 beforeEach(() => {
   mkdirSync(TEST_DIR, { recursive: true });
   // Clear env vars that could interfere
@@ -21,10 +32,18 @@ beforeEach(() => {
   delete process.env.OHWOW_PORT;
   delete process.env.OHWOW_MODEL_SOURCE;
   delete process.env.OHWOW_BROWSER_HEADLESS;
+  // Pin to the default workspace so the resolver doesn't pick up whatever
+  // ~/.ohwow/current-workspace points at on the developer's machine.
+  process.env.OHWOW_WORKSPACE = 'default';
 });
 
 afterEach(() => {
   rmSync(TEST_DIR, { recursive: true, force: true });
+  if (ORIGINAL_OHWOW_WORKSPACE === undefined) {
+    delete process.env.OHWOW_WORKSPACE;
+  } else {
+    process.env.OHWOW_WORKSPACE = ORIGINAL_OHWOW_WORKSPACE;
+  }
 });
 
 describe('loadConfig', () => {
