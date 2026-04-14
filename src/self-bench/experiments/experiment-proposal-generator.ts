@@ -31,14 +31,14 @@
  *     checker has been red since <timestamp>" without humans
  *     watching a terminal.
  *
- *   Rule 4 (subprocess_health_probe — missing tool test coverage):
- *     code-reading. Scans src/orchestrator/tools/*.ts, compares
- *     against __tests__/ for a matching <name>.test.ts. For each
- *     gap, proposes a 'toolchain-tool-test-<name>' probe that runs
- *     `npx vitest run src/orchestrator/tools/__tests__/<name>.test.ts`
- *     — flagging the absence if the test file still doesn't exist
- *     after authoring, or passing once a human adds one. Capped at
- *     3/tick like Rule 2.
+ *   Rule 4 (subprocess_health_probe — existing tool test coverage):
+ *     code-reading. Scans src/orchestrator/tools/__tests__/*.test.ts
+ *     for test files that already exist and proposes a
+ *     'toolchain-tool-test-<name>' probe per file. Running a real
+ *     test is useful signal: the ledger knows whether those tests
+ *     are passing or broken. Capped at 3/tick like Rule 2.
+ *     (Previously this rule scanned for missing test files and
+ *     proposed running ghost paths that always failed — fixed.)
  *
  * Future rules: per-trigger coverage, per-agent config health,
  * per-provider cost. Each is another pass through probe().
@@ -663,21 +663,23 @@ export class ExperimentProposalGenerator implements Experiment {
   }
 
   /**
-   * Rule 4 — missing tool test coverage probes.
-   * Scans src/orchestrator/tools/*.ts, compares against the co-located
-   * __tests__/ directory for a matching <name>.test.ts file. For each
-   * gap up to MAX_TOOL_TEST_PROPOSALS_PER_TICK, emits a
-   * subprocess_health_probe brief that runs:
-   *   npx vitest run src/orchestrator/tools/__tests__/<name>.test.ts
+   * Rule 4 — existing tool test coverage probes.
+   * Scans src/orchestrator/tools/__tests__/*.test.ts for test files
+   * that already exist and proposes a subprocess_health_probe for
+   * each one that doesn't already have a proposal. Running a real
+   * test file is useful: it tells the ledger whether those tests
+   * are currently passing or broken.
    *
-   * The generated experiment:
-   *   - Returns 'fail' if the test file is absent (command exits non-0).
-   *   - Returns 'fail' if the test file exists but tests break.
-   *   - Returns 'pass' once a human writes the file and tests pass.
+   * Previously this rule scanned tool source files, found ones
+   * without a matching test, and proposed "run the missing file."
+   * That was structurally wrong — vitest on a non-existent file
+   * exits non-zero, so every generated probe immediately judged
+   * 'fail' forever. The right signal for "this tool has no tests"
+   * is a coverage-gap finding from a dedicated audit experiment,
+   * not a probe that runs ghosts.
    *
-   * Oldest-first ordering (alphabetical) so early files get covered
-   * before newer ones — the same relative priority a human reviewer
-   * would apply.
+   * Alphabetical ordering, capped at MAX_TOOL_TEST_PROPOSALS_PER_TICK
+   * per tick, same dedupe logic as Rules 2 and 3.
    */
   private proposeMissingToolTestProbes(
     proposals: ExperimentBrief[],
@@ -692,39 +694,32 @@ export class ExperimentProposalGenerator implements Experiment {
       return { tool_handlers_scanned: 0, tool_handlers_missing_tests: 0, new_tool_test_proposals: 0 };
     }
 
-    const toolsDir = path.join(status.repoRoot, 'src', 'orchestrator', 'tools');
-    const testsDir = path.join(toolsDir, '__tests__');
+    const testsDir = path.join(
+      status.repoRoot,
+      'src',
+      'orchestrator',
+      'tools',
+      '__tests__',
+    );
 
-    let toolFiles: string[];
+    // Collect existing test file basenames (without .test.ts extension).
+    let testFiles: string[];
     try {
-      toolFiles = fs
-        .readdirSync(toolsDir)
-        .filter((n) => n.endsWith('.ts') && !n.includes('.test.'))
-        .sort(); // alphabetical = oldest-introduced first
+      testFiles = fs
+        .readdirSync(testsDir)
+        .filter((n) => n.endsWith('.test.ts'))
+        .map((n) => n.replace(/\.test\.ts$/, ''))
+        .sort(); // alphabetical
     } catch {
+      // __tests__ dir may not exist yet — no proposals
       return { tool_handlers_scanned: 0, tool_handlers_missing_tests: 0, new_tool_test_proposals: 0 };
     }
 
-    // Collect existing test basenames (without extension).
-    const existingTests = new Set<string>();
-    try {
-      for (const n of fs.readdirSync(testsDir)) {
-        if (n.endsWith('.test.ts')) existingTests.add(n.replace(/\.test\.ts$/, ''));
-      }
-    } catch {
-      // __tests__ dir may not exist yet — treat as empty
-    }
-
-    let missingCount = 0;
     let newCount = 0;
 
-    for (const basename of toolFiles) {
-      const name = basename.replace(/\.ts$/, '');
-      if (existingTests.has(name)) continue;
-      missingCount += 1;
-
-      // Already at the per-tick cap — keep counting missing but stop proposing.
-      if (newCount >= MAX_TOOL_TEST_PROPOSALS_PER_TICK) continue;
+    for (const name of testFiles) {
+      // Already at the per-tick cap — stop proposing but finish the loop count.
+      if (newCount >= MAX_TOOL_TEST_PROPOSALS_PER_TICK) break;
 
       // Build slug: "toolchain-tool-test-<sanitized-name>"
       const sanitized = name
@@ -740,7 +735,7 @@ export class ExperimentProposalGenerator implements Experiment {
       const brief: ExperimentBrief = {
         slug,
         name: `Tool test coverage: ${name}`,
-        hypothesis: `${name} has a test file at ${testRelPath} that passes.`,
+        hypothesis: `${name} tests at ${testRelPath} pass on every run.`,
         everyMs: TOOL_TEST_PROBE_EVERY_MS,
         template: 'subprocess_health_probe',
         params: {
@@ -759,8 +754,12 @@ export class ExperimentProposalGenerator implements Experiment {
     }
 
     return {
-      tool_handlers_scanned: toolFiles.length,
-      tool_handlers_missing_tests: missingCount,
+      // tool_handlers_scanned now means "test files found", keeping the
+      // field name stable so existing ledger consumers don't break.
+      tool_handlers_scanned: testFiles.length,
+      // No longer meaningful (we only scan existing tests, not gaps).
+      // Keep the field for schema compatibility; always 0.
+      tool_handlers_missing_tests: 0,
       new_tool_test_proposals: newCount,
     };
   }

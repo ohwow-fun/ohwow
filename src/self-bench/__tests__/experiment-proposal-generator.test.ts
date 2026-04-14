@@ -570,18 +570,21 @@ describe('ExperimentProposalGenerator — Rule 3 (toolchain singletons)', () => 
 });
 
 /**
- * Rule 4 — subprocess_health_probe for missing tool test coverage.
- * Uses a temp directory as the fake repo root so each test can
- * control which tool files and test files exist.
+ * Rule 4 — subprocess_health_probe for existing tool test coverage.
+ * Rule 4 now scans src/orchestrator/tools/__tests__/*.test.ts for
+ * files that ALREADY EXIST and proposes a probe per file. Previously
+ * it scanned tool source files for gaps and proposed running missing
+ * paths — those always failed because vitest on a non-existent file
+ * exits non-zero. Fixed to only propose probes for real test files.
  */
-describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
+describe('ExperimentProposalGenerator — Rule 4 (existing tool tests)', () => {
   const exp: Experiment = new ExperimentProposalGenerator();
   let tempRoot: string;
   let savedEnv: string | undefined;
 
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-tool-'));
-    // Rule 4 needs tools dir + __tests__ subdir
+    // Rule 4 only needs the __tests__ subdir (scans existing test files, not source files)
     fs.mkdirSync(path.join(tempRoot, 'src', 'orchestrator', 'tools', '__tests__'), {
       recursive: true,
     });
@@ -598,14 +601,6 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
     try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  function writeTool(name: string) {
-    fs.writeFileSync(
-      path.join(tempRoot, 'src', 'orchestrator', 'tools', `${name}.ts`),
-      `// ${name} tool stub`,
-      'utf-8',
-    );
-  }
-
   function writeToolTest(name: string) {
     fs.writeFileSync(
       path.join(tempRoot, 'src', 'orchestrator', 'tools', '__tests__', `${name}.test.ts`),
@@ -614,11 +609,10 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
     );
   }
 
-  it('proposes a subprocess probe for each tool missing a test file', async () => {
-    writeTool('bash');
-    writeTool('filesystem');
-    writeTool('agents');
-    writeToolTest('agents'); // agents has a test; bash and filesystem do not
+  it('proposes a subprocess probe for each existing test file', async () => {
+    writeToolTest('bash');
+    writeToolTest('filesystem');
+    writeToolTest('agents');
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
@@ -627,50 +621,52 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
       new_tool_test_proposals: number;
       proposals: Array<{ template: string; slug: string; params: { command: string } }>;
     };
+    // tool_handlers_scanned = number of test files found
     expect(ev.tool_handlers_scanned).toBe(3);
-    expect(ev.tool_handlers_missing_tests).toBe(2);
-    expect(ev.new_tool_test_proposals).toBe(2);
+    // tool_handlers_missing_tests is always 0 (no longer tracked)
+    expect(ev.tool_handlers_missing_tests).toBe(0);
+    expect(ev.new_tool_test_proposals).toBe(3);
     const toolBriefs = ev.proposals.filter(
       (p) => p.template === 'subprocess_health_probe' &&
         p.slug.startsWith('toolchain-tool-test-'),
     );
-    expect(toolBriefs).toHaveLength(2);
+    expect(toolBriefs).toHaveLength(3);
     const slugs = toolBriefs.map((p) => p.slug);
     expect(slugs).toContain('toolchain-tool-test-bash');
     expect(slugs).toContain('toolchain-tool-test-filesystem');
+    expect(slugs).toContain('toolchain-tool-test-agents');
     const bashBrief = toolBriefs.find((p) => p.slug === 'toolchain-tool-test-bash');
     expect(bashBrief!.params.command).toContain('bash.test.ts');
   });
 
-  it('skips tools that already have a matching test file', async () => {
-    writeTool('covered-tool');
-    writeToolTest('covered-tool');
+  it('emits no proposals when __tests__ dir is empty', async () => {
+    // No test files written — directory exists but is empty
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
-      tool_handlers_missing_tests: number;
+      tool_handlers_scanned: number;
       new_tool_test_proposals: number;
     };
-    expect(ev.tool_handlers_missing_tests).toBe(0);
+    expect(ev.tool_handlers_scanned).toBe(0);
     expect(ev.new_tool_test_proposals).toBe(0);
   });
 
   it('caps at MAX_TOOL_TEST_PROPOSALS_PER_TICK (3) per tick', async () => {
     for (const name of ['a-tool', 'b-tool', 'c-tool', 'd-tool', 'e-tool']) {
-      writeTool(name);
+      writeToolTest(name);
     }
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
-      tool_handlers_missing_tests: number;
+      tool_handlers_scanned: number;
       new_tool_test_proposals: number;
     };
-    expect(ev.tool_handlers_missing_tests).toBe(5);
+    expect(ev.tool_handlers_scanned).toBe(5);
     expect(ev.new_tool_test_proposals).toBe(3); // capped
   });
 
   it('dedupes against existing slugs in the ledger', async () => {
-    writeTool('bash');
+    writeToolTest('bash');
     const env = buildDb({
       existing_proposals: [
         {
@@ -687,8 +683,8 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
     expect(ev.new_tool_test_proposals).toBe(0);
   });
 
-  it('converts underscores to hyphens in tool file slugs', async () => {
-    writeTool('local_write_file');
+  it('converts underscores to hyphens in test file slugs', async () => {
+    writeToolTest('local_write_file');
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
@@ -702,7 +698,7 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
   });
 
   it('generated tool-test briefs pass validateBrief', async () => {
-    writeTool('my-tool');
+    writeToolTest('my-tool');
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { proposals: Array<unknown> };
@@ -716,7 +712,7 @@ describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
   });
 
   it('intervene writes a self_findings row for each tool-test brief', async () => {
-    writeTool('my-tool');
+    writeToolTest('my-tool');
     const env = buildDb({
       // pre-fill all three toolchain slugs so the only new proposal is the tool-test one
       existing_proposals: [
