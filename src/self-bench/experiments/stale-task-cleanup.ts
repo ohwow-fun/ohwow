@@ -55,6 +55,7 @@ import type {
   Finding,
   InterventionApplied,
   ProbeResult,
+  ValidationResult,
   Verdict,
 } from '../experiment-types.js';
 
@@ -96,7 +97,14 @@ export class StaleTaskCleanupExperiment implements Experiment {
   // immediately instead of waiting 5 minutes into the new process.
   // Legitimate fresh in_progress tasks are protected by the
   // STALE_THRESHOLD_MS + started_at guards, so this is safe.
-  cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
+  //
+  // validationDelayMs: 15 minutes. After a cleanup the runner
+  // checks whether any of the reset agents have accumulated new
+  // stale tasks. 15m is enough time for the scheduler to dispatch
+  // fresh work to the unlocked agents and for those tasks to run
+  // past the STALE_THRESHOLD_MS if whatever killed the first round
+  // is still killing tasks.
+  cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true, validationDelayMs: 15 * 60 * 1000 };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const now = Date.now();
@@ -194,6 +202,86 @@ export class StaleTaskCleanupExperiment implements Experiment {
         cleaned_task_ids: cleanedTaskIds,
         affected_agent_ids: Array.from(affectedAgentIds),
         stale_threshold_ms: ev.stale_threshold_ms,
+      },
+    };
+  }
+
+  /**
+   * Phase 3 accountability check: 15 minutes after a cleanup, verify
+   * the intervention actually held. The three outcomes:
+   *
+   * - 'held': none of the reset agents have accumulated new stale
+   *   tasks. The cleanup unblocked them and the system moved on.
+   * - 'failed': at least one reset agent has a NEW stale task now.
+   *   Whatever killed the first round of tasks killed the second
+   *   round too. The sweeper is fighting a symptom, not the cause —
+   *   operator should investigate the underlying dispatcher/model
+   *   failure.
+   * - 'inconclusive': the baseline had no affected agents (shouldn't
+   *   happen, but defensive) or the agent lookup returned nothing.
+   */
+  async validate(
+    baseline: Record<string, unknown>,
+    ctx: ExperimentContext,
+  ): Promise<ValidationResult> {
+    const cleanedTaskIds = (baseline.cleaned_task_ids as string[] | undefined) ?? [];
+    const affectedAgentIds = (baseline.affected_agent_ids as string[] | undefined) ?? [];
+
+    if (affectedAgentIds.length === 0) {
+      return {
+        outcome: 'inconclusive',
+        summary: 'no affected agents in baseline — nothing to validate',
+        evidence: { baseline_agent_count: 0 },
+      };
+    }
+
+    // Query current stale tasks and filter to ones owned by agents
+    // the original cleanup reset. A new stale task owned by a reset
+    // agent is a rebound — the cleanup didn't actually fix the
+    // underlying cause.
+    const cutoffIso = new Date(Date.now() - STALE_THRESHOLD_MS).toISOString();
+    const { data } = await ctx.db
+      .from<StaleTaskRow>('agent_workforce_tasks')
+      .select('id, agent_id, title, started_at, updated_at, status')
+      .eq('status', 'in_progress')
+      .lt('updated_at', cutoffIso);
+
+    const currentStaleRows = (data ?? []) as StaleTaskRow[];
+    const resetAgentSet = new Set(affectedAgentIds);
+    const rebounds = currentStaleRows.filter((r) => resetAgentSet.has(r.agent_id));
+
+    // Also guard against "the same task came back as in_progress" —
+    // shouldn't happen because intervene set status=failed, but if
+    // something else flipped it back we want to know.
+    const cleanedIdSet = new Set(cleanedTaskIds);
+    const resurrected = currentStaleRows.filter((r) => cleanedIdSet.has(r.id));
+
+    if (rebounds.length === 0 && resurrected.length === 0) {
+      return {
+        outcome: 'held',
+        summary: `cleanup held: ${cleanedTaskIds.length} task(s) stayed cleared, ${affectedAgentIds.length} agent(s) did not re-accumulate stale work`,
+        evidence: {
+          cleaned_task_count: cleanedTaskIds.length,
+          affected_agent_count: affectedAgentIds.length,
+          current_stale_from_reset_agents: 0,
+          resurrected_task_count: 0,
+        },
+      };
+    }
+
+    return {
+      outcome: 'failed',
+      summary: `cleanup rebounded: ${rebounds.length} reset agent(s) have new stale task(s); ${resurrected.length} original task(s) resurrected`,
+      evidence: {
+        cleaned_task_count: cleanedTaskIds.length,
+        affected_agent_count: affectedAgentIds.length,
+        rebounds: rebounds.map((r) => ({
+          task_id: r.id,
+          agent_id: r.agent_id,
+          title: r.title,
+          updated_at: r.updated_at,
+        })),
+        resurrected_task_ids: resurrected.map((r) => r.id),
       },
     };
   }
