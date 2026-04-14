@@ -51,4 +51,5 @@ export const TOOLCHAIN_TEST_REGISTRY: readonly ToolchainTestProbeConfig[] = [
   { slug: 'wiki' },
   { slug: 'work-router' },
   { slug: 'x-posting' },
+  { slug: 'workflows' },
 ];
