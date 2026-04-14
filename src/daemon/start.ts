@@ -61,6 +61,7 @@ import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-i
 import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
 import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/autonomous-author-quality.js';
 import { AutonomousPatchRollbackExperiment } from '../self-bench/experiments/autonomous-patch-rollback.js';
+import { PatchAuthorExperiment } from '../self-bench/experiments/patch-author.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1436,6 +1437,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // experiment flags candidates in the ledger but does not
         // mutate main. Probe is read-only and always safe to run.
         experimentRunner.register(new AutonomousPatchRollbackExperiment());
+        // Capstone application of Layers 1-9: discovers self_findings
+        // whose affected_files intersect a tier-2 path and surfaces
+        // them as patch candidates. Observe-only on first ship — does
+        // NOT call a model and does NOT call safeSelfCommit. Once a
+        // few cycles confirm the discovery half is sound, a follow-up
+        // wires the model + Layer 8 prompt + Layer 4 AST bound +
+        // Layer 2 trailer + safeSelfCommit. See the experiment header
+        // for the gating criteria.
+        experimentRunner.register(new PatchAuthorExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
