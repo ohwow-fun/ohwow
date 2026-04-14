@@ -58,6 +58,7 @@ import {
   refreshRuntimeConfigCache,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
 } from '../self-bench/runtime-config.js';
+import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1320,6 +1321,22 @@ export async function startDaemon(): Promise<DaemonHandle> {
       setInterval(() => {
         void refreshRuntimeConfigCache(db);
       }, RUNTIME_CONFIG_REFRESH_INTERVAL_MS);
+
+      // Phase 7-A: configure the self-commit repo root from the
+      // daemon binary path. Derives /path/to/repo from
+      // /path/to/repo/dist/index.js. Self-commit stays disabled
+      // by default regardless — the kill-switch file at
+      // ~/.ohwow/self-commit-enabled is the operator's opt-in.
+      try {
+        const entryPath = process.argv[1];
+        if (entryPath) {
+          const derived = dirname(dirname(entryPath));
+          setSelfCommitRepoRoot(derived);
+          logger.debug({ repoRoot: derived }, '[daemon] self-commit repo root configured');
+        }
+      } catch (err) {
+        logger.debug({ err }, '[daemon] could not configure self-commit repo root');
+      }
 
       if (engine) {
         const experimentRunner = new ExperimentRunner(db, engine, workspaceId);
