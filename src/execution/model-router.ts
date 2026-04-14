@@ -63,7 +63,7 @@ export interface ModelResponse {
   outputTokens: number;
   model: string;
   provider: 'anthropic' | 'ollama' | 'openrouter' | 'claude-code' | 'llama-cpp' | 'mlx' | 'openai-compatible';
-  /** Actual cost in cents reported by provider (e.g., OpenRouter x-openrouter-cost header). */
+  /** Actual cost in cents reported by provider (e.g., OpenRouter usage.cost field in USD). */
   costCents?: number;
 }
 
@@ -1073,6 +1073,7 @@ export class OpenRouterProvider implements ModelProvider {
           max_tokens: params.maxTokens || 4096,
           temperature: params.temperature ?? 0.5,
           stream: false,
+          usage: { include: true },
         }),
       });
     } catch (err) {
@@ -1088,17 +1089,17 @@ export class OpenRouterProvider implements ModelProvider {
 
     const data = await response.json() as {
       choices: Array<{ message: { content: string } }>;
-      usage?: { prompt_tokens: number; completion_tokens: number };
+      usage?: { prompt_tokens: number; completion_tokens: number; cost?: number };
     };
 
     const content = data.choices?.[0]?.message?.content || '';
     const usage = data.usage || { prompt_tokens: 0, completion_tokens: 0 };
     const _durationMs = Date.now() - startTime;
 
-    // Extract actual cost from OpenRouter response header (USD → cents)
-    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
-    const costCents = openrouterCostHeader
-      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+    // Extract actual cost from OpenRouter usage.cost (USD → cents).
+    // Requires `usage: { include: true }` in the request body.
+    const costCents = typeof data.usage?.cost === 'number'
+      ? Math.ceil(data.usage.cost * 100)
       : undefined;
 
     return {
@@ -1147,6 +1148,7 @@ export class OpenRouterProvider implements ModelProvider {
           stream: false,
           tools: params.tools,
           tool_choice: (params as unknown as Record<string, unknown>).toolChoice || 'auto',
+          usage: { include: true },
         }),
       });
     } catch (err) {
@@ -1171,7 +1173,7 @@ export class OpenRouterProvider implements ModelProvider {
           }>;
         };
       }>;
-      usage?: { prompt_tokens: number; completion_tokens: number };
+      usage?: { prompt_tokens: number; completion_tokens: number; cost?: number };
     };
 
     const choice = data.choices?.[0];
@@ -1189,10 +1191,10 @@ export class OpenRouterProvider implements ModelProvider {
         },
       }));
 
-    // Extract actual cost from OpenRouter response header (USD → cents)
-    const openrouterCostHeader = response.headers.get('x-openrouter-cost');
-    const costCents = openrouterCostHeader
-      ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+    // Extract actual cost from OpenRouter usage.cost (USD → cents).
+    // Requires `usage: { include: true }` in the request body.
+    const costCents = typeof data.usage?.cost === 'number'
+      ? Math.ceil(data.usage.cost * 100)
       : undefined;
 
     return {
@@ -1263,6 +1265,7 @@ export class OpenRouterProvider implements ModelProvider {
           max_tokens: params.maxTokens || 4096,
           temperature: params.temperature ?? 0.5,
           stream: true,
+          stream_options: { include_usage: true },
           tools: params.tools,
           tool_choice: 'auto',
         }),
@@ -1276,7 +1279,7 @@ export class OpenRouterProvider implements ModelProvider {
     }
 
     let fullContent = '';
-    let usage = { prompt_tokens: 0, completion_tokens: 0 };
+    let usage: { prompt_tokens: number; completion_tokens: number; cost?: number } = { prompt_tokens: 0, completion_tokens: 0 };
     const toolCallAccum = new Map<number, { id: string; name: string; arguments: string }>();
     let hasToolCalls = false;
 
@@ -1326,7 +1329,7 @@ export class OpenRouterProvider implements ModelProvider {
                     }>;
                   };
                 }>;
-                usage?: { prompt_tokens: number; completion_tokens: number };
+                usage?: { prompt_tokens: number; completion_tokens: number; cost?: number };
               };
 
               const delta = chunk.choices?.[0]?.delta;
@@ -1370,10 +1373,10 @@ export class OpenRouterProvider implements ModelProvider {
 
       const _durationMs = Date.now() - startTime;
 
-      // Extract actual cost from OpenRouter response header
-      const openrouterCostHeader = response.headers.get('x-openrouter-cost');
-      const costCents = openrouterCostHeader
-        ? Math.ceil(parseFloat(openrouterCostHeader) * 100)
+      // Extract actual cost from OpenRouter usage.cost (USD → cents).
+      // Arrives in the final SSE chunk thanks to stream_options.include_usage.
+      const costCents = typeof usage.cost === 'number'
+        ? Math.ceil(usage.cost * 100)
         : undefined;
 
       const toolCalls: OpenAIToolCall[] = Array.from(toolCallAccum.values())
