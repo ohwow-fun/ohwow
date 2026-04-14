@@ -26,7 +26,6 @@ export function createSystemRouter(
       const { data: apiKeyRow } = await db.from('runtime_settings')
         .select('value')
         .eq('key', 'anthropic_api_key')
-        .eq('workspace_id', workspaceId)
         .maybeSingle();
 
       const hasAnthropicKey = !!(apiKeyRow as { value: string } | null)?.value || !!process.env.ANTHROPIC_API_KEY;
@@ -57,9 +56,9 @@ export function createSystemRouter(
       // OpenRouter catalog so the Chat model picker reflects what the
       // orchestrator actually uses when no Anthropic key / Ollama is around.
       const [{ data: orchRow }, { data: cloudProviderRow }, { data: orKeyRow }] = await Promise.all([
-        db.from('runtime_settings').select('value').eq('key', 'orchestrator_model').eq('workspace_id', workspaceId).maybeSingle(),
-        db.from('runtime_settings').select('value').eq('key', 'cloud_provider').eq('workspace_id', workspaceId).maybeSingle(),
-        db.from('runtime_settings').select('value').eq('key', 'openrouter_api_key').eq('workspace_id', workspaceId).maybeSingle(),
+        db.from('runtime_settings').select('value').eq('key', 'orchestrator_model').maybeSingle(),
+        db.from('runtime_settings').select('value').eq('key', 'cloud_provider').maybeSingle(),
+        db.from('runtime_settings').select('value').eq('key', 'openrouter_api_key').maybeSingle(),
       ]);
       const orchestratorModel = (orchRow as { value: string } | null)?.value || '';
       const cloudProvider = (cloudProviderRow as { value: string } | null)?.value || '';
@@ -82,7 +81,6 @@ export function createSystemRouter(
       const { data: modelRow } = await db.from('runtime_settings')
         .select('value')
         .eq('key', 'ollama_model')
-        .eq('workspace_id', workspaceId)
         .maybeSingle();
       const activeOllama = (modelRow as { value: string } | null)?.value || '';
       const currentModel = orchestratorModel
