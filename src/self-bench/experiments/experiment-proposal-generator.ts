@@ -173,6 +173,16 @@ export class ExperimentProposalGenerator implements Experiment {
       // meaningful ceiling.
       const failMs = Math.max(p99, warnMs + 500);
 
+      // sample_size is the rolling window the generated experiment
+      // will probe at runtime. min_samples is the floor below which
+      // the experiment returns 'warning' instead of a verdict.
+      // Clamp min_samples to sample_size so the brief is structurally
+      // valid even for low-traffic models — validateBrief requires
+      // min_samples <= sample_size, and hardcoding min_samples=10
+      // broke that invariant when we lowered MIN_CALLS_FOR_PROPOSAL.
+      const sampleSize = Math.min(50, latencies.length);
+      const minSamples = Math.min(10, sampleSize);
+
       const brief: ExperimentBrief = {
         slug,
         name: `Latency probe: ${model}`,
@@ -181,10 +191,10 @@ export class ExperimentProposalGenerator implements Experiment {
         template: 'model_latency_probe',
         params: {
           model_id: model,
-          sample_size: Math.min(50, latencies.length),
+          sample_size: sampleSize,
           warn_latency_ms: warnMs,
           fail_latency_ms: failMs,
-          min_samples: 10,
+          min_samples: minSamples,
         } satisfies ModelLatencyProbeParams,
       };
       proposals.push(brief);

@@ -88,13 +88,30 @@ describe('ExperimentProposalGenerator', () => {
   });
 
   it('skips models with fewer than MIN_CALLS_FOR_PROPOSAL samples', async () => {
+    // MIN_CALLS_FOR_PROPOSAL is 5 — use 3 samples to be below the floor.
     const env = buildDb({
-      llm_calls: Array.from({ length: 10 }, () => llmCall('small/sample', 100)),
+      llm_calls: Array.from({ length: 3 }, () => llmCall('small/sample', 100)),
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { new_proposals: number; skipped_due_to_low_samples: number };
     expect(ev.new_proposals).toBe(0);
     expect(ev.skipped_due_to_low_samples).toBe(1);
+  });
+
+  it('clamps min_samples to sample_size for low-traffic models (validateBrief invariant)', async () => {
+    // Model with 6 samples — above the 5-sample floor, below the
+    // default hardcoded min_samples of 10. The generator must
+    // clamp min_samples so validateBrief passes (min_samples <= sample_size).
+    const env = buildDb({
+      llm_calls: Array.from({ length: 6 }, (_, i) => llmCall('low/traffic', 500 + i * 100)),
+    });
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as { proposals: Array<{ params: { sample_size: number; min_samples: number } }> };
+    expect(ev.proposals).toHaveLength(1);
+    const params = ev.proposals[0].params;
+    expect(params.sample_size).toBe(6);
+    expect(params.min_samples).toBe(6); // clamped from 10 down to sample_size
+    expect(params.min_samples).toBeLessThanOrEqual(params.sample_size);
   });
 
   it('proposes a latency probe for a model with enough samples', async () => {
