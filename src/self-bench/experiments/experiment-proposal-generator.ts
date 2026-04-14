@@ -10,32 +10,38 @@
  * fillExperimentTemplate (Phase 7-B) consumes.
  *
  * The proposal generator is narrow on purpose and grows one rule
- * at a time. Today it runs two:
+ * at a time. Today it runs four:
  *
- *   Rule 1 (model_latency_probe proposal):
- *     For each model_id in llm_calls that has at least MIN_SAMPLES
- *     recent calls AND no existing experiment with
- *     slug=`model-latency-<sanitized-id>` (checked via existing
- *     findings with that subject), propose a new latency probe
- *     targeted at that model. Thresholds are derived from the
- *     observed latency distribution — warn at p90, fail at p99 —
- *     so the generated experiment's alert shape matches the
- *     baseline at generation time.
+ *   Rule 1 (model_latency_probe): traffic-driven. For each model_id
+ *     in llm_calls with enough recent calls, proposes a latency probe.
  *
- *   Rule 2 (migration_schema_probe proposal):
- *     Code-reading rule. Scans src/db/migrations/*.sql at runtime,
- *     regex-extracts every `CREATE TABLE [IF NOT EXISTS] <name>`
- *     statement, and proposes one schema-drift canary per migration
- *     file whose slug hasn't been seen in the dedupe window. The
- *     generated probes are read-only — a single SELECT on
- *     sqlite_master — so they're safe to run frequently. Bounded
- *     per tick by MAX_MIGRATION_PROPOSALS_PER_TICK so the author
- *     side doesn't get a 120-brief backlog on a fresh DB.
+ *   Rule 2 (migration_schema_probe): code-reading. Scans
+ *     src/db/migrations/*.sql, proposes a schema-drift canary per
+ *     migration file (newest first, capped at 3/tick).
  *
- * Future rules could cover: per-tool reliability probes,
- * per-trigger-type coverage probes, per-agent-config health probes,
- * per-provider cost probes. Each additional rule is another pass
- * through probe() that adds to the proposals list.
+ *   Rule 3 (subprocess_health_probe — toolchain singletons): proposes
+ *     three fixed experiments once each, then dedupe stops them
+ *     forever. These model the developer workflow directly:
+ *       toolchain-typecheck  — npm run typecheck (30m)
+ *       toolchain-lint       — npm run lint       (1h)
+ *       toolchain-tests      — npm test           (2h)
+ *     Once authored, these run on cadence and write pass/fail
+ *     findings for every daemon restart. A 'fail' finding is the
+ *     ledger entry a future Phase 7-E can read to know "the type
+ *     checker has been red since <timestamp>" without humans
+ *     watching a terminal.
+ *
+ *   Rule 4 (subprocess_health_probe — missing tool test coverage):
+ *     code-reading. Scans src/orchestrator/tools/*.ts, compares
+ *     against __tests__/ for a matching <name>.test.ts. For each
+ *     gap, proposes a 'toolchain-tool-test-<name>' probe that runs
+ *     `npx vitest run src/orchestrator/tools/__tests__/<name>.test.ts`
+ *     — flagging the absence if the test file still doesn't exist
+ *     after authoring, or passing once a human adds one. Capped at
+ *     3/tick like Rule 2.
+ *
+ * Future rules: per-trigger coverage, per-agent config health,
+ * per-provider cost. Each is another pass through probe().
  *
  * Why this is a separate experiment from the author
  * -------------------------------------------------
@@ -66,6 +72,7 @@ import type {
   ExperimentBrief,
   MigrationSchemaProbeParams,
   ModelLatencyProbeParams,
+  SubprocessHealthProbeParams,
 } from '../experiment-template.js';
 import { validateBrief } from '../experiment-template.js';
 import { writeFinding } from '../findings-store.js';
@@ -103,6 +110,57 @@ const MIGRATION_MAX_TABLES_PER_PROBE = 50;
 /** Slug length ceiling (validateBrief enforces the same value). */
 const SLUG_MAX_LENGTH = 50;
 
+/**
+ * Rule 3 — toolchain singleton definitions. Three fixed experiments,
+ * one per developer-workflow command. Each is proposed once (dedupe
+ * stops re-emission forever), then runs on the baked-in cadence.
+ */
+const TOOLCHAIN_EXPERIMENTS: ReadonlyArray<{
+  slug: string;
+  name: string;
+  description: string;
+  command: string;
+  everyMs: number;
+  timeoutMs: number;
+  hypothesis: string;
+}> = Object.freeze([
+  {
+    slug: 'toolchain-typecheck',
+    name: 'TypeScript type checker health',
+    description: 'TypeScript type checker (npm run typecheck)',
+    command: 'npm run typecheck',
+    everyMs: 30 * 60 * 1000,     // 30m — fast feedback on type regressions
+    timeoutMs: 3 * 60 * 1000,    // 3 min ceiling
+    hypothesis: 'npm run typecheck exits with code 0 on every run.',
+  },
+  {
+    slug: 'toolchain-lint',
+    name: 'ESLint linter health',
+    description: 'ESLint linter (npm run lint)',
+    command: 'npm run lint',
+    everyMs: 60 * 60 * 1000,     // 1h — lint drifts slower than types
+    timeoutMs: 2 * 60 * 1000,    // 2 min ceiling
+    hypothesis: 'npm run lint exits with code 0 on every run.',
+  },
+  {
+    slug: 'toolchain-tests',
+    name: 'Full test suite health',
+    description: 'Full test suite (npm test)',
+    command: 'npm test',
+    everyMs: 2 * 60 * 60 * 1000, // 2h — tests are slower to run
+    timeoutMs: 5 * 60 * 1000,    // 5 min ceiling
+    hypothesis: 'npm test exits with code 0 on every run.',
+  },
+]);
+
+/**
+ * Rule 4 throttle: never emit more than N missing-tool-test briefs
+ * per tick so the author queue doesn't spike on the first run.
+ */
+const MAX_TOOL_TEST_PROPOSALS_PER_TICK = 3;
+/** Cadence baked into each generated tool-test probe. */
+const TOOL_TEST_PROBE_EVERY_MS = 6 * 60 * 60 * 1000; // 6h
+
 interface LlmCallRow {
   model: string;
   latency_ms: number;
@@ -118,6 +176,10 @@ interface ProposalGeneratorEvidence extends Record<string, unknown> {
   migration_files_with_tables: number;
   new_migration_proposals: number;
   migration_repo_root_unavailable: boolean;
+  new_toolchain_proposals: number;
+  tool_handlers_scanned: number;
+  tool_handlers_missing_tests: number;
+  new_tool_test_proposals: number;
   proposals: ExperimentBrief[];
 }
 
@@ -289,6 +351,22 @@ export class ExperimentProposalGenerator implements Experiment {
       existingProposals,
     );
 
+    // 4. Rule 3 — toolchain singleton probes. Three fixed slugs that
+    //    model the developer workflow: typecheck, lint, tests. Each is
+    //    proposed once; dedupe prevents re-emission after that.
+    const toolchainSummary = this.proposeToolchainSingletons(
+      proposals,
+      existingProposals,
+    );
+
+    // 5. Rule 4 — missing tool test coverage probes. Scans
+    //    src/orchestrator/tools/*.ts, compares against __tests__/, and
+    //    proposes a subprocess probe for each uncovered tool (cap 3/tick).
+    const toolTestSummary = this.proposeMissingToolTestProbes(
+      proposals,
+      existingProposals,
+    );
+
     const evidence: ProposalGeneratorEvidence = {
       inspected_models: byModel.size,
       existing_proposals: existingProposals.size,
@@ -298,15 +376,20 @@ export class ExperimentProposalGenerator implements Experiment {
       migration_files_with_tables: migrationSummary.migration_files_with_tables,
       new_migration_proposals: migrationSummary.new_migration_proposals,
       migration_repo_root_unavailable: migrationSummary.repo_root_unavailable,
+      new_toolchain_proposals: toolchainSummary.new_toolchain_proposals,
+      tool_handlers_scanned: toolTestSummary.tool_handlers_scanned,
+      tool_handlers_missing_tests: toolTestSummary.tool_handlers_missing_tests,
+      new_tool_test_proposals: toolTestSummary.new_tool_test_proposals,
       proposals,
     };
 
-    const summary =
-      byModel.size === 0 && migrationSummary.migrations_scanned === 0
-        ? 'no llm_calls rows and no migrations readable — nothing to propose'
-        : proposals.length === 0
-          ? `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s), nothing new to propose (${existingProposals.size} already covered)`
-          : `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s), generated ${proposals.length} new proposal(s) (${migrationSummary.new_migration_proposals} migration)`;
+    const allSignals = [byModel.size, migrationSummary.migrations_scanned, toolTestSummary.tool_handlers_scanned];
+    const anySignal = allSignals.some((n) => n > 0);
+    const summary = !anySignal && toolchainSummary.new_toolchain_proposals === 0
+      ? 'no llm_calls rows and no migrations readable — nothing to propose'
+      : proposals.length === 0
+        ? `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s) + ${toolTestSummary.tool_handlers_scanned} tool(s), nothing new to propose (${existingProposals.size} already covered)`
+        : `inspected ${byModel.size} model(s) + ${migrationSummary.migrations_scanned} migration(s) + ${toolTestSummary.tool_handlers_scanned} tool(s), generated ${proposals.length} new proposal(s)`;
 
     return {
       subject: null,
@@ -317,11 +400,19 @@ export class ExperimentProposalGenerator implements Experiment {
 
   judge(result: ProbeResult, _history: Finding[]): Verdict {
     const ev = result.evidence as ProposalGeneratorEvidence;
-    // Rule 1 and Rule 2 are both signal sources. If BOTH are
-    // silent (no models AND no migrations readable), the generator
-    // can't do its job — warning. Otherwise any proposals landing
-    // in the ledger are work queue entries, not problems, so pass.
-    if (ev.inspected_models === 0 && ev.migrations_scanned === 0) {
+    // Warning only when ALL data sources are silent: no LLM traffic,
+    // no migration files readable (implies no repo root), no tool
+    // handlers found, AND no toolchain singletons were newly proposed
+    // (implies they're all already in the ledger — that's fine, but if
+    // EVERYTHING is zero the generator has no signals at all).
+    // In steady state (all covered) inspected_models and
+    // migrations_scanned will still be > 0 so this branch stays quiet.
+    if (
+      ev.inspected_models === 0 &&
+      ev.migrations_scanned === 0 &&
+      ev.tool_handlers_scanned === 0 &&
+      ev.new_toolchain_proposals === 0
+    ) {
       return 'warning';
     }
     return 'pass';
@@ -526,6 +617,151 @@ export class ExperimentProposalGenerator implements Experiment {
       migration_files_with_tables: filesWithTables,
       new_migration_proposals: newCount,
       repo_root_unavailable: false,
+    };
+  }
+
+  /**
+   * Rule 3 — toolchain singleton probes.
+   * Proposes exactly three fixed experiments: typecheck, lint, tests.
+   * These model the developer workflow so the ledger accumulates a
+   * continuous pass/fail history for each tool without a human watching
+   * a terminal. Once all three slugs are in the ledger the dedupe check
+   * silently drops them every subsequent tick — zero overhead at steady
+   * state.
+   */
+  private proposeToolchainSingletons(
+    proposals: ExperimentBrief[],
+    existingProposals: Set<string>,
+  ): { new_toolchain_proposals: number } {
+    let count = 0;
+    for (const tc of TOOLCHAIN_EXPERIMENTS) {
+      if (existingProposals.has(tc.slug)) continue;
+
+      const brief: ExperimentBrief = {
+        slug: tc.slug,
+        name: tc.name,
+        hypothesis: tc.hypothesis,
+        everyMs: tc.everyMs,
+        template: 'subprocess_health_probe',
+        params: {
+          command: tc.command,
+          description: tc.description,
+          capture_lines: 50,
+          timeout_ms: tc.timeoutMs,
+        } satisfies SubprocessHealthProbeParams,
+      };
+
+      // validateBrief is a safety net; params are hardcoded so this
+      // should never fail in practice.
+      if (validateBrief(brief) !== null) continue;
+
+      proposals.push(brief);
+      existingProposals.add(tc.slug);
+      count += 1;
+    }
+    return { new_toolchain_proposals: count };
+  }
+
+  /**
+   * Rule 4 — missing tool test coverage probes.
+   * Scans src/orchestrator/tools/*.ts, compares against the co-located
+   * __tests__/ directory for a matching <name>.test.ts file. For each
+   * gap up to MAX_TOOL_TEST_PROPOSALS_PER_TICK, emits a
+   * subprocess_health_probe brief that runs:
+   *   npx vitest run src/orchestrator/tools/__tests__/<name>.test.ts
+   *
+   * The generated experiment:
+   *   - Returns 'fail' if the test file is absent (command exits non-0).
+   *   - Returns 'fail' if the test file exists but tests break.
+   *   - Returns 'pass' once a human writes the file and tests pass.
+   *
+   * Oldest-first ordering (alphabetical) so early files get covered
+   * before newer ones — the same relative priority a human reviewer
+   * would apply.
+   */
+  private proposeMissingToolTestProbes(
+    proposals: ExperimentBrief[],
+    existingProposals: Set<string>,
+  ): {
+    tool_handlers_scanned: number;
+    tool_handlers_missing_tests: number;
+    new_tool_test_proposals: number;
+  } {
+    const status = getSelfCommitStatus();
+    if (!status.repoRoot) {
+      return { tool_handlers_scanned: 0, tool_handlers_missing_tests: 0, new_tool_test_proposals: 0 };
+    }
+
+    const toolsDir = path.join(status.repoRoot, 'src', 'orchestrator', 'tools');
+    const testsDir = path.join(toolsDir, '__tests__');
+
+    let toolFiles: string[];
+    try {
+      toolFiles = fs
+        .readdirSync(toolsDir)
+        .filter((n) => n.endsWith('.ts') && !n.includes('.test.'))
+        .sort(); // alphabetical = oldest-introduced first
+    } catch {
+      return { tool_handlers_scanned: 0, tool_handlers_missing_tests: 0, new_tool_test_proposals: 0 };
+    }
+
+    // Collect existing test basenames (without extension).
+    const existingTests = new Set<string>();
+    try {
+      for (const n of fs.readdirSync(testsDir)) {
+        if (n.endsWith('.test.ts')) existingTests.add(n.replace(/\.test\.ts$/, ''));
+      }
+    } catch {
+      // __tests__ dir may not exist yet — treat as empty
+    }
+
+    let missingCount = 0;
+    let newCount = 0;
+
+    for (const basename of toolFiles) {
+      const name = basename.replace(/\.ts$/, '');
+      if (existingTests.has(name)) continue;
+      missingCount += 1;
+
+      // Already at the per-tick cap — keep counting missing but stop proposing.
+      if (newCount >= MAX_TOOL_TEST_PROPOSALS_PER_TICK) continue;
+
+      // Build slug: "toolchain-tool-test-<sanitized-name>"
+      const sanitized = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      const slug = `toolchain-tool-test-${sanitized}`;
+      if (slug.length > SLUG_MAX_LENGTH) continue;
+      if (existingProposals.has(slug)) continue;
+
+      const testRelPath = `src/orchestrator/tools/__tests__/${name}.test.ts`;
+
+      const brief: ExperimentBrief = {
+        slug,
+        name: `Tool test coverage: ${name}`,
+        hypothesis: `${name} has a test file at ${testRelPath} that passes.`,
+        everyMs: TOOL_TEST_PROBE_EVERY_MS,
+        template: 'subprocess_health_probe',
+        params: {
+          command: `npx vitest run ${testRelPath}`,
+          description: `Test coverage probe for ${name}`,
+          capture_lines: 30,
+          timeout_ms: 60 * 1000, // 60s per tool test run
+        } satisfies SubprocessHealthProbeParams,
+      };
+
+      if (validateBrief(brief) !== null) continue;
+
+      proposals.push(brief);
+      existingProposals.add(slug);
+      newCount += 1;
+    }
+
+    return {
+      tool_handlers_scanned: toolFiles.length,
+      tool_handlers_missing_tests: missingCount,
+      new_tool_test_proposals: newCount,
     };
   }
 }

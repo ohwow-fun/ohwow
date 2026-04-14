@@ -74,6 +74,22 @@ function makeCtx(env: ReturnType<typeof buildDb>): ExperimentContext {
   };
 }
 
+/**
+ * Returns existing_proposals rows for all three toolchain singleton slugs
+ * so the dedupe set suppresses Rule 3 during Rule 1 / Rule 2 test cases.
+ * Without this pre-seeding, Rule 3 ALWAYS emits 3 new proposals (it needs
+ * no repo root), which changes proposal counts and judge verdicts.
+ */
+function toolchainSeeds(): Array<Record<string, unknown>> {
+  return ['toolchain-typecheck', 'toolchain-lint', 'toolchain-tests'].map((slug, i) => ({
+    id: `tc-seed-${i}`,
+    experiment_id: 'experiment-proposal-generator',
+    category: 'experiment_proposal',
+    subject: `proposal:${slug}`,
+    ran_at: new Date().toISOString(),
+  }));
+}
+
 function llmCall(model: string, latencyMs: number, agoHours = 1) {
   return {
     model,
@@ -101,7 +117,8 @@ describe('ExperimentProposalGenerator', () => {
   });
 
   it('warning verdict when no llm_calls rows exist and no migrations readable', async () => {
-    const env = buildDb({});
+    // Pre-seed toolchains so Rule 3 is silent, then confirm warning.
+    const env = buildDb({ existing_proposals: toolchainSeeds() });
     const result = await exp.probe(makeCtx(env));
     expect(result.summary).toContain('no llm_calls');
     expect(exp.judge(result, [])).toBe('warning');
@@ -109,8 +126,10 @@ describe('ExperimentProposalGenerator', () => {
 
   it('skips models with fewer than MIN_CALLS_FOR_PROPOSAL samples', async () => {
     // MIN_CALLS_FOR_PROPOSAL is 5 — use 3 samples to be below the floor.
+    // Pre-seed toolchains so Rule 3 doesn't add noise to the proposal count.
     const env = buildDb({
       llm_calls: Array.from({ length: 3 }, () => llmCall('small/sample', 100)),
+      existing_proposals: toolchainSeeds(),
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { new_proposals: number; skipped_due_to_low_samples: number };
@@ -122,8 +141,10 @@ describe('ExperimentProposalGenerator', () => {
     // Model with 6 samples — above the 5-sample floor, below the
     // default hardcoded min_samples of 10. The generator must
     // clamp min_samples so validateBrief passes (min_samples <= sample_size).
+    // Pre-seed toolchains so proposals array contains only the one model probe.
     const env = buildDb({
       llm_calls: Array.from({ length: 6 }, (_, i) => llmCall('low/traffic', 500 + i * 100)),
+      existing_proposals: toolchainSeeds(),
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { proposals: Array<{ params: { sample_size: number; min_samples: number } }> };
@@ -137,6 +158,7 @@ describe('ExperimentProposalGenerator', () => {
   it('proposes a latency probe for a model with enough samples', async () => {
     const env = buildDb({
       llm_calls: Array.from({ length: 30 }, (_, i) => llmCall('qwen/qwen3.5-35b-a3b', 1000 + i * 50)),
+      existing_proposals: toolchainSeeds(),
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
@@ -174,20 +196,23 @@ describe('ExperimentProposalGenerator', () => {
           subject: 'proposal:qwen-qwen3-5-35b-a3b-latency',
           ran_at: new Date().toISOString(),
         },
+        ...toolchainSeeds(),
       ],
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { new_proposals: number; existing_proposals: number };
     expect(ev.new_proposals).toBe(0);
-    expect(ev.existing_proposals).toBe(1);
+    expect(ev.existing_proposals).toBe(4); // 1 latency + 3 toolchain
   });
 
   it('intervene writes one self_findings row per new proposal', async () => {
+    // Pre-seed toolchain slugs so only the two model probes are "new".
     const env = buildDb({
       llm_calls: [
         ...Array.from({ length: 30 }, () => llmCall('a/model', 500)),
         ...Array.from({ length: 30 }, () => llmCall('b/model', 1000)),
       ],
+      existing_proposals: toolchainSeeds(),
     });
     const ctx = makeCtx(env);
     const result = await exp.probe(ctx);
@@ -196,9 +221,11 @@ describe('ExperimentProposalGenerator', () => {
     const details = intervention!.details as { proposal_count: number; slugs: string[] };
     expect(details.proposal_count).toBe(2);
     expect(details.slugs.sort()).toEqual(['a-model-latency', 'b-model-latency']);
-    // Two rows written to self_findings (both have category=experiment_proposal)
+    // Two rows written to self_findings for the model probes specifically
     const proposalRows = env.tables.self_findings.filter(
-      (r) => r.category === 'experiment_proposal',
+      (r) => r.category === 'experiment_proposal' &&
+        (String(r.subject ?? '').includes('a-model-latency') ||
+          String(r.subject ?? '').includes('b-model-latency')),
     );
     expect(proposalRows).toHaveLength(2);
   });
@@ -206,12 +233,15 @@ describe('ExperimentProposalGenerator', () => {
   it('each proposal finding embeds a valid ExperimentBrief in evidence', async () => {
     const env = buildDb({
       llm_calls: Array.from({ length: 30 }, () => llmCall('qwen/qwen3.5-35b-a3b', 1500)),
+      existing_proposals: toolchainSeeds(),
     });
     const ctx = makeCtx(env);
     const result = await exp.probe(ctx);
     await exp.intervene!('pass', result, ctx);
+    // Find the latency proposal specifically (toolchain seeds in self_findings have no evidence)
     const proposal = env.tables.self_findings.find(
-      (r) => r.category === 'experiment_proposal',
+      (r) => r.category === 'experiment_proposal' &&
+        String(r.subject ?? '').includes('qwen-qwen3-5-35b-a3b-latency'),
     );
     expect(proposal).toBeDefined();
     const evidence = JSON.parse(proposal!.evidence as string);
@@ -233,6 +263,7 @@ describe('ExperimentProposalGenerator', () => {
           subject: 'proposal:qwen-qwen3-5-35b-a3b-latency',
           ran_at: new Date().toISOString(),
         },
+        ...toolchainSeeds(),
       ],
     });
     const ctx = makeCtx(env);
@@ -244,6 +275,7 @@ describe('ExperimentProposalGenerator', () => {
   it('generated briefs pass validateBrief (end-to-end template compatibility)', async () => {
     const env = buildDb({
       llm_calls: Array.from({ length: 30 }, (_, i) => llmCall('valid/model-id', 800 + i * 10)),
+      existing_proposals: toolchainSeeds(),
     });
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as { proposals: Array<unknown> };
@@ -442,5 +474,285 @@ describe('ExperimentProposalGenerator — Rule 2 (migration_schema_probe)', () =
     const evidence = JSON.parse(migRow!.evidence as string);
     expect(evidence.brief.template).toBe('migration_schema_probe');
     expect(evidence.brief.params.expected_tables).toEqual(['int_table']);
+  });
+});
+
+/**
+ * Rule 3 — subprocess_health_probe toolchain singletons.
+ * Repo root is nulled out so Rule 2 and Rule 4 stay silent and
+ * only the hardcoded toolchain slugs are in play.
+ */
+describe('ExperimentProposalGenerator — Rule 3 (toolchain singletons)', () => {
+  const exp: Experiment = new ExperimentProposalGenerator();
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.OHWOW_REPO_ROOT;
+    delete process.env.OHWOW_REPO_ROOT;
+    setSelfCommitRepoRoot(null);
+  });
+  afterEach(() => {
+    setSelfCommitRepoRoot(null);
+    if (savedEnv !== undefined) process.env.OHWOW_REPO_ROOT = savedEnv;
+  });
+
+  it('proposes all three toolchain singletons on first run', async () => {
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      new_toolchain_proposals: number;
+      proposals: Array<{ slug: string; template: string }>;
+    };
+    expect(ev.new_toolchain_proposals).toBe(3);
+    const tcSlugs = ev.proposals
+      .filter((p) => p.template === 'subprocess_health_probe')
+      .map((p) => p.slug);
+    expect(tcSlugs).toContain('toolchain-typecheck');
+    expect(tcSlugs).toContain('toolchain-lint');
+    expect(tcSlugs).toContain('toolchain-tests');
+  });
+
+  it('dedupes: does not re-propose slugs already in the ledger', async () => {
+    const env = buildDb({
+      existing_proposals: [
+        {
+          id: '1',
+          experiment_id: 'experiment-proposal-generator',
+          category: 'experiment_proposal',
+          subject: 'proposal:toolchain-typecheck',
+          ran_at: new Date().toISOString(),
+        },
+        {
+          id: '2',
+          experiment_id: 'experiment-proposal-generator',
+          category: 'experiment_proposal',
+          subject: 'proposal:toolchain-lint',
+          ran_at: new Date().toISOString(),
+        },
+      ],
+    });
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as { new_toolchain_proposals: number };
+    // Only toolchain-tests is new
+    expect(ev.new_toolchain_proposals).toBe(1);
+  });
+
+  it('generated toolchain briefs pass validateBrief', async () => {
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as { proposals: Array<unknown> };
+    for (const brief of ev.proposals) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(validateBrief(brief as any)).toBeNull();
+    }
+  });
+
+  it('intervene writes one self_findings row per toolchain brief', async () => {
+    const env = buildDb({});
+    const ctx = makeCtx(env);
+    const result = await exp.probe(ctx);
+    const intervention = await exp.intervene!('pass', result, ctx);
+    expect(intervention).not.toBeNull();
+    const rows = env.tables.self_findings.filter(
+      (r) => r.category === 'experiment_proposal',
+    );
+    const subjects = rows.map((r) => String(r.subject ?? '').replace('proposal:', ''));
+    expect(subjects).toContain('toolchain-typecheck');
+    expect(subjects).toContain('toolchain-lint');
+    expect(subjects).toContain('toolchain-tests');
+  });
+
+  it('judge returns pass when toolchain proposals were generated', async () => {
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    expect(exp.judge(result, [])).toBe('pass');
+  });
+});
+
+/**
+ * Rule 4 — subprocess_health_probe for missing tool test coverage.
+ * Uses a temp directory as the fake repo root so each test can
+ * control which tool files and test files exist.
+ */
+describe('ExperimentProposalGenerator — Rule 4 (missing tool tests)', () => {
+  const exp: Experiment = new ExperimentProposalGenerator();
+  let tempRoot: string;
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-tool-'));
+    // Rule 4 needs tools dir + __tests__ subdir
+    fs.mkdirSync(path.join(tempRoot, 'src', 'orchestrator', 'tools', '__tests__'), {
+      recursive: true,
+    });
+    // Rule 2 needs migrations dir; keep it empty so it adds no noise
+    fs.mkdirSync(path.join(tempRoot, 'src', 'db', 'migrations'), { recursive: true });
+    savedEnv = process.env.OHWOW_REPO_ROOT;
+    delete process.env.OHWOW_REPO_ROOT;
+    setSelfCommitRepoRoot(tempRoot);
+  });
+
+  afterEach(() => {
+    setSelfCommitRepoRoot(null);
+    if (savedEnv !== undefined) process.env.OHWOW_REPO_ROOT = savedEnv;
+    try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  function writeTool(name: string) {
+    fs.writeFileSync(
+      path.join(tempRoot, 'src', 'orchestrator', 'tools', `${name}.ts`),
+      `// ${name} tool stub`,
+      'utf-8',
+    );
+  }
+
+  function writeToolTest(name: string) {
+    fs.writeFileSync(
+      path.join(tempRoot, 'src', 'orchestrator', 'tools', '__tests__', `${name}.test.ts`),
+      `// ${name} test stub`,
+      'utf-8',
+    );
+  }
+
+  it('proposes a subprocess probe for each tool missing a test file', async () => {
+    writeTool('bash');
+    writeTool('filesystem');
+    writeTool('agents');
+    writeToolTest('agents'); // agents has a test; bash and filesystem do not
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      tool_handlers_scanned: number;
+      tool_handlers_missing_tests: number;
+      new_tool_test_proposals: number;
+      proposals: Array<{ template: string; slug: string; params: { command: string } }>;
+    };
+    expect(ev.tool_handlers_scanned).toBe(3);
+    expect(ev.tool_handlers_missing_tests).toBe(2);
+    expect(ev.new_tool_test_proposals).toBe(2);
+    const toolBriefs = ev.proposals.filter(
+      (p) => p.template === 'subprocess_health_probe' &&
+        p.slug.startsWith('toolchain-tool-test-'),
+    );
+    expect(toolBriefs).toHaveLength(2);
+    const slugs = toolBriefs.map((p) => p.slug);
+    expect(slugs).toContain('toolchain-tool-test-bash');
+    expect(slugs).toContain('toolchain-tool-test-filesystem');
+    const bashBrief = toolBriefs.find((p) => p.slug === 'toolchain-tool-test-bash');
+    expect(bashBrief!.params.command).toContain('bash.test.ts');
+  });
+
+  it('skips tools that already have a matching test file', async () => {
+    writeTool('covered-tool');
+    writeToolTest('covered-tool');
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      tool_handlers_missing_tests: number;
+      new_tool_test_proposals: number;
+    };
+    expect(ev.tool_handlers_missing_tests).toBe(0);
+    expect(ev.new_tool_test_proposals).toBe(0);
+  });
+
+  it('caps at MAX_TOOL_TEST_PROPOSALS_PER_TICK (3) per tick', async () => {
+    for (const name of ['a-tool', 'b-tool', 'c-tool', 'd-tool', 'e-tool']) {
+      writeTool(name);
+    }
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      tool_handlers_missing_tests: number;
+      new_tool_test_proposals: number;
+    };
+    expect(ev.tool_handlers_missing_tests).toBe(5);
+    expect(ev.new_tool_test_proposals).toBe(3); // capped
+  });
+
+  it('dedupes against existing slugs in the ledger', async () => {
+    writeTool('bash');
+    const env = buildDb({
+      existing_proposals: [
+        {
+          id: 'prior',
+          experiment_id: 'experiment-proposal-generator',
+          category: 'experiment_proposal',
+          subject: 'proposal:toolchain-tool-test-bash',
+          ran_at: new Date().toISOString(),
+        },
+      ],
+    });
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as { new_tool_test_proposals: number };
+    expect(ev.new_tool_test_proposals).toBe(0);
+  });
+
+  it('converts underscores to hyphens in tool file slugs', async () => {
+    writeTool('local_write_file');
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      proposals: Array<{ slug: string; template: string }>;
+    };
+    const toolBriefs = ev.proposals.filter(
+      (p) => p.template === 'subprocess_health_probe' &&
+        p.slug.startsWith('toolchain-tool-test-'),
+    );
+    expect(toolBriefs[0].slug).toBe('toolchain-tool-test-local-write-file');
+  });
+
+  it('generated tool-test briefs pass validateBrief', async () => {
+    writeTool('my-tool');
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as { proposals: Array<unknown> };
+    for (const brief of ev.proposals.filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (p: any) => p.template === 'subprocess_health_probe' && (p.slug as string).startsWith('toolchain-tool-test-'),
+    )) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(validateBrief(brief as any)).toBeNull();
+    }
+  });
+
+  it('intervene writes a self_findings row for each tool-test brief', async () => {
+    writeTool('my-tool');
+    const env = buildDb({
+      // pre-fill all three toolchain slugs so the only new proposal is the tool-test one
+      existing_proposals: [
+        { id: '1', experiment_id: 'experiment-proposal-generator', category: 'experiment_proposal', subject: 'proposal:toolchain-typecheck', ran_at: new Date().toISOString() },
+        { id: '2', experiment_id: 'experiment-proposal-generator', category: 'experiment_proposal', subject: 'proposal:toolchain-lint', ran_at: new Date().toISOString() },
+        { id: '3', experiment_id: 'experiment-proposal-generator', category: 'experiment_proposal', subject: 'proposal:toolchain-tests', ran_at: new Date().toISOString() },
+      ],
+    });
+    const ctx = makeCtx(env);
+    const result = await exp.probe(ctx);
+    const intervention = await exp.intervene!('pass', result, ctx);
+    expect(intervention).not.toBeNull();
+    const rows = env.tables.self_findings.filter(
+      (r) => r.category === 'experiment_proposal',
+    );
+    const toolRow = rows.find((r) =>
+      String(r.subject ?? '').includes('toolchain-tool-test-my-tool'),
+    );
+    expect(toolRow).toBeDefined();
+    const evidence = JSON.parse(toolRow!.evidence as string);
+    expect(evidence.brief.template).toBe('subprocess_health_probe');
+    expect(evidence.brief.params.command).toContain('my-tool.test.ts');
+  });
+
+  it('judge returns warning only when all data sources have nothing', async () => {
+    // Null repo root (no migrations, no tools), no llm_calls, all
+    // toolchain slugs already in the ledger.
+    setSelfCommitRepoRoot(null);
+    const env = buildDb({
+      existing_proposals: [
+        { id: '1', experiment_id: 'x', category: 'experiment_proposal', subject: 'proposal:toolchain-typecheck', ran_at: new Date().toISOString() },
+        { id: '2', experiment_id: 'x', category: 'experiment_proposal', subject: 'proposal:toolchain-lint', ran_at: new Date().toISOString() },
+        { id: '3', experiment_id: 'x', category: 'experiment_proposal', subject: 'proposal:toolchain-tests', ran_at: new Date().toISOString() },
+      ],
+    });
+    const result = await exp.probe(makeCtx(env));
+    expect(exp.judge(result, [])).toBe('warning');
   });
 });

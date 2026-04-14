@@ -6,9 +6,11 @@ import { execSync } from 'node:child_process';
 import {
   fillExperimentTemplate,
   validateBrief,
+  SUBPROCESS_COMMAND_ALLOWLIST,
   type ExperimentBrief,
   type MigrationSchemaProbeParams,
   type ModelLatencyProbeParams,
+  type SubprocessHealthProbeParams,
 } from '../experiment-template.js';
 
 /**
@@ -299,5 +301,159 @@ describe('fillExperimentTemplate — compilation smoke test', () => {
     } finally {
       try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
     }
+  });
+
+  it('subprocess_health_probe generated source compiles against the real Experiment interface', () => {
+    const brief: ExperimentBrief = {
+      slug: 'toolchain-typecheck',
+      name: 'TypeScript type checker health',
+      hypothesis: 'npm run typecheck exits with code 0 on every run.',
+      everyMs: 30 * 60 * 1000,
+      template: 'subprocess_health_probe',
+      params: {
+        command: 'npm run typecheck',
+        description: 'TypeScript type checker (npm run typecheck)',
+        capture_lines: 50,
+        timeout_ms: 3 * 60 * 1000,
+      } satisfies SubprocessHealthProbeParams,
+    };
+
+    const out = fillExperimentTemplate(brief);
+    const tmpSlug = `subprocess-smoke-${Date.now()}`;
+    const repoRoot = path.resolve(__dirname, '..', '..', '..');
+    const tmpSourcePath = path.join(
+      repoRoot,
+      'src',
+      'self-bench',
+      'experiments',
+      `${tmpSlug}.ts`,
+    );
+
+    const adjusted = out.sourceContent
+      .replace(/toolchain-typecheck/g, tmpSlug)
+      .replace(/ToolchainTypecheckExperiment/g, 'SubprocessSmokeExperiment');
+
+    fs.writeFileSync(tmpSourcePath, adjusted, 'utf-8');
+    try {
+      execSync('npx tsc --noEmit --skipLibCheck', {
+        cwd: repoRoot,
+        stdio: 'pipe',
+      });
+    } finally {
+      try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
+    }
+  });
+});
+
+const goodSubprocessBrief: ExperimentBrief = {
+  slug: 'toolchain-typecheck',
+  name: 'TypeScript type checker health',
+  hypothesis: 'npm run typecheck exits with code 0 on every run.',
+  everyMs: 30 * 60 * 1000,
+  template: 'subprocess_health_probe',
+  params: {
+    command: 'npm run typecheck',
+    description: 'TypeScript type checker (npm run typecheck)',
+    capture_lines: 50,
+    timeout_ms: 3 * 60 * 1000,
+  } satisfies SubprocessHealthProbeParams,
+};
+
+describe('validateBrief — subprocess_health_probe', () => {
+  it('accepts a well-formed subprocess brief', () => {
+    expect(validateBrief(goodSubprocessBrief)).toBeNull();
+  });
+
+  it('rejects a command not in the allowlist', () => {
+    const b: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), command: 'rm -rf /' },
+    };
+    expect(validateBrief(b)).toContain('params.command must start with');
+  });
+
+  it('accepts every command in SUBPROCESS_COMMAND_ALLOWLIST', () => {
+    for (const cmd of SUBPROCESS_COMMAND_ALLOWLIST) {
+      const b: ExperimentBrief = {
+        ...goodSubprocessBrief,
+        slug: `toolchain-typecheck`, // reuse; slug validity isn't under test here
+        params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), command: cmd },
+      };
+      expect(validateBrief(b)).toBeNull();
+    }
+  });
+
+  it('rejects an empty description', () => {
+    const b: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), description: '' },
+    };
+    expect(validateBrief(b)).toContain('description');
+  });
+
+  it('rejects capture_lines below 5', () => {
+    const b: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), capture_lines: 2 },
+    };
+    expect(validateBrief(b)).toContain('capture_lines');
+  });
+
+  it('rejects timeout_ms below 10000', () => {
+    const b: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), timeout_ms: 1000 },
+    };
+    expect(validateBrief(b)).toContain('timeout_ms');
+  });
+
+  it('rejects timeout_ms above 600000', () => {
+    const b: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: { ...(goodSubprocessBrief.params as SubprocessHealthProbeParams), timeout_ms: 700_000 },
+    };
+    expect(validateBrief(b)).toContain('timeout_ms');
+  });
+});
+
+describe('fillExperimentTemplate — subprocess_health_probe', () => {
+  it('returns expected source and test paths', () => {
+    const out = fillExperimentTemplate(goodSubprocessBrief);
+    expect(out.sourcePath).toBe('src/self-bench/experiments/toolchain-typecheck.ts');
+    expect(out.testPath).toBe('src/self-bench/__tests__/toolchain-typecheck.test.ts');
+  });
+
+  it('embeds the command and description in source', () => {
+    const out = fillExperimentTemplate(goodSubprocessBrief);
+    expect(out.sourceContent).toContain('npm run typecheck');
+    expect(out.sourceContent).toContain('TypeScript type checker (npm run typecheck)');
+  });
+
+  it('includes AUTO-GENERATED marker', () => {
+    const out = fillExperimentTemplate(goodSubprocessBrief);
+    expect(out.sourceContent).toContain('AUTO-GENERATED');
+  });
+
+  it('emits a class derived from the slug', () => {
+    const out = fillExperimentTemplate(goodSubprocessBrief);
+    expect(out.sourceContent).toContain('class ToolchainTypecheckExperiment');
+    expect(out.testContent).toContain('ToolchainTypecheckExperiment');
+  });
+
+  it('test content includes pass and fail cases', () => {
+    const out = fillExperimentTemplate(goodSubprocessBrief);
+    expect(out.testContent).toContain("toBe('pass')");
+    expect(out.testContent).toContain("toBe('fail')");
+  });
+
+  it('throws on invalid brief', () => {
+    const bad: ExperimentBrief = {
+      ...goodSubprocessBrief,
+      params: {
+        ...(goodSubprocessBrief.params as SubprocessHealthProbeParams),
+        command: 'rm -rf /',
+      },
+    };
+    expect(() => fillExperimentTemplate(bad)).toThrow('invalid brief');
   });
 });
