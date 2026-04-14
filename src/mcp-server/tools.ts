@@ -18,6 +18,7 @@ import { registerWorkspaceTools } from './tools/workspace.js';
 import { registerMcpServerTools } from './tools/mcp-servers.js';
 import { registerAgentManagementTools } from './tools/agents.js';
 import { registerPermissionRequestTools } from './tools/permission-requests.js';
+import { registerFailingTriggersTools } from './tools/failing-triggers.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -33,4 +34,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerMcpServerTools(server, client);
   registerAgentManagementTools(server, client);
   registerPermissionRequestTools(server, client);
+  registerFailingTriggersTools(server, client);
 }
