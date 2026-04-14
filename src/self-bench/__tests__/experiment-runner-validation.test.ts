@@ -204,18 +204,22 @@ describe('ExperimentRunner — validation scheduling', () => {
     expect(env.tables.experiment_validations).toHaveLength(0);
   });
 
-  it('does NOT enqueue a validation when verdict was pass (no intervene called)', async () => {
+  it('DOES enqueue a validation on pass verdict if intervene returns non-null (meta-experiments)', async () => {
+    // Phase 4 semantic change: intervene is called on any non-error
+    // verdict, so meta-experiments that return a non-null intervention
+    // on pass DO get their validation scheduled. Experiments that
+    // don't want validation on pass just return null from intervene.
     const runner = buildRunner();
     const exp = makeExperiment({
-      id: 'healthy',
-      probe: async () => ({ summary: 'all good', evidence: {} }),
+      id: 'meta',
+      probe: async () => ({ summary: 'routine maintenance', evidence: {} }),
       judge: () => 'pass',
-      intervene: async () => ({ description: 'x', details: {} }),
+      intervene: async () => ({ description: 'adjusted things', details: {} }),
       validate: async () => ({ outcome: 'held', summary: 'ok', evidence: {} }),
     });
     runner.register(exp);
     await runner.tick();
-    expect(env.tables.experiment_validations).toHaveLength(0);
+    expect(env.tables.experiment_validations).toHaveLength(1);
   });
 });
 

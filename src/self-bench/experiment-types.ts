@@ -114,9 +114,44 @@ export interface Finding {
 }
 
 /**
+ * Lightweight scheduler interface the runner exposes to
+ * meta-experiments that need to modify peer cadences. Phase 4's
+ * AdaptiveSchedulerExperiment uses this to stretch cadences on
+ * pass streaks and pull them in on failures — the core mechanic
+ * that makes probe budget follow actual signal instead of running
+ * every experiment on a static schedule.
+ *
+ * Kept narrow on purpose: the meta-loop should not be able to
+ * register/unregister peers, only adjust their next-run timestamps
+ * and introspect their current state.
+ */
+export interface ExperimentScheduler {
+  /**
+   * Override the next-run timestamp for an experiment. Epoch ms.
+   * No-op if the experimentId isn't registered. Values in the past
+   * are clamped to "immediate" by the runner.
+   */
+  setNextRunAt(experimentId: string, timestampMs: number): void;
+  /**
+   * Snapshot of every registered experiment: id, category, cadence,
+   * and current nextRunAt. Meta-experiments iterate this to pick
+   * targets.
+   */
+  getRegisteredExperimentInfo(): Array<{
+    id: string;
+    name: string;
+    category: ExperimentCategory;
+    cadence: ExperimentCadence;
+    nextRunAt: number;
+  }>;
+}
+
+/**
  * Context passed to every experiment method by the runner. Gives
- * experiments access to the DB, the engine, and a helper to read
- * their own recent findings for history-aware judgment.
+ * experiments access to the DB, the engine, a helper to read their
+ * own recent findings for history-aware judgment, and (when the
+ * runner has one) a scheduler reference for meta-experiments that
+ * need to modify peer cadences.
  */
 export interface ExperimentContext {
   db: DatabaseAdapter;
@@ -124,6 +159,12 @@ export interface ExperimentContext {
   engine: RuntimeEngine;
   /** Read recent findings for this experiment id (most recent first). */
   recentFindings(experimentId: string, limit?: number): Promise<Finding[]>;
+  /**
+   * Present when the ExperimentRunner built the context. Absent in
+   * unit tests that construct contexts directly. Experiments that
+   * need to modify peer cadences must null-check.
+   */
+  scheduler?: ExperimentScheduler;
 }
 
 /**

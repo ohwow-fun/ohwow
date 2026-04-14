@@ -48,6 +48,7 @@ import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-st
 import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
+import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1318,6 +1319,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // cleanup is reversible by reading the ledger's
         // intervention_applied field.
         experimentRunner.register(new StaleTaskCleanupExperiment());
+        // Phase 4: AdaptiveSchedulerExperiment is the meta-loop that
+        // reads the ledger every 10m and adjusts peer cadences: pass
+        // streaks get stretched (up to 4x), recent failures get
+        // pulled in to 60s re-probe. This is the mechanic that makes
+        // probe budget follow signal instead of running every
+        // experiment on a static schedule forever.
+        experimentRunner.register(new AdaptiveSchedulerExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },

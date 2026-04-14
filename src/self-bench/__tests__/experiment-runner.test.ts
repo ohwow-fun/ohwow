@@ -206,9 +206,9 @@ describe('ExperimentRunner', () => {
     expect(intervention.description).toBe('did a thing');
   });
 
-  it('does NOT call intervene on a pass verdict', async () => {
+  it('DOES call intervene on pass verdicts (experiments early-return null when there is nothing to do)', async () => {
     const runner = buildRunner();
-    const interveneSpy = vi.fn();
+    const interveneSpy = vi.fn().mockResolvedValue(null);
     const exp = makeStubExperiment({
       id: 'e5',
       everyMs: 60_000,
@@ -219,7 +219,26 @@ describe('ExperimentRunner', () => {
     });
     runner.register(exp);
     await runner.tick();
+    // Changed in Phase 4: intervene is called on any non-error
+    // verdict. Existing experiments early-return null when there's
+    // nothing to do; meta-experiments use this hook to apply
+    // routine scheduler adjustments even on pass.
+    expect(interveneSpy).toHaveBeenCalledTimes(1);
+  });
 
+  it('does NOT call intervene when probe threw (error verdict)', async () => {
+    const runner = buildRunner();
+    const interveneSpy = vi.fn();
+    const exp = makeStubExperiment({
+      id: 'e5b',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: async () => { throw new Error('probe blew up'); },
+      judge: () => 'pass',
+      intervene: interveneSpy,
+    });
+    runner.register(exp);
+    await runner.tick();
     expect(interveneSpy).not.toHaveBeenCalled();
   });
 

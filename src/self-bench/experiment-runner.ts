@@ -34,7 +34,10 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import type {
   Experiment,
+  ExperimentCadence,
+  ExperimentCategory,
   ExperimentContext,
+  ExperimentScheduler,
   Finding,
   InterventionApplied,
   PendingValidation,
@@ -95,7 +98,7 @@ export interface ExperimentRunnerOptions {
   now?: () => number;
 }
 
-export class ExperimentRunner {
+export class ExperimentRunner implements ExperimentScheduler {
   private experiments = new Map<string, Experiment>();
   private nextRunAt = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -111,6 +114,49 @@ export class ExperimentRunner {
   ) {
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS;
     this.now = opts.now ?? Date.now;
+  }
+
+  /**
+   * ExperimentScheduler implementation — lets meta-experiments
+   * (AdaptiveSchedulerExperiment) override peer cadences at runtime.
+   * No-op on unknown ids; past timestamps clamp to "immediate" so
+   * the next tick picks them up.
+   */
+  setNextRunAt(experimentId: string, timestampMs: number): void {
+    if (!this.experiments.has(experimentId)) return;
+    const clamped = Math.max(timestampMs, this.now());
+    this.nextRunAt.set(experimentId, clamped);
+  }
+
+  /**
+   * Snapshot the full registry for meta-experiments. Returns a
+   * plain array so callers can filter / sort freely without
+   * touching the runner's private state.
+   */
+  getRegisteredExperimentInfo(): Array<{
+    id: string;
+    name: string;
+    category: ExperimentCategory;
+    cadence: ExperimentCadence;
+    nextRunAt: number;
+  }> {
+    const out: Array<{
+      id: string;
+      name: string;
+      category: ExperimentCategory;
+      cadence: ExperimentCadence;
+      nextRunAt: number;
+    }> = [];
+    for (const [id, exp] of this.experiments) {
+      out.push({
+        id,
+        name: exp.name,
+        category: exp.category,
+        cadence: exp.cadence,
+        nextRunAt: this.nextRunAt.get(id) ?? 0,
+      });
+    }
+    return out;
   }
 
   /**
@@ -323,6 +369,7 @@ export class ExperimentRunner {
       engine: this.engine,
       recentFindings: (experimentId: string, limit?: number) =>
         readRecentFindings(this.db, experimentId, limit),
+      scheduler: this,
     };
   }
 
@@ -338,7 +385,15 @@ export class ExperimentRunner {
       probeResult = await exp.probe(ctx);
       const history = await readRecentFindings(this.db, exp.id, JUDGE_HISTORY_LIMIT);
       verdict = exp.judge(probeResult, history);
-      if (exp.intervene && verdict !== 'pass' && verdict !== 'error') {
+      // Invoke intervene on any non-error verdict. Historically
+      // this was gated on verdict !== 'pass' as well, but that
+      // blocked meta-experiments like AdaptiveSchedulerExperiment
+      // whose routine successful work IS the intervention. Existing
+      // experiments that don't want to mutate on pass already
+      // early-return null (ModelHealthExperiment, StaleTaskCleanup)
+      // so this is backward-compatible — the gate only ever blocked
+      // intent, not a real safety rule.
+      if (exp.intervene && verdict !== 'error') {
         intervention = (await exp.intervene(verdict, probeResult, ctx)) ?? null;
       }
     } catch (err) {

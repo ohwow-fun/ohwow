@@ -3,6 +3,7 @@ export type {
   ExperimentCategory,
   ExperimentCadence,
   ExperimentContext,
+  ExperimentScheduler,
   Finding,
   FindingStatus,
   InterventionApplied,
