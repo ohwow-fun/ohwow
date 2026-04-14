@@ -47,6 +47,7 @@ import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js
 import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
 import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
+import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1311,6 +1312,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // Phase 2: LedgerHealthExperiment watches the runner itself
         // — reads its own ledger to detect stalled or erroring peers.
         experimentRunner.register(new LedgerHealthExperiment());
+        // Phase 2: StaleTaskCleanupExperiment is the first actionable
+        // experiment — it sweeps zombie in_progress tasks every 5m,
+        // marks them failed, and resets their agents to idle. The
+        // cleanup is reversible by reading the ledger's
+        // intervention_applied field.
+        experimentRunner.register(new StaleTaskCleanupExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
