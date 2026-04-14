@@ -9,6 +9,10 @@ export type {
   NewFindingRow,
   ProbeResult,
   Verdict,
+  ValidationOutcome,
+  ValidationResult,
+  ValidationStatus,
+  PendingValidation,
 } from './experiment-types.js';
 
 export {
@@ -17,3 +21,11 @@ export {
   listFindings,
   type ListFindingsFilters,
 } from './findings-store.js';
+
+export {
+  enqueueValidation,
+  readDueValidations,
+  markValidationCompleted,
+  markValidationSkipped,
+  markValidationError,
+} from './validation-store.js';

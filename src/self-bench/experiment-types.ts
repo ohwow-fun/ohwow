@@ -36,7 +36,10 @@ import type { RuntimeEngine } from '../execution/engine.js';
 /**
  * Category buckets for experiment organization and ledger filtering.
  * Aligned with the existing reliability surfaces so each experiment
- * maps cleanly to one category.
+ * maps cleanly to one category. 'validation' is a cross-cutting bucket
+ * for finding rows produced by the validation framework (Phase 3) —
+ * filter on it to see every accountability receipt regardless of
+ * which experiment's intervention was being validated.
  */
 export type ExperimentCategory =
   | 'model_health'
@@ -45,6 +48,7 @@ export type ExperimentCategory =
   | 'handler_audit'
   | 'prompt_calibration'
   | 'canary'
+  | 'validation'
   | 'other';
 
 /**
@@ -129,20 +133,70 @@ export interface ExperimentContext {
  * - runOnBoot: if true, the first run fires at runner start; if false,
  *              the first run is now+everyMs so boot-time noise doesn't
  *              saturate the ledger.
- * - whenIdle: reserved for Phase 3. Today the runner always runs
- *             regardless, since probe() is expected to be cheap.
+ * - whenIdle: reserved for a future phase. Today the runner always
+ *             runs regardless, since probe() is expected to be cheap.
+ * - validationDelayMs: when this experiment implements validate(),
+ *             how long after an intervention should the runner fire
+ *             the validation check. Default 15 minutes.
  */
 export interface ExperimentCadence {
   everyMs: number;
   runOnBoot?: boolean;
   whenIdle?: boolean;
+  validationDelayMs?: number;
+}
+
+/**
+ * Possible outcomes of a validation. 'held' means the intervention is
+ * still in effect and the system state looks good; 'failed' means the
+ * intervention rebounded (the same condition re-emerged or a new one
+ * caused by the intervention); 'inconclusive' means we couldn't tell.
+ */
+export type ValidationOutcome = 'held' | 'failed' | 'inconclusive';
+
+/** Lifecycle of a row in the experiment_validations table. */
+export type ValidationStatus = 'pending' | 'completed' | 'skipped' | 'error';
+
+/**
+ * Result shape returned by an experiment's validate() method. The
+ * runner turns this into a self_findings row in category='validation'.
+ */
+export interface ValidationResult {
+  outcome: ValidationOutcome;
+  summary: string;
+  evidence: Record<string, unknown>;
+}
+
+/**
+ * A pending validation row read out of experiment_validations by the
+ * runner's due-queue processor.
+ */
+export interface PendingValidation {
+  id: string;
+  interventionFindingId: string;
+  experimentId: string;
+  baseline: Record<string, unknown>;
+  validateAt: string;
+  status: ValidationStatus;
+  createdAt: string;
 }
 
 /**
  * The Experiment interface. An implementation is a class or plain
  * object exposing id, metadata, cadence, probe, judge, and optionally
- * intervene. The runner owns scheduling, persistence, error recovery,
- * and history — the experiment owns the probe and the decision.
+ * intervene and validate. The runner owns scheduling, persistence,
+ * error recovery, history, and validation queuing — the experiment
+ * owns the probe, the decision, and the intervention + validation
+ * logic.
+ *
+ * validate() is the Phase 3 accountability hook. When an experiment
+ * implements it AND intervene() returns a non-null InterventionApplied
+ * on a given run, the runner automatically enqueues a validation row
+ * in experiment_validations. validate() fires ~validationDelayMs
+ * after the intervention (default 15 minutes) and reads the
+ * intervention's details as the baseline parameter. Its result lands
+ * as a self_findings row in category='validation' with a verdict
+ * mapped from the ValidationOutcome.
  */
 export interface Experiment {
   id: string;
@@ -158,6 +212,10 @@ export interface Experiment {
     result: ProbeResult,
     ctx: ExperimentContext,
   ): Promise<InterventionApplied | null>;
+  validate?(
+    baseline: Record<string, unknown>,
+    ctx: ExperimentContext,
+  ): Promise<ValidationResult>;
 }
 
 /**
