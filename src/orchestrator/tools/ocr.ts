@@ -4,6 +4,7 @@
  * PDF support: converts pages to images via pdftoppm (poppler), then OCRs each page.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { writeFileSync, readFileSync, mkdtempSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, platform } from 'os';
@@ -11,6 +12,46 @@ import { execFileSync, execSync } from 'child_process';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import type { MessageContentPart } from '../../execution/model-router.js';
 import { commandExists, popplerInstallHint } from '../../lib/platform-utils.js';
+
+export const OCR_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'ocr_extract_text',
+    description:
+      'Extract text from an image or PDF using the local OCR model. Supports documents, screenshots, photos of text, tables, receipts, and multi-page PDFs. Provide either image_base64 or pdf_base64 (not both). Requires the OCR model (DeepSeek OCR) to be downloaded via Ollama. IMPORTANT: Only call this when you have actual base64-encoded file data to process. If the user asks whether you can process files, answer conversationally instead of calling this tool.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        image_base64: { type: 'string', minLength: 100, description: 'Base64-encoded image data (PNG, JPEG, WebP, or GIF). Must be real base64 file data, not a placeholder. Use this OR pdf_base64.' },
+        pdf_base64: { type: 'string', minLength: 100, description: 'Base64-encoded PDF file. Must be real base64 file data, not a placeholder. Each page is converted to an image and OCR\'d separately. Use this OR image_base64.' },
+        max_pages: { type: 'number', description: 'Maximum number of PDF pages to process (default: 20). Ignored for images.' },
+        output_format: {
+          type: 'string',
+          enum: ['text', 'markdown', 'json'],
+          description: 'Output format: text (plain text), markdown (structured with headings/tables), json (structured fields). Default: markdown.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'analyze_image',
+    description:
+      'Analyze an image using the best available vision model (dedicated OCR model, vision-capable local model, or Claude). Describe images, identify objects, analyze screenshots, or answer specific questions about image content. IMPORTANT: Only call this when you have actual base64-encoded image data. If the user asks whether you can analyze images, answer conversationally.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        image_base64: { type: 'string', minLength: 100, description: 'Base64-encoded image data (PNG, JPEG, WebP, or GIF). Must be real base64 file data, not a placeholder.' },
+        analysis_type: {
+          type: 'string',
+          enum: ['describe', 'objects', 'screenshot', 'general'],
+          description: 'Type of analysis: describe (detailed description), objects (list objects/elements), screenshot (analyze UI/app screenshot), general (default overview).',
+        },
+        prompt: { type: 'string', description: 'Custom prompt for specific questions about the image. Overrides analysis_type when provided.' },
+      },
+      required: ['image_base64'],
+    },
+  },
+];
 
 /** Known base64 magic-byte prefixes for supported file types. */
 const IMAGE_MAGIC_PREFIXES = ['/9j/', 'iVBOR', 'R0lG', 'UklG']; // JPEG, PNG, GIF, WebP

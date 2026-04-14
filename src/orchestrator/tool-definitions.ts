@@ -32,6 +32,12 @@ import { WHATSAPP_TOOL_DEFINITIONS } from './tools/whatsapp.js';
 import { TELEGRAM_TOOL_DEFINITIONS } from './tools/telegram.js';
 import { BUSINESS_INTEL_TOOL_DEFINITIONS } from './tools/business-pulse.js';
 import { CRM_TOOL_DEFINITIONS } from './tools/crm.js';
+import { SCRAPING_TOOL_DEFINITIONS } from './tools/scraping.js';
+import { RESEARCH_TOOL_DEFINITIONS } from './tools/research.js';
+import { AUDIO_TOOL_DEFINITIONS } from './tools/audio.js';
+import { MEETING_TOOL_DEFINITIONS } from './tools/meeting.js';
+import { INTERNET_TOOL_DEFINITIONS } from './tools/internet.js';
+import { OCR_TOOL_DEFINITIONS } from './tools/ocr.js';
 
 export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...LLM_TOOL_DEFINITIONS,
@@ -75,216 +81,12 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...TELEGRAM_TOOL_DEFINITIONS,
   ...BUSINESS_INTEL_TOOL_DEFINITIONS,
   ...CRM_TOOL_DEFINITIONS,
-  // Scraping tools
-  {
-    name: 'scrape_url',
-    description:
-      'Fetch and extract content from a URL. Automatically tries fast HTTP first, then stealth (anti-bot bypass), then full browser rendering. Use when the user wants to read or extract info from a web page.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        url: { type: 'string', description: 'The URL to scrape' },
-        selector: { type: 'string', description: 'Optional CSS selector to extract specific elements' },
-        format: { type: 'string', enum: ['html', 'markdown', 'text'], description: 'Output format (default: markdown)' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'scrape_bulk',
-    description:
-      'Fetch multiple URLs at once and return combined results. Use for comparing pages or collecting data from several sources.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        urls: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'URLs to scrape (max 20)',
-        },
-        selector: { type: 'string', description: 'Optional CSS selector to extract from each page' },
-        format: { type: 'string', enum: ['html', 'markdown', 'text'], description: 'Output format (default: markdown)' },
-      },
-      required: ['urls'],
-    },
-  },
-  {
-    name: 'scrape_search',
-    description:
-      'Search the web for a query and scrape the top results for detailed content. Goes deeper than a simple web search by fetching and reading each result page.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'The search query' },
-        max_results: { type: 'number', description: 'Max pages to scrape (default: 5, max: 10)' },
-      },
-      required: ['query'],
-    },
-  },
-  // Research
-  {
-    name: 'deep_research',
-    description:
-      'Conduct deep research on a topic. Generates multiple search queries, searches the web, and synthesizes findings into a structured report with citations.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        question: { type: 'string', description: 'The research question to investigate' },
-        depth: {
-          type: 'string',
-          enum: ['quick', 'thorough', 'comprehensive'],
-          description: 'Research depth: quick (2 queries), thorough (4 queries, default), comprehensive (6 queries)',
-        },
-      },
-      required: ['question'],
-    },
-  },
-  // Audio transcription
-  {
-    name: 'transcribe_audio',
-    description:
-      'Transcribe audio to text using the best available speech-to-text provider (Voicebox Whisper, Gemma Audio, or OpenAI Whisper). Optionally analyze the transcript with a follow-up prompt. IMPORTANT: Only call this when you have actual base64-encoded audio data to process.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        audio_base64: {
-          type: 'string',
-          minLength: 100,
-          description: 'Base64-encoded audio data (WAV, MP3, OGG, WebM, or M4A). Must be real audio file data, not a placeholder.',
-        },
-        language: {
-          type: 'string',
-          description: 'Language hint for transcription accuracy (e.g., "en", "es", "fr"). Optional.',
-        },
-        prompt: {
-          type: 'string',
-          description: 'Optional analysis prompt applied to the transcript after transcription. Use for summarizing, extracting action items, translating, or any other processing.',
-        },
-      },
-      required: ['audio_base64'],
-    },
-  },
-  // Meeting listener tools
-  {
-    name: 'start_meeting_listener',
-    description:
-      'Start listening to a meeting via system audio capture. Captures audio from Zoom, Teams, or all system audio, transcribes in real-time, and builds structured meeting notes (summary, decisions, action items). Notes sync to the cloud dashboard. macOS only, requires screen recording permission on first use.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        app: {
-          type: 'string',
-          enum: ['zoom', 'teams', 'meet', 'all'],
-          description: 'Which app to capture audio from. "all" captures all system audio. Default: "all".',
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'stop_meeting_listener',
-    description:
-      'Stop the active meeting listener. Triggers a final comprehensive analysis pass that produces a complete meeting summary with decisions, action items, open questions, and key quotes. Returns the full structured notes.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'get_meeting_notes',
-    description:
-      'Get the current running notes from an active or recently completed meeting session. Returns the latest summary, key points, decisions, action items, and open questions accumulated so far.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  // Internet tools (zero-cost, zero-config)
-  {
-    name: 'youtube_transcript',
-    description:
-      'Extract the transcript or subtitles from a YouTube video. Returns timestamped text content. Useful for summarizing, researching, or quoting video content without watching it. Requires yt-dlp installed locally.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        url: { type: 'string', description: 'YouTube video URL' },
-        language: { type: 'string', description: 'Subtitle language code (default: en)' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'read_rss_feed',
-    description:
-      'Parse an RSS or Atom feed URL and return recent entries. Use for monitoring blogs, news sites, changelogs, podcast feeds, or any site with an RSS feed.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        url: { type: 'string', description: 'RSS or Atom feed URL' },
-        limit: { type: 'number', description: 'Max entries to return (default 20, max 50)' },
-      },
-      required: ['url'],
-    },
-  },
-  {
-    name: 'github_search',
-    description:
-      'Search GitHub for repositories, issues, pull requests, or code. Use for finding libraries, researching how others solved a problem, or tracking issues. Requires gh CLI installed and authenticated.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        query: { type: 'string', description: 'Search query (supports GitHub search syntax)' },
-        type: {
-          type: 'string',
-          enum: ['repos', 'issues', 'prs', 'code'],
-          description: 'What to search for (default: repos)',
-        },
-        limit: { type: 'number', description: 'Max results to return (default 10, max 30)' },
-      },
-      required: ['query'],
-    },
-  },
-  // OCR
-  {
-    name: 'ocr_extract_text',
-    description:
-      'Extract text from an image or PDF using the local OCR model. Supports documents, screenshots, photos of text, tables, receipts, and multi-page PDFs. Provide either image_base64 or pdf_base64 (not both). Requires the OCR model (DeepSeek OCR) to be downloaded via Ollama. IMPORTANT: Only call this when you have actual base64-encoded file data to process. If the user asks whether you can process files, answer conversationally instead of calling this tool.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        image_base64: { type: 'string', minLength: 100, description: 'Base64-encoded image data (PNG, JPEG, WebP, or GIF). Must be real base64 file data, not a placeholder. Use this OR pdf_base64.' },
-        pdf_base64: { type: 'string', minLength: 100, description: 'Base64-encoded PDF file. Must be real base64 file data, not a placeholder. Each page is converted to an image and OCR\'d separately. Use this OR image_base64.' },
-        max_pages: { type: 'number', description: 'Maximum number of PDF pages to process (default: 20). Ignored for images.' },
-        output_format: {
-          type: 'string',
-          enum: ['text', 'markdown', 'json'],
-          description: 'Output format: text (plain text), markdown (structured with headings/tables), json (structured fields). Default: markdown.',
-        },
-      },
-      required: [],
-    },
-  },
-
-  {
-    name: 'analyze_image',
-    description:
-      'Analyze an image using the best available vision model (dedicated OCR model, vision-capable local model, or Claude). Describe images, identify objects, analyze screenshots, or answer specific questions about image content. IMPORTANT: Only call this when you have actual base64-encoded image data. If the user asks whether you can analyze images, answer conversationally.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {
-        image_base64: { type: 'string', minLength: 100, description: 'Base64-encoded image data (PNG, JPEG, WebP, or GIF). Must be real base64 file data, not a placeholder.' },
-        analysis_type: {
-          type: 'string',
-          enum: ['describe', 'objects', 'screenshot', 'general'],
-          description: 'Type of analysis: describe (detailed description), objects (list objects/elements), screenshot (analyze UI/app screenshot), general (default overview).',
-        },
-        prompt: { type: 'string', description: 'Custom prompt for specific questions about the image. Overrides analysis_type when provided.' },
-      },
-      required: ['image_base64'],
-    },
-  },
+  ...SCRAPING_TOOL_DEFINITIONS,
+  ...RESEARCH_TOOL_DEFINITIONS,
+  ...AUDIO_TOOL_DEFINITIONS,
+  ...MEETING_TOOL_DEFINITIONS,
+  ...INTERNET_TOOL_DEFINITIONS,
+  ...OCR_TOOL_DEFINITIONS,
 
   // ─── Sub-Orchestrator ──────────────────────────────────────────────────────
   {

@@ -3,8 +3,29 @@
  * Wraps the research skill for use in the orchestrator chat.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { executeResearch, type ResearchDepth, type LocalKnowledgeOptions } from '../../execution/skills/research.js';
+
+export const RESEARCH_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'deep_research',
+    description:
+      'Conduct deep research on a topic. Generates multiple search queries, searches the web, and synthesizes findings into a structured report with citations.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        question: { type: 'string', description: 'The research question to investigate' },
+        depth: {
+          type: 'string',
+          enum: ['quick', 'thorough', 'comprehensive'],
+          description: 'Research depth: quick (2 queries), thorough (4 queries, default), comprehensive (6 queries)',
+        },
+      },
+      required: ['question'],
+    },
+  },
+];
 
 export async function deepResearch(
   ctx: LocalToolContext,

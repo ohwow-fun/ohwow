@@ -4,11 +4,39 @@
  * with optional LLM analysis of the transcript.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import type { STTProvider } from '../../voice/types.js';
 import { VoiceboxSTTProvider } from '../../voice/voicebox-stt-provider.js';
 import { GemmaAudioProvider, WhisperLocalProvider, WhisperAPIProvider } from '../../voice/stt-providers.js';
 import { logger } from '../../lib/logger.js';
+
+export const AUDIO_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'transcribe_audio',
+    description:
+      'Transcribe audio to text using the best available speech-to-text provider (Voicebox Whisper, Gemma Audio, or OpenAI Whisper). Optionally analyze the transcript with a follow-up prompt. IMPORTANT: Only call this when you have actual base64-encoded audio data to process.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        audio_base64: {
+          type: 'string',
+          minLength: 100,
+          description: 'Base64-encoded audio data (WAV, MP3, OGG, WebM, or M4A). Must be real audio file data, not a placeholder.',
+        },
+        language: {
+          type: 'string',
+          description: 'Language hint for transcription accuracy (e.g., "en", "es", "fr"). Optional.',
+        },
+        prompt: {
+          type: 'string',
+          description: 'Optional analysis prompt applied to the transcript after transcription. Use for summarizing, extracting action items, translating, or any other processing.',
+        },
+      },
+      required: ['audio_base64'],
+    },
+  },
+];
 
 /** Supported audio MIME types and their base64 magic-byte prefixes. */
 const AUDIO_MAGIC: Array<{ prefix: string; mime: string }> = [

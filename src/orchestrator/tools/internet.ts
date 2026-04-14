@@ -4,11 +4,59 @@
  * Inspired by the Agent-Reach channel pattern.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../../lib/logger.js';
 import { ensureYtdlp, ensureGh } from '../../lib/internet-installer.js';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const INTERNET_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'youtube_transcript',
+    description:
+      'Extract the transcript or subtitles from a YouTube video. Returns timestamped text content. Useful for summarizing, researching, or quoting video content without watching it. Requires yt-dlp installed locally.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'YouTube video URL' },
+        language: { type: 'string', description: 'Subtitle language code (default: en)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'read_rss_feed',
+    description:
+      'Parse an RSS or Atom feed URL and return recent entries. Use for monitoring blogs, news sites, changelogs, podcast feeds, or any site with an RSS feed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'RSS or Atom feed URL' },
+        limit: { type: 'number', description: 'Max entries to return (default 20, max 50)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'github_search',
+    description:
+      'Search GitHub for repositories, issues, pull requests, or code. Use for finding libraries, researching how others solved a problem, or tracking issues. Requires gh CLI installed and authenticated.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'Search query (supports GitHub search syntax)' },
+        type: {
+          type: 'string',
+          enum: ['repos', 'issues', 'prs', 'code'],
+          description: 'What to search for (default: repos)',
+        },
+        limit: { type: 'number', description: 'Max results to return (default 10, max 30)' },
+      },
+      required: ['query'],
+    },
+  },
+];
 
 const execFileAsync = promisify(execFile);
 

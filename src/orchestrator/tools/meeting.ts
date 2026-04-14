@@ -3,8 +3,48 @@
  * Start/stop system audio capture and get running meeting notes.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
+
+export const MEETING_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'start_meeting_listener',
+    description:
+      'Start listening to a meeting via system audio capture. Captures audio from Zoom, Teams, or all system audio, transcribes in real-time, and builds structured meeting notes (summary, decisions, action items). Notes sync to the cloud dashboard. macOS only, requires screen recording permission on first use.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        app: {
+          type: 'string',
+          enum: ['zoom', 'teams', 'meet', 'all'],
+          description: 'Which app to capture audio from. "all" captures all system audio. Default: "all".',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'stop_meeting_listener',
+    description:
+      'Stop the active meeting listener. Triggers a final comprehensive analysis pass that produces a complete meeting summary with decisions, action items, open questions, and key quotes. Returns the full structured notes.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_meeting_notes',
+    description:
+      'Get the current running notes from an active or recently completed meeting session. Returns the latest summary, key points, decisions, action items, and open questions accumulated so far.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
 function getSession(ctx: LocalToolContext) {
   return ctx.meetingSession ?? null;
 }

@@ -4,6 +4,7 @@
  * Uses the shared ScraplingService instance from LocalToolContext.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import {
   ScraplingService,
@@ -11,6 +12,54 @@ import {
   cleanContent,
 } from '../../execution/scrapling/index.js';
 import { logger } from '../../lib/logger.js';
+
+export const SCRAPING_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'scrape_url',
+    description:
+      'Fetch and extract content from a URL. Automatically tries fast HTTP first, then stealth (anti-bot bypass), then full browser rendering. Use when the user wants to read or extract info from a web page.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        url: { type: 'string', description: 'The URL to scrape' },
+        selector: { type: 'string', description: 'Optional CSS selector to extract specific elements' },
+        format: { type: 'string', enum: ['html', 'markdown', 'text'], description: 'Output format (default: markdown)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'scrape_bulk',
+    description:
+      'Fetch multiple URLs at once and return combined results. Use for comparing pages or collecting data from several sources.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        urls: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'URLs to scrape (max 20)',
+        },
+        selector: { type: 'string', description: 'Optional CSS selector to extract from each page' },
+        format: { type: 'string', enum: ['html', 'markdown', 'text'], description: 'Output format (default: markdown)' },
+      },
+      required: ['urls'],
+    },
+  },
+  {
+    name: 'scrape_search',
+    description:
+      'Search the web for a query and scrape the top results for detailed content. Goes deeper than a simple web search by fetching and reading each result page.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        query: { type: 'string', description: 'The search query' },
+        max_results: { type: 'number', description: 'Max pages to scrape (default: 5, max: 10)' },
+      },
+      required: ['query'],
+    },
+  },
+];
 
 /** Ensure a URL has a protocol prefix. Defaults to https://. */
 function normalizeUrl(url: string): string {
