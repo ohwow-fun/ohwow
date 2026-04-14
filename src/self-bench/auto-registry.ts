@@ -53,6 +53,7 @@ import { MigrationSchema009NudgesExperiment } from './experiments/migration-sche
 import { ToolchainToolTestAgentsExperiment } from './experiments/toolchain-tool-test-agents.js';
 import { ToolchainToolTestCollectiveIntelligenceExperiment } from './experiments/toolchain-tool-test-collective-intelligence.js';
 import { ToolchainToolTestHumanGrowthExperiment } from './experiments/toolchain-tool-test-human-growth.js';
+import { ToolchainToolTestInvestigateShellAllowlistExperiment } from './experiments/toolchain-tool-test-investigate-shell-allowlist.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema010LocalCrmExperiment(),
   () => new MigrationSchema012OrchestratorMemoryExperiment(),
@@ -78,4 +79,5 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new ToolchainToolTestAgentsExperiment(),
   () => new ToolchainToolTestCollectiveIntelligenceExperiment(),
   () => new ToolchainToolTestHumanGrowthExperiment(),
+  () => new ToolchainToolTestInvestigateShellAllowlistExperiment(),
 ];
