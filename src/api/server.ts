@@ -112,6 +112,9 @@ export interface ServerConfig {
   contentPublicKey?: JsonWebKey;
   dataDir?: string;
   browserHeadless?: boolean;
+  /** API keys for modelReady detection — passed from daemon config at boot. */
+  anthropicApiKey?: string;
+  openRouterApiKey?: string;
 }
 
 /**
@@ -374,8 +377,9 @@ export function createServer(deps: ServerDeps): {
     // Check if a model is available (Ollama with a downloaded model, or an API key)
     let modelReady = false;
     try {
-      if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN || process.env.OPENROUTER_API_KEY) {
-        modelReady = true; // API key available
+      if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN || process.env.OPENROUTER_API_KEY ||
+          config.anthropicApiKey || config.openRouterApiKey) {
+        modelReady = true; // API key available (env or config file)
       } else {
         const ollamaUrl = process.env.OHWOW_OLLAMA_URL || 'http://localhost:11434';
         const tagRes = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });

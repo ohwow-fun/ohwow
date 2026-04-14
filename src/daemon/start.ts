@@ -1022,6 +1022,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
       contentPublicKey: controlPlane?.contentPublicKey ?? undefined,
       dataDir,
       browserHeadless: config.browserHeadless,
+      anthropicApiKey: config.anthropicApiKey,
+      openRouterApiKey: config.openRouterApiKey,
     },
     db,
     rawDb,

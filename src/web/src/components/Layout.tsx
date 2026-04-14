@@ -135,6 +135,8 @@ function SidebarNavLink({
 
 function SidebarContent({
   health,
+  healthError,
+  healthLoading,
   tier,
   tierLoading,
   visibleNav,
@@ -142,6 +144,8 @@ function SidebarContent({
   onClose,
 }: {
   health: HealthData | null;
+  healthError: string | null;
+  healthLoading: boolean;
   tier: string;
   tierLoading: boolean;
   visibleNav: NavItem[];
@@ -207,13 +211,15 @@ function SidebarContent({
         <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-white/[0.03]">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              {health && (
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${health.status === 'healthy' ? 'bg-success' : 'bg-warning'}`} />
-              )}
+              <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                healthError ? 'bg-warning' :
+                health ? (health.status === 'healthy' ? 'bg-success' : 'bg-warning') :
+                'bg-neutral-600 animate-pulse'
+              }`} />
               <span className="text-xs text-neutral-400">
-                {health ? `v${health.version}` : 'Starting...'}
+                {healthError ? 'Offline' : health ? `v${health.version}` : healthLoading ? 'Starting...' : 'Connecting...'}
               </span>
-              {health && (
+              {health && !healthError && (
                 <>
                   <span className="text-white/10 text-xs">|</span>
                   <span className="text-xs text-neutral-500">{formatUptime(health.uptime)}</span>
@@ -238,7 +244,7 @@ function SidebarContent({
 
 export function Layout() {
   const location = useLocation();
-  const { data: health } = useApi<HealthData>('/health');
+  const { data: health, error: healthError, loading: healthLoading } = useApi<HealthData>('/health');
   const { tier, modelReady, loading: tierLoading } = useTier();
   useEventToasts();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -264,6 +270,8 @@ export function Layout() {
       <aside className="hidden md:flex w-64 border-r border-white/10 flex-col h-dvh sticky top-0">
         <SidebarContent
           health={health ?? null}
+          healthError={healthError}
+          healthLoading={healthLoading}
           tier={tier}
           tierLoading={tierLoading}
           visibleNav={visibleNav}
@@ -291,6 +299,8 @@ export function Layout() {
             >
               <SidebarContent
                 health={health ?? null}
+                healthError={healthError}
+                healthLoading={healthLoading}
                 tier={tier}
                 tierLoading={tierLoading}
                 visibleNav={visibleNav}

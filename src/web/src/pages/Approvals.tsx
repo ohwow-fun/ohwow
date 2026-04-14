@@ -7,6 +7,93 @@ import { RowSkeleton } from '../components/Skeleton';
 import { api } from '../api/client';
 import { useState, useCallback } from 'react';
 
+/**
+ * Lightweight markdown renderer — no external dep required.
+ * Handles the subset agents commonly produce: headings, bold, code
+ * fences, inline code, bullet lists, and plain paragraphs.
+ */
+function ApprovalBody({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Code fence
+    if (line.startsWith('```')) {
+      const lang = line.slice(3).trim();
+      const codeLines: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      elements.push(
+        <pre key={i} className="bg-white/[0.05] rounded px-3 py-2 text-[11px] text-neutral-300 overflow-x-auto my-1.5 whitespace-pre">
+          {lang && <span className="text-neutral-500 text-[10px] block mb-1">{lang}</span>}
+          {codeLines.join('\n')}
+        </pre>
+      );
+      i++;
+      continue;
+    }
+
+    // Headings
+    const h3 = line.match(/^### (.+)/);
+    const h2 = line.match(/^## (.+)/);
+    const h1 = line.match(/^# (.+)/);
+    if (h3) { elements.push(<p key={i} className="text-xs font-semibold text-white mt-2 mb-0.5">{h3[1]}</p>); i++; continue; }
+    if (h2) { elements.push(<p key={i} className="text-xs font-semibold text-white mt-2 mb-0.5">{h2[1]}</p>); i++; continue; }
+    if (h1) { elements.push(<p key={i} className="text-sm font-semibold text-white mt-2 mb-1">{h1[1]}</p>); i++; continue; }
+
+    // Bullet list
+    const bullet = line.match(/^[-*+] (.+)/);
+    if (bullet) {
+      elements.push(
+        <div key={i} className="flex gap-1.5 text-xs text-neutral-300">
+          <span className="text-neutral-500 mt-px">•</span>
+          <span>{inlineFormat(bullet[1])}</span>
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Numbered list
+    const numbered = line.match(/^(\d+)\. (.+)/);
+    if (numbered) {
+      elements.push(
+        <div key={i} className="flex gap-1.5 text-xs text-neutral-300">
+          <span className="text-neutral-500 shrink-0">{numbered[1]}.</span>
+          <span>{inlineFormat(numbered[2])}</span>
+        </div>
+      );
+      i++; continue;
+    }
+
+    // Empty line
+    if (line.trim() === '') { elements.push(<div key={i} className="h-1" />); i++; continue; }
+
+    // Normal paragraph
+    elements.push(<p key={i} className="text-xs text-neutral-300 leading-relaxed">{inlineFormat(line)}</p>);
+    i++;
+  }
+
+  return <div className="mt-2 space-y-0.5 max-h-48 overflow-y-auto pr-1">{elements}</div>;
+}
+
+function inlineFormat(text: string): React.ReactNode {
+  // Split on **bold** and `code` spans
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**'))
+      return <strong key={idx} className="text-white font-medium">{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`'))
+      return <code key={idx} className="bg-white/10 px-1 rounded text-[10px] text-neutral-200">{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
+
 interface DeferredAction {
   type: string;
   params: Record<string, unknown>;
@@ -153,9 +240,7 @@ export function ApprovalsPage() {
                     </div>
                     <p className="text-xs text-neutral-400 mt-0.5">{new Date(item.created_at).toLocaleString()}</p>
                     {item.output && (
-                      <pre className="text-xs text-neutral-400 mt-2 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
-                        {typeof item.output === 'string' ? item.output.slice(0, 500) : JSON.stringify(item.output).slice(0, 500)}
-                      </pre>
+                      <ApprovalBody text={typeof item.output === 'string' ? item.output.slice(0, 1200) : JSON.stringify(item.output).slice(0, 1200)} />
                     )}
                   </div>
                   <div className="flex gap-2 shrink-0">

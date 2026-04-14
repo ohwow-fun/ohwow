@@ -173,7 +173,7 @@ function TaskActivityChart({ activity }: { activity: ActivityEntry[] | null }) {
 }
 
 function QuickStatsRow({ agents, tasks }: { agents: Agent[] | null; tasks: Task[] | null }) {
-  const activeAgents = agents ? agents.filter(a => a.status !== 'paused').length : 0;
+  const activeAgents = agents ? agents.filter(a => a.status === 'working').length : 0;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const todayTasks = tasks
@@ -187,7 +187,7 @@ function QuickStatsRow({ agents, tasks }: { agents: Agent[] | null; tasks: Task[
   return (
     <div className="flex gap-3 mb-8">
       <div className="flex-1 border border-white/[0.06] rounded-lg px-4 py-3 bg-white/[0.02]">
-        <p className="text-[10px] text-neutral-500 uppercase tracking-wider">Active Agents</p>
+        <p className="text-[10px] text-neutral-500 uppercase tracking-wider">Working Now</p>
         <p className="text-lg font-semibold text-success mt-0.5">{activeAgents}</p>
       </div>
       <div className="flex-1 border border-white/[0.06] rounded-lg px-4 py-3 bg-white/[0.02]">
