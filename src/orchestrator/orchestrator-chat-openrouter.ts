@@ -819,10 +819,22 @@ export async function* runOpenRouterChat(
         ? this.brain.buildReflection(userMessage, recentToolNames, iteration, maxIter)
         : buildReflectionPrompt(userMessage, executedToolCalls, iteration, maxIter);
 
-      const resultsBlock = toolResultsSummary
-        .map(r => `## ${r.name}\n${r.content}`)
-        .join('\n\n');
-      const reflectionContent = `[Tool Results:\n${resultsBlock}${stagnationWarning}\n\n${reflectionText}]`;
+      // Tool results were already pushed as role='tool' messages above this
+      // iteration, and OpenRouter cloud models (Grok, Sonnet, Flash, Mimo…)
+      // parse role='tool' natively. The old code concatenated every result
+      // into a second `[Tool Results: …]` text block and re-pushed it as a
+      // role='user' reflection, so every tool output lived in loopMessages
+      // twice per iteration — and the duplicated user-role copy was invisible
+      // to compactStaleOpenAIToolResults (which only walks role='tool'),
+      // doubling context growth across long tool loops. Reflection now only
+      // carries the stagnation nudge + the reflection prompt, both of which
+      // add signal the model can't derive from the tool messages alone.
+      //
+      // The Ollama path keeps its own inline duplication intentionally as a
+      // fallback for small models that don't parse role='tool' reliably.
+      const reflectionContent = stagnationWarning
+        ? `${stagnationWarning}\n\n${reflectionText}`
+        : reflectionText;
 
       // Include screenshot images in the reflection message for vision-capable models (OpenRouter path)
       // Evict old screenshots first: keep only the most recent to avoid blowing context
@@ -857,9 +869,24 @@ export async function* runOpenRouterChat(
       prevIterToolCount = response.toolCalls?.length ?? 0;
       iterHadErrors = toolResultsSummary.some(r => r.content.startsWith('Error') || r.content.includes('failed'));
 
-      // Mid-loop context budget check
+      // Mid-loop context budget check.
+      //
+      // The old metric (`totalInputTokens / contextLimit`) is CUMULATIVE work
+      // across every iteration's request, not the current context fill. After
+      // 20 iterations a healthy loop reads as "539% context" while the actual
+      // next-call payload is well under the break threshold. That broke both
+      // the observability log and the summarize trigger: the log screamed
+      // about an overflow that wasn't happening, and the summarize call fired
+      // every other iteration even when loopMessages was already compact.
+      //
+      // Current load mirrors what checkTurnTokenBudget measures at the top of
+      // the next iteration, so the warn/summarize thresholds now line up with
+      // the hard break guard instead of drifting.
       iterationsSinceSummarize++;
-      const utilizationPct = totalInputTokens / contextLimit;
+      const currentStaticTokens = estimateTokens(systemPrompt) + toolTokenCount;
+      const currentMessageTokens = estimateMessagesTokens(loopMessages);
+      const usableContext = Math.max(1, contextLimit - 4096);
+      const utilizationPct = (currentStaticTokens + currentMessageTokens) / usableContext;
       if (utilizationPct >= 0.7) {
         logger.warn(`[orchestrator] OpenRouter context at ${Math.round(utilizationPct * 100)}% for session ${sessionId}`);
       }

@@ -774,9 +774,20 @@ export async function* runAnthropicChat(
         } catch { /* non-fatal */ }
       }
 
-      // Mid-loop context budget check for Anthropic path
+      // Mid-loop context budget check for Anthropic path.
+      //
+      // The old metric (`totalInputTokens / anthropicContextLimit`) is
+      // CUMULATIVE work across every iteration's request, not the current
+      // context fill. After a long tool loop it reported multi-hundred-percent
+      // "context used" while the actual next-call payload was fine, breaking
+      // both the observability log and the summarize trigger. Use the same
+      // current-load estimator as the hard break guard above so warn and
+      // summarize thresholds stay synchronized with the real context.
       iterationsSinceSummarize++;
-      const utilizationPct = totalInputTokens / anthropicContextLimit;
+      const currentStaticTokens = estimateTokens(systemBlocks.map(b => b.text).join('')) + estimateToolTokens(convertToolsToOpenAI(tools));
+      const currentMessageTokens = estimateMessagesTokens(loopMessages);
+      const usableContext = Math.max(1, anthropicContextLimit - 4096);
+      const utilizationPct = (currentStaticTokens + currentMessageTokens) / usableContext;
       if (utilizationPct >= 0.7) {
         logger.warn(`[LocalOrchestrator] Anthropic context at ${Math.round(utilizationPct * 100)}% for session ${sessionId}`);
       }
