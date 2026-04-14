@@ -28,7 +28,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
         return;
       }
 
-      res.json({ schedules: data || [] });
+      res.json({ data: data || [] });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
