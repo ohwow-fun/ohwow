@@ -17,7 +17,7 @@ vi.mock('../self-commit.js', () => ({
 
 import { execSync } from 'node:child_process';
 import { getSelfCommitStatus } from '../self-commit.js';
-import { ToolchainToolTestSchedulesExperiment } from '../experiments/toolchain-tool-test-schedules.js';
+import { ToolchainToolTestListDeliverablesSinceExperiment } from '../experiments/toolchain-tool-test-list-deliverables-since.js';
 
 function makeCtx(): ExperimentContext {
   return {
@@ -30,8 +30,8 @@ function makeCtx(): ExperimentContext {
   };
 }
 
-describe('ToolchainToolTestSchedulesExperiment (auto-generated)', () => {
-  const exp = new ToolchainToolTestSchedulesExperiment();
+describe('ToolchainToolTestListDeliverablesSinceExperiment (auto-generated)', () => {
+  const exp = new ToolchainToolTestListDeliverablesSinceExperiment();
 
   beforeEach(() => {
     vi.mocked(getSelfCommitStatus).mockReturnValue({
@@ -49,7 +49,7 @@ describe('ToolchainToolTestSchedulesExperiment (auto-generated)', () => {
     expect(exp.judge(result, [])).toBe('pass');
     const ev = result.evidence as { exit_code: number; command: string };
     expect(ev.exit_code).toBe(0);
-    expect(ev.command).toBe('npx vitest run src/orchestrator/tools/__tests__/schedules.test.ts');
+    expect(ev.command).toBe('npx vitest run src/orchestrator/tools/__tests__/list-deliverables-since.test.ts');
   });
 
   it('returns fail when command exits non-zero', async () => {
@@ -85,7 +85,7 @@ describe('ToolchainToolTestSchedulesExperiment (auto-generated)', () => {
     vi.mocked(execSync).mockReturnValue(Buffer.from('') as unknown as string);
     const result = await exp.probe(makeCtx());
     const ev = result.evidence as { command: string; duration_ms: number };
-    expect(ev.command).toBe('npx vitest run src/orchestrator/tools/__tests__/schedules.test.ts');
+    expect(ev.command).toBe('npx vitest run src/orchestrator/tools/__tests__/list-deliverables-since.test.ts');
     expect(typeof ev.duration_ms).toBe('number');
   });
 });
