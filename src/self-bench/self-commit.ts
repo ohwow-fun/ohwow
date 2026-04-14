@@ -43,12 +43,19 @@
  *    audit entry is the operator's tripwire for halting the loop
  *    on missing-audit or non-none bailout_check.
  *
- * 7. Commit scope is explicit. git add receives only the files
- *    from the opts.files list — no git add . ever. Commit runs
- *    WITHOUT --no-verify (husky runs its hooks) so the operator
- *    runbook bailout "--no-verify" is self-enforcing. The
- *    redundant typecheck the hook runs is cheap (~8s) and
- *    harmless — it's a subset of what we already ran manually.
+ * 7. Commit scope is explicit AND atomic. The commit uses
+ *    `git commit --only -- <opts.files>` so its scope is bounded to
+ *    exactly the listed paths regardless of what else is in the
+ *    index. Replaces an earlier git-add-then-commit pattern that
+ *    had a race window: a concurrent worker staging anything
+ *    between our git-add and our git-commit got their changes
+ *    silently bundled into our commit. `--only` makes the scope
+ *    expression atomic — git updates the index and commits in one
+ *    invocation, ignoring all other staged paths. NO --no-verify
+ *    (husky runs its hooks) so the operator runbook bailout
+ *    "--no-verify" is self-enforcing. The redundant typecheck the
+ *    hook runs is cheap (~8s) and harmless — it's a subset of what
+ *    we already ran manually, and it sees only our paths.
  *
  * Error handling
  * --------------
@@ -374,28 +381,53 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return { ok: false, reason: `audit log write failed: ${extractErrorSummary(err)}` };
   }
 
-  // 6. Git add (explicit file list — never git add .)
-  try {
-    const addArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
-    runInRepo(`git add ${addArgs}`, repoRoot);
-  } catch (err) {
-    rollbackFiles(absPaths);
-    return { ok: false, reason: `git add failed: ${extractErrorSummary(err)}` };
-  }
-
-  // 7. Git commit with sign-off + self-attribution trailer. NO
-  //    --no-verify — husky's pre-commit hook runs (typecheck +
-  //    lint-staged eslint). Those are cheap and deterministic;
-  //    running them again from inside the daemon is fine because
-  //    husky hooks operate on staged files, not on the test runner.
+  // 6. Git commit with sign-off + self-attribution trailer. Uses
+  //    `git commit --only -- <files>` so the commit scope is bounded
+  //    to exactly opts.files regardless of what else is in the index.
+  //
+  //    Why --only and not git-add-then-commit:
+  //    The earlier two-step (git add <files> ; git commit) was a
+  //    race window. If a concurrent worker (another autonomous
+  //    self-commit, a human running git rm, lint-staged stashing,
+  //    etc.) staged anything between our git-add and our git-commit,
+  //    that change got bundled into our commit silently. This was
+  //    observed on 2026-04-14 when an autonomous commit titled
+  //    "auto-author toolchain-tool-test-list-deliverables-since"
+  //    actually contained ~1,500 lines of unrelated deletions from a
+  //    concurrent refactor's git-rm.
+  //
+  //    `git commit --only -- <files>` updates the index for ONLY the
+  //    listed paths (from the working tree) and commits ONLY those
+  //    paths. Other index entries — staged or otherwise — are left
+  //    untouched and excluded from the commit. This is the
+  //    git-native way to express "commit exactly these files,
+  //    nothing else."
+  //
+  //    NO --no-verify — husky's pre-commit hook still runs
+  //    (typecheck + lint-staged eslint). The hook sees only the
+  //    files we're committing, so cross-session WIP outside our
+  //    scope still doesn't pollute the validation surface.
+  //
+  //    `git add -N` (intent to add) is required for new files
+  //    before `git commit --only` can pick them up — without it
+  //    git rejects the commit with "pathspec did not match any
+  //    file(s) known to git." -N adds a zero-length placeholder
+  //    entry to the index; --only then replaces it with the actual
+  //    working-tree content. Crucially, -N only touches the paths
+  //    we name — other staged paths in the index are untouched, so
+  //    the isolation guarantee holds.
   const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n`;
+  const fileArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
   try {
-    runInRepo('git commit -s -F -', repoRoot, { input: fullMessage });
+    runInRepo(`git add -N -- ${fileArgs}`, repoRoot);
+    runInRepo(`git commit -s --only -F - -- ${fileArgs}`, repoRoot, { input: fullMessage });
   } catch (err) {
-    // Git reset the staged changes so the repo is clean.
+    // Reset the index entries `--only` may have updated so the repo
+    // is clean. Scoped to opts.files — never touches paths the
+    // self-commit didn't write (per the global rule "never git reset
+    // HEAD on files you didn't stage").
     try {
-      const resetArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
-      runInRepo(`git reset HEAD -- ${resetArgs}`, repoRoot);
+      runInRepo(`git reset HEAD -- ${fileArgs}`, repoRoot);
     } catch { /* best effort */ }
     rollbackFiles(absPaths);
     return { ok: false, reason: `git commit failed: ${extractErrorSummary(err)}` };

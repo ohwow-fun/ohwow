@@ -356,3 +356,66 @@ describe('safeSelfCommit — git state', () => {
     expect(status).toContain('?? unrelated.txt');
   });
 });
+
+describe('safeSelfCommit — concurrent staging isolation (race condition fix)', () => {
+  it('does not bundle a concurrently-staged unrelated file into the commit', async () => {
+    // Simulate the failure mode that produced commit 0948ede on
+    // 2026-04-14: a concurrent worker stages an unrelated file
+    // between when safeSelfCommit's git-add ran and when its
+    // git-commit ran. Pre-fix, the unrelated file got swept into
+    // the autonomous commit, mis-attributing ~1500 lines of
+    // unrelated changes to a "auto-author X" message.
+    //
+    // With --only the commit scope is bounded to opts.files
+    // regardless of what else is in the index — staged or otherwise.
+    fs.writeFileSync(path.join(tempRoot, 'concurrent.txt'), 'staged by another worker');
+    execSync('git add concurrent.txt', { cwd: tempRoot, stdio: 'pipe' });
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/iso.ts', content: 'export const iso = 1;' }],
+      commitMessage: 'feat(self-bench): isolation regression test for race condition',
+      experimentId: 'iso-writer',
+    }));
+    expect(result.ok).toBe(true);
+
+    // The commit must list ONLY iso.ts. concurrent.txt must remain
+    // staged (not committed) so the concurrent worker's intent
+    // is preserved.
+    const filesInCommit = execSync('git show --name-only --pretty=format: HEAD', {
+      cwd: tempRoot,
+      encoding: 'utf-8',
+    }).trim().split('\n').filter(Boolean);
+    expect(filesInCommit).toEqual(['src/self-bench/experiments/iso.ts']);
+
+    const status = execSync('git status --porcelain', { cwd: tempRoot, encoding: 'utf-8' });
+    expect(status).toContain('A  concurrent.txt'); // still staged, not committed
+  });
+
+  it('does not bundle a concurrently-staged DELETION into the commit', async () => {
+    // The exact shape of 0948ede's failure: a concurrent worker had
+    // git-rm'd 18 toolchain duplicate files. The autonomous commit
+    // bundled those deletions silently. With --only the deletions
+    // stay staged, untouched.
+    fs.writeFileSync(path.join(tempRoot, 'will-be-removed.txt'), 'soon to be deleted');
+    execSync('git add will-be-removed.txt', { cwd: tempRoot, stdio: 'pipe' });
+    execSync('git commit -m "init the file"', { cwd: tempRoot, stdio: 'pipe' });
+    execSync('git rm will-be-removed.txt', { cwd: tempRoot, stdio: 'pipe' });
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/iso2.ts', content: 'export const iso2 = 1;' }],
+      commitMessage: 'feat(self-bench): isolation regression for staged deletions',
+      experimentId: 'iso2-writer',
+    }));
+    expect(result.ok).toBe(true);
+
+    const filesInCommit = execSync('git show --name-only --pretty=format: HEAD', {
+      cwd: tempRoot,
+      encoding: 'utf-8',
+    }).trim().split('\n').filter(Boolean);
+    expect(filesInCommit).toEqual(['src/self-bench/experiments/iso2.ts']);
+
+    // The deletion must remain staged — concurrent worker's intent preserved.
+    const status = execSync('git status --porcelain', { cwd: tempRoot, encoding: 'utf-8' });
+    expect(status).toContain('D  will-be-removed.txt');
+  });
+});
