@@ -42,6 +42,7 @@ import { NotionConnector } from '../integrations/connectors/notion-connector.js'
 import { MessageRouter } from '../integrations/message-router.js';
 import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ModelRouter } from '../execution/model-router.js';
+import { refreshDemotedAgentModels, DEMOTION_REFRESH_INTERVAL_MS } from '../execution/agent-model-tiers.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
@@ -1278,6 +1279,18 @@ export async function startDaemon(): Promise<DaemonHandle> {
         });
       }, REFINEMENT_INTERVAL);
       logger.debug('[daemon] Person model refinement scheduled (1h interval)');
+    }
+
+    // Agent-tier demotion cache: recomputes the "which models can't
+    // tool-call on work-shaped tasks" set from rolling llm_calls data.
+    // Fires immediately on boot so selectAgentModelForIteration has fresh
+    // signal before the first task runs, then every 10 minutes.
+    {
+      void refreshDemotedAgentModels(db);
+      setInterval(() => {
+        void refreshDemotedAgentModels(db);
+      }, DEMOTION_REFRESH_INTERVAL_MS);
+      logger.debug('[daemon] Agent-tier demotion refresher scheduled (10m interval)');
     }
 
     // Human Growth Engine: compute growth snapshots alongside refinement
