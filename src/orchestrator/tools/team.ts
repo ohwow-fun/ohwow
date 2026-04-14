@@ -23,11 +23,105 @@
  * their guide agent, and have their COS-voiced briefing render.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import { logger } from '../../lib/logger.js';
 import { syncResource, hexToUuid } from '../../control-plane/sync-resources.js';
 import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
 import { activateConversationPersona } from '../conversation-persona.js';
+
+export const TEAM_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'create_team_member',
+    description: 'Add a new human team member to the workspace. Use this when the user says "X is joining the team" or "hire Y" or "onboard Z". Returns the new member record; follow up with assign_guide_agent and start_person_ingestion to run the full onboarding flow.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Full name (required)' },
+        email: { type: 'string', description: 'Email address' },
+        role: { type: 'string', description: 'Role or job title (e.g. "Growth Lead")' },
+        timezone: { type: 'string', description: 'IANA timezone like America/Los_Angeles' },
+        phone: { type: 'string', description: 'Phone (optional)' },
+        group_label: { type: 'string', description: 'Free-form team label: "engineering", "gtm", etc.' },
+        capacity_hours: { type: 'number', description: 'Weekly capacity in hours' },
+        skills: { type: 'array', items: { type: 'string' }, description: 'List of skill tags' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_team_members',
+    description: 'List all human team members in the workspace with their guide agent, onboarding status, and invite status.',
+    input_schema: { type: 'object' as const, properties: {}, required: [] },
+  },
+  {
+    name: 'update_team_member',
+    description: 'Edit an existing team member record. Pass only the fields you want to change.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id (from create_team_member or list_team_members)' },
+        name: { type: 'string' },
+        email: { type: 'string' },
+        role: { type: 'string' },
+        timezone: { type: 'string' },
+        phone: { type: 'string' },
+        group_label: { type: 'string' },
+        capacity_hours: { type: 'number' },
+        skills: { type: 'array', items: { type: 'string' } },
+        onboarding_status: { type: 'string', description: 'not_started | in_progress | ready | active' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'assign_guide_agent',
+    description: 'Assign a dedicated "chief of staff" guide agent to a team member. If agent_id is omitted, a new Chief of Staff agent is auto-spawned for them. The guide becomes the member\'s always-on AI partner.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        agent_id: { type: 'string', description: 'Optional: pick an existing agent instead of spawning one' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'draft_cloud_invite',
+    description: 'Draft (do NOT send yet) a cloud dashboard invite email for a team member. Returns a preview email body the founder can review before calling send_cloud_invite. Use this when the founder wants to review before sending.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        role: { type: 'string', description: 'Cloud role: admin, member, viewer. Default: member.' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'send_cloud_invite',
+    description: 'Actually send a cloud dashboard invite to a team member via email. Creates a workspace_invites row on the cloud, sends the invite email, and stores the token on the local team_members row so we can track acceptance. The member will receive a real email with a 7-day invite link. Use this when the founder says something like "send the invite", "invite them", or "send mario the link" — it replaces the draft-only flow.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+        role: { type: 'string', description: 'Cloud role: admin, member, viewer. Default: member.' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+  {
+    name: 'list_member_tasks',
+    description: 'List work routed to a specific human team member via the work router.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        team_member_id: { type: 'string', description: 'Team member id' },
+      },
+      required: ['team_member_id'],
+    },
+  },
+];
 
 /** Convert a local team_members row into the payload shape the cloud expects. */
 export function teamMemberSyncPayload(row: Record<string, unknown>): Record<string, unknown> & { id: string } {

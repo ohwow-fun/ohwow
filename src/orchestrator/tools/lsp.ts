@@ -3,12 +3,79 @@
  * Provides diagnostics, hover, go-to-definition, references, and completions.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { resolve } from 'path';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { logger } from '../../lib/logger.js';
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
+
+export const LSP_CODE_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'lsp_diagnostics',
+    description: 'Get compiler errors and warnings for a file using the language server. Use before and after edits to verify correctness.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path (absolute or relative to workspace)' },
+      },
+      required: ['file'],
+    },
+  },
+  {
+    name: 'lsp_hover',
+    description: 'Get type information and documentation for a symbol at a specific position in a file.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_go_to_definition',
+    description: 'Jump to the definition of a symbol at a given position. Returns the file and location with surrounding code context.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_references',
+    description: 'Find all references to a symbol at a given position across the project.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+  {
+    name: 'lsp_completions',
+    description: 'Get code completions at a position. Useful for discovering available methods, properties, or imports.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'File path' },
+        line: { type: 'number', description: 'Line number (1-based)' },
+        character: { type: 'number', description: 'Column number (1-based)' },
+      },
+      required: ['file', 'line', 'character'],
+    },
+  },
+];
 
 /** Resolve a file path relative to working directory, with workspace boundary check. */
 function resolveFile(ctx: LocalToolContext, file: string): string {

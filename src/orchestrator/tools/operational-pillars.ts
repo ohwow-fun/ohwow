@@ -7,7 +7,58 @@
  * gaps with actionable blueprints.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const OPERATIONAL_PILLARS_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'assess_operations',
+    description: 'Analyze the workspace\'s current operational health against what it SHOULD be doing at its growth stage and business type. Returns a gap analysis with critical, important, and recommended pillars. Use proactively when the user asks what to focus on, or in early conversations.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        category_filter: { type: 'string', description: 'Filter by category: acquisition, retention, operations, finance, product, team, strategy' },
+        include_dismissed: { type: 'boolean', description: 'Include dismissed pillars (default false)' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'get_pillar_detail',
+    description: 'Get detailed info about a specific operational pillar: setup steps, KPIs, and current workspace status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pillar_slug: { type: 'string', description: 'Pillar slug (e.g. "content_pipeline", "outbound_outreach")' },
+      },
+      required: ['pillar_slug'],
+    },
+  },
+  {
+    name: 'build_pillar',
+    description: 'Start building an operational pillar. Creates a blueprint with setup steps and marks as "building".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pillar_slug: { type: 'string', description: 'Pillar slug to build' },
+        custom_context: { type: 'string', description: 'Optional context about user preferences for this pillar' },
+      },
+      required: ['pillar_slug'],
+    },
+  },
+  {
+    name: 'update_pillar_status',
+    description: 'Update an operational pillar status to running, optimizing, paused, or dismissed.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        pillar_slug: { type: 'string', description: 'Pillar slug to update' },
+        status: { type: 'string', description: 'New status: running, optimizing, paused, dismissed' },
+      },
+      required: ['pillar_slug', 'status'],
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Types
