@@ -52,6 +52,7 @@ import { ToolchainToolTestWhatsappExperiment } from './experiments/toolchain-too
 import { MigrationSchema009NudgesExperiment } from './experiments/migration-schema-009-nudges.js';
 import { ToolchainToolTestAgentsExperiment } from './experiments/toolchain-tool-test-agents.js';
 import { ToolchainToolTestCollectiveIntelligenceExperiment } from './experiments/toolchain-tool-test-collective-intelligence.js';
+import { ToolchainToolTestHumanGrowthExperiment } from './experiments/toolchain-tool-test-human-growth.js';
 export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema010LocalCrmExperiment(),
   () => new MigrationSchema012OrchestratorMemoryExperiment(),
@@ -76,4 +77,5 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   () => new MigrationSchema009NudgesExperiment(),
   () => new ToolchainToolTestAgentsExperiment(),
   () => new ToolchainToolTestCollectiveIntelligenceExperiment(),
+  () => new ToolchainToolTestHumanGrowthExperiment(),
 ];
