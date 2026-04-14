@@ -58,6 +58,7 @@ import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handl
 import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
 import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
 import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
+import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import {
   refreshRuntimeConfigCache,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
@@ -68,6 +69,7 @@ import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
@@ -1411,27 +1413,21 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // while an agent can be silently drowning in failed tasks.
         // Per-agent failure-rate watchdog on a 24h rolling window.
         experimentRunner.register(new AgentOutcomesExperiment());
-        // Phase 8-A (shadow mode): ContentCadenceTunerExperiment is
-        // the first BusinessExperiment wired into the live runner.
-        // Gated behind workspaceSlug === 'default' because its probe
-        // anchors to a business goal that only makes sense on the
-        // GTM dogfood workspace, and hardcoded dryRun: true so the
-        // first rollout only writes no-intervention findings until
-        // an operator decides the probe + judge look right. Without
-        // a downstream consumer of content_cadence.posts_per_day,
-        // flipping dryRun off today would produce a "widened →
-        // didn't work → rolled back" cycle on every run — the
-        // shadow-mode ledger is the correct observable instead.
+        // Phase 8-A (live): ContentCadenceTunerExperiment is the first
+        // BusinessExperiment in the live runner. Gated behind workspaceSlug
+        // === 'default' because its probe anchors to a business goal that
+        // only makes sense on the GTM dogfood workspace.
         //
-        // Env var: OHWOW_CONTENT_CADENCE_TUNER_FAST=1 accelerates
-        // the loop to 5-minute probe cadence + 5-minute validation
-        // delay so a full probe→judge→(skip intervene)→validate
-        // cycle lands in the ledger within minutes instead of a
-        // day. Unset, the tuner inherits its class defaults (6h /
-        // 24h) so nothing shifts in production when this code
-        // merges without the env var being set.
+        // ContentCadenceScheduler (also registered below) is the downstream
+        // consumer that reads content_cadence.posts_per_day, dispatches X
+        // post tasks when under the daily budget, and keeps
+        // goal.current_value current so validate() sees real signal.
+        //
+        // Env var: OHWOW_CONTENT_CADENCE_TUNER_FAST=1 accelerates the loop
+        // to 5-minute probe cadence + 5-minute validation delay for local
+        // smoke testing. In production the class defaults are 6h / 24h.
         if (workspaceSlug === 'default') {
-          const cadenceTuner = new ContentCadenceTunerExperiment({ dryRun: true });
+          const cadenceTuner = new ContentCadenceTunerExperiment({ dryRun: false });
           const fast = process.env.OHWOW_CONTENT_CADENCE_TUNER_FAST;
           if (fast === '1' || fast === 'true') {
             cadenceTuner.cadence = {
@@ -1449,9 +1445,25 @@ export async function startDaemon(): Promise<DaemonHandle> {
               everyMs: cadenceTuner.cadence.everyMs,
               validationDelayMs: cadenceTuner.cadence.validationDelayMs,
             },
-            '[daemon] content-cadence-tuner registered in shadow mode',
+            '[daemon] content-cadence-tuner registered in live mode',
           );
+
+          // Phase 8-A: ContentCadenceScheduler — downstream consumer that
+          // reads content_cadence.posts_per_day every hour, seeds the
+          // x_posts_per_week goal row on first run, dispatches X post tasks
+          // when under the daily budget, and updates goal.current_value with
+          // the trailing-7d count so validate() has real signal.
+          const cadenceScheduler = new ContentCadenceScheduler(db, engine, workspaceId);
+          cadenceScheduler.start();
+          logger.info('[daemon] content-cadence-scheduler started');
         }
+
+        // Phase 8-B: AgentTaskCostWatcherExperiment — observer for the
+        // rolling 7d avg cost per completed task. Anchors to the
+        // agent_avg_task_cost_cents goal (operator creates via UI with a
+        // target value in cents). Warns when avg exceeds target; no
+        // intervention until Phase 8-B.2 adds a routing knob.
+        experimentRunner.register(new AgentTaskCostWatcherExperiment());
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },
