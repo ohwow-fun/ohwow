@@ -7,7 +7,7 @@
  *   2. Reads content_cadence.posts_per_day from runtime_config_overrides
  *      (falls back to DEFAULT 1 when no override is set).
  *   3. Counts X posts completed so far today (agent_workforce_tasks WHERE
- *      x_compose metadata is set AND status='completed' AND ended_at >= today).
+ *      x_compose metadata is set AND status='completed' AND completed_at >= today).
  *   4. If still under budget, finds an X-capable agent and dispatches a
  *      "post one tweet today" task.
  *   5. Counts X posts in the trailing 7 days and updates the goal's
@@ -83,7 +83,13 @@ export class ContentCadenceScheduler {
     logger.info('[ContentCadenceScheduler] stopped');
   }
 
-  private async tick(): Promise<void> {
+  /**
+   * Single tick of the budget loop. Public for integration tests
+   * that drive ticks directly instead of waiting on the interval.
+   * Production callers go through start()/stop() — do not call this
+   * directly from app code.
+   */
+  async tick(): Promise<void> {
     if (this.executing) return; // skip overlapping ticks
     this.executing = true;
     try {
@@ -107,7 +113,7 @@ export class ContentCadenceScheduler {
         } else {
           logger.warn(
             { workspaceId: this.workspaceId },
-            '[ContentCadenceScheduler] no active agent found — skipping dispatch',
+            '[ContentCadenceScheduler] no idle agent found — skipping dispatch',
           );
         }
       }
@@ -129,23 +135,57 @@ export class ContentCadenceScheduler {
    */
   private async ensureGoalExists(): Promise<void> {
     try {
-      // Check via select first to avoid a write on every tick.
       const { data } = await this.db
-        .from<{ id: string }>('agent_workforce_goals')
-        .select('id')
+        .from<{ id: string; due_date: string | null }>('agent_workforce_goals')
+        .select('id, due_date')
         .eq('id', GOAL_ID);
-      const rows = (data ?? []) as Array<{ id: string }>;
-      if (rows.length > 0) return;
+      const rows = (data ?? []) as Array<{ id: string; due_date: string | null }>;
+
+      // Roll the deadline forward when the existing goal is within 1 day of
+      // (or past) its due_date. Without this refresh, the 7-day window the
+      // probe needs collapses on day 8 — computeRequiredVelocity returns null
+      // for past-due goals, the judge falls into goal_met_or_past_due, and
+      // the tuner stops having a velocity gap to react to. Rolling forward
+      // weekly keeps the rate the metric name promises (posts/week) honest.
+      if (rows.length > 0) {
+        const existing = rows[0];
+        const ROLL_FORWARD_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+        const dueMs = existing.due_date ? new Date(existing.due_date).getTime() : 0;
+        if (dueMs - Date.now() < ROLL_FORWARD_THRESHOLD_MS) {
+          const nextDue = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+          nextDue.setHours(0, 0, 0, 0);
+          await this.db
+            .from('agent_workforce_goals')
+            .update({
+              due_date: nextDue.toISOString().split('T')[0],
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', GOAL_ID);
+          logger.info(
+            { goalId: GOAL_ID, nextDue: nextDue.toISOString().split('T')[0] },
+            '[ContentCadenceScheduler] rolled x_posts_per_week goal forward 7 days',
+          );
+        }
+        return;
+      }
 
       const now = new Date().toISOString();
-      const due = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      // 7 posts over 7 days = 1 post/day required velocity. The tuner's
+      // probe computes requiredPerDay = (target - current) / daysRemaining,
+      // so target_value and due_date must agree on the rate the goal name
+      // promises. A 7-post target across a 90-day window collapses to
+      // 0.078/day — trivially met by the default cadence (1/day) — and
+      // the tuner would never have a reason to widen.
+      const due = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       due.setHours(0, 0, 0, 0);
 
       await this.db.from('agent_workforce_goals').insert({
         id: GOAL_ID,
         workspace_id: this.workspaceId,
         title: 'X posts per week',
-        description: 'Post consistently on X to grow follower base and top-of-funnel awareness.',
+        description:
+          'Post 7 times this week on X to maintain top-of-funnel cadence. ' +
+          'Refreshed weekly — current_value is the trailing-7d post count.',
         target_metric: GOAL_METRIC,
         target_value: 7.0,
         current_value: 0.0,
@@ -174,7 +214,7 @@ export class ContentCadenceScheduler {
    * Count agent_workforce_tasks that:
    *   - belong to this workspace
    *   - have status='completed'
-   *   - have ended_at >= since (ISO string)
+   *   - have completed_at >= since (ISO string)
    *   - have metadata that indicates an x_compose tool was used
    *     (posted_via: 'x_compose_tweet', 'x_compose_thread', or 'x_compose_article')
    */
@@ -186,19 +226,19 @@ export class ContentCadenceScheduler {
       // In practice the window is ≤168 tasks (7 days × up to 24/day at max
       // cadence), so in-process filtering is fine here.
       const { data } = await this.db
-        .from<{ id: string; metadata: string | null; ended_at: string | null }>('agent_workforce_tasks')
-        .select('id, metadata, ended_at')
+        .from<{ id: string; metadata: string | null; completed_at: string | null }>('agent_workforce_tasks')
+        .select('id, metadata, completed_at')
         .eq('workspace_id', this.workspaceId)
         .eq('status', 'completed');
 
       const rows = (data ?? []) as Array<{
         id: string;
         metadata: string | null;
-        ended_at: string | null;
+        completed_at: string | null;
       }>;
 
       return rows.filter((r) => {
-        if (!r.ended_at || r.ended_at < since) return false;
+        if (!r.completed_at || r.completed_at < since) return false;
         const meta = parseMetadata(r.metadata);
         const via = meta.posted_via as string | undefined;
         return typeof via === 'string' && via.startsWith('x_compose');
@@ -212,7 +252,14 @@ export class ContentCadenceScheduler {
   /**
    * Find an agent to delegate the X post task to.
    * Prefers agents whose names suggest social/content specialty;
-   * falls back to any active agent in this workspace.
+   * falls back to any idle agent in this workspace.
+   *
+   * Filters on status='idle' because that's the "available to receive
+   * work" state in the agent lifecycle. The earlier 'active' filter
+   * never matched any row — agents transition between 'idle' (ready)
+   * and 'working' (executing a task), with no 'active' enum value.
+   * Cross-check: agent-lock-contention.ts joins on status='working'
+   * for the executing semantic; the inverse here is 'idle'.
    */
   private async findXAgent(): Promise<string | null> {
     try {
@@ -220,7 +267,7 @@ export class ContentCadenceScheduler {
         .from<{ id: string; name: string }>('agent_workforce_agents')
         .select('id, name')
         .eq('workspace_id', this.workspaceId)
-        .eq('status', 'active');
+        .eq('status', 'idle');
 
       const agents = (data ?? []) as Array<{ id: string; name: string }>;
       if (agents.length === 0) return null;
