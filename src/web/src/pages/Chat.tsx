@@ -66,7 +66,13 @@ export function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState(() => {
+    const stored = localStorage.getItem('ohwow-chat-session-id');
+    if (stored) return stored;
+    const fresh = crypto.randomUUID();
+    localStorage.setItem('ohwow-chat-session-id', fresh);
+    return fresh;
+  });
   const [voiceAvailable, setVoiceAvailable] = useState(false);
   const [voiceChecked, setVoiceChecked] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -91,6 +97,26 @@ export function ChatPage() {
       .catch(() => {
         // Models endpoint not available
       });
+  }, []);
+
+  // Restore prior messages for the persisted session on mount
+  useEffect(() => {
+    let cancelled = false;
+    api<{ messages?: Array<{ role: string; content: string }> }>(`/api/chat/${sessionId}`)
+      .then(res => {
+        if (cancelled || !res.messages?.length) return;
+        setMessages(
+          res.messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+        );
+      })
+      .catch(() => {
+        // New session, or server error — start fresh
+      });
+    return () => { cancelled = true; };
+  // Only on mount with the initially-loaded session. handleNewSession owns later resets.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Check if any voice provider is available, with periodic re-checks
@@ -214,7 +240,9 @@ export function ChatPage() {
   };
 
   const handleNewSession = () => {
-    setSessionId(crypto.randomUUID());
+    const fresh = crypto.randomUUID();
+    localStorage.setItem('ohwow-chat-session-id', fresh);
+    setSessionId(fresh);
     setMessages([]);
     lastTranscriptRef.current = '';
     lastResponseRef.current = '';
@@ -263,7 +291,8 @@ export function ChatPage() {
           subtitle="Talk to your orchestrator"
           action={
             <div className="flex items-center gap-2">
-              {/* Model picker */}
+              {/* Model picker — only shown when we actually know of models */}
+              {models.length > 0 && (
               <div className="relative">
                 <button
                   onClick={() => setShowModelPicker(!showModelPicker)}
@@ -272,7 +301,7 @@ export function ChatPage() {
                   <span className="max-w-[120px] truncate">{currentModelName}</span>
                   <CaretDown size={12} />
                 </button>
-                {showModelPicker && models.length > 0 && (
+                {showModelPicker && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowModelPicker(false)} />
                     <div className="absolute right-0 top-full mt-1 z-50 bg-neutral-950 border border-white/10 rounded-lg py-1 min-w-[200px] shadow-lg">
@@ -292,6 +321,7 @@ export function ChatPage() {
                   </>
                 )}
               </div>
+              )}
               {/* New session */}
               <button
                 onClick={handleNewSession}

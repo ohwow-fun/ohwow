@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import type Database from 'better-sqlite3';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { CURATED_OPENROUTER_MODELS } from '../../execution/model-router.js';
 
 export function createSystemRouter(
   db: DatabaseAdapter,
@@ -52,13 +53,41 @@ export function createSystemRouter(
         // Ollama not reachable
       }
 
-      // Get current model from settings
+      // Cloud routing: include the active orchestrator model and curated
+      // OpenRouter catalog so the Chat model picker reflects what the
+      // orchestrator actually uses when no Anthropic key / Ollama is around.
+      const [{ data: orchRow }, { data: cloudProviderRow }, { data: orKeyRow }] = await Promise.all([
+        db.from('runtime_settings').select('value').eq('key', 'orchestrator_model').eq('workspace_id', workspaceId).maybeSingle(),
+        db.from('runtime_settings').select('value').eq('key', 'cloud_provider').eq('workspace_id', workspaceId).maybeSingle(),
+        db.from('runtime_settings').select('value').eq('key', 'openrouter_api_key').eq('workspace_id', workspaceId).maybeSingle(),
+      ]);
+      const orchestratorModel = (orchRow as { value: string } | null)?.value || '';
+      const cloudProvider = (cloudProviderRow as { value: string } | null)?.value || '';
+      const hasOpenRouterKey = !!(orKeyRow as { value: string } | null)?.value || !!process.env.OPENROUTER_API_KEY;
+
+      if (cloudProvider === 'openrouter' || hasOpenRouterKey) {
+        for (const m of CURATED_OPENROUTER_MODELS) {
+          models.push({ id: m.id, name: m.name, provider: 'openrouter' });
+        }
+      }
+      if (orchestratorModel && !models.some(m => m.id === orchestratorModel)) {
+        models.push({
+          id: orchestratorModel,
+          name: orchestratorModel,
+          provider: cloudProvider === 'openrouter' ? 'openrouter' : (cloudProvider || 'cloud'),
+        });
+      }
+
+      // Get current model from settings — prefer the orchestrator's active model
       const { data: modelRow } = await db.from('runtime_settings')
         .select('value')
         .eq('key', 'ollama_model')
         .eq('workspace_id', workspaceId)
         .maybeSingle();
-      const currentModel = (modelRow as { value: string } | null)?.value || (hasAnthropicKey ? 'claude-haiku-4-5-20251001' : '');
+      const activeOllama = (modelRow as { value: string } | null)?.value || '';
+      const currentModel = orchestratorModel
+        || activeOllama
+        || (hasAnthropicKey ? 'claude-haiku-4-5-20251001' : '');
 
       res.json({ data: { models, currentModel } });
     } catch (err) {
