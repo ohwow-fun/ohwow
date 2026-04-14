@@ -90,7 +90,13 @@ export class StaleTaskCleanupExperiment implements Experiment {
   category = 'other' as const;
   hypothesis =
     'Tasks in status=in_progress with no updated_at change in STALE_THRESHOLD_MS have been abandoned by a dead execution path — their execution will never resume, their agents stay locked, and they should be marked failed to unblock the queue.';
-  cadence = { everyMs: 5 * 60 * 1000, runOnBoot: false };
+  // runOnBoot: true because a daemon restart is the most common way
+  // zombies get created — in_progress tasks from the dead process
+  // are by definition abandoned. Sweeping on boot unsticks them
+  // immediately instead of waiting 5 minutes into the new process.
+  // Legitimate fresh in_progress tasks are protected by the
+  // STALE_THRESHOLD_MS + started_at guards, so this is safe.
+  cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const now = Date.now();
