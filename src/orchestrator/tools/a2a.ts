@@ -2,9 +2,48 @@
  * A2A orchestrator tools: list_a2a_connections, send_a2a_task, test_a2a_connection
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { sendTask, healthCheck, parseConnectionRow } from '../../a2a/client.js';
 import type { A2AMessage } from '../../a2a/types.js';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
+
+export const A2A_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_a2a_connections',
+    description:
+      'List all A2A connections with their status, trust level, and skills.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'send_a2a_task',
+    description:
+      'Send a task to an external agent via A2A connection. Always confirm first.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connection_id: { type: 'string', description: 'The A2A connection ID' },
+        message: { type: 'string', description: 'Task message for the external agent' },
+      },
+      required: ['connection_id', 'message'],
+    },
+  },
+  {
+    name: 'test_a2a_connection',
+    description:
+      'Health-check an A2A connection to verify the external agent is reachable.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        connection_id: { type: 'string', description: 'The A2A connection ID' },
+      },
+      required: ['connection_id'],
+    },
+  },
+];
 
 export async function listA2AConnections(ctx: LocalToolContext): Promise<ToolResult> {
   const { data: connections, error } = await ctx.db

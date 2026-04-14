@@ -4,8 +4,47 @@
  * Supports multi-bot: tools accept optional connection_id or bot_username.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import type { TelegramClient } from '../../integrations/telegram/client.js';
+
+export const TELEGRAM_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'send_telegram_message',
+    description:
+      'Send a message to a Telegram chat via the connected bot. For multi-bot workspaces, optionally specify which bot to send from.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        chat_id: { type: 'string', description: 'The Telegram chat ID' },
+        message: { type: 'string', description: 'The message text to send' },
+        connection_id: { type: 'string', description: 'Optional: send from a specific Telegram bot connection (use list_telegram_connections to see IDs)' },
+        bot_username: { type: 'string', description: 'Optional: send from the bot matching this username (e.g. "company_bot")' },
+      },
+      required: ['chat_id', 'message'],
+    },
+  },
+  {
+    name: 'list_telegram_chats',
+    description:
+      'Get the Telegram bot connection status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'list_telegram_connections',
+    description:
+      'List all Telegram bot connections in the workspace, showing bot username, label, status per connection. Useful when the workspace has multiple Telegram bots.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+];
 
 /**
  * Resolve a Telegram client from context.

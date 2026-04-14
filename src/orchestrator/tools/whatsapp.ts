@@ -4,8 +4,134 @@
  * Supports multi-connection: tools accept optional connection_id or from_number.
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { readFile } from 'fs/promises';
 import { extname } from 'path';
+
+export const WHATSAPP_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'connect_whatsapp',
+    description:
+      'Link WhatsApp by scanning a QR code. Only needed when WhatsApp is not connected yet.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'disconnect_whatsapp',
+    description:
+      'Disconnect from WhatsApp. Closes the active session.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_whatsapp_status',
+    description:
+      'Check the current WhatsApp connection status, phone number, and allowed chat count without listing all chats.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'update_whatsapp_chat',
+    description:
+      'Update the display name of an allowed WhatsApp chat. Accepts a contact name, phone digits, or full JID to identify the chat.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        chat_id: { type: 'string', description: 'The chat to update: a contact name, phone digits, or full JID' },
+        name: { type: 'string', description: 'The new display name for the chat' },
+      },
+      required: ['chat_id', 'name'],
+    },
+  },
+  {
+    name: 'send_whatsapp_message',
+    description:
+      'Send a WhatsApp message. Accepts a contact name (e.g. "Mom"), phone digits (e.g. "5551234567"), or full JID. Automatically adds the number to contacts if needed. For media, provide a file path. For multi-number workspaces, optionally specify which connection to send from.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        chat_id: { type: 'string', description: 'The recipient: a contact name (e.g. "Mom"), phone digits (e.g. "5551234567"), or full JID' },
+        message: { type: 'string', description: 'The message text to send (required for text messages, optional caption for media)' },
+        media_path: { type: 'string', description: 'Absolute path to a file to send (image, document, audio, or video). When provided, message becomes the caption.' },
+        connection_id: { type: 'string', description: 'Optional: send from a specific WhatsApp connection (use list_whatsapp_connections to see IDs)' },
+        from_number: { type: 'string', description: 'Optional: send from the connection matching this phone number' },
+      },
+      required: ['chat_id'],
+    },
+  },
+  {
+    name: 'list_whatsapp_chats',
+    description:
+      'List allowed WhatsApp chats and the current connection status.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'list_whatsapp_connections',
+    description:
+      'List all WhatsApp connections in the workspace, showing phone number, label, status, and chat count per connection. Useful when the workspace has multiple WhatsApp numbers.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'add_whatsapp_chat',
+    description:
+      'Add a phone number to the WhatsApp allowed chats list. After adding, messages can be sent to this chat.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        phone_number: { type: 'string', description: 'Phone number to add (digits only or full JID like 1234567890@s.whatsapp.net)' },
+        name: { type: 'string', description: 'Optional display name for the chat' },
+        type: { type: 'string', enum: ['individual', 'group'], description: 'Chat type (default: individual)' },
+      },
+      required: ['phone_number'],
+    },
+  },
+  {
+    name: 'remove_whatsapp_chat',
+    description:
+      'Remove a chat from the WhatsApp allowed list. Accepts a contact name, phone digits, or full JID.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        chat_id: { type: 'string', description: 'The chat to remove: a contact name (e.g. "Mom"), phone digits, or full JID' },
+      },
+      required: ['chat_id'],
+    },
+  },
+  {
+    name: 'get_whatsapp_messages',
+    description:
+      'Retrieve WhatsApp message history. Filter by contact, date range, keyword search, or any combination.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        chat_id: { type: 'string', description: 'Contact name, phone digits, or JID. Omit for all chats.' },
+        since: { type: 'string', description: 'Start date/time ISO format (e.g. "2026-03-06")' },
+        until: { type: 'string', description: 'End date/time ISO format. Defaults to now.' },
+        limit: { type: 'number', description: 'Max messages (default 100, max 500)' },
+        include_replies: { type: 'boolean', description: 'Include assistant replies (default false)' },
+        search: { type: 'string', description: 'Search keyword to filter messages by content (case-insensitive)' },
+      },
+      required: [],
+    },
+  },
+];
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
 import type { WhatsAppClient } from '../../whatsapp/client.js';
 

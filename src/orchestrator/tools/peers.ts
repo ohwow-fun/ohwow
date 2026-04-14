@@ -7,6 +7,61 @@
  * - ask_peer: Chat with a peer's orchestrator
  */
 
+import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
+
+export const PEER_TOOL_DEFINITIONS: Tool[] = [
+  {
+    name: 'list_peers',
+    description:
+      'List all peered workspaces with their connection status and capabilities.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'delegate_to_peer',
+    description:
+      'Send a task to an agent on a peered workspace. The task runs on the peer and returns a result.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        peer_id: { type: 'string', description: 'The peer workspace ID' },
+        agent_id: { type: 'string', description: 'The agent ID on the peer workspace' },
+        prompt: { type: 'string', description: 'Task instructions for the agent' },
+        project_id: { type: 'string', description: 'Optional project ID on the peer' },
+      },
+      required: ['peer_id', 'agent_id', 'prompt'],
+    },
+  },
+  {
+    name: 'ask_peer',
+    description:
+      'Chat with a peered workspace\'s orchestrator. Ask questions about its status, running tasks, or coordinate work.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        peer_id: { type: 'string', description: 'The peer workspace ID' },
+        message: { type: 'string', description: 'Message to send to the peer orchestrator' },
+      },
+      required: ['peer_id', 'message'],
+    },
+  },
+  {
+    name: 'list_peer_agents',
+    description:
+      'List all agents available on a peered workspace.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        peer_id: { type: 'string', description: 'The peer workspace ID' },
+      },
+      required: ['peer_id'],
+    },
+  },
+];
+
 import type { LocalToolContext } from '../local-tool-types.js';
 import type { ToolResult } from '../local-tool-types.js';
 import {
