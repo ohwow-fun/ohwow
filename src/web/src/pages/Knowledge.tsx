@@ -90,7 +90,7 @@ export function KnowledgePage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium truncate">{doc.title}</p>
                 <p className="text-xs text-neutral-500">
-                  {doc.chunk_count != null ? `${doc.chunk_count} chunks` : doc.type}
+                  {doc.chunk_count != null ? `${doc.chunk_count} ${doc.chunk_count === 1 ? 'chunk' : 'chunks'}` : doc.type}
                   {' \u00b7 '}
                   {new Date(doc.created_at).toLocaleDateString()}
                 </p>
