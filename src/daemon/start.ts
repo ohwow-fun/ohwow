@@ -69,6 +69,7 @@ import { ErrorClassificationFuzzExperiment } from '../self-bench/experiments/err
 import { SitemapDriftExperiment } from '../self-bench/experiments/sitemap-drift.js';
 import { DashboardSmokeExperiment } from '../self-bench/experiments/dashboard-smoke.js';
 import { DashboardCopyExperiment } from '../self-bench/experiments/dashboard-copy.js';
+import { SourceCopyLintExperiment } from '../self-bench/experiments/source-copy-lint.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1482,6 +1483,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // COPY_RULES. 15min cadence. Observe-only — closes the loop
         // once tier-2-copy lands.
         experimentRunner.register(new DashboardCopyExperiment());
+        // Source-side copy lint: scans src/web/src string literals,
+        // template literals, and JSX text for the same rules. The
+        // intersection of source + DOM findings is the high-signal
+        // set the (future) copy patch-author should act on.
+        experimentRunner.register(new SourceCopyLintExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
