@@ -83,4 +83,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '060-consciousness-items.sql', expectedTables: ['consciousness_items'] },
   { migrationFile: '059-claude-code-sessions.sql', expectedTables: ['claude_code_sessions'] },
   { migrationFile: '058-turboquant-stats.sql', expectedTables: ['turboquant_stats'] },
+  { migrationFile: '057-persona-soul.sql', expectedTables: ['persona_observations', 'persona_model'] },
 ];
