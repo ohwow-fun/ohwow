@@ -802,6 +802,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
       'agent_workforce_workflows',
       'agent_workforce_workflow_runs',
       'agent_workforce_workflow_triggers',
+      'agent_workforce_departments',
+      'agent_workforce_team_members',
       'agent_workforce_plans',
       'agent_workforce_plan_steps',
       'agent_workforce_principles',
