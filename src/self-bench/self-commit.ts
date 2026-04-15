@@ -75,7 +75,8 @@ import { execSync } from 'node:child_process';
 import { logger } from '../lib/logger.js';
 import { runInvariantsForPaths } from './patch-invariants.js';
 import { diffTopLevelSymbols, changedSymbolCount } from './patch-ast-bounds.js';
-import { resolvePathTier, getAllowedPrefixes } from './path-trust-tiers.js';
+import { verifyOnlyStringLiteralsChanged } from './patch-string-literal-bounds.js';
+import { resolvePathTier, resolvePatchMode, getAllowedPrefixes } from './path-trust-tiers.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -454,6 +455,17 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     const normalized = path.normalize(f.path).replace(/\\/g, '/');
     const prior = preWriteSnapshots.get(normalized);
     if (prior === undefined) continue;
+    const mode = resolvePatchMode(normalized);
+    if (mode === 'string-literal') {
+      // Stricter gate: only string-literal / jsx-text node contents
+      // may differ. Everything else in the AST must be identical.
+      const check = verifyOnlyStringLiteralsChanged(prior, f.content);
+      if (!check.ok) {
+        rollbackFiles(absPaths, preWriteSnapshots, opts.files);
+        return { ok: false, reason: `${f.path}: ${check.reason}` };
+      }
+      continue;
+    }
     const diff = diffTopLevelSymbols(prior, f.content);
     const touched = changedSymbolCount(diff);
     if (touched > 1) {

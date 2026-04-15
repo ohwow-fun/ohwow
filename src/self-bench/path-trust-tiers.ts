@@ -39,12 +39,36 @@ import path from 'node:path';
 
 export type TrustTier = 'tier-1' | 'tier-2' | 'tier-3';
 
+/**
+ * Permitted shape of an autonomous patch against a tier-2 path.
+ *
+ *   'whole-file'     — model returns full new file contents. Layer 4
+ *                      AST-bound gate restricts changes to one
+ *                      top-level symbol. Suits pure utility files
+ *                      small enough to rewrite safely.
+ *   'string-literal' — model returns a JSON list of find/replace
+ *                      edits. Layer 4 gate verifies (via TS compiler)
+ *                      that only string-literal, template-literal
+ *                      chunk, and JSX-text nodes differ between
+ *                      before/after — every other AST node is
+ *                      structurally identical. Suits UI source files
+ *                      that are too big to rewrite but that we want
+ *                      to heal at copy-level granularity.
+ */
+export type TierPatchMode = 'whole-file' | 'string-literal';
+
 export interface PathTierEntry {
   /** Prefix, relative, forward-slashed. Prefix match — trailing slash recommended. */
   prefix: string;
   tier: Exclude<TrustTier, 'tier-3'>;
   /** One-sentence human-readable rationale. Shows up in refusal messages. */
   rationale: string;
+  /**
+   * How autonomous patches against this path must be shaped. Defaults
+   * to 'whole-file' for backward compatibility with the existing
+   * pure-util tier-2 entries.
+   */
+  patchMode?: TierPatchMode;
 }
 
 const DEFAULT_REGISTRY: PathTierEntry[] = [
@@ -154,6 +178,19 @@ export function resolvePathTier(relPath: string): {
   }
   if (best === null) return { tier: 'tier-3', entry: null };
   return { tier: best.tier, entry: best };
+}
+
+/**
+ * Resolve the patch mode declared by the longest-prefix tier-2 entry
+ * covering `relPath`. Tier-1 and tier-3 paths return 'whole-file' —
+ * tier-1 paths are always create-only (no patch) so the mode is moot,
+ * and tier-3 is refused upstream. Entries without an explicit
+ * patchMode default to 'whole-file' (the historical behavior).
+ */
+export function resolvePatchMode(relPath: string): TierPatchMode {
+  const { entry } = resolvePathTier(relPath);
+  if (!entry) return 'whole-file';
+  return entry.patchMode ?? 'whole-file';
 }
 
 /**
