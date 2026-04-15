@@ -165,18 +165,28 @@ export class InterventionAuditExperiment implements Experiment {
       (a, b) => b.completed + b.inconclusive - (a.completed + a.inconclusive),
     );
 
-    const performative = experiments
-      .filter((e) => e.completed >= MIN_SAMPLE && e.hold_rate < HOLD_RATE_FLOOR)
-      .map((e) => e.experiment_id);
+    // Unmeasurable takes precedence: any experiment producing
+    // MIN_SAMPLE+ inconclusive validations has a measurability problem
+    // worth surfacing on its own. The earlier "inconclusive > held +
+    // failed" criterion was too strict — it kept experiments stuck in
+    // the performative bucket whenever stale pre-fix `failed` rows
+    // dominated the window, even after the validator started correctly
+    // emitting inconclusive. Once an experiment is unmeasurable, it is
+    // explicitly NOT performative — "performative" means measurable and
+    // failing, which is incompatible with "we can't measure it."
+    const unmeasurableSet = new Set(
+      experiments
+        .filter((e) => e.inconclusive >= MIN_SAMPLE)
+        .map((e) => e.experiment_id),
+    );
+    const unmeasurable = Array.from(unmeasurableSet);
 
-    // Unmeasurable = mostly inconclusive rows over a meaningful sample.
-    // Those probes need a validate() method that exposes burn-down
-    // signal, not a "performative" label. Surfaced separately so the
-    // strategist can route them to a different intervention.
-    const unmeasurable = experiments
+    const performative = experiments
       .filter(
         (e) =>
-          e.inconclusive >= MIN_SAMPLE && e.inconclusive > e.held + e.failed,
+          !unmeasurableSet.has(e.experiment_id) &&
+          e.completed >= MIN_SAMPLE &&
+          e.hold_rate < HOLD_RATE_FLOOR,
       )
       .map((e) => e.experiment_id);
 

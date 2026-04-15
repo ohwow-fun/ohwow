@@ -198,6 +198,26 @@ describe('InterventionAuditExperiment', () => {
     expect(exp.judge(result, [])).toBe('warning');
   });
 
+  it('experiment with stale failed dominance + MIN_SAMPLE inconclusive moves to unmeasurable, not performative', async () => {
+    // probe-stale: 20 failed (pre-fix pollution), 6 inconclusive (post-fix
+    // signal). Old criterion (`inconclusive > held+failed`) would leave
+    // it in performative until the failed rows aged out. New criterion
+    // promotes it to unmeasurable as soon as ≥MIN_SAMPLE inconclusive
+    // accumulate; performative excludes anything already unmeasurable.
+    const rows = [
+      ...Array.from({ length: 20 }, () => validation('probe-stale', 'failed')),
+      ...Array.from({ length: 6 }, () => validation('probe-stale', 'inconclusive')),
+    ];
+    const env = buildDb(rows);
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      performative: string[];
+      unmeasurable: string[];
+    };
+    expect(ev.unmeasurable).toEqual(['probe-stale']);
+    expect(ev.performative).toEqual([]);
+  });
+
   it('intervene() writes strategy.unmeasurable_experiments to runtime_config_overrides', async () => {
     const rows = Array.from({ length: 6 }, () =>
       validation('probe-u', 'inconclusive'),
