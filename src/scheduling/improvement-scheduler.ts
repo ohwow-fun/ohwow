@@ -122,6 +122,24 @@ export class ImprovementScheduler {
     this.homeostasis = controller;
   }
 
+  /**
+   * Run the reflection consolidator if more than CONSOLIDATION_FORCE_MS
+   * has elapsed since the last one. Safe to call from multiple sites
+   * (start(), execute()). Swallows errors so a failing consolidator
+   * never breaks the caller.
+   */
+  private async runForcedConsolidationIfDue(): Promise<void> {
+    if (!this.reflectionConsolidator) return;
+    if (Date.now() - this.lastForcedConsolidationAt <= CONSOLIDATION_FORCE_MS) return;
+    try {
+      await this.reflectionConsolidator();
+      this.lastForcedConsolidationAt = Date.now();
+      logger.info('[ImprovementScheduler] forced reflection consolidation (no deep_sleep in window)');
+    } catch (err) {
+      logger.warn({ err }, '[ImprovementScheduler] forced reflection consolidation failed');
+    }
+  }
+
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -132,6 +150,12 @@ export class ImprovementScheduler {
       this.execute().catch(err => {
         logger.error({ err }, '[ImprovementScheduler] Initial run failed');
       });
+    } else if (this.reflectionConsolidator) {
+      // Even if the full improvement cycle isn't due, run a
+      // consolidation on boot so the hippocampus has fresh memories
+      // available to downstream experiments on every daemon restart.
+      // Caps re-fire via lastForcedConsolidationAt + 12h window.
+      this.runForcedConsolidationIfDue();
     }
 
     this.timer = setInterval(() => {
@@ -206,21 +230,7 @@ export class ImprovementScheduler {
       // cycle never reaches deep_sleep, so the hippocampus pass above
       // never fires. Without this fallback, affective_memories stays
       // empty and the reflection→patch-author seeding bridge is dead.
-      // Fires at most once every CONSOLIDATION_FORCE_MS regardless
-      // of phase, so on busy workspaces the hippocampus runs twice
-      // a day instead of never.
-      if (
-        this.reflectionConsolidator &&
-        Date.now() - this.lastForcedConsolidationAt > CONSOLIDATION_FORCE_MS
-      ) {
-        try {
-          await this.reflectionConsolidator();
-          this.lastForcedConsolidationAt = Date.now();
-          logger.info('[ImprovementScheduler] forced reflection consolidation (no deep_sleep in window)');
-        } catch (err) {
-          logger.warn({ err }, '[ImprovementScheduler] forced reflection consolidation failed');
-        }
-      }
+      await this.runForcedConsolidationIfDue();
 
       const currentTaskCount = await this.getCompletedTaskCount();
       const lastTaskCount = await this.getLastTaskCount();
