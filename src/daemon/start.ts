@@ -1229,6 +1229,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
         dataDir,
         repoRoot,
         runOnBoot: false,
+        chainOnZeroExit: config.xAuthorsToCrmEnabled
+          ? {
+              enabled: true,
+              scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
+              heartbeatName: 'x-authors-to-crm-last-run.json',
+              logTag: '[XAuthorsToCrmScheduler]',
+            }
+          : undefined,
       });
       xIntel.start(config.xIntelIntervalMinutes * 60 * 1000);
       logger.info(

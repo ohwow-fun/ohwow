@@ -194,6 +194,24 @@ export interface RuntimeConfig {
   xForecastEnabled: boolean;
   /** Cadence for the forecast scorer in minutes. Default: 1440 (daily). */
   xForecastIntervalMinutes: number;
+  /**
+   * Enable the x-authors-to-crm pipeline step that chains after x-intel:
+   * consumes the sidecar ledger, applies free-gates, classifies intent,
+   * and proposes CRM contact creation for qualified authors. Scheduler
+   * knob only — the actual free-gate thresholds and bucket allowlists
+   * live in ~/.ohwow/workspaces/<ws>/lead-gen-config.json (not here).
+   * Default: false.
+   */
+  xAuthorsToCrmEnabled: boolean;
+  /**
+   * Scheduler-level floor on the author's composite score. The workspace's
+   * lead-gen-config.json is the real source of truth for free-gate
+   * thresholds; this is a coarse kill-switch knob for emergencies.
+   * Default: 0.6.
+   */
+  xAuthorsMinSignal: number;
+  /** Scheduler-level bucket allowlist. Overridden by lead-gen-config.json. Default: ['market_signal','competitors']. */
+  xAuthorsBuckets: string[];
 }
 
 interface ConfigFile {
@@ -247,6 +265,9 @@ interface ConfigFile {
   xIntelIntervalMinutes?: number;
   xForecastEnabled?: boolean;
   xForecastIntervalMinutes?: number;
+  xAuthorsToCrmEnabled?: boolean;
+  xAuthorsMinSignal?: number;
+  xAuthorsBuckets?: string[];
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
   llamaCppUrl?: string;
@@ -472,6 +493,12 @@ export interface WorkspaceConfig {
   xForecastEnabled?: boolean;
   /** Per-workspace override: cadence in minutes for the X forecast scorer. */
   xForecastIntervalMinutes?: number;
+  /** Per-workspace override: enable the x-authors-to-crm pipeline step chained after x-intel. */
+  xAuthorsToCrmEnabled?: boolean;
+  /** Per-workspace override: scheduler-level minimum composite score. */
+  xAuthorsMinSignal?: number;
+  /** Per-workspace override: scheduler-level bucket allowlist. */
+  xAuthorsBuckets?: string[];
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -604,6 +631,15 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   }
   if (typeof ws.xForecastIntervalMinutes === 'number' && ws.xForecastIntervalMinutes > 0) {
     next.xForecastIntervalMinutes = ws.xForecastIntervalMinutes;
+  }
+  if (typeof ws.xAuthorsToCrmEnabled === 'boolean') {
+    next.xAuthorsToCrmEnabled = ws.xAuthorsToCrmEnabled;
+  }
+  if (typeof ws.xAuthorsMinSignal === 'number' && ws.xAuthorsMinSignal >= 0 && ws.xAuthorsMinSignal <= 1) {
+    next.xAuthorsMinSignal = ws.xAuthorsMinSignal;
+  }
+  if (Array.isArray(ws.xAuthorsBuckets)) {
+    next.xAuthorsBuckets = ws.xAuthorsBuckets.filter((b) => typeof b === 'string');
   }
   return next;
 }
@@ -765,6 +801,21 @@ export function loadConfig(configPath?: string): RuntimeConfig {
           : fileConfig.xForecastEnabled ?? true,
     xForecastIntervalMinutes:
       parseInt(process.env.OHWOW_X_FORECAST_INTERVAL_MIN || '', 10) || fileConfig.xForecastIntervalMinutes || 1440,
+    // Scheduler-level knobs for the x-authors-to-crm chain step. These
+    // are coarse kill-switches; the actual free-gate rubric lives in
+    // ~/.ohwow/workspaces/<ws>/lead-gen-config.json (per-workspace, never
+    // committed). Treat these as emergency levers, not tuning surface.
+    xAuthorsToCrmEnabled: process.env.OHWOW_X_AUTHORS_TO_CRM_ENABLED === 'true' || fileConfig.xAuthorsToCrmEnabled === true,
+    xAuthorsMinSignal: (() => {
+      const env = parseFloat(process.env.OHWOW_X_AUTHORS_MIN_SIGNAL || '');
+      if (Number.isFinite(env) && env >= 0 && env <= 1) return env;
+      const fc = fileConfig.xAuthorsMinSignal;
+      if (typeof fc === 'number' && fc >= 0 && fc <= 1) return fc;
+      return 0.6;
+    })(),
+    xAuthorsBuckets: Array.isArray(fileConfig.xAuthorsBuckets) && fileConfig.xAuthorsBuckets.length > 0
+      ? fileConfig.xAuthorsBuckets
+      : ['market_signal', 'competitors'],
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',

@@ -90,6 +90,71 @@ describe('XIntelScheduler', () => {
     expect(s.isRunning).toBe(false);
   });
 
+  it('chainOnZeroExit: no second spawn when disabled', async () => {
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-authors-to-crm.mjs'),
+      `process.stdout.write('chain-ran'); process.exit(0);`,
+    );
+    const s = new XIntelScheduler({
+      workspaceSlug: 'default',
+      dataDir,
+      repoRoot,
+      chainOnZeroExit: {
+        enabled: false,
+        scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
+        heartbeatName: 'x-authors-to-crm-last-run.json',
+      },
+    });
+    await s.tick();
+    expect(s.lastExit).toBe(0);
+    expect(existsSync(join(dataDir, 'x-authors-to-crm-last-run.json'))).toBe(false);
+  });
+
+  it('chainOnZeroExit: spawns chain child and writes chain heartbeat on primary exit=0', async () => {
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-authors-to-crm.mjs'),
+      `process.stdout.write('chain-ran'); process.exit(0);`,
+    );
+    const s = new XIntelScheduler({
+      workspaceSlug: 'default',
+      dataDir,
+      repoRoot,
+      chainOnZeroExit: {
+        enabled: true,
+        scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
+        heartbeatName: 'x-authors-to-crm-last-run.json',
+      },
+    });
+    await s.tick();
+    const hb = JSON.parse(readFileSync(join(dataDir, 'x-authors-to-crm-last-run.json'), 'utf8'));
+    expect(hb.exitCode).toBe(0);
+    expect(hb.stdoutTail).toContain('chain-ran');
+  });
+
+  it('chainOnZeroExit: skips chain when primary exits non-zero', async () => {
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-intel.mjs'),
+      `process.exit(2);`,
+    );
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-authors-to-crm.mjs'),
+      `process.stdout.write('SHOULD-NOT-RUN'); process.exit(0);`,
+    );
+    const s = new XIntelScheduler({
+      workspaceSlug: 'default',
+      dataDir,
+      repoRoot,
+      chainOnZeroExit: {
+        enabled: true,
+        scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
+        heartbeatName: 'x-authors-to-crm-last-run.json',
+      },
+    });
+    await s.tick();
+    expect(s.lastExit).toBe(2);
+    expect(existsSync(join(dataDir, 'x-authors-to-crm-last-run.json'))).toBe(false);
+  });
+
   it('honors scriptRelPath + heartbeatName for the forecast-scorer sibling', async () => {
     // Two schedulers sharing mechanics but pointed at different scripts
     // and different heartbeat files. Mirrors how start.ts runs them.

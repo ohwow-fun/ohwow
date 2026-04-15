@@ -242,6 +242,9 @@ export class OnboardingService {
       xIntelIntervalMinutes: 180,
       xForecastEnabled: true,
       xForecastIntervalMinutes: 1440,
+      xAuthorsToCrmEnabled: false,
+      xAuthorsMinSignal: 0.6,
+      xAuthorsBuckets: ['market_signal', 'competitors'],
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;
