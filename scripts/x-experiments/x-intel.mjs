@@ -73,6 +73,24 @@ function historyPath(workspace) {
   return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, 'x-intel-history.jsonl');
 }
 
+// Per-run sidecar of author candidates (handle, permalink, bucket, score, engagement).
+// Downstream layer-4 writers (x-authors-to-crm.mjs) consume this instead of
+// re-parsing the prose brief, so no LLM call is required to extract identity.
+function authorsSidecarPath(workspace, date) {
+  return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, `x-authors-${date}.jsonl`);
+}
+
+function writeAuthorsSidecar(workspace, date, records) {
+  if (!records.length) return null;
+  const p = authorsSidecarPath(workspace, date);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  // Overwrite rather than append: a same-day re-run re-synthesizes the same
+  // top set, and we want the sidecar to match the run's final decision, not
+  // accumulate duplicates.
+  fs.writeFileSync(p, records.map(r => JSON.stringify(r)).join('\n') + '\n');
+  return p;
+}
+
 function loadHistory(workspace, bucketId, daysBack) {
   const p = historyPath(workspace);
   if (!fs.existsSync(p)) return [];
@@ -254,6 +272,10 @@ if (DRY) {
   process.exit(0);
 }
 
+// Accumulated across buckets, flushed once after synthesis. Keyed on
+// permalink downstream to dedup an author who shows up in multiple buckets.
+const authorCandidates = [];
+
 // 5. SYNTHESIZE + PROPOSE UPLOAD PER BUCKET -----------------------------
 
 for (const bucketDef of cfg.buckets) {
@@ -261,6 +283,21 @@ for (const bucketDef of cfg.buckets) {
   const posts = byBucket[bucketDef.id] || [];
   if (!posts.length) { console.log(`\n[x-intel] bucket ${bucketDef.id}: no posts, skip`); continue; }
   const top = posts.slice(0, cfg.budget?.max_posts_synthesized_per_bucket ?? 25);
+
+  for (const p of top) {
+    if (!p.author || !p.permalink) continue;
+    authorCandidates.push({
+      handle: p.author,
+      display_name: p.displayName || null,
+      permalink: p.permalink,
+      bucket: bucketDef.id,
+      score: typeof p._score === 'number' ? p._score : null,
+      likes: p.likes ?? 0,
+      replies: p.replies ?? 0,
+      tags: p._tags || [],
+      first_seen_ts: new Date().toISOString(),
+    });
+  }
 
   const history = loadHistory(workspace, bucketDef.id, HISTORY_DAYS);
   const historyBlock = history.length
@@ -371,6 +408,9 @@ Cite permalinks concretely. Concrete over generic. Never invent posts. No corpor
     budget.pending++;
   }
 }
+
+const sidecarPath = writeAuthorsSidecar(workspace, today, authorCandidates);
+if (sidecarPath) console.log(`[x-intel] authors sidecar → ${sidecarPath} (${authorCandidates.length} rows)`);
 
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 const accuracy = loadRollingAccuracy(workspace, 30);
