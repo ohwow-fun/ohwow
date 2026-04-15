@@ -506,7 +506,7 @@ describe('safeSelfCommit — Layer 7 daily commit budget', () => {
   it('falls back to default budget when env var is invalid', async () => {
     // With budget=0 via env, any commit would be refused. A non-numeric
     // env var should NOT silently disable the cap; it should fall
-    // back to the default of 24.
+    // back to the generous default (~1/min) which allows this one-off.
     process.env.OHWOW_SELF_COMMIT_DAILY_BUDGET = 'not-a-number';
     const result = await safeSelfCommit(baseOpts({
       files: [{ path: 'src/self-bench/experiments/env-fallback.ts', content: 'export const z = 1;' }],

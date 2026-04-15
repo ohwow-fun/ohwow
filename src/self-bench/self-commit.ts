@@ -231,13 +231,13 @@ const WHY_NOT_EDIT_MIN_LENGTH = 10;
 /** Max age of a justifying finding. Older findings are considered stale. */
 const FINDING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /**
- * Layer 7 — hard cap on autonomous commits per 24h window. Counted
- * via git log against commits carrying the Self-authored by
- * experiment: trailer. Overridable via OHWOW_SELF_COMMIT_DAILY_BUDGET
- * for ops flexibility (unplanned incident response, throttling
- * tighter than default, or smoke-testing a new layer).
+ * Layer 7 — rate ceiling on autonomous commits per 24h window.
+ * Counted via git log against commits carrying the Self-authored
+ * by experiment: trailer. Set to 1440 (≈1/min) so the gate only
+ * trips on pathological fan-out, not on normal autonomous activity.
+ * Overridable via OHWOW_SELF_COMMIT_DAILY_BUDGET for ops flexibility.
  */
-const DAILY_AUTONOMOUS_COMMIT_BUDGET_DEFAULT = 24;
+const DAILY_AUTONOMOUS_COMMIT_BUDGET_DEFAULT = 1440;
 const DAILY_BUDGET_ENV = 'OHWOW_SELF_COMMIT_DAILY_BUDGET';
 /** Trailer every safeSelfCommit writes — used to count autonomous commits. */
 const AUTONOMOUS_COMMIT_TRAILER = 'Self-authored by experiment:';
