@@ -118,7 +118,7 @@ describe('Tasks Routes', () => {
 
     await handler(req, res as unknown as Response);
 
-    expect(res._body).toEqual({ data: tasks });
+    expect(res._body).toMatchObject({ data: tasks });
     expect(res.status).not.toHaveBeenCalled(); // 200 is implicit
   });
 

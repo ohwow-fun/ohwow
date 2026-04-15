@@ -6,9 +6,10 @@ import type { Request, Response, NextFunction } from 'express';
 const JWT_SECRET = 'test-jwt-secret-key-for-testing-only';
 const LOCAL_SESSION = 'local-session-token-abc';
 
-function mockReqResNext(headers: Record<string, string | undefined> = {}) {
+function mockReqResNext(headers: Record<string, string | undefined> = {}, url = '/api/tasks') {
   const req = {
     headers: { ...headers },
+    originalUrl: url,
     workspaceId: undefined as string | undefined,
     userId: undefined as string | undefined,
   } as Request;
