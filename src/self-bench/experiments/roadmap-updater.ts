@@ -26,6 +26,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
@@ -81,7 +82,7 @@ export class RoadmapUpdaterExperiment implements Experiment {
     'When the live loop state drifts from AUTONOMY_ROADMAP.md, an LLM ' +
     'rewrite of sections 3 and 5 keeps the doc legible without human edits, ' +
     'gated by the tier-2 Fixes-Finding-Id trailer.';
-  readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: false };
+  readonly cadence = { everyMs: 15 * 60 * 1000, runOnBoot: false };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();
@@ -167,6 +168,16 @@ export class RoadmapUpdaterExperiment implements Experiment {
     const current = safeRead(roadmapAbs);
     if (!current) return { description: 'could not read roadmap', details: { stage: 'read' } };
 
+    const experimentFiles = listExperimentBasenames(repoRoot);
+    const inputFingerprint = computeInputFingerprint(ev, experimentFiles);
+    const priorFingerprint = await readLastInputFingerprint(ctx);
+    if (priorFingerprint && priorFingerprint === inputFingerprint) {
+      return {
+        description: 'no_change_since_last_run',
+        details: { stage: 'no-op', inputFingerprint },
+      };
+    }
+
     const finding = await pickJustifyingFinding(ctx, repoRoot);
     if (!finding) {
       return {
@@ -211,7 +222,10 @@ export class RoadmapUpdaterExperiment implements Experiment {
 
     const rewritten = reassembleRoadmap(sections, focus.header, parsed.section3, nextSteps.header, parsed.section5);
     if (rewritten.trim() === current.trim()) {
-      return { description: 'LLM rewrite was a no-op; skipping commit', details: { stage: 'no-op' } };
+      return {
+        description: 'LLM rewrite was a no-op; skipping commit',
+        details: { stage: 'no-op', inputFingerprint },
+      };
     }
 
     const findingResolver = async (id: string): Promise<FindingLookup | null> => {
@@ -250,6 +264,7 @@ export class RoadmapUpdaterExperiment implements Experiment {
         model: llm.data.model_used,
         provider: llm.data.provider,
         cost_cents: llm.data.cost_cents,
+        inputFingerprint,
       },
     };
   }
@@ -421,6 +436,29 @@ async function pickJustifyingFinding(
     return { id: f.id, ranAt: f.ranAt };
   }
   return null;
+}
+
+export function computeInputFingerprint(
+  ev: RoadmapUpdaterEvidence,
+  experimentFiles: readonly string[],
+): string {
+  const payload = {
+    loop_verdict: ev.loop_verdict,
+    hold_rate: ev.hold_rate,
+    patches_landed: ev.patches_landed,
+    patches_reverted: ev.patches_reverted,
+    violation_pool_today: ev.violation_pool_today,
+    experiment_files: [...experimentFiles].sort(),
+    experiment_files_missing_from_roadmap: [...ev.experiment_files_missing_from_roadmap].sort(),
+  };
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+async function readLastInputFingerprint(ctx: ExperimentContext): Promise<string | null> {
+  const history = await ctx.recentFindings('roadmap-updater', 1);
+  const last = history[0];
+  const fp = last?.interventionApplied?.details?.inputFingerprint;
+  return typeof fp === 'string' ? fp : null;
 }
 
 function emptyEvidence(reason: string): RoadmapUpdaterEvidence {
