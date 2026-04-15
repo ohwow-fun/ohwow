@@ -8,7 +8,7 @@ import { FeatureIntro } from '../components/FeatureIntro';
 
 interface ActivityEntry {
   id: string;
-  type: string;
+  activity_type: string;
   title: string;
   description: string | null;
   agent_id: string | null;
@@ -16,7 +16,9 @@ interface ActivityEntry {
 }
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
+  const d = /Z$|[+-]\d\d:?\d\d$/.test(dateStr) ? new Date(dateStr) : new Date(dateStr.replace(' ', 'T') + 'Z');
+  const diff = Date.now() - d.getTime();
+  if (diff < 0) return 'just now';
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -33,7 +35,7 @@ export function BriefingsPage() {
   const briefings = useMemo(() => {
     if (!activity) return [];
     return activity.filter(a =>
-      BRIEFING_TYPES.some(t => (a.type ?? '').toLowerCase().includes(t))
+      BRIEFING_TYPES.some(t => (a.activity_type ?? '').toLowerCase().includes(t))
     );
   }, [activity]);
 
@@ -41,7 +43,7 @@ export function BriefingsPage() {
   const recentCompleted = useMemo(() => {
     if (!activity) return [];
     return activity
-      .filter(a => a.type === 'task_completed')
+      .filter(a => a.activity_type === 'task_completed')
       .slice(0, 10);
   }, [activity]);
 
@@ -86,7 +88,7 @@ export function BriefingsPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <p className="text-sm font-medium">{item.title}</p>
-                          <span className="text-[10px] bg-white/[0.06] px-1.5 py-0.5 rounded text-neutral-400">{item.type}</span>
+                          <span className="text-[10px] bg-white/[0.06] px-1.5 py-0.5 rounded text-neutral-400">{item.activity_type}</span>
                         </div>
                         {item.description && <p className="text-xs text-neutral-400">{item.description}</p>}
                         <p className="text-[10px] text-neutral-500 mt-1.5 flex items-center gap-1">
