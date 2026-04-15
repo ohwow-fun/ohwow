@@ -175,10 +175,14 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     expect(exp.judge(result, [])).toBe('fail');
   });
 
-  it('falls back to experiment+subject match when refire has no affected_files', async () => {
-    // Experiments that don't populate affected_files still benefit
-    // from the reverter — we'd rather over-revert for them than
-    // silently disable the gate.
+  it('does NOT revert when refire has no affected_files and no violations', async () => {
+    // Stricter semantics: absence of evidence is not evidence the
+    // patch failed. Legacy experiments that populate neither
+    // affected_files nor violations must not trigger auto-revert.
+    // This replaces the earlier "over-revert for safety" fallback
+    // that caused false positives on multi-file copy-lint findings
+    // where a patch healed one file but an unrelated file still
+    // violated (bug fix, 2026-04-15).
     const findingId = 'ffffffff-0000-0000-0000-000000000000';
     seedPatchCommit(findingId);
     const db = stubDb({
@@ -187,7 +191,7 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     });
     const exp = new AutonomousPatchRollbackExperiment();
     const result = await exp.probe(makeCtx(db));
-    expect((result.evidence as { candidates: unknown[] }).candidates).toHaveLength(1);
+    expect((result.evidence as { candidates: unknown[] }).candidates).toEqual([]);
   });
 
   it('does NOT flag when refire literals do not intersect original literals', async () => {
@@ -245,6 +249,44 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const exp = new AutonomousPatchRollbackExperiment();
     const result = await exp.probe(makeCtx(db));
     expect((result.evidence as { candidates: unknown[] }).candidates).toHaveLength(1);
+  });
+
+  it('does NOT flag when refire literals are scoped to UNtouched files (regression: Dashboard.tsx em dash)', async () => {
+    // Exact shape of the 2026-04-15 false-positive: original finding
+    // listed violations in three files, the patch only touched one
+    // (bad.ts, matching seedPatchCommit). Refire surfaced a separate
+    // file's violation with the SAME rule/literal — must not count
+    // against a patch that never claimed to fix that file.
+    const findingId = 'iiiiiiii-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId); // touches bad.ts
+    const db = stubDb({
+      original: [{
+        id: findingId,
+        experiment_id: 'source-copy-lint',
+        subject: 'meta:source-copy-lint',
+        ran_at: '2026-04-13T00:00:00Z',
+        evidence: {
+          violations: [
+            { ruleId: 'no-em-dash', match: '—', file: 'bad.ts', literal: '—' },
+            { ruleId: 'no-something-went-wrong', match: 'Something went wrong', file: 'untouched.tsx', literal: 'Something went wrong' },
+          ],
+        },
+      }],
+      refire: [{
+        id: 'refire-untouched-file',
+        verdict: 'warning',
+        ran_at: '2026-04-14T18:00:00Z',
+        evidence: {
+          affected_files: ['untouched.tsx'],
+          violations: [
+            { ruleId: 'no-something-went-wrong', match: 'Something went wrong', file: 'untouched.tsx', literal: 'Something went wrong' },
+          ],
+        },
+      }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toEqual([]);
   });
 
   it('ignores a patch whose original finding no longer exists in the ledger', async () => {

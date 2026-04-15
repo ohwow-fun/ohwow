@@ -177,7 +177,12 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
   ): Promise<RollbackCandidate | null> {
     const original = await this.fetchOriginal(ctx, patch.findingId);
     if (!original) return null;
-    const originalLiterals = extractViolationLiterals(original.evidence);
+    // Only literals from violations in files THIS patch touched are
+    // claims-this-patch-fixed. A multi-file original finding where
+    // the patch only healed one file must not re-revert because a
+    // DIFFERENT file's violation from the same finding is still red.
+    const patchedFiles = new Set(normalizeFiles(patch.files));
+    const originalLiterals = extractViolationLiterals(original.evidence, patchedFiles);
     const refire = await this.fetchRefire(
       ctx,
       original.experiment_id,
@@ -258,15 +263,23 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
       const patchedSet = new Set(normalizeFiles(patchFiles));
       for (const r of rows) {
         if (r.verdict !== 'warning' && r.verdict !== 'fail') continue;
-        const refireLiterals = extractViolationLiterals(r.evidence);
-        if (originalSet.size > 0 && refireLiterals.length > 0) {
-          // Strict literal-level check. Only fire if at least one
-          // of the patch's justifying literals is still present.
+        // Scope the refire literals to the patched files too, so a
+        // FlowBuilder violation in a refire does not count against a
+        // Dashboard-only patch.
+        const refireLiterals = extractViolationLiterals(r.evidence, patchedSet);
+        if (originalSet.size > 0) {
+          // Strict literal-level check. Only fire if at least one of
+          // the patch's justifying literals is still present in a
+          // file this patch touched.
           if (refireLiterals.some((l) => originalSet.has(l))) return r;
           continue;
         }
+        // No literal-level evidence from the original — fall back to
+        // file-level overlap. If the refire has no affected_files,
+        // we deliberately do NOT revert: absence of evidence is not
+        // evidence the patch failed.
         const affected = extractAffectedFilesFromEvidence(r.evidence);
-        if (affected.length === 0) return r;
+        if (affected.length === 0) continue;
         const overlap = affected.some((f) => patchedSet.has(f));
         if (overlap) return r;
       }
@@ -282,25 +295,49 @@ function normalizeFiles(files: readonly string[]): string[] {
 }
 
 /**
- * Pull violation literals out of evidence.violations[]. Checks both
- * `literal` and `match` fields. Returns strings ≥3 chars so a bare
- * em-dash like "—" can't match "different em-dash on another page"
- * as the same-literal-coming-back — it has to be a longer phrase
- * that uniquely identifies the specific copy we patched.
+ * Pull violation literals out of evidence.violations[], optionally
+ * scoped to a set of file paths the patch actually touched. The file
+ * scope is what prevents false positives on multi-file findings where
+ * the patch only healed one file — a refire still red in an UNtouched
+ * file must not trigger a revert.
+ *
+ * Returns a de-duplicated list of `${ruleId}|${match-or-literal}`
+ * keys. Keying by ruleId as well as the text lets a 1-char literal
+ * like "—" still discriminate against literals with the same text
+ * from a different rule.
  */
-function extractViolationLiterals(evidence: unknown): string[] {
+function extractViolationLiterals(
+  evidence: unknown,
+  fileScope?: ReadonlySet<string>,
+): string[] {
   if (!evidence || typeof evidence !== 'object') return [];
   const arr = (evidence as Record<string, unknown>).violations;
   if (!Array.isArray(arr)) return [];
-  const out: string[] = [];
+  // If fileScope is provided but NO violation carries a `file` field,
+  // the scope filter can't attribute — fall back to unscoped extract
+  // so legacy experiments without per-violation file info still get
+  // literal-level matching.
+  const hasFileInfo = arr.some(
+    (v) => v && typeof v === 'object' && typeof (v as Record<string, unknown>).file === 'string',
+  );
+  const effectiveScope = fileScope && hasFileInfo ? fileScope : null;
+
+  const out = new Set<string>();
   for (const v of arr) {
     if (!v || typeof v !== 'object') continue;
-    const lit = (v as Record<string, unknown>).literal;
-    const match = (v as Record<string, unknown>).match;
-    if (typeof lit === 'string' && lit.length >= 3) out.push(lit);
-    else if (typeof match === 'string' && match.length >= 3) out.push(match);
+    const vv = v as Record<string, unknown>;
+    if (effectiveScope) {
+      const file = typeof vv.file === 'string' ? vv.file.replace(/\\/g, '/') : null;
+      if (!file || !effectiveScope.has(file)) continue;
+    }
+    const lit = typeof vv.literal === 'string' ? vv.literal : null;
+    const match = typeof vv.match === 'string' ? vv.match : null;
+    const text = lit && lit.length > 0 ? lit : match && match.length > 0 ? match : null;
+    if (!text) continue;
+    const ruleId = typeof vv.ruleId === 'string' ? vv.ruleId : '';
+    out.add(`${ruleId}|${text}`);
   }
-  return out;
+  return Array.from(out);
 }
 
 function extractAffectedFilesFromEvidence(evidence: unknown): string[] {
