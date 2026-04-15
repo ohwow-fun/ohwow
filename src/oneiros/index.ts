@@ -25,3 +25,19 @@ export {
   simulateFuture,
 } from './default-mode.js';
 export type { DMNPattern, DMNPrinciple, DMNGoal } from './default-mode.js';
+
+export {
+  consolidateReflection,
+  readDiaryWindow,
+  buildReflectionPrompt,
+  parseObservations,
+} from './reflection-consolidator.js';
+export type {
+  ReflectionObservation,
+  ReflectionLLM,
+  ReflectionConsolidatedEvent,
+  ReflectionConsolidatorBus,
+  ConsolidateReflectionOptions,
+  ConsolidateReflectionResult,
+  ObservationKind,
+} from './reflection-consolidator.js';
