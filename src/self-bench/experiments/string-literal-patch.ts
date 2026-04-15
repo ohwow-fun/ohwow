@@ -131,7 +131,15 @@ export function applyStringLiteralEdits(
   const appliedAt: number[] = [];
   for (const m of matches) {
     out += source.slice(cursor, m.index);
-    out += m.edit.replace;
+    // Detect the surrounding string delimiter so we can escape the
+    // replacement text before splicing it in. Without this, a
+    // replacement containing an apostrophe (e.g. "Couldn't") breaks a
+    // single-quoted string: `'Something went wrong'` → `'Couldn't…'`.
+    const quoteChar = findSurroundingQuote(source, m.index);
+    const safeReplace = quoteChar
+      ? escapeForQuoteStyle(m.edit.replace, quoteChar)
+      : m.edit.replace;
+    out += safeReplace;
     cursor = m.index + m.edit.find.length;
     appliedAt.push(m.index);
   }
@@ -157,4 +165,53 @@ function allIndicesOf(haystack: string, needle: string): number[] {
 
 function truncate(s: string): string {
   return s.length > 80 ? s.slice(0, 77) + '...' : s;
+}
+
+/**
+ * Scan backward from `index` in `source` to find the opening string
+ * delimiter that contains that position. Returns `'`, `"`, `` ` ``, or
+ * null when no delimiter can be determined. Skips backslash-escaped
+ * quotes so `\'` inside a single-quoted string doesn't confuse the scan.
+ *
+ * This is a heuristic. It handles the overwhelming majority of
+ * real-world TypeScript/TSX string literals correctly. Edge cases
+ * (nested template expressions, uncommon escape sequences) are handled
+ * by the downstream Layer-4 parse gate which rejects any result that
+ * doesn't compile.
+ */
+function findSurroundingQuote(source: string, index: number): string | null {
+  let i = index - 1;
+  while (i >= 0) {
+    const ch = source[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      // Count preceding backslashes to determine if this quote is escaped.
+      let backslashes = 0;
+      let j = i - 1;
+      while (j >= 0 && source[j] === '\\') {
+        backslashes++;
+        j--;
+      }
+      if (backslashes % 2 === 0) {
+        // Not escaped — this is the opening delimiter.
+        return ch;
+      }
+    }
+    i--;
+  }
+  return null;
+}
+
+/**
+ * Escape any unescaped occurrences of `quoteChar` in `text` so the
+ * replacement is safe to splice back inside a string of that quote style.
+ * Template literals (`` ` ``) are not escaped — the rare case of a
+ * backtick in replacement text is left to the Layer-4 parse gate.
+ */
+function escapeForQuoteStyle(text: string, quoteChar: string): string {
+  if (quoteChar === '`') return text; // template literals: skip
+  if (!text.includes(quoteChar)) return text;
+  // Replace unescaped occurrences only: match quoteChar NOT preceded by \.
+  // The negative lookbehind (?<!\\) is supported in Node.js ≥ 10.
+  const escaped = quoteChar === "'" ? "'" : '"';
+  return text.replace(new RegExp(`(?<!\\\\)${escaped}`, 'g'), `\\${quoteChar}`);
 }

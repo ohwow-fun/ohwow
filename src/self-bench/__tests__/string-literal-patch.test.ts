@@ -93,4 +93,35 @@ describe('applyStringLiteralEdits', () => {
     ]);
     expect(r.ok).toBe(false);
   });
+
+  it('escapes apostrophe in replacement when surrounding quote is single', () => {
+    // Simulates: setError('Something went wrong. Try again?')
+    // Replacement "Couldn't load" contains an apostrophe that would break
+    // the single-quoted string without escaping.
+    const source = `setError('Something went wrong. Try again?')`;
+    const r = applyStringLiteralEdits(source, [
+      { find: 'Something went wrong. Try again?', replace: "Couldn't load. Try refreshing." },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe(`setError('Couldn\\'t load. Try refreshing.')`);
+  });
+
+  it('does not escape apostrophe when surrounding quote is double', () => {
+    const source = `setError("Something went wrong. Try again?")`;
+    const r = applyStringLiteralEdits(source, [
+      { find: 'Something went wrong. Try again?', replace: "Couldn't load. Try refreshing." },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe(`setError("Couldn't load. Try refreshing.")`);
+  });
+
+  it('does not double-escape already-escaped quotes in replacement', () => {
+    const source = `msg('Something wrong')`;
+    const r = applyStringLiteralEdits(source, [
+      { find: 'Something wrong', replace: "It\\'s broken" },
+    ]);
+    expect(r.ok).toBe(true);
+    // Already-escaped \' must stay as \' — not become \\\'
+    expect(r.content).toBe(`msg('It\\'s broken')`);
+  });
 });
