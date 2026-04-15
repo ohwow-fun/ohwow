@@ -46,6 +46,19 @@ import { setRuntimeConfig, deleteRuntimeConfig } from '../runtime-config.js';
 export const STRATEGY_ACTIVE_FOCUS_KEY = 'strategy.active_focus';
 export const STRATEGY_PRIORITY_KEY = 'strategy.priority_experiments';
 export const STRATEGY_DEMOTED_KEY = 'strategy.demoted_experiments';
+export const STRATEGY_OVERWEIGHT_MODELS_KEY = 'strategy.overweight_models';
+
+/**
+ * Thresholds for the model-concentration rule. If one cloud model
+ * eats more than MODEL_SHARE_THRESHOLD of today's burn AND fewer
+ * than LOCAL_CALL_FLOOR of calls are hitting a local provider, the
+ * strategist flags the model as overweight so the model router can
+ * rebalance. Both thresholds must trip — a single dominant model is
+ * fine when most traffic is local, and low local-ratio is fine if
+ * spend is spread across providers.
+ */
+const MODEL_SHARE_THRESHOLD = 0.7;
+const LOCAL_CALL_FLOOR = 0.2;
 
 const STRATEGIST_ID = 'strategist';
 const TICK_MS = 15 * 60 * 1000;
@@ -54,14 +67,28 @@ export interface StrategistEvidence {
   top_failing_experiments: Array<{ experiment_id: string; active_count: number }>;
   patch_loop?: { hold_rate: number | null; pool_delta: number | null; summary: string };
   burn?: { daily_cost_cents: number | null; mrr: number | null; ratio: number | null };
+  burn_concentration?: {
+    top_model: string | null;
+    top_model_share: number | null;
+    local_call_ratio: number | null;
+    total_cents_today: number;
+  };
   reflection_count_24h: number;
   decision: StrategyDecision;
+}
+
+export interface BurnConcentration {
+  topModel: string | null;
+  topModelShare: number | null;
+  localCallRatio: number | null;
+  totalCentsToday: number;
 }
 
 export interface StrategyDecision {
   active_focus: string;
   priority_experiments: string[];
   demoted_experiments: string[];
+  overweight_models: string[];
 }
 
 /**
@@ -72,10 +99,12 @@ export function decideStrategy(facts: {
   topFailing: Array<{ experimentId: string; count: number }>;
   patchLoop: { holdRate: number | null; poolDelta: number | null } | null;
   burn: { ratio: number | null } | null;
+  burnConcentration?: BurnConcentration | null;
   reflectionCount: number;
 }): StrategyDecision {
   const priority: string[] = [];
   const demoted: string[] = [];
+  const overweightModels: string[] = [];
   const reasons: string[] = [];
 
   // 1. Biggest active-finding backlog gets priority. We cap at 3 so
@@ -126,11 +155,40 @@ export function decideStrategy(facts: {
     if (idx2 >= 0) priority.splice(idx2, 1);
   }
 
+  // 4. Model-burn concentration: when one cloud model eats the
+  //    majority of today's spend AND local-call ratio is low, the
+  //    router is routing too much toward a single provider. Flag the
+  //    model as overweight so the router (or operator) can rebalance.
+  //    Demote experiment-author too since it's the heaviest LLM
+  //    consumer — throttling authoring frees the most budget while
+  //    the rebalance catches up.
+  if (facts.burnConcentration) {
+    const { topModel, topModelShare, localCallRatio, totalCentsToday } =
+      facts.burnConcentration;
+    if (
+      topModel &&
+      topModelShare !== null &&
+      localCallRatio !== null &&
+      topModelShare > MODEL_SHARE_THRESHOLD &&
+      localCallRatio < LOCAL_CALL_FLOOR &&
+      totalCentsToday > 100
+    ) {
+      overweightModels.push(topModel);
+      reasons.push(
+        `model burn concentrated: ${Math.round(topModelShare * 100)}% on ${topModel}, ${Math.round(localCallRatio * 100)}% local`,
+      );
+      if (!demoted.includes('experiment-author')) demoted.push('experiment-author');
+      const idx = priority.indexOf('experiment-author');
+      if (idx >= 0) priority.splice(idx, 1);
+    }
+  }
+
   const active_focus = reasons.length > 0 ? reasons.join('; ') : 'steady state — no intervention';
   return {
     active_focus,
     priority_experiments: dedup(priority),
     demoted_experiments: dedup(demoted),
+    overweight_models: dedup(overweightModels),
   };
 }
 
@@ -158,6 +216,7 @@ export class StrategistExperiment implements Experiment {
     const topFailing = await this.readTopFailingExperiments(ctx);
     const patchLoop = await this.readLatestPatchLoop(ctx);
     const burn = await this.readBurn(ctx);
+    const burnConcentration = await this.readBurnConcentration(ctx);
     const reflectionCount = await this.readReflectionCount(ctx);
 
     const decision = decideStrategy({
@@ -167,6 +226,7 @@ export class StrategistExperiment implements Experiment {
         poolDelta: extractPoolDelta(patchLoop),
       },
       burn,
+      burnConcentration,
       reflectionCount,
     });
 
@@ -183,6 +243,14 @@ export class StrategistExperiment implements Experiment {
           }
         : undefined,
       burn: burn ? { ...burn } : undefined,
+      burn_concentration: burnConcentration
+        ? {
+            top_model: burnConcentration.topModel,
+            top_model_share: burnConcentration.topModelShare,
+            local_call_ratio: burnConcentration.localCallRatio,
+            total_cents_today: burnConcentration.totalCentsToday,
+          }
+        : undefined,
       reflection_count_24h: reflectionCount,
       decision,
     };
@@ -210,6 +278,7 @@ export class StrategistExperiment implements Experiment {
     await setRuntimeConfig(ctx.db, STRATEGY_ACTIVE_FOCUS_KEY, decision.active_focus, { setBy: this.id });
     await setRuntimeConfig(ctx.db, STRATEGY_PRIORITY_KEY, decision.priority_experiments, { setBy: this.id });
     await setRuntimeConfig(ctx.db, STRATEGY_DEMOTED_KEY, decision.demoted_experiments, { setBy: this.id });
+    await setRuntimeConfig(ctx.db, STRATEGY_OVERWEIGHT_MODELS_KEY, decision.overweight_models, { setBy: this.id });
     return {
       description: `strategy: ${decision.active_focus}`,
       details: {
@@ -226,6 +295,7 @@ export class StrategistExperiment implements Experiment {
     await deleteRuntimeConfig(ctx.db, STRATEGY_ACTIVE_FOCUS_KEY);
     await deleteRuntimeConfig(ctx.db, STRATEGY_PRIORITY_KEY);
     await deleteRuntimeConfig(ctx.db, STRATEGY_DEMOTED_KEY);
+    await deleteRuntimeConfig(ctx.db, STRATEGY_OVERWEIGHT_MODELS_KEY);
     return { description: 'strategy keys cleared', details: {} };
   }
 
@@ -290,6 +360,45 @@ export class StrategistExperiment implements Experiment {
         ? (row.daily_cost_cents / (row.mrr / 30))
         : null;
       return { daily_cost_cents: row.daily_cost_cents, mrr: row.mrr, ratio };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Pull the latest meta:burn-rate finding from BurnRateExperiment
+   * and compute the top model's share of today's spend + the local
+   * call ratio. Returns null when the probe hasn't emitted yet or
+   * the ledger read fails — the decision function tolerates a null
+   * and simply skips the concentration rule.
+   */
+  private async readBurnConcentration(
+    ctx: ExperimentContext,
+  ): Promise<BurnConcentration | null> {
+    try {
+      const { data } = await ctx.db
+        .from<{ evidence: unknown; ran_at: string }>('self_findings')
+        .select('evidence, ran_at')
+        .eq('experiment_id', 'burn-rate')
+        .order('ran_at', { ascending: false })
+        .limit(1);
+      const row = ((data ?? []) as Array<{ evidence: unknown }>)[0];
+      if (!row) return null;
+      const ev = parseEvidence(row.evidence);
+      const totalCentsToday = typeof ev.total_cents_today === 'number' ? ev.total_cents_today : 0;
+      const localCallRatio =
+        typeof ev.local_call_ratio === 'number' ? ev.local_call_ratio : null;
+      const topRaw = ev.top_model_by_cost;
+      let topModel: string | null = null;
+      let topModelShare: number | null = null;
+      if (topRaw && typeof topRaw === 'object') {
+        const t = topRaw as { model?: unknown; cents?: unknown };
+        if (typeof t.model === 'string') topModel = t.model;
+        if (typeof t.cents === 'number' && totalCentsToday > 0) {
+          topModelShare = t.cents / totalCentsToday;
+        }
+      }
+      return { topModel, topModelShare, localCallRatio, totalCentsToday };
     } catch {
       return null;
     }

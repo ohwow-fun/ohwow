@@ -112,4 +112,54 @@ describe('decideStrategy', () => {
     expect(d.demoted_experiments).toContain('experiment-author');
     expect(d.demoted_experiments).toContain('patch-author');
   });
+
+  it('flags overweight_models when one cloud model eats >70% of spend and local<20%', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      burnConcentration: {
+        topModel: 'xiaomi/mimo-v2-flash',
+        topModelShare: 0.86,
+        localCallRatio: 0,
+        totalCentsToday: 967,
+      },
+      reflectionCount: 0,
+    });
+    expect(d.overweight_models).toEqual(['xiaomi/mimo-v2-flash']);
+    expect(d.demoted_experiments).toContain('experiment-author');
+    expect(d.active_focus).toMatch(/concentrated/);
+  });
+
+  it('does not flag concentration when local ratio is healthy', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      burnConcentration: {
+        topModel: 'xiaomi/mimo-v2-flash',
+        topModelShare: 0.86,
+        localCallRatio: 0.5,
+        totalCentsToday: 967,
+      },
+      reflectionCount: 0,
+    });
+    expect(d.overweight_models).toEqual([]);
+  });
+
+  it('does not flag concentration on trivial spend days', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      burnConcentration: {
+        topModel: 'xiaomi/mimo-v2-flash',
+        topModelShare: 0.9,
+        localCallRatio: 0,
+        totalCentsToday: 20,
+      },
+      reflectionCount: 0,
+    });
+    expect(d.overweight_models).toEqual([]);
+  });
 });
