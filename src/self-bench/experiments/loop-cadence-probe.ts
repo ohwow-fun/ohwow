@@ -70,6 +70,19 @@ export class LoopCadenceProbeExperiment implements Experiment {
       const history = await ctx.recentFindings(peer.id, HISTORY_LIMIT);
       rows.push(summarizePeer(peer.id, peer.cadence.everyMs, history, now));
     }
+    // Witness: most recent ran_at across all peers. If no other peer
+    // ran AFTER a candidate-stale peer's due time, the daemon likely
+    // just restarted and the long-cadence peer hasn't had a chance to
+    // fire yet. That's not stale — that's cold. Suppress the flag.
+    const witnessMs = rows.reduce(
+      (acc, r) => (r.last_ran_at ? Math.max(acc, Date.parse(r.last_ran_at)) : acc),
+      0,
+    );
+    for (const r of rows) {
+      if (!r.stale || !r.last_ran_at) continue;
+      const dueAt = Date.parse(r.last_ran_at) + r.declared_every_ms;
+      if (witnessMs < dueAt) r.stale = false;
+    }
     const stalePeers = rows.filter((r) => r.stale).map((r) => r.experiment_id);
     const evidence: LoopCadenceEvidence = {
       peers: rows,
