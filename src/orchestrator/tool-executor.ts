@@ -44,6 +44,12 @@ import {
   listDmsViaBrowser,
   deleteLastTweetViaBrowser,
 } from './tools/x-posting.js';
+import {
+  ensureDebugChrome,
+  findProfileByIdentity,
+  listProfiles,
+  openProfileWindow,
+} from '../execution/browser/chrome-profile-router.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -526,12 +532,11 @@ Constraints:
   }
 
   // --- X browser tools (tweet / thread / article / DM / delete) ---
-  // All drive the user's real Chrome via CDP. We activate the browser
-  // through the normal orchestrator path (which launches Chrome with
-  // the right profile at :9222 if it isn't already running), then the
-  // helpers connect their own playwright-core client to the same CDP
-  // endpoint — bypassing Stagehand's page wrapper which hides
-  // page.keyboard from external callers.
+  // All drive the user's real Chrome via CDP. We route to the right
+  // Chrome profile via chrome-profile-router (same path as the
+  // deliverable-executor), then the helpers connect their own
+  // playwright-core client to the CDP endpoint — bypassing Stagehand's
+  // page wrapper which hides page.keyboard from external callers.
   //
   // Defaults: dry_run=true so an accidental LLM call never publishes.
   if (
@@ -542,26 +547,52 @@ Constraints:
     || request.name === 'x_list_dms'
     || request.name === 'x_delete_tweet'
   ) {
-    const profile = (toolInput.profile as string | undefined) || 'ogsus@ohwow.fun';
-    // Make sure Chrome is running at :9222 with the requested profile
-    // before we try to attach. We still call activate() even though
-    // the helpers use their own connectOverCDP — activate() is what
-    // launches Chrome + quits/relaunches on a profile mismatch.
-    if (!ctx.browserState.service && ctx.browserState.setRequestedProfile) {
-      ctx.browserState.setRequestedProfile(profile);
-    }
-    if (!ctx.browserState.service && ctx.browserState.activate) {
-      yield { type: 'status', message: `Opening Chrome with profile "${profile}" for X...` };
+    // Always route to the correct Chrome profile before attaching over CDP.
+    // We bypass ctx.browserState here because that surface launches a generic
+    // Chromium; x-posting requires the specific user-authenticated profile
+    // from ~/.ohwow/chrome-cdp/. This mirrors deliverable-executor's
+    // ensureProfileChrome() pattern.
+    {
+      const profileOverride = (toolInput.profile as string | undefined) || null;
+      const profiles = listProfiles();
+      if (profiles.length === 0) {
+        const errorResult: ToolResult = { success: false, error: 'No Chrome profiles found. Log into X in desktop Chrome via onboarding, or set runtime_settings.x_posting_profile.' };
+        ctx.executedToolCalls.set(toolKey, errorResult);
+        yield { type: 'tool_done', name: request.name, result: errorResult };
+        return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
+      }
+      const profileHint = profileOverride
+        || await (async () => {
+          try {
+            const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'x_posting_profile').maybeSingle();
+            const val = (data as { value: string } | null)?.value;
+            return val && val.trim().length > 0 ? val.trim() : null;
+          } catch { return null; }
+        })();
+      const target = (profileHint && findProfileByIdentity(profiles, profileHint))
+        || profiles.find((p) => !!p.email)
+        || profiles[0];
+      yield { type: 'status', message: `Ensuring Chrome profile "${target.email || target.directory}" for X...` };
       try {
-        await ctx.browserState.activate();
+        await ensureDebugChrome({ preferredProfile: target.directory });
+        await openProfileWindow({ profileDir: target.directory });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const errorResult: ToolResult = { success: false, error: `Browser activation failed: ${msg}` };
+        const errorResult: ToolResult = { success: false, error: `Couldn't open Chrome profile for X: ${msg}` };
         ctx.executedToolCalls.set(toolKey, errorResult);
         yield { type: 'tool_done', name: request.name, result: errorResult };
         return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
       }
     }
+
+    // Read the expected handle for identity verification on compose.
+    const expectedXHandle = await (async () => {
+      try {
+        const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'x_posting_handle').maybeSingle();
+        const val = (data as { value: string } | null)?.value;
+        return val && val.trim().length > 0 ? val.trim().replace(/^@/, '') : undefined;
+      } catch { return undefined; }
+    })();
 
     const dryRun = toolInput.dry_run !== false; // default dry_run=true
     const opLabel = request.name.replace('x_', '').replace('_', ' ');
@@ -582,6 +613,7 @@ Constraints:
         opResult = await composeTweetViaBrowser({
           text: String(toolInput.text || ''),
           dryRun,
+          expectedHandle: expectedXHandle,
         });
       } else if (request.name === 'x_compose_thread') {
         const tweets = Array.isArray(toolInput.tweets) ? (toolInput.tweets as string[]) : [];
