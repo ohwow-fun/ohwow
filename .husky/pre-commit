@@ -1,1 +1,2 @@
+./scripts/check-personal-data.sh
 npx lint-staged
