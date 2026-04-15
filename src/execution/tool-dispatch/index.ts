@@ -15,6 +15,7 @@ import { draftExecutor } from './draft-executor.js';
 import { filesystemExecutor } from './filesystem-executor.js';
 import { bashExecutor } from './bash-executor.js';
 import { hostReachExecutor } from './host-executor.js';
+import { logTailExecutor } from './log-tail-executor.js';
 import { mcpExecutor } from './mcp-executor.js';
 import { stateExecutor } from './state-executor.js';
 import { docMountExecutor } from '../doc-mounts/doc-mount-executor.js';
@@ -34,6 +35,7 @@ export function createDefaultToolRegistry(): ToolExecutorRegistry {
   registry.register(filesystemExecutor);
   registry.register(bashExecutor);
   registry.register(hostReachExecutor);
+  registry.register(logTailExecutor);
   registry.register(draftExecutor);
   registry.register(stateExecutor);
   registry.register(mcpExecutor);

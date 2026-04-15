@@ -34,6 +34,7 @@ import {
   clipboardWriteHandler,
   openUrlHandler,
 } from './host-reach.js';
+import { logTailHandler } from './log-tail.js';
 import { investigateShell } from './investigate-shell.js';
 import { pdfInspectFields, pdfFillForm } from './pdf.js';
 import { listPeers, delegateToPeer, askPeer, listPeerAgentsTool } from './peers.js';
@@ -237,6 +238,9 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['clipboard_read', (ctx, input) => clipboardReadHandler(ctx, input)],
   ['clipboard_write', (ctx, input) => clipboardWriteHandler(ctx, input)],
   ['open_url', (ctx, input) => openUrlHandler(ctx, input)],
+
+  // Observability: tail deployed service logs (supabase/vercel/fly/modal).
+  ['log_tail', (ctx, input) => logTailHandler(ctx, input)],
 
   // PDF form tools
   ['pdf_inspect_fields', (ctx, input) => pdfInspectFields(ctx, input)],

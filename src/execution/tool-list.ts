@@ -27,6 +27,7 @@ import { BASH_TOOL_DEFINITIONS } from './bash/index.js';
 import { DOC_MOUNT_TOOL_DEFINITIONS } from './doc-mounts/index.js';
 import { STATE_TOOL_DEFINITIONS } from './state/index.js';
 import { HOST_REACH_TOOL_DEFINITIONS } from './host/index.js';
+import { LOG_TAIL_TOOL_DEFINITIONS } from './observability/index.js';
 import { filterToolsByPolicy } from './agent-tool-policy.js';
 import { logger } from '../lib/logger.js';
 import crypto from 'crypto';
@@ -133,6 +134,9 @@ export async function buildTaskToolList(
   // clipboard, open_url. Allowlist mode will filter these out downstream
   // via filterToolsByPolicy if the agent isn't meant to have them.
   tools.push(...HOST_REACH_TOOL_DEFINITIONS);
+  // log_tail: provider CLI wrappers (supabase/vercel/fly/modal). Always
+  // injected; graceful no-op when the CLI or credentials are missing.
+  tools.push(...LOG_TAIL_TOOL_DEFINITIONS);
   if (caps.webSearchEnabled) tools.push(WEB_SEARCH_TOOL);
 
   // When SOP explicitly says "Do NOT use request_browser", exclude it from tools
