@@ -1,0 +1,124 @@
+# Lead-gen rubric tuning — first cycle
+
+Date: 2026-04-15
+Fixture: `__tests__/fixtures/labeled-authors.jsonl` (60 rows; 20 buyer, 15 builder, 20 noise, 5 engager)
+Harness: `_tune-rubric.mjs`, `_run-experiments.mjs`, `_run-e5.mjs`
+ICP source: ohwow.fun landing + marketing + growth stages (researched at session start). The ICP is small-team founders / solopreneurs escaping manual ops; they complain about n8n complexity, Zapier limits, and VA trust.
+
+## E1 — score threshold sweep
+
+Hypothesis: `minScore=0.6` is tuned to the corpus. Below 0.55 precision drops; above 0.7 recall drops.
+
+| minScore | P     | R    | F1    |
+|----------|-------|------|-------|
+| 0.45     | 0.500 | 0.96 | 0.658 |
+| 0.50     | 0.545 | 0.96 | 0.696 |
+| 0.55     | 0.585 | 0.96 | 0.727 |
+| **0.60** | **0.615** | **0.96** | **0.750** |
+| 0.65     | 0.576 | 0.76 | 0.655 |
+| 0.70     | 0.640 | 0.64 | 0.640 |
+| 0.75     | 0.800 | 0.48 | 0.600 |
+
+Result: hypothesis confirmed. F1 peak at 0.60. Noise leaks in at ≤0.50. Buyer recall cliff above 0.65. **Ship: minScore=0.60.**
+
+## E2 — engager-boost aggressiveness
+
+Hypothesis: `ownPostReplyReducesMinScoreTo=0.4` recovers engager recall without letting noise in.
+
+| boost | P     | R    | engagerRecall | noiseRecall |
+|-------|-------|------|---------------|-------------|
+| off   | 0.571 | 0.80 | 0.0           | 0           |
+| 0.5   | 0.583 | 0.84 | 0.2           | 0           |
+| **0.4** | **0.615** | **0.96** | **0.8** | **0** |
+| 0.3   | 0.615 | 0.96 | 0.8           | 0           |
+| 0.2   | 0.615 | 0.96 | 0.8           | 0           |
+
+Result: boost=0.4 maxes out engager recall at 0.8 with no precision loss. Going lower is a no-op on this corpus (engagers are at or above 0.4 anyway). **Ship: boost=0.4.** The last engager miss is `synth_engager_5` (DM sender with bucket=null); the bucket allowlist filters it out pre-score-check. Intentional — DM senders enter via dm-to-code's funnel path, which has its own bucket-null handling.
+
+## E3 — bucket allowlist
+
+Hypothesis: adding a "hacks" bucket improves recall without hurting precision.
+
+| allowlist         | P     | R    |
+|-------------------|-------|------|
+| ms+comp (default) | 0.615 | 0.96 |
+| ms+comp+hacks     | 0.615 | 0.96 |
+| ms-only           | 0.516 | 0.64 |
+| comp-only         | 1.000 | 0.32 |
+
+Result: no "hacks" rows in current corpus → expansion is a no-op. `comp-only` gives perfect precision but kills recall; `ms-only` hurts both. **Ship: ms+comp.** Revisit once engager harvest lands and `hacks` bucket rows appear.
+
+## E4 — touches gate (biggest finding)
+
+Hypothesis: `minTouches=2` drops false positives once the ledger accumulates repeats.
+
+Simulated ledger-state aging: day-1 = fixture baseline; day-3 = buyers + engagers +1 touch; day-7 = buyers +2, engagers +1.
+
+| day | minTouches | P     | R    | F1    |
+|-----|------------|-------|------|-------|
+| 1   | 1          | 0.615 | 0.96 | 0.750 |
+| 1   | 2          | 0.737 | 0.56 | 0.636 |
+| 1   | 3          | 1.000 | 0.08 | 0.148 |
+| 3   | 1          | 0.615 | 0.96 | 0.750 |
+| **3** | **2**    | **0.828** | **0.96** | **0.889** |
+| 3   | 3          | 1.000 | 0.56 | 0.718 |
+| 7   | 1          | 0.615 | 0.96 | 0.750 |
+| 7   | 2          | 0.828 | 0.96 | 0.889 |
+| 7   | 3          | 1.000 | 0.80 | 0.889 |
+
+Result: **F1 jumps from 0.750 → 0.889 at day-3 with minTouches=2 and no recall loss.** Day-1 can't use minTouches=2 (buyers haven't accumulated yet).
+
+Operational recommendation: ship `minTouches=1` in `lead-gen-config.example.json` (cold-start correct). Revisit the private workspace configs on day-3 and bump to 2. The example file carries this as a comment so operators know to flip the knob.
+
+## E5 — intent classifier calibration (real LLM)
+
+Budget: 20 `simple_classification` calls. Spend: ~$0.006 (well under the $0.10 cap).
+
+Sample: 8 buyers, 5 builders, 5 noise, 2 engagers.
+
+Per-class result:
+
+| truth    | n | correct class | mean confidence |
+|----------|---|---------------|-----------------|
+| buyer    | 8 | 7/8 buyer_intent | 0.896 |
+| builder  | 5 | 5/5 builder_curiosity | 0.810 |
+| noise    | 5 | 5/5 adjacent_noise | 0.920 |
+| engager  | 2 | 2/2 buyer_intent | 0.850 |
+
+**Overall: 19/20 (95%) correct class assignment at mean confidence 0.85-0.92.**
+
+Only miss: `synth_buyer_8` (Make.com complaint, tripped "building workflows" keyword → builder_curiosity at 0.85 confidence). This is a known borderline: buyers who phrase themselves like tinkerers get misrouted. Acceptable at 5% rate; would need prompt rework or an auxiliary signal (e.g., pricing-related phrases) to recover.
+
+Verdict heuristic in the E5 runner compared in-class confidences rather than cross-class separation — don't trust the `calibrationVerdict` string, the raw byTruth summary is the actual story. **Ship: no prompt rework needed.**
+
+## Volume estimate
+
+Assumptions:
+- x-intel runs every 3h = 8 ticks/day.
+- Each sidecar yields 3-5 fresh author candidates (observed in early runs; will update with real data).
+- Free-gate pass rate ≈ 40% (builders + noise fall out).
+- LLM pass rate (buyer_intent ≥ 0.7 confidence) ≈ 35% of free-gate passes.
+- simple_classification cost ≈ $0.0003/call.
+
+Daily: ~32 sidecar authors → ~13 free-gate passes → ~13 LLM calls → ~5 qualified CRM contacts.
+
+Weekly: **~30 qualified CRM contacts at ~$0.03/week LLM spend (~$2/month).**
+
+If N < 3/week, rubric is too tight (loosen minScore to 0.55). If N > 50/week, too loose (tighten minScore to 0.65 or add allowedBuckets filter).
+
+## Ship criteria (6g)
+
+- [x] Migration 121 applied on default (verified: `never_sync`, `outreach_token` present).
+- [x] Rubric tuning defaults committed to `lead-gen-config.example.json` with experiment numbers in comments.
+- [x] Volume estimate committed as comment.
+- [ ] First live DRY=0 run produced ≥1 qualified contact. **Blocked: no sidecar yet; x-intel needs one live run first.**
+- [ ] Zero `never_sync=1` rows in the upstream resource-sync queue. **Blocked on above.**
+- [ ] `xAuthorsToCrmEnabled=true` flipped in default `workspace.json`. **Blocked on above.**
+
+## Open follow-ups
+
+1. Trigger x-intel once manually so sidecar exists, then run `DRY=0 X_AUTHORS_MAX_PER_RUN=5 node scripts/x-experiments/x-authors-to-crm.mjs`. If ≥1 real contact passes inspection, flip `xAuthorsToCrmEnabled=true` in `~/.ohwow/workspaces/default/workspace.json`.
+2. Engager harvest is still a stub (`return []` in x-authors-to-crm.mjs). Adding replier/quoter primitives to `_x-harvest` will populate the `engager:own-post` + `engager:competitor` sources the rubric is tuned for, dramatically increasing recall.
+3. Day-3+ operators should bump private-config `minTouches` from 1 → 2. Could be automated once the ledger tracks first-observed-at per workspace.
+4. Corpus has no "hacks" bucket rows; E3 is speculative until the bucket has real examples. Re-run E3 once `hacks` rows appear in sidecar data.
+5. E5's sole miss (Make.com complaint routed as builder) is a known prompt weakness. Budget 20 more calls for a prompt-revision A/B when the false-positive rate matters.

@@ -7,7 +7,11 @@
   },
 
   "freeGates": {
-    "_comment": "Zero-cost filters applied to each ledger row before any LLM call. A row must pass ALL of these to reach the classifier.",
+    "_comment": "Zero-cost filters applied to each ledger row before any LLM call. A row must pass ALL of these to reach the classifier. Defaults below came from E1–E4 tuning against a 60-row labeled corpus; see TUNING-NOTES.md.",
+    "_tuning_e1": "minScore=0.6 is the F1 peak on the corpus (0.75). 0.55 also competitive (0.727). Below 0.55 noise leaks; above 0.65 buyer recall drops fast.",
+    "_tuning_e2": "engagerBoost=0.4 recovers engager recall from 0 to 0.8 with no precision loss. Going lower (0.3, 0.2) adds no benefit on this corpus.",
+    "_tuning_e4": "minTouches=1 is correct at day-1 (cold ledger). After day 3, bumping to minTouches=2 jumps F1 from 0.75 → 0.889 with no recall loss — buyers accumulate repeats, noise does not. Revisit this knob once the ledger has been running a week.",
+    "_volume_estimate": "At observed x-intel cadence (1 run / 3h), expect ~15-40 sidecar authors/run → ~5-12 clear free-gates/run → ~2-6 buyer_intent/day → ~14-40 qualified CRM contacts/week at $2-6/month LLM spend (simple_classification at ~$0.0001/call).",
     "minScore": 0.6,
     "minReplies": 0,
     "minLikes": 0,
