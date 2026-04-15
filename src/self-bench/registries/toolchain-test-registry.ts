@@ -54,4 +54,5 @@ export const TOOLCHAIN_TEST_REGISTRY: readonly ToolchainTestProbeConfig[] = [
   { slug: 'x-posting' },
   { slug: 'workflows' },
   { slug: 'synthesis-generator' },
+  { slug: 'operational-pillars' },
 ];
