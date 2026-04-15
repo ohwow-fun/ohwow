@@ -86,4 +86,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '057-persona-soul.sql', expectedTables: ['persona_observations', 'persona_model'] },
   { migrationFile: '056-sandbox-tables.sql', expectedTables: ['agent_workforce_tool_recordings', 'agent_workforce_shadow_runs'] },
   { migrationFile: '055-resource-usage.sql', expectedTables: ['resource_usage_daily'] },
+  { migrationFile: '053-llm-cache.sql', expectedTables: ['llm_response_cache'] },
 ];
