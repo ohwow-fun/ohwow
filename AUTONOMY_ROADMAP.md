@@ -163,3 +163,95 @@ Layer C (now in progress): Promote the roadmap suite to tier-2 whole-file mode
 ---
 
 _Iteration history lives in [roadmap/iteration-log.md](roadmap/iteration-log.md)._
+
+## 4. Known Gaps
+
+### P0 — Loop Convergence is Unobservable
+The system is generating patches and reverting them, but there is no aggregate
+metric for "is the violation pool shrinking?" or "what % of patches are holding?"
+Without this, we cannot tell if the system is making progress or thrashing.
+
+**Symptoms**: 8 revert commits in 3 days; Layer 5 required 4 bugfixes in same window.
+**Risk**: The latest Layer 5 fix (`ae52755`, literal-level intersection) may resolve
+the oscillation, but we have no way to confirm convergence without a health metric.
+
+### P1 — No Post-Patch Immediate Verification
+After landing a string-literal patch on a `pages/` file, the system waits up to
+10min for the next copy-lint run to tell it whether the violation is gone. This
+creates a lag window where Layer 5 could fire on a partially-effective patch
+even though most violations were fixed. A synchronous post-patch re-scan of the
+patched file would give immediate signal and prevent unnecessary reverts.
+
+### P2 — Browser Testing Is Observe-Only
+DashboardSmokeExperiment exists and walks all routes, but its findings never
+flow into the patch pipeline. Tier-2 pages/ promotion was intended to bridge
+this, but the DashboardSmoke findings don't carry `violations[]` arrays with
+literal text. They carry `issues[]` with runtime error messages. The
+PatchAuthorExperiment's literal-in-source filter correctly skips these.
+Result: browser bugs are logged but never self-healed.
+
+### P3 — Deterministic Experiment Execution (Replayability)
+There is no way to replay a single experiment run against a specific commit and
+get deterministic output. Non-determinism comes from: (a) LLM temperature > 0
+(currently 0, so OK), (b) live DB state at probe time, (c) file system state.
+Replayability would enable: validating that a patch actually fixes its finding
+before committing it, regression testing the patch pipeline.
+
+### P4 — Business Metric Integration
+The system can fix copy violations and tool reliability issues. It has no
+visibility into: user-facing conversion rates, session durations, feature
+adoption, or any real-world impact metric. This is intentionally deferred.
+
+## 5. Experiment Inventory
+
+### Active Experiments (47 total)
+
+1. adaptive-scheduler
+2. agent-cost-watcher
+3. agent-coverage-gap
+4. agent-lock-contention
+5. agent-outcomes
+6. anthropic-claude-sonnet-4-6-latency
+7. autonomous-author-quality
+8. autonomous-patch-rollback
+9. canaries
+10. canary-experiment
+11. content-cadence-loop-health
+12. content-cadence-tuner
+13. dashboard-copy
+14. dashboard-smoke
+15. deepseek-deepseek-v3-2-latency
+16. error-classification-fuzz
+17. experiment-author
+18. experiment-proposal-generator
+19. format-duration-fuzz
+20. google-gemini-2-5-flash-latency
+21. handler-schema-drift
+22. ledger-health
+23. list-completeness-summary
+24. list-handlers-fuzz
+25. loop-cadence-probe
+26. migration-schema-probe
+27. model-health
+28. patch-author
+29. patch-loop-health
+30. prose-invariant-drift
+31. provider-availability
+32. qwen-qwen3-5-35b-a3b-latency
+33. roadmap-updater
+34. sitemap-drift
+35. source-copy-lint
+36. stagnation-fuzz
+37. stale-task-cleanup
+38. stale-threshold-tuner
+39. string-literal-patch
+40. test-coverage-probe
+41. token-similarity-fuzz
+42. toolchain-test-probe
+43. trigger-stability
+44. vitest-health-probe
+45. xiaomi-mimo-v2-flash-latency
+46. xiaomi-mimo-v2-pro-latency
+47. roadmap-observer (proposed, Layer B)
+
+**Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
