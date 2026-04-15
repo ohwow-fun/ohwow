@@ -75,6 +75,8 @@ import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provid
 import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
+import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
+import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -1475,6 +1477,16 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // cross-link. Wired into safeSelfCommit in a follow-up so
         // those patches auto-revert.
         experimentRunner.register(new RoadmapShapeProbeExperiment());
+        // Vitest as an in-loop signal. Runs the self-bench test glob
+        // every 30min and emits fail findings for any failing test
+        // file. Observe-only; the PatchAuthor pipeline reacts when the
+        // affected_files point at patchable paths.
+        experimentRunner.register(new VitestHealthProbeExperiment());
+        // Surfaces tier-2 sources that lack a sibling vitest suite.
+        // Emits warning findings whose affected_files is the proposed
+        // new test path under a tier-1 prefix, ready for new-file
+        // authoring.
+        experimentRunner.register(new TestCoverageProbeExperiment());
         // Phase B — first surprise-source experiment. Property-tests
         // src/lib/format-duration.ts (a tier-2 path) on a deterministic
         // seeded corpus. On a correct implementation this stays at zero
