@@ -135,19 +135,22 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'pure error→category dispatch, fuzzed by error-classification-fuzz (totality + fixtures + retry-contract)',
   },
-  // First string-literal-mode tier-2 entry. UI page file — the
-  // component body is too big for whole-file rewrites, but the
-  // source-copy-lint experiment repeatedly flags em-dashes in the
-  // AUTONOMY_LABELS titles. String-literal patch mode lets the
-  // autonomous author heal those em-dashes without exposing JSX
-  // structure or imports to model edits. Promoted one file at a
-  // time — do not mass-promote src/web/src/pages/.
+  // UI pages — bulk-promoted under string-literal patch mode. The
+  // Layer 4 AST skeleton gate (patch-string-literal-bounds.ts) is
+  // the load-bearing safety here: only StringLiteral /
+  // NoSubstitutionTemplateLiteral / TemplateHead|Middle|Tail /
+  // JsxText node contents may differ between pre-write and post-
+  // write. Component structure, imports, identifiers, JSX attrs,
+  // booleans, numerics — all frozen. Widening the prefix from one
+  // named file (Agents.tsx) to the whole pages/ tree trades the
+  // "review per file" norm for faster copy healing; the gate's
+  // guarantee doesn't weaken with surface area.
   {
-    prefix: 'src/web/src/pages/Agents.tsx',
+    prefix: 'src/web/src/pages/',
     tier: 'tier-2',
     patchMode: 'string-literal',
     rationale:
-      'UI page, copy-level edits only — string-literal gate blocks structural AST changes',
+      'dashboard pages tree, copy-level edits only — Layer 4 skeleton gate freezes structure/imports/identifiers',
   },
 ];
 
