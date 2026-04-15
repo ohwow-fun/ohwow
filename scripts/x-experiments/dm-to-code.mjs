@@ -21,9 +21,14 @@
  *   CODE_CLASSES='feature_request,bug_report,integration_idea'  which classes to dispatch
  */
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { llm, chat, resolveOhwow, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
+import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from './_author-ledger.mjs';
+import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent } from './_qualify.mjs';
 
 const MAX_CONVS = Number(process.env.MAX_CONVS || 5);
 const DRY = process.env.DRY !== '0';
@@ -32,8 +37,32 @@ const CODE_CLASSES = new Set((process.env.CODE_CLASSES || 'feature_request,bug_r
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Resolve the handle of the DM peer from the open conversation view.
+// X strips data-testid from DM headers, so we walk the header link that
+// points to /<handle> and is not a tab-bar self-link. Falls back to
+// parsing the conversation-item testid, which encodes user ids but not
+// always handles — returning null is preferable to fabricating.
+async function resolvePeerHandle(page, meHandle) {
+  try {
+    const h = await page.evaluate(`(() => {
+      const self = ${JSON.stringify(meHandle || '')};
+      const links = Array.from(document.querySelectorAll('header a[href^="/"], [data-testid="DM_Conversation_Header"] a[href^="/"]'));
+      for (const a of links) {
+        const slug = a.getAttribute('href').slice(1).split('/')[0];
+        if (!slug) continue;
+        if (slug === 'messages' || slug === 'home' || slug === 'i' || slug === self) continue;
+        if (/^[A-Za-z0-9_]{1,15}$/.test(slug)) return slug;
+      }
+      return null;
+    })()`);
+    return typeof h === 'string' && h.length ? h : null;
+  } catch { return null; }
+}
+
 (async () => {
-  const { workspace } = resolveOhwow();
+  const { url, token, workspace } = resolveOhwow();
+  const cfg = loadLeadGenConfig(workspace, { fs, os, path, logger: console });
+  const ledger = loadLedger(workspace);
   console.log(`[dm] active workspace: ${workspace} · dry: ${DRY}`);
 
   const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
@@ -123,6 +152,103 @@ Given a DM transcript + classification, output STRICT JSON: {"code_prompt":"<=12
     }
     results.push({ testid: c.testid, ...cls, transcript });
 
+    // Single-funnel qualification: every inbound DM sender enters the
+    // same lead-qualification rubric as X-author candidates do. source:
+    // 'dm' triggers the engager-boost in _qualify, so DMs clear the
+    // score floor even at low public engagement — the DM itself is the
+    // signal. No side-door: dm_dispatch below remains, but we record
+    // the sender as a CRM contact when they pass the funnel.
+    const peerHandle = await resolvePeerHandle(page, msgs.meHandle);
+    if (peerHandle) {
+      upsertAuthor(ledger, {
+        handle: peerHandle,
+        display_name: null,
+        permalink: `https://x.com/${peerHandle}`,
+        bucket: null,
+        score: 0,
+        replies: 0,
+        likes: 0,
+        tags: [],
+        source: 'dm',
+      });
+      const row = ledger.get(peerHandle.toLowerCase());
+      if (row && !isQualified(ledger, peerHandle)) {
+        const verdict = freeGates(cfg, row);
+        if (verdict.decision === 'pass') {
+          let intent = null;
+          try {
+            intent = await classifyIntent(row, cfg, async (args) => {
+              const r = await llm(args);
+              return r?.text ?? r;
+            }, { extractJson });
+          } catch (e) { console.log(`  [funnel] classify failed: ${e.message}`); }
+          if (intent && acceptsIntent(intent, cfg)) {
+            const outreachToken = crypto.randomUUID();
+            const proposal = propose({
+              kind: 'x_contact_create',
+              summary: `@${peerHandle} (via DM) → ${intent.intent} (conf ${intent.confidence.toFixed(2)})`,
+              payload: {
+                handle: peerHandle,
+                permalink: `https://x.com/${peerHandle}`,
+                source: 'dm',
+                intent: intent.intent,
+                confidence: intent.confidence,
+                intent_reason: intent.reason,
+                free_gate_reason: verdict.reason,
+                outreach_token: outreachToken,
+              },
+              autoApproveAfter: 3,
+            });
+            console.log(`  [funnel] @${peerHandle} ${proposal.status}`);
+            if (!DRY && proposal.status === 'auto_applied') {
+              try {
+                const cRes = await fetch(`${url}/api/contacts`, {
+                  method: 'POST',
+                  headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    name: peerHandle,
+                    contact_type: 'lead',
+                    status: 'active',
+                    tags: ['x', 'dm', 'qualified', intent.intent],
+                    custom_fields: {
+                      x_handle: peerHandle,
+                      x_permalink: `https://x.com/${peerHandle}`,
+                      x_source: 'dm',
+                      x_intent: intent.intent,
+                      x_intent_confidence: intent.confidence,
+                    },
+                    never_sync: true,
+                    outreach_token: outreachToken,
+                  }),
+                });
+                if (!cRes.ok) throw new Error(`POST contacts ${cRes.status}`);
+                const contact = (await cRes.json()).data;
+                await fetch(`${url}/api/contacts/${contact.id}/events`, {
+                  method: 'POST',
+                  headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    kind: 'dm:received',
+                    source: 'dm-to-code',
+                    title: `DM received from @${peerHandle}`,
+                    payload: {
+                      classification: cls,
+                      intent: intent.intent,
+                      confidence: intent.confidence,
+                      dm_preview: transcript.slice(0, 200),
+                    },
+                  }),
+                });
+                markQualified(ledger, peerHandle, contact.id);
+                console.log(`  [funnel] promoted contact=${contact.id}`);
+              } catch (e) { console.log(`  [funnel] promote failed: ${e.message}`); }
+            }
+          }
+        } else {
+          console.log(`  [funnel] @${peerHandle} rejected: ${verdict.reason}`);
+        }
+      }
+    }
+
     if (CODE_CLASSES.has(cls.class) && cls.code_prompt && cls.signal >= 0.4) {
       const briefPath = `/tmp/dm-${c.testid.replace(/[^\w-]/g, '_')}.md`;
       const brief = [
@@ -159,6 +285,7 @@ Given a DM transcript + classification, output STRICT JSON: {"code_prompt":"<=12
     }
   }
 
+  if (!DRY) saveLedger(workspace, ledger);
   const outPath = `/tmp/dm-scan-${new Date().toISOString().slice(0, 10)}.jsonl`;
   fs.writeFileSync(outPath, results.map(r => JSON.stringify(r)).join('\n') + '\n');
   console.log(`\n[dm] wrote ${results.length} classifications → ${outPath}`);

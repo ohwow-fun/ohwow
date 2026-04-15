@@ -42,17 +42,29 @@ function writeQueue(workspace, entries) {
  * earned N auto_applied threshold via past approved ratings, the entry
  * is created as 'auto_applied' (caller should apply immediately).
  */
-export function propose({ kind, summary, payload, autoApproveAfter = 10 }) {
+export function propose({ kind, summary, payload, autoApproveAfter = 10, gate }) {
   const { workspace } = resolveOhwow();
   const all = loadQueue(workspace);
   const priorApproved = all.filter(e => e.kind === kind && (e.status === 'approved' || e.status === 'applied' || e.status === 'auto_applied')).length;
   const priorRejected = all.filter(e => e.kind === kind && e.status === 'rejected').length;
   const trusted = priorApproved >= autoApproveAfter && priorRejected <= Math.max(1, Math.floor(priorApproved / 10));
+  // Optional secondary gate: even when trust threshold is met, the gate
+  // can force the entry back to 'pending' (e.g. forecast-accuracy floor
+  // for outbound replies). Throws are treated as a false gate — fail
+  // closed so a broken gate never silently auto-applies.
+  let gatePassed = true;
+  if (trusted && typeof gate === 'function') {
+    try {
+      gatePassed = gate(kind, payload) === true;
+    } catch {
+      gatePassed = false;
+    }
+  }
   const entry = {
     id: crypto.randomUUID(),
     ts: new Date().toISOString(),
     kind, workspace, summary, payload,
-    status: trusted ? 'auto_applied' : 'pending',
+    status: trusted && gatePassed ? 'auto_applied' : 'pending',
     trustStats: { priorApproved, priorRejected },
   };
   const next = [...all, entry];
