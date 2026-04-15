@@ -138,7 +138,18 @@ export async function runVitestJson(
       ['vitest', 'run', '--reporter=json', testGlob],
       { cwd: repoRoot, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env } },
     );
-    return { json: safeParse(stdout), error: null };
+    const json = safeParse(stdout);
+    if (!json) {
+      // Exit 0 with no summary anchor — happens when a concurrent
+      // vitest invocation is holding the cache dir or when stdout
+      // gets swallowed. Surface as a runner_error rather than
+      // silently reporting total_tests=0 as pass.
+      return {
+        json: null,
+        error: `vitest stdout missing summary anchor (stdout_len=${stdout.length})`,
+      };
+    }
+    return { json, error: null };
   } catch (err) {
     // vitest exits non-zero on any test failure; stdout still carries
     // the JSON summary that tells us which tests failed.
