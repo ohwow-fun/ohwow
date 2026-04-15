@@ -294,6 +294,15 @@ export class PatchAuthorExperiment implements Experiment {
       promptBody += `\n\n<violations ref="${targetPath}" count="${violationsForFile.length}">\n${renderViolationList(violationsForFile)}\n</violations>`;
     }
 
+    // Inject roadmap context so the model understands the loop's goal,
+    // the auto-revert mechanism, and the current convergence state.
+    // Read-only — the model must not modify the roadmap, only use it
+    // for context when authoring the patch.
+    const roadmapCtx = loadRoadmapContext(repoRoot);
+    if (roadmapCtx) {
+      promptBody += `\n\n<context name="autonomy-goal">\n${roadmapCtx}\n</context>`;
+    }
+
     const sys =
       patchMode === 'string-literal'
         ? buildStringLiteralSystemPrompt(targetPath, violationsForFile.length)
@@ -556,6 +565,30 @@ export function evidenceLiteralsAppearInSource(
     }
   }
   return false;
+}
+
+/**
+ * Load a compact excerpt from AUTONOMY_ROADMAP.md — sections "Known Gaps"
+ * and "Active Focus" — to give the LLM context about the loop's current
+ * convergence state and why patches need to hold. Returns null when the
+ * file is absent or unreadable so this is always a soft enhancement.
+ */
+function loadRoadmapContext(repoRoot: string): string | null {
+  try {
+    const roadmapPath = path.join(repoRoot, 'AUTONOMY_ROADMAP.md');
+    const full = fs.readFileSync(roadmapPath, 'utf-8');
+    // Extract sections 2 (Known Gaps) and 3 (Active Focus) only.
+    // The iteration log is verbose and not useful for patch authoring.
+    const sections: string[] = [];
+    const gapMatch = full.match(/## 2\. Known Gaps[\s\S]*?(?=## \d|$)/);
+    const focusMatch = full.match(/## 3\. Active Focus[\s\S]*?(?=## \d|$)/);
+    if (gapMatch) sections.push(gapMatch[0].trim());
+    if (focusMatch) sections.push(focusMatch[0].trim());
+    if (sections.length === 0) return null;
+    return sections.join('\n\n');
+  } catch {
+    return null;
+  }
 }
 
 /** Pull a string[] out of evidence.affected_files; safe against missing/bad shapes. */

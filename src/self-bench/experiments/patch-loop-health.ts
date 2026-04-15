@@ -40,6 +40,7 @@ import type {
   Verdict,
 } from '../experiment-types.js';
 import { getSelfCommitStatus } from '../self-commit.js';
+import { getAllowedPrefixes, resolvePathTier } from '../path-trust-tiers.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -221,13 +222,11 @@ async function countViolationPool(
   const todayStart = new Date(now - DAY_MS).toISOString();
   const yesterdayStart = new Date(now - 2 * DAY_MS).toISOString();
 
-  const TIER2_PREFIXES = [
-    'src/lib/format-duration.ts',
-    'src/lib/token-similarity.ts',
-    'src/lib/stagnation.ts',
-    'src/lib/error-classification.ts',
-    'src/web/src/pages/',
-  ];
+  // Derive tier-2 prefixes from the authoritative registry so this
+  // list stays in sync automatically when new paths are promoted.
+  const TIER2_PREFIXES = getAllowedPrefixes().filter(
+    (p) => resolvePathTier(p).tier === 'tier-2',
+  );
 
   try {
     // Fetch findings for the 48h window newest-first so the 5000-row cap
