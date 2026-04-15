@@ -41,7 +41,7 @@ export function formatDuration(ms: number): string {
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0) parts.push(`${minutes}m`);
   if (seconds > 0) parts.push(`${seconds}s`);
-  if (millis > 1) parts.push(`${millis}ms`);
+  if (millis > 0) parts.push(`${millis}ms`);
 
   return parts.join(' ');
 }
