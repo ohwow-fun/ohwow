@@ -63,6 +63,9 @@ import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/aut
 import { AutonomousPatchRollbackExperiment } from '../self-bench/experiments/autonomous-patch-rollback.js';
 import { PatchAuthorExperiment } from '../self-bench/experiments/patch-author.js';
 import { FormatDurationFuzzExperiment } from '../self-bench/experiments/format-duration-fuzz.js';
+import { TokenSimilarityFuzzExperiment } from '../self-bench/experiments/token-similarity-fuzz.js';
+import { StagnationFuzzExperiment } from '../self-bench/experiments/stagnation-fuzz.js';
+import { ErrorClassificationFuzzExperiment } from '../self-bench/experiments/error-classification-fuzz.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1457,6 +1460,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // affected_files = ['src/lib/format-duration.ts'] — exactly
         // what PatchAuthorExperiment is watching for.
         experimentRunner.register(new FormatDurationFuzzExperiment());
+        // Three additional tier-2 surprise sources — same property-fuzz
+        // pattern pointed at different pure utilities. Each 5-min tick
+        // runs ~100-200 samples against its target and emits a fail
+        // finding on drift.
+        experimentRunner.register(new TokenSimilarityFuzzExperiment());
+        experimentRunner.register(new StagnationFuzzExperiment());
+        experimentRunner.register(new ErrorClassificationFuzzExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that

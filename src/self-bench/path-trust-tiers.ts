@@ -90,53 +90,27 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'pure ms→string formatter, fully test-covered, single caller — first tier-2 trial',
   },
-  // ─── Tier-2 PROPOSALS — pending operator approval ──────────────────
-  //
-  // Each entry below is a candidate for promotion to tier-2. They are
-  // intentionally commented out so that listing the active registry is
-  // still the source of truth for what the autonomous patch-author is
-  // allowed to touch. To promote a proposal:
-  //   1. Confirm the file still meets the tier-2 contract (pure,
-  //      well-tested public surface, single-ish caller, reversible).
-  //   2. Land a companion fuzzer/probe that emits findings whose
-  //      evidence.affected_files includes this path. Without a surprise
-  //      source the path is dead weight in the registry.
-  //   3. Uncomment the entry in one commit; the fuzzer can land the
-  //      same session or follow.
-  //
-  // Proposal 1 — src/lib/token-similarity.ts
-  //   Pure Jaccard/normalization. Invariants to fuzz: symmetry
-  //   (sim(a,b)=sim(b,a)), range [0,1], self-sim=1 for non-empty,
-  //   normalize idempotent. Zero side effects, used by SOP trigger
-  //   matching only.
-  // {
-  //   prefix: 'src/lib/token-similarity.ts',
-  //   tier: 'tier-2',
-  //   rationale: 'pure jaccard + normalize, well-tested, single consumer (SOP triggers)',
-  // },
-  //
-  // Proposal 2 — src/lib/stagnation.ts
-  //   Pure hash + window predicate. Invariants: hashToolCall
-  //   deterministic for same (name, input); detectStagnation true iff
-  //   last windowSize entries equal; false when fewer than windowSize
-  //   entries. No async, no external state.
-  // {
-  //   prefix: 'src/lib/stagnation.ts',
-  //   tier: 'tier-2',
-  //   rationale: 'pure hash + sliding-window predicate, used only by agent-runner stagnation check',
-  // },
-  //
-  // Proposal 3 — src/lib/error-classification.ts
-  //   Pure string→enum dispatch. Invariants: classifyError total
-  //   (always returns a FailureCategory); known-error fixture table
-  //   maps to expected category; isRetryableFailure pure function of
-  //   category. Mis-classification is a telemetry concern, not a
-  //   safety one — low blast radius for a bad patch.
-  // {
-  //   prefix: 'src/lib/error-classification.ts',
-  //   tier: 'tier-2',
-  //   rationale: 'pure error→category dispatch, telemetry-only blast radius',
-  // },
+  // Tier-2 wave 2 — each paired with a property fuzz under
+  // src/self-bench/experiments/*-fuzz.ts that emits findings with
+  // evidence.affected_files pointing at the matching path.
+  {
+    prefix: 'src/lib/token-similarity.ts',
+    tier: 'tier-2',
+    rationale:
+      'pure jaccard + normalize, fuzzed by token-similarity-fuzz (symmetry, range, idempotence)',
+  },
+  {
+    prefix: 'src/lib/stagnation.ts',
+    tier: 'tier-2',
+    rationale:
+      'pure hash + sliding-window predicate, fuzzed by stagnation-fuzz (md5 shape, detect contract)',
+  },
+  {
+    prefix: 'src/lib/error-classification.ts',
+    tier: 'tier-2',
+    rationale:
+      'pure error→category dispatch, fuzzed by error-classification-fuzz (totality + fixtures + retry-contract)',
+  },
 ];
 
 let registryOverride: PathTierEntry[] | null = null;
