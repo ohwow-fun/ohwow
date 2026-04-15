@@ -112,6 +112,35 @@ describe('findAutonomousPatchesInWindow', () => {
     expect('2026-04-15T02:05:13Z' > patches[0].ts).toBe(false);
   });
 
+  it('excludes commits already reverted via Auto-Reverts trailer', () => {
+    // Seed a patch with Fixes-Finding-Id.
+    const abs = path.join(repo, 'a.ts');
+    fs.writeFileSync(abs, 'export const a = 1;\n');
+    git('git add a.ts');
+    const msgFile = path.join(repo, '.git', 'COMMIT_MSG');
+    fs.writeFileSync(
+      msgFile,
+      'feat(self-bench): patch\n\nFixes-Finding-Id: aaaaaaaa-1111-2222-3333-444444444444\n',
+    );
+    git(`git commit -F "${msgFile}"`);
+    const patchSha = git('git rev-parse HEAD').trim();
+
+    // Seed a follow-up commit whose body carries Auto-Reverts for
+    // the patch sha. Body content is all that matters; it doesn't
+    // need to be a real revert.
+    fs.writeFileSync(abs, 'export const a = 2;\n');
+    git('git add a.ts');
+    fs.writeFileSync(
+      msgFile,
+      `revert: patch rolled back\n\nAuto-Reverts: ${patchSha}\n`,
+    );
+    git(`git commit -F "${msgFile}"`);
+
+    // Despite the patch sha still being in-window, it must be
+    // excluded because a later Auto-Reverts trailer names it.
+    expect(findAutonomousPatchesInWindow(repo, 24 * 60 * 60_000)).toEqual([]);
+  });
+
   it('excludes commits older than the window', () => {
     const abs = path.join(repo, 'a.ts');
     fs.writeFileSync(abs, 'export const a = 1;\n');

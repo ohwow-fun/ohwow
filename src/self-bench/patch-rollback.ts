@@ -127,10 +127,30 @@ export function findAutonomousPatchesInWindow(
     return [];
   }
   const records = out.split('\x1e').map((r) => r.trim()).filter((r) => r.length > 0);
+  // First pass: collect shas that have already been reverted. The
+  // revert commit carries `Auto-Reverts: <sha>`; anything named
+  // there must be skipped even if the original commit is still in
+  // the window, otherwise the watcher tries to revert it over and
+  // over and each `git revert` on an already-reverted commit leaves
+  // conflict markers in the tree.
+  const alreadyReverted = new Set<string>();
+  for (const rec of records) {
+    const parts = rec.split('\x1f');
+    const body = parts[2] ?? '';
+    const m = body.match(/^Auto-Reverts:\s*([0-9a-f]{7,40})\s*$/m);
+    if (m && m[1]) alreadyReverted.add(m[1]);
+  }
   const patches: AutonomousPatch[] = [];
   for (const rec of records) {
     const [sha, ts, body] = rec.split('\x1f');
     if (!sha || !ts || !body) continue;
+    if (alreadyReverted.has(sha)) continue;
+    // Match by prefix too — revert trailers may carry a short sha.
+    let shortHit = false;
+    for (const short of alreadyReverted) {
+      if (sha.startsWith(short)) { shortHit = true; break; }
+    }
+    if (shortHit) continue;
     const findingMatch = body.match(/^Fixes-Finding-Id:\s*([^\s]+)\s*$/m);
     if (!findingMatch) continue;
     const findingId = findingMatch[1];
@@ -204,6 +224,15 @@ export function revertCommit(
     // revert commit is brand-new and unpushed at this point.
     run(`git commit --amend -s -F -`, repoRoot, message);
   } catch (err) {
+    // `git revert` can fail mid-operation (e.g. the commit is already
+    // reverted and produces an empty diff, or there's a conflict).
+    // Without cleanup, git leaves the working tree in a conflicted
+    // state with unresolved <<<<<<< markers — subsequent tool runs
+    // (and other patch-author ticks) will fail to parse those files.
+    // Always run `git revert --abort` so a failed revert leaves no
+    // trace. Best-effort: if the abort itself fails, there was
+    // nothing to abort, which is fine.
+    try { run('git revert --abort', repoRoot); } catch { /* best effort */ }
     return { ok: false, reason: `git revert failed: ${extractErrorSummary(err)}` };
   }
 
