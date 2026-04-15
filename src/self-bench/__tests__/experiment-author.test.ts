@@ -8,6 +8,7 @@ import {
   setSelfCommitRepoRoot,
   _resetSelfCommitForTests,
   _setAuditLogPathForTests,
+  _setKillSwitchDisabledPathForTests,
 } from '../self-commit.js';
 import type {
   Experiment,
@@ -136,14 +137,13 @@ beforeEach(() => {
   // Audit log path must be outside the repo so git status stays clean.
   auditLogPath = path.join(os.tmpdir(), `author-audit-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
   _setAuditLogPathForTests(auditLogPath);
-  process.env.OHWOW_SELF_COMMIT_TEST_ALLOW = '1';
+  // Kill switch defaults to open (opt-out model). No env var needed.
 });
 
 afterEach(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   try { if (fs.existsSync(auditLogPath)) fs.unlinkSync(auditLogPath); } catch { /* ignore */ }
   _resetSelfCommitForTests();
-  delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
 });
 
 describe('ExperimentAuthorExperiment — probe', () => {
@@ -308,7 +308,9 @@ describe('ExperimentAuthorExperiment — intervene', () => {
   });
 
   it('records a failure finding when commit fails (kill switch closed)', async () => {
-    delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
+    // Simulate the kill switch being closed by pointing the disabled-file path
+    // at a file that actually exists (the audit log is guaranteed to exist).
+    _setKillSwitchDisabledPathForTests(auditLogPath);
     const inserted: Array<Record<string, unknown>> = [];
     const ctx = makeCtx(tempRoot, {
       'experiment-proposal-generator': [proposalFinding(sampleBrief, false)],
@@ -326,5 +328,7 @@ describe('ExperimentAuthorExperiment — intervene', () => {
     const evidence = JSON.parse(markerRow!.evidence as string);
     expect(evidence.claimed).toBe(false);
     expect(evidence.commit_ok).toBe(false);
+
+    _setKillSwitchDisabledPathForTests(null);
   });
 });

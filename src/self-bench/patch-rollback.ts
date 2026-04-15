@@ -16,10 +16,9 @@
  *
  * Kill switch
  * -----------
- * revertCommit is gated by a separate kill-switch file
- * (~/.ohwow/auto-revert-enabled). The operator opts in explicitly;
- * default is closed. A revert is a mutation of main just like a
- * self-commit, so it gets the same opt-in primitive.
+ * revertCommit defaults to enabled (opt-out). To disable, create
+ * ~/.ohwow/auto-revert-disabled. A revert is a mutation of main just
+ * like a self-commit, so it gets the same opt-out primitive.
  *
  * No --no-verify
  * --------------
@@ -76,21 +75,38 @@ export function normalizeCommitTsToUtc(ts: string): string {
  * safeSelfCommit kill switch so the operator can enable authoring
  * without enabling reverts (and vice versa).
  */
-export const AUTO_REVERT_ENABLED_PATH = path.join(
+/**
+ * Kill switch is now opt-OUT. Auto-revert runs by default; create this file to
+ * disable it. Replaces the old opt-in ~/.ohwow/auto-revert-enabled pattern.
+ */
+export const AUTO_REVERT_DISABLED_PATH = path.join(
   os.homedir(),
   '.ohwow',
-  'auto-revert-enabled',
+  'auto-revert-disabled',
 );
 
-/** Test-only env var that bypasses the kill-switch file check. */
-const TEST_BYPASS_ENV = 'OHWOW_AUTO_REVERT_TEST_ALLOW';
+/** Test-only env var that forces the kill switch CLOSED (loop disabled). */
+const TEST_DENY_ENV = 'OHWOW_AUTO_REVERT_TEST_DENY';
+
+/** Test-only override for the disabled-file path. Null = use the default. */
+let killSwitchDisabledPathOverride: string | null = null;
+
+/**
+ * Test-only override for the kill-switch disabled-file path. Pass a path to a
+ * non-existent file to simulate the kill switch being closed (revert disabled),
+ * or null to restore the real default path.
+ */
+export function _setAutoRevertKillSwitchPathForTests(p: string | null): void {
+  killSwitchDisabledPathOverride = p;
+}
 
 function isRevertKillSwitchOpen(): boolean {
-  if (process.env[TEST_BYPASS_ENV] === '1') return true;
+  if (process.env[TEST_DENY_ENV] === '1') return false;
+  const disabledPath = killSwitchDisabledPathOverride ?? AUTO_REVERT_DISABLED_PATH;
   try {
-    return fs.existsSync(AUTO_REVERT_ENABLED_PATH);
+    return !fs.existsSync(disabledPath);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -202,7 +218,7 @@ export function revertCommit(
   if (!isRevertKillSwitchOpen()) {
     return {
       ok: false,
-      reason: `auto-revert is disabled by default. To enable, create ${AUTO_REVERT_ENABLED_PATH}`,
+      reason: `auto-revert is disabled by default. To re-enable, remove ${AUTO_REVERT_DISABLED_PATH}`,
     };
   }
   if (!/^[0-9a-f]{7,40}$/.test(sha)) {
@@ -241,23 +257,10 @@ export function revertCommit(
     revertSha = run('git rev-parse HEAD', repoRoot).trim();
   } catch { /* non-fatal */ }
 
-  try {
-    run('git push', repoRoot);
-  } catch (err) {
-    logger.error(
-      { sha, revertSha, err: extractErrorSummary(err) },
-      '[auto-revert] revert committed locally but push failed — main is ahead of origin',
-    );
-    return {
-      ok: false,
-      reason: `revert committed as ${revertSha} but push failed: ${extractErrorSummary(err)}`,
-      revertSha,
-    };
-  }
-
+  // Push intentionally skipped — local commits only (see self-commit.ts).
   logger.info(
     { revertedSha: sha, revertSha, reason },
-    '[auto-revert] autonomous patch rolled back and pushed',
+    '[auto-revert] autonomous patch rolled back locally (push skipped)',
   );
   return { ok: true, revertSha };
 }

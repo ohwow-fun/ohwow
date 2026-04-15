@@ -7,6 +7,7 @@ import {
   findAutonomousPatchesInWindow,
   normalizeCommitTsToUtc,
   revertCommit,
+  _setAutoRevertKillSwitchPathForTests,
 } from '../patch-rollback.js';
 
 let repo: string;
@@ -47,13 +48,13 @@ beforeEach(() => {
   git('git commit -m "init"');
   git('git push -u origin main');
 
-  process.env.OHWOW_AUTO_REVERT_TEST_ALLOW = '1';
+  // Kill switch defaults to open (opt-out model). No env var needed.
 });
 
 afterEach(() => {
   try { fs.rmSync(repo, { recursive: true, force: true }); } catch { /* ignore */ }
   try { fs.rmSync(origin, { recursive: true, force: true }); } catch { /* ignore */ }
-  delete process.env.OHWOW_AUTO_REVERT_TEST_ALLOW;
+  _setAutoRevertKillSwitchPathForTests(null);
 });
 
 describe('findAutonomousPatchesInWindow', () => {
@@ -178,8 +179,10 @@ describe('normalizeCommitTsToUtc', () => {
 });
 
 describe('revertCommit', () => {
-  it('refuses when the kill switch is closed', () => {
-    delete process.env.OHWOW_AUTO_REVERT_TEST_ALLOW;
+  it('refuses when the kill switch is closed (disabled file exists)', () => {
+    // Point the kill switch at a file that actually exists to simulate "disabled".
+    const disabledFile = path.join(repo, 'README.md');
+    _setAutoRevertKillSwitchPathForTests(disabledFile);
     const sha = seedCommit(
       'a.ts',
       'export const a = 1;\n',
@@ -203,12 +206,14 @@ describe('revertCommit', () => {
     expect(r.reason).toContain('at least 10');
   });
 
-  it('reverts a commit, amends the message with an Auto-Reverts trailer, and pushes', () => {
+  it('reverts a commit locally and amends the message with an Auto-Reverts trailer', () => {
     const sha = seedCommit(
       'bad.ts',
       'export const bad = 1;\n',
       'feat(self-bench): bad patch\n\nFixes-Finding-Id: ffffaaaa\n',
     );
+    const originHeadBefore = execSync('git rev-parse main', { cwd: origin, encoding: 'utf-8' }).trim();
+
     const r = revertCommit(repo, sha, 'finding re-fired verdict=fail inside cool-off');
     expect(r.ok).toBe(true);
     expect(r.revertSha).toBeTruthy();
@@ -221,9 +226,8 @@ describe('revertCommit', () => {
     // The reverted file is gone from the working tree.
     expect(fs.existsSync(path.join(repo, 'bad.ts'))).toBe(false);
 
-    // Push landed — origin's HEAD matches local HEAD.
-    const localHead = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf-8' }).trim();
-    const originHead = execSync('git rev-parse main', { cwd: origin, encoding: 'utf-8' }).trim();
-    expect(originHead).toBe(localHead);
+    // Push is intentionally skipped — origin HEAD is unchanged from before the revert.
+    const originHeadAfter = execSync('git rev-parse main', { cwd: origin, encoding: 'utf-8' }).trim();
+    expect(originHeadAfter).toBe(originHeadBefore);
   });
 });

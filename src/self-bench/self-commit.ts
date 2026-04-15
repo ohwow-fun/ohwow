@@ -203,14 +203,22 @@ const MODIFY_ALLOWED_EXACT_PATHS = new Set([
   'src/self-bench/registries/toolchain-test-registry.ts',
 ]);
 
-/** Test-only env var that bypasses the kill-switch file check. */
-const TEST_BYPASS_ENV = 'OHWOW_SELF_COMMIT_TEST_ALLOW';
+/**
+ * Test-only env var that forces the kill switch CLOSED (disabled) regardless
+ * of the disabled-file state. Replaces the old ALLOW bypass — the new default
+ * is open, so tests only need a way to force-close.
+ */
+const TEST_DENY_ENV = 'OHWOW_SELF_COMMIT_TEST_DENY';
 
-/** File whose existence means the operator has opted in. */
-export const SELF_COMMIT_ENABLED_PATH = path.join(
+/**
+ * Kill switch is now opt-OUT. The loop runs by default; create this file to
+ * disable it without touching code. Replaces the old opt-in
+ * ~/.ohwow/self-commit-enabled pattern.
+ */
+export const SELF_COMMIT_DISABLED_PATH = path.join(
   os.homedir(),
   '.ohwow',
-  'self-commit-enabled',
+  'self-commit-disabled',
 );
 
 /**
@@ -247,6 +255,8 @@ const AUTONOMOUS_COMMIT_TRAILER = 'Self-authored by experiment:';
 // Tests override via their beforeEach hooks.
 let repoRootOverride: string | null = null;
 let auditLogPathOverride: string | null = null;
+/** Test-only override for the disabled-file path. Null = use the default. */
+let killSwitchDisabledPathOverride: string | null = null;
 
 /**
  * Wire the daemon's repo root at boot. Detected in start.ts from
@@ -265,10 +275,20 @@ export function _setAuditLogPathForTests(p: string | null): void {
   auditLogPathOverride = p;
 }
 
+/**
+ * Test-only override for the kill-switch disabled-file path. Pass a path to a
+ * non-existent file to simulate the kill switch being closed (loop disabled),
+ * or null to restore the real default path.
+ */
+export function _setKillSwitchDisabledPathForTests(p: string | null): void {
+  killSwitchDisabledPathOverride = p;
+}
+
 /** Test-only reset so beforeEach starts clean. */
 export function _resetSelfCommitForTests(): void {
   repoRootOverride = null;
   auditLogPathOverride = null;
+  killSwitchDisabledPathOverride = null;
 }
 
 function getRepoRoot(): string | null {
@@ -283,11 +303,14 @@ function getAuditLogPath(): string {
 }
 
 function isKillSwitchOpen(): boolean {
-  if (process.env[TEST_BYPASS_ENV] === '1') return true;
+  // Test can force-close without touching the filesystem.
+  if (process.env[TEST_DENY_ENV] === '1') return false;
+  // Opt-out: disabled if the kill-switch file exists.
+  const disabledPath = killSwitchDisabledPathOverride ?? SELF_COMMIT_DISABLED_PATH;
   try {
-    return fs.existsSync(SELF_COMMIT_ENABLED_PATH);
+    return !fs.existsSync(disabledPath);
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -339,7 +362,7 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   if (!isKillSwitchOpen()) {
     return {
       ok: false,
-      reason: `self-commit is disabled by default. To enable, create ${SELF_COMMIT_ENABLED_PATH}`,
+      reason: `self-commit is disabled by default. To re-enable, remove ${SELF_COMMIT_DISABLED_PATH}`,
     };
   }
 
@@ -654,22 +677,15 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     commitSha = runInRepo('git rev-parse HEAD', repoRoot).trim();
   } catch { /* shouldn't happen but not fatal — commit already landed */ }
 
-  // 9. Push to origin so committed experiments are visible remotely.
-  // Non-fatal — the commit is already in local git history. A push
-  // failure just means the remote is temporarily behind; the next
-  // successful safeSelfCommit will push both commits at once.
-  try {
-    runInRepo('git push', repoRoot, { timeoutMs: 60_000 });
-    logger.info(
-      { experimentId: opts.experimentId, commitSha, filesWritten: opts.files.map((f) => f.path) },
-      '[self-commit] experiment committed and pushed autonomously',
-    );
-  } catch (pushErr) {
-    logger.warn(
-      { experimentId: opts.experimentId, commitSha, err: extractErrorSummary(pushErr) },
-      '[self-commit] commit succeeded but push failed — will retry on next commit',
-    );
-  }
+  // 9. Push intentionally skipped — local commits only until the loop
+  // is proven stable. A human push (or a future push-enablement
+  // experiment) moves commits to the remote when ready. Keeping this
+  // step out of the autonomous path removes one blast-radius vector
+  // during the supervised observation window.
+  logger.info(
+    { experimentId: opts.experimentId, commitSha, filesWritten: opts.files.map((f) => f.path) },
+    '[self-commit] experiment committed locally (push skipped)',
+  );
 
   return {
     ok: true,

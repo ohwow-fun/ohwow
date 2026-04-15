@@ -8,6 +8,7 @@ import {
   setSelfCommitRepoRoot,
   _resetSelfCommitForTests,
   _setAuditLogPathForTests,
+  _setKillSwitchDisabledPathForTests,
   getSelfCommitStatus,
   type SelfCommitOptions,
   type FindingLookup,
@@ -79,7 +80,7 @@ beforeEach(() => {
   // explicitly unlinks.
   auditLogPath = path.join(os.tmpdir(), `self-commit-audit-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
   _setAuditLogPathForTests(auditLogPath);
-  process.env.OHWOW_SELF_COMMIT_TEST_ALLOW = '1';
+  // Kill switch defaults to open (opt-out model). No env var needed.
 });
 
 afterEach(() => {
@@ -90,11 +91,11 @@ afterEach(() => {
   try { fs.rmSync(tempRoot, { recursive: true, force: true }); } catch { /* ignore */ }
   _resetSelfCommitForTests();
   _setPathTierRegistryForTests(null);
-  delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
 });
 
 describe('getSelfCommitStatus', () => {
-  it('reports killSwitchOpen when OHWOW_SELF_COMMIT_TEST_ALLOW=1', () => {
+  it('reports killSwitchOpen by default (opt-out model)', () => {
+    // Kill switch is open by default — no disabled file means it runs.
     const status = getSelfCommitStatus();
     expect(status.killSwitchOpen).toBe(true);
     expect(status.repoRootConfigured).toBe(true);
@@ -114,11 +115,29 @@ describe('getSelfCommitStatus', () => {
 });
 
 describe('safeSelfCommit — kill switch', () => {
-  it('refuses when kill switch is closed and no test bypass set', async () => {
-    delete process.env.OHWOW_SELF_COMMIT_TEST_ALLOW;
-    const result = await safeSelfCommit(baseOpts());
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain('disabled by default');
+  it('refuses when kill switch is force-closed via TEST_DENY env var', async () => {
+    process.env.OHWOW_SELF_COMMIT_TEST_DENY = '1';
+    try {
+      const result = await safeSelfCommit(baseOpts());
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('disabled by default');
+    } finally {
+      delete process.env.OHWOW_SELF_COMMIT_TEST_DENY;
+    }
+  });
+
+  it('refuses when the disabled file exists at the overridden path', async () => {
+    const disabledFile = path.join(os.tmpdir(), `self-commit-disabled-${Date.now()}`);
+    fs.writeFileSync(disabledFile, '');
+    _setKillSwitchDisabledPathForTests(disabledFile);
+    try {
+      const result = await safeSelfCommit(baseOpts());
+      expect(result.ok).toBe(false);
+      expect(result.reason).toContain('disabled by default');
+    } finally {
+      _setKillSwitchDisabledPathForTests(null);
+      try { fs.unlinkSync(disabledFile); } catch { /* ignore */ }
+    }
   });
 });
 
