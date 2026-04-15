@@ -22,6 +22,7 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
 import { composeTweetViaBrowser } from '../orchestrator/tools/x-posting.js';
+import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
 
 export interface DeliverableRow {
   id: string;
@@ -159,10 +160,61 @@ async function readLiveMode(db: DatabaseAdapter): Promise<boolean> {
   } catch { return false; }
 }
 
+async function readPreferredXProfile(db: DatabaseAdapter): Promise<string | null> {
+  try {
+    const { data } = await db.from('runtime_settings')
+      .select('value')
+      .eq('key', 'x_posting_profile')
+      .maybeSingle();
+    const val = (data as { value: string } | null)?.value;
+    return val && val.trim().length > 0 ? val.trim() : null;
+  } catch { return null; }
+}
+
+/**
+ * Make sure debug Chrome is up on :9222 with the target profile's
+ * window open *before* x-posting attaches over CDP. The tool-executor
+ * path does this via `ctx.browserState.activate()`, but the
+ * deliverable-executor runs outside that surface — previously it went
+ * straight to `composeTweetViaBrowser`, which called
+ * `chromium.connectOverCDP(:9222)` against a debug Chrome that may not
+ * be running. Playwright would then either fail to attach or, worse,
+ * fall through some upstream capability and launch its own bundled
+ * Chromium with no persistent profile — meaning we tried to post
+ * logged out.
+ */
+async function ensureProfileChrome(db: DatabaseAdapter): Promise<{ ok: true } | { ok: false; error: string }> {
+  const override = await readPreferredXProfile(db);
+  const profiles = listProfiles();
+  if (profiles.length === 0) {
+    return { ok: false, error: 'no profiles in ~/.ohwow/chrome-cdp/. Log into X in desktop Chrome once via the onboarding, or set runtime_settings.x_posting_profile.' };
+  }
+  // Preference order: explicit override → first profile with an email →
+  // first profile overall. Keeps behavior sane in single-profile setups
+  // while letting multi-account workspaces pin which account posts.
+  const target = (override && findProfileByIdentity(profiles, override))
+    || profiles.find((p) => !!p.email)
+    || profiles[0];
+  try {
+    await ensureDebugChrome({ preferredProfile: target.directory });
+    // ensureDebugChrome only guarantees the process is running; it does
+    // not guarantee a window for THIS profile is open. openProfileWindow
+    // is idempotent — it no-ops if the window already exists.
+    await openProfileWindow({ profileDir: target.directory });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 const postTweetHandler: Handler = async (content, ctx) => {
   const text = typeof content.text === 'string' ? content.text.trim() : '';
   if (!text) return { ok: false, error: 'post_tweet: content.text missing' };
   const dryRun = !ctx.liveMode;
+
+  const prep = await ensureProfileChrome(ctx.db);
+  if (!prep.ok) return { ok: false, error: `post_tweet: ${prep.error}` };
+
   try {
     const res = await composeTweetViaBrowser({ text, dryRun });
     if (!res.success) {
