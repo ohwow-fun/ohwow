@@ -30,6 +30,7 @@ import {
   DESKTOP_TOOL_DEFINITIONS,
   REQUEST_DESKTOP_TOOL,
 } from '../execution/desktop/index.js';
+import { HOST_REACH_TOOL_DEFINITIONS } from '../execution/host/index.js';
 import { runtimeToolRegistry } from './runtime-tool-registry.js';
 import { logger } from '../lib/logger.js';
 
@@ -114,6 +115,12 @@ export async function assembleOrchestratorToolSurface(
   } else {
     tools = [...tools, REQUEST_FILE_ACCESS_TOOL];
   }
+
+  // Host-reach tools (notify_user, speak, clipboard_read/write, open_url):
+  // always injected. Typed wrappers for the macOS commands the orchestrator
+  // used to compose by hand through run_bash. Per-channel excludedTools /
+  // allowlists still apply downstream if a caller wants them gone.
+  tools = [...tools, ...HOST_REACH_TOOL_DEFINITIONS];
 
   // Filter by intent sections and priority when provided. Explicit tool
   // names mentioned in the user message bypass the filter — if the user

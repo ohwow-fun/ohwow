@@ -14,6 +14,11 @@ const SECRET_ENV_PATTERNS = [
   /SSH_AUTH_SOCK/i,
   /AWS_SECRET/i,
   /PRIVATE_KEY/i,
+  // Ohwow runtime internals: workspace path, daemon port, DB path, license
+  // key, cloud URL. Not secrets in the API-key sense, but leaking them to
+  // agent-invoked subprocesses lets the model introspect its own daemon and
+  // surface license keys / internal URLs in demo output. Scrub by default.
+  /^OHWOW_/i,
 ];
 
 /**

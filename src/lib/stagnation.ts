@@ -7,10 +7,37 @@
 import { createHash } from 'crypto';
 
 /**
+ * Serialize `value` as JSON with stable key ordering. Two objects with the
+ * same keys in different order produce identical strings, so hashes computed
+ * over the result are order-insensitive.
+ *
+ * The model can emit tool inputs in any key order — e.g.
+ *   {"command": "...", "working_directory": "..."}
+ *   {"working_directory": "...", "command": "..."}
+ * are the same call, but `JSON.stringify` renders them differently. Without
+ * normalization the stagnation detector missed reruns where only key order
+ * changed, so an agent could effectively "shuffle" its way around the
+ * hash-window-3 check by alternating argument order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const parts = keys.map(
+    (k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`,
+  );
+  return `{${parts.join(',')}}`;
+}
+
+/**
  * Hash a tool call (name + input) into a compact digest for comparison.
+ * Input is serialized with stable key order so equivalent calls with
+ * reordered arguments produce identical hashes.
  */
 export function hashToolCall(name: string, input: unknown): string {
-  return createHash('md5').update(`${name}:${JSON.stringify(input)}`).digest('hex');
+  return createHash('md5').update(`${name}:${stableStringify(input)}`).digest('hex');
 }
 
 /**

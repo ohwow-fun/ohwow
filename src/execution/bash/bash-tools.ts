@@ -15,7 +15,7 @@ export const BASH_TOOL_DEFINITIONS: Tool[] = [
   {
     name: 'run_bash',
     description:
-      'Execute a bash command on the user\'s device. Commands run within allowed directories only. Use for system tasks, build commands, git operations, data processing, and scripting. Prefer local_read_file for simple file reads.',
+      'Execute a bash command on the user\'s device. Commands run within allowed directories only. Use for system tasks, build commands, git operations, data processing, and scripting. Prefer local_read_file for simple file reads. Each call runs in a fresh shell — `cd` and shell variables do NOT persist between calls. Chain multi-step work in a single command with `&&`, or pass `working_directory` each time.',
     input_schema: {
       type: 'object',
       properties: {
@@ -69,6 +69,7 @@ You can execute bash commands on the user's device using the **run_bash** tool.
 - Default timeout is 30 seconds (max 5 minutes)
 - Certain dangerous commands are blocked (rm -rf /, shutdown, reboot, etc.)
 - Environment variables containing secrets are scrubbed
+- **Each call runs in a fresh shell.** \`cd\`, \`export\`, and shell variables do NOT persist between calls. To do multi-step work, chain with \`&&\` in one command, or pass \`working_directory\` each call.
 
 **Best practices:**
 - Verify paths before destructive operations

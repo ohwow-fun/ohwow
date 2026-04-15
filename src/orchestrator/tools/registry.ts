@@ -27,6 +27,13 @@ import { ocrExtractText, analyzeImage } from './ocr.js';
 import { listKnowledge, uploadKnowledge, addKnowledgeFromUrl, assignKnowledge, deleteKnowledge, searchKnowledge, getKnowledgeDocument } from './knowledge.js';
 import { localListDirectory, localReadFile, localSearchFiles, localSearchContent, localWriteFile, localEditFile } from './filesystem.js';
 import { localRunBash } from './bash.js';
+import {
+  notifyUserHandler,
+  speakHandler,
+  clipboardReadHandler,
+  clipboardWriteHandler,
+  openUrlHandler,
+} from './host-reach.js';
 import { investigateShell } from './investigate-shell.js';
 import { pdfInspectFields, pdfFillForm } from './pdf.js';
 import { listPeers, delegateToPeer, askPeer, listPeerAgentsTool } from './peers.js';
@@ -223,6 +230,13 @@ export const toolRegistry = new Map<string, ToolHandler>([
   // Bash tools
   ['run_bash', (ctx, input) => localRunBash(ctx, input)],
   ['investigate_shell', (ctx, input) => investigateShell(ctx, input)],
+
+  // Host-reach tools (typed wrappers for macOS host interactions)
+  ['notify_user', (ctx, input) => notifyUserHandler(ctx, input)],
+  ['speak', (ctx, input) => speakHandler(ctx, input)],
+  ['clipboard_read', (ctx, input) => clipboardReadHandler(ctx, input)],
+  ['clipboard_write', (ctx, input) => clipboardWriteHandler(ctx, input)],
+  ['open_url', (ctx, input) => openUrlHandler(ctx, input)],
 
   // PDF form tools
   ['pdf_inspect_fields', (ctx, input) => pdfInspectFields(ctx, input)],

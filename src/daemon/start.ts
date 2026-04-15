@@ -26,6 +26,7 @@ import { initDatabase } from '../db/init.js';
 import { createSqliteAdapter } from '../db/sqlite-adapter.js';
 import { createRpcHandlers } from '../db/rpc-handlers.js';
 import { RuntimeEngine } from '../execution/engine.js';
+import { installDiaryHook } from '../execution/diary-hook.js';
 import { createServer } from '../api/server.js';
 import { ControlPlaneClient } from '../control-plane/client.js';
 import type { AgentConfigPayload } from '../control-plane/types.js';
@@ -742,6 +743,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
     reportToCloud: controlPlane ? (report) => controlPlane!.reportTask(report) : () => Promise.resolve(),
   }, businessContext, bus, modelRouter, scraplingService);
   engineRef.current = engine;
+
+  // Diary hook: append a JSONL entry to <dataDir>/diary.jsonl on every
+  // task completion. Cheap persistent memory for later reflection, and a
+  // readable "what did my agents do today" log for the operator. Subscribe
+  // on the bus the engine emits through.
+  installDiaryHook(bus, rawDb, { dataDir });
 
   // 9. Start polling (connected tier only)
   if (controlPlane) {

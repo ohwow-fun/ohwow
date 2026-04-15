@@ -155,6 +155,13 @@ export async function runModelRouterLoop(
     let iteration = 0;
     let consecutiveParseErrors = 0;
     let toolLoopAborted = false;
+    // Hard circuit breaker: when the brain flags stagnation this many times
+    // in a row, abort the loop instead of just appending another warning the
+    // model will ignore. Warning-only responses work for strong models;
+    // weaker local models (deepseek-v3.2, qwen) observed to burn to the
+    // 25-iteration cap even with repeated nudges.
+    const MAX_CONSECUTIVE_STAGNATION = 3;
+    let consecutiveStagnation = 0;
     const toolCallHashes: string[] = [];
     const routerToolsUsed: string[] = [];
     try {
@@ -450,10 +457,22 @@ export async function runModelRouterLoop(
 
         // Brain: enriched stagnation warning (Ollama path)
         if (this.brain.isStagnating()) {
+          consecutiveStagnation++;
           const lastMsg = loopMessages[loopMessages.length - 1];
           if (lastMsg.role === 'tool') {
             lastMsg.content = `${lastMsg.content}\n\n${this.brain.buildStagnationWarning()}`;
           }
+          if (consecutiveStagnation >= MAX_CONSECUTIVE_STAGNATION) {
+            logger.warn(
+              { taskId: opts.taskId, iteration: iteration + 1, consecutiveStagnation },
+              '[RuntimeEngine] Hard stagnation circuit breaker fired — aborting tool loop',
+            );
+            fullContent += '\n\n[Agent looped on identical tool calls and was stopped by the stagnation circuit breaker. Synthesize an answer from what you have.]';
+            toolLoopAborted = true;
+            break;
+          }
+        } else {
+          consecutiveStagnation = 0;
         }
 
         // Inject reflection prompt every 5 iterations

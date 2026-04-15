@@ -151,12 +151,34 @@ export function createServer(deps: ServerDeps): {
 
   app.use(express.json());
 
-  // Global rate limiter: 1000 requests per hour per IP
+  // Global rate limiter. Skips loopback traffic because the daemon is local-
+  // first — the only callers on 127.0.0.1 / ::1 are the TUI, the web
+  // dashboard, the MCP server, and trusted agents. Rate-limiting them
+  // causes 429 storms during normal bursty work (polling task status while
+  // also dispatching new tasks) and the response body was plain text,
+  // which broke every JSON-expecting client. Keep the limiter for non-
+  // loopback IPs in case the daemon ever gets exposed via tunnel.
   app.use(rateLimit({
     windowMs: 60 * 60 * 1000,
     limit: 1000,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
+    skip: (req) => {
+      const ip = req.ip ?? '';
+      return (
+        ip === '127.0.0.1'
+        || ip === '::1'
+        || ip === '::ffff:127.0.0.1'
+        || ip.startsWith('127.')
+      );
+    },
+    handler: (_req, res) => {
+      res.status(429).json({
+        error: 'rate_limited',
+        message: 'Too many requests. Retry after the window resets.',
+        retry_after_seconds: 60 * 60,
+      });
+    },
   }));
 
   // Public routes (no auth)

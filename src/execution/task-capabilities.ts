@@ -108,7 +108,7 @@ export async function resolveTaskCapabilities(
     ? allowlistPermits(toolPolicy, 'local_list_directory')
     : explicitFsFlag === true || (explicitFsFlag !== false && workspaceFsBaseline.length > 0);
   const bashEnabled = isAllowlistMode
-    ? allowlistPermits(toolPolicy, 'bash_execute')
+    ? allowlistPermits(toolPolicy, 'run_bash')
     : agentConfig.bash_enabled === true;
   // MCP is enabled when the agent opts in OR when the allowlist contains
   // any `mcp__<server>__<tool>` entry. The latter is the auto-enable

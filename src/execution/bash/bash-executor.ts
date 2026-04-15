@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { FileAccessGuard } from '../filesystem/filesystem-guard.js';
 import { PermissionDeniedError, resolveSuggestedPath } from '../filesystem/permission-error.js';
 import { scrubEnvironment, scrubEnvironmentForGit, scrubBashOutput } from '../../lib/env-scrub.js';
+import { logger } from '../../lib/logger.js';
 
 // ============================================================================
 // TYPES
@@ -216,12 +217,35 @@ export async function executeBashTool(
 
   // Execute the command (auto-detect git commands for relaxed env scrubbing)
   const gitMode = options?.gitEnabled === true && isGitCommand(command);
+  const startedAt = Date.now();
   const result = await executeCommand(command, cwd, timeoutMs, gitMode);
+  const durationMs = Date.now() - startedAt;
 
   // Format output. Secrets are redacted BEFORE truncation so partial token
   // fragments don't survive the cut — see scrubBashOutput for pattern list.
+  const rawStdoutBytes = Buffer.byteLength(result.stdout, 'utf-8');
+  const rawStderrBytes = Buffer.byteLength(result.stderr, 'utf-8');
   const stdout = truncateOutput(scrubBashOutput(result.stdout), 'stdout');
   const stderr = truncateOutput(scrubBashOutput(result.stderr), 'stderr');
+
+  logger.info(
+    {
+      cwd,
+      exit_code: result.exitCode,
+      duration_ms: durationMs,
+      timeout_ms: timeoutMs,
+      git_mode: gitMode,
+      stdout_bytes: rawStdoutBytes,
+      stderr_bytes: rawStderrBytes,
+      stdout_truncated: rawStdoutBytes > MAX_OUTPUT_BYTES,
+      stderr_truncated: rawStderrBytes > MAX_OUTPUT_BYTES,
+      // Command is logged separately at debug so routine info logs don't
+      // capture potentially sensitive command text. Use OHWOW_LOG_LEVEL=debug
+      // for the full invocation audit trail.
+    },
+    'run_bash executed',
+  );
+  logger.debug({ command }, 'run_bash command');
 
   const parts = [`Exit code: ${result.exitCode}`];
   if (stdout.length > 0) {
@@ -229,6 +253,14 @@ export async function executeBashTool(
   }
   if (stderr.length > 0) {
     parts.push(`\nstderr:\n${stderr}`);
+  }
+  // When both streams are empty, weaker models see only "Exit code: 0" and
+  // often retry the same command hoping for different output. Naming the
+  // silence explicitly gives them a signal to pivot (try a different query,
+  // check a different file, conclude that nothing matched) instead of
+  // loop-shuffling until the iteration cap kills them.
+  if (stdout.length === 0 && stderr.length === 0) {
+    parts.push('\n(no output on stdout or stderr)');
   }
 
   return {

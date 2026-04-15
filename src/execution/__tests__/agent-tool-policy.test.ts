@@ -164,4 +164,17 @@ describe('allowlistPermits', () => {
     expect(allowlistPermits(policy, 'web_search')).toBe(false);
     expect(allowlistPermits(policy, 'request_browser')).toBe(false);
   });
+
+  it('permits run_bash when present in the allowlist', () => {
+    // Regression: the bash capability gate in task-capabilities.ts previously
+    // checked the string 'bash_execute' — a name that exists nowhere else —
+    // so allowlist-mode agents could never receive BASH_TOOL_DEFINITIONS
+    // even when they explicitly listed run_bash.
+    const policy = resolveAgentToolPolicy({
+      tools_mode: 'allowlist',
+      tools_enabled: ['run_bash', 'local_read_file'],
+    });
+    expect(allowlistPermits(policy, 'run_bash')).toBe(true);
+    expect(allowlistPermits(policy, 'bash_execute')).toBe(false);
+  });
 });

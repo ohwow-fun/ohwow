@@ -20,6 +20,34 @@ describe('hashToolCall', () => {
     const h2 = hashToolCall('read_file', { path: '/tmp/b.txt' });
     expect(h1).not.toBe(h2);
   });
+
+  it('is insensitive to input key order', () => {
+    // Regression: models emit tool inputs with variable key order — without
+    // normalization the stagnation detector could be shuffled around by
+    // alternating `{command, working_directory}` and `{working_directory,
+    // command}` on otherwise-identical calls.
+    const a = hashToolCall('run_bash', {
+      command: "sqlite3 runtime.db 'SELECT COUNT(*) FROM llm_calls;'",
+      working_directory: '/Users/jesus/.ohwow/workspaces/default',
+    });
+    const b = hashToolCall('run_bash', {
+      working_directory: '/Users/jesus/.ohwow/workspaces/default',
+      command: "sqlite3 runtime.db 'SELECT COUNT(*) FROM llm_calls;'",
+    });
+    expect(a).toBe(b);
+  });
+
+  it('normalizes nested object key order', () => {
+    const a = hashToolCall('t', { outer: { x: 1, y: 2 }, z: 3 });
+    const b = hashToolCall('t', { z: 3, outer: { y: 2, x: 1 } });
+    expect(a).toBe(b);
+  });
+
+  it('preserves array order (arrays are sequences, not sets)', () => {
+    const a = hashToolCall('t', { items: [1, 2, 3] });
+    const b = hashToolCall('t', { items: [3, 2, 1] });
+    expect(a).not.toBe(b);
+  });
 });
 
 describe('detectStagnation', () => {

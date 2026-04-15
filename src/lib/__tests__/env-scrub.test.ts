@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { scrubBashOutput } from '../env-scrub.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { scrubBashOutput, scrubEnvironment, scrubEnvironmentForGit } from '../env-scrub.js';
 
 describe('scrubBashOutput', () => {
   it('redacts Fly.io FlyV1 tokens', () => {
@@ -50,5 +50,44 @@ describe('scrubBashOutput', () => {
 
   it('handles empty input', () => {
     expect(scrubBashOutput('')).toBe('');
+  });
+});
+
+describe('scrubEnvironment', () => {
+  const originals: Record<string, string | undefined> = {};
+  const setVar = (key: string, value: string) => {
+    originals[key] = process.env[key];
+    process.env[key] = value;
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(originals)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    for (const key of Object.keys(originals)) delete originals[key];
+  });
+
+  it('strips OHWOW_* runtime internals from the child env', () => {
+    // Regression: pre-fix, an agent running `env | grep OHWOW` in run_bash
+    // could see the daemon's workspace path, DB path, port, and — for cloud
+    // workspaces — the license key. These are not API-key-shaped so the
+    // generic SECRET/TOKEN/KEY patterns didn't catch them.
+    setVar('OHWOW_WORKSPACE', 'default');
+    setVar('OHWOW_PORT', '7700');
+    setVar('OHWOW_LICENSE_KEY', 'lic_xxxxxxxxxxxxxxxxxxxx');
+    setVar('HOME_UNRELATED', 'keep-me');
+
+    const env = scrubEnvironment();
+    expect(env.OHWOW_WORKSPACE).toBeUndefined();
+    expect(env.OHWOW_PORT).toBeUndefined();
+    expect(env.OHWOW_LICENSE_KEY).toBeUndefined();
+    expect(env.HOME_UNRELATED).toBe('keep-me');
+  });
+
+  it('strips OHWOW_* in git mode too', () => {
+    setVar('OHWOW_WORKSPACE', 'default');
+    const env = scrubEnvironmentForGit();
+    expect(env.OHWOW_WORKSPACE).toBeUndefined();
   });
 });
