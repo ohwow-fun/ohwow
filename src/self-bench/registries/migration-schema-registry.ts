@@ -78,4 +78,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '064-oneiros.sql', expectedTables: ['sleep_state', 'dream_associations'] },
   { migrationFile: '078-doc-mounts.sql', expectedTables: ['doc_mounts', 'doc_mount_pages'] },
   { migrationFile: '065-immune-system.sql', expectedTables: ['threat_signatures', 'immune_memories', 'immune_incidents'] },
+  { migrationFile: '063-homeostasis.sql', expectedTables: ['homeostasis_set_points', 'allostasis_events'] },
 ];
