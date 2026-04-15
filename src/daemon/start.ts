@@ -90,6 +90,8 @@ import { MODEL_CATALOG } from '../lib/ollama-models.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
+import { BusinessVitalsScheduler } from '../scheduling/business-vitals-scheduler.js';
+import { LogTailWatcher } from '../scheduling/log-tail-watcher.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
@@ -1215,6 +1217,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
           logger.debug('[daemon] Wired homeostasis -> scheduler');
         }
 
+        // Wire burn-throttle: revenue_vs_burn pressure clamps model
+        // routing to local-only when business cost exceeds margin.
+        // See src/homeostasis/homeostasis-controller.ts getBurnThrottleLevel.
+        if (bpp.homeostasis) {
+          const controller = bpp.homeostasis;
+          modelRouter.setBurnThrottleProvider(() => controller.getBurnThrottleLevel());
+          logger.debug('[daemon] Wired burn-throttle -> model router');
+        }
+
         // Wire bios boundary check: defer schedules during off-hours
         try {
           const { inferBoundary, isBoundaryActive } = await import('../bios/boundary-guardian.js');
@@ -1844,6 +1855,19 @@ export async function startDaemon(): Promise<DaemonHandle> {
     // Connector sync scheduler: periodically syncs data source connectors
     connectorSyncScheduler = new ConnectorSyncScheduler(db, workspaceId, connectorRegistry, bus);
     connectorSyncScheduler.start();
+
+    // Heart: every 15 min, aggregate task costs + (optionally) Stripe
+    // MRR into business_vitals. Homeostasis reads the latest row to
+    // set revenue_vs_burn pressure. No Stripe key = cost-only rows.
+    const businessVitalsScheduler = new BusinessVitalsScheduler(db, workspaceId);
+    businessVitalsScheduler.start();
+
+    // Eyes reflex: every 5 min, tail provider logs named in
+    // OHWOW_LOG_TAIL_WATCH (supabase,vercel,fly,modal) and write a
+    // self_findings warning row when error_density exceeds threshold.
+    // Unset env = watcher runs but every tick is a no-op.
+    const logTailWatcher = new LogTailWatcher(db);
+    logTailWatcher.start();
   }
 
   // 12a2. Document processing worker (runs on all devices)
