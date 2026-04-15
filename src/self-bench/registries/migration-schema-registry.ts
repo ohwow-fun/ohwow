@@ -106,4 +106,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '013-voice-profile-settings.sql', expectedTables: ['runtime_settings'] },
   { migrationFile: '011-notification-preferences.sql', expectedTables: ['runtime_settings'] },
   { migrationFile: '007-deliverables.sql', expectedTables: ['agent_workforce_deliverables'] },
+  { migrationFile: '005-telegram.sql', expectedTables: ['telegram_connections', 'telegram_chat_messages'] },
 ];
