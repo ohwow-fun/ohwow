@@ -92,4 +92,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '046-state-changelog.sql', expectedTables: ['agent_workforce_state_changelog'] },
   { migrationFile: '044-multi-connection-fixes.sql', expectedTables: ['telegram_connections_new', 'connection_locks'] },
   { migrationFile: '045-task-state.sql', expectedTables: ['agent_workforce_task_state'] },
+  { migrationFile: '040-self-improvement-tables.sql', expectedTables: ['agent_workforce_routing_stats', 'agent_workforce_skills', 'agent_workforce_digital_twin_snapshots', 'agent_workforce_practice_sessions', 'agent_workforce_principles', 'agent_workforce_discovered_processes', 'agent_workforce_proactive_runs'] },
 ];
