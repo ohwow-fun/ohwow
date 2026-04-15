@@ -143,7 +143,7 @@ describe('PatchLoopHealthExperiment', () => {
     expect(exp.judge(result, [])).toBe('fail');
   });
 
-  it('returns warmup pass when runnerStartedAtMs is recent (<30min uptime)', async () => {
+  it('returns warmup warning when runnerStartedAtMs is recent (<30min uptime)', async () => {
     // Seed what would otherwise be a failing signal (2 patches, both
     // reverted → hold_rate=0). With warmup active, verdict must be pass
     // because the pre-restart state can't be distinguished from live.
@@ -167,7 +167,7 @@ describe('PatchLoopHealthExperiment', () => {
     expect(ev.reason).toBe('post_restart_warmup');
     expect(ev.patches_landed).toBe(0);
     expect(ev.hold_rate).toBeNull();
-    expect(exp.judge(result, [])).toBe('pass');
+    expect(exp.judge(result, [])).toBe('warning');
   });
 
   it('suppresses pool_delta when uptime < 48h', async () => {

@@ -873,13 +873,21 @@ function countAutonomousCommitsLast24h(repoRoot: string): number {
 
 function extractErrorSummary(err: unknown): string {
   if (err instanceof Error) {
-    // execSync errors often include stderr in a .stderr property
-    // (as Buffer). Capture up to 500 chars for the ledger.
-    const maybeStderr = (err as { stderr?: Buffer | string }).stderr;
-    if (maybeStderr) {
-      const s = typeof maybeStderr === 'string' ? maybeStderr : maybeStderr.toString('utf-8');
-      if (s.trim()) return s.slice(0, 500);
-    }
+    // execSync errors expose both stdout and stderr as Buffers. tsc
+    // writes diagnostics to stdout, not stderr, so checking only
+    // .stderr loses every typecheck error and the ledger reason
+    // collapses to "Command failed: npm run typecheck" — no signal
+    // for the LLM author to learn from. Prefer whichever stream has
+    // content, stdout first since that's where tsc lands.
+    const e = err as { stdout?: Buffer | string; stderr?: Buffer | string };
+    const pick = (b: Buffer | string | undefined): string => {
+      if (!b) return '';
+      return typeof b === 'string' ? b : b.toString('utf-8');
+    };
+    const out = pick(e.stdout).trim();
+    const errout = pick(e.stderr).trim();
+    const combined = [out, errout].filter((s) => s.length > 0).join('\n');
+    if (combined) return combined.slice(-500);
     return err.message.slice(0, 500);
   }
   return String(err).slice(0, 500);

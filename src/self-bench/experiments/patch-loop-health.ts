@@ -47,8 +47,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * Minimum post-restart window before hold_rate / pool_delta signals
  * are treated as real. Below this, the 24h lookback mixes pre-restart
  * state (stale probes, dead patch attempts) with live state and the
- * verdict oscillates nonsensically. Verdict=pass with reason=warmup
- * until we have at least this much live data.
+ * verdict oscillates nonsensically. Verdict=warning with reason=warmup
+ * until we have at least this much live data — warning signals
+ * "unmeasured" to consumers, which is distinguishable from "healthy".
  */
 const WARMUP_MS = 30 * 60 * 1000;
 
@@ -174,7 +175,11 @@ export class PatchLoopHealthExperiment implements Experiment {
   judge(result: ProbeResult, _history: Finding[]): Verdict {
     const ev = result.evidence as LoopHealthEvidence;
     if (ev.reason === 'no_repo_root') return 'pass';
-    if (ev.reason === 'post_restart_warmup') return 'pass';
+    // Warmup means "unmeasured", not "healthy". Report `warning` so
+    // consumers (strategist, dashboards, cold-prompt readers) can
+    // distinguish "loop is fine" from "I can't tell yet". Pass during
+    // warmup makes the organ silently invisible after every restart.
+    if (ev.reason === 'post_restart_warmup') return 'warning';
     if (ev.hold_rate === null) return 'pass'; // no patches in window
     if (ev.hold_rate < 0.5) return 'fail';
     if (ev.hold_rate < 0.8) return 'warning';
