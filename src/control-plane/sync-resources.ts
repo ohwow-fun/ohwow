@@ -73,6 +73,16 @@ export async function syncResource(
   payload: SyncPayload,
 ): Promise<void> {
   if (!ctx.controlPlane) return;
+  // Privacy gate: rows flagged never_sync=1 (e.g. X-sourced contacts
+  // containing public-profile PII we don't want mirrored to the cloud)
+  // must never ship upstream. This matches the route-level short-circuit
+  // in src/api/routes/contacts.ts and serves as belt-and-suspenders for
+  // any caller that bypasses the HTTP route (orchestrator tools,
+  // dispatchers, resync backfill).
+  if (payload.never_sync === 1 || payload.never_sync === true) {
+    logger.debug({ resource, action, id: payload.id }, '[sync-resources] skipped: never_sync');
+    return;
+  }
   try {
     const result = await ctx.controlPlane.reportResource(resource, action, payload);
     if (!result.ok) {

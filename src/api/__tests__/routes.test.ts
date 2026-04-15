@@ -398,6 +398,132 @@ describe('Contacts Routes', () => {
 
     expect(res._body).toEqual({ data: events });
   });
+
+  it('POST /api/contacts with never_sync=true skips upstream sync', async () => {
+    const reportResource = vi.fn().mockResolvedValue({ ok: true });
+    const controlPlane = { reportResource } as never;
+    db = mockDb({ agent_workforce_contacts: { data: { id: 'c-new', name: 'Alice', never_sync: 1 } } });
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never, controlPlane);
+
+    const handler = findHandler(router, 'post', '/api/contacts');
+    const req = makeReq({
+      body: {
+        name: 'Alice',
+        never_sync: true,
+        outreach_token: 'tok-xyz',
+        custom_fields: { x_handle: 'alice_x' },
+      },
+    });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(201);
+    expect(reportResource).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/contacts without never_sync fires upstream sync', async () => {
+    const reportResource = vi.fn().mockResolvedValue({ ok: true });
+    const controlPlane = { reportResource } as never;
+    db = mockDb({ agent_workforce_contacts: { data: { id: 'c-new', name: 'Bob', never_sync: 0 } } });
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never, controlPlane);
+
+    const handler = findHandler(router, 'post', '/api/contacts');
+    const req = makeReq({ body: { name: 'Bob' } });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(201);
+    expect(reportResource).toHaveBeenCalledTimes(1);
+    expect(reportResource).toHaveBeenCalledWith('contact', 'upsert', expect.objectContaining({ id: 'c-new' }));
+  });
+
+  it('GET /api/contacts with custom_field_key filters via json_extract', async () => {
+    db = mockDb({ agent_workforce_contacts: { data: [] } });
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
+
+    const chain = db.from('agent_workforce_contacts');
+    const eqSpy = vi.spyOn(chain, 'eq');
+    // The router will call db.from() again inside the handler — patch the
+    // spy there too by making db.from return the same chain on every call.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (db.from as any).mockImplementation(() => chain);
+
+    const handler = findHandler(router, 'get', '/api/contacts');
+    const req = makeReq({
+      query: { custom_field_key: 'x_handle', custom_field_value: 'alice_x' } as Record<string, string>,
+    });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    const eqCalls = eqSpy.mock.calls.map((c) => c[0]);
+    expect(eqCalls).toContain("json_extract(custom_fields, '$.x_handle')");
+  });
+
+  it('GET /api/contacts rejects malformed custom_field_key', async () => {
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
+    const handler = findHandler(router, 'get', '/api/contacts');
+    const req = makeReq({
+      query: { custom_field_key: "x'; drop", custom_field_value: 'v' } as Record<string, string>,
+    });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(400);
+  });
+
+  it('POST /api/contacts/:id/events rejects missing kind', async () => {
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
+    const handler = findHandler(router, 'post', '/api/contacts/:id/events');
+    const req = makeReq({ params: { id: 'c-1' } as Record<string, string>, body: {} });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(400);
+  });
+
+  it('POST /api/contacts/:id/events writes both 121 and 001 columns', async () => {
+    // Hand-rolled db: the shared mockDb fixture doesn't model the select→eq→
+    // maybeSingle + insert split cleanly for this route.
+    const insertSpy = vi.fn().mockResolvedValue({ data: null, error: null });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contactLookup: any = {};
+    contactLookup.select = () => contactLookup;
+    contactLookup.eq = () => contactLookup;
+    contactLookup.maybeSingle = () =>
+      Promise.resolve({ data: { id: 'c-1', workspace_id: 'ws-test' }, error: null });
+    const handDb = {
+      from: (table: string) => {
+        if (table === 'agent_workforce_contacts') return contactLookup;
+        if (table === 'agent_workforce_contact_events') return { insert: insertSpy };
+        throw new Error(`unexpected table: ${table}`);
+      },
+    };
+    router = createContactsRouter(handDb as unknown as DatabaseAdapter, eventBus as never);
+
+    const handler = findHandler(router, 'post', '/api/contacts/:id/events');
+    const req = makeReq({
+      params: { id: 'c-1' } as Record<string, string>,
+      body: { kind: 'x:qualified', source: 'x-authors-to-crm', payload: { score: 0.8 } },
+    });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(201);
+    expect(insertSpy).toHaveBeenCalledTimes(1);
+    const row = insertSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(row.kind).toBe('x:qualified');
+    expect(row.event_type).toBe('x:qualified');
+    expect(row.title).toBe('x:qualified');
+    expect(row.payload).toBe(JSON.stringify({ score: 0.8 }));
+    expect(row.metadata).toBe(JSON.stringify({ score: 0.8 }));
+    expect(row.source).toBe('x-authors-to-crm');
+  });
 });
 
 /* ── Settings Routes ─────────────────────────────────────────────── */
