@@ -128,6 +128,17 @@ export class PatchAuthorExperiment implements Experiment {
       const affected = extractAffectedFiles(row.evidence);
       const tier2Files = affected.filter((f) => resolvePathTier(f).tier === 'tier-2');
       if (tier2Files.length === 0) continue;
+      // Cheap extra filter: if the finding's evidence lists specific
+      // violation literals, require at least one of them to appear
+      // verbatim in one of the tier-2 source files. DOM-scraped
+      // findings often attribute runtime data (e.g. a person's role)
+      // to a page path; that data isn't in source, so a patch-author
+      // LLM call would waste a token budget refusing at the applier.
+      // When evidence has no literals to inspect, the gate stays
+      // permissive so every finding shape keeps working.
+      if (repoRoot && !evidenceLiteralsAppearInSource(repoRoot, tier2Files, row.evidence)) {
+        continue;
+      }
       candidates.push({
         findingId: row.id,
         experimentId: row.experiment_id,
@@ -412,6 +423,45 @@ export function listTier2Prefixes(): string[] {
   return getAllowedPrefixes().filter(
     (prefix) => resolvePathTier(prefix).tier === 'tier-2',
   );
+}
+
+/**
+ * Does at least one violation literal from `evidence.violations[]`
+ * appear verbatim in any of `tier2Files`? Returns true (permissive)
+ * when evidence has no violations array or no usable literal
+ * strings — other finding shapes keep flowing through unchanged.
+ * Short literals (<3 chars) are ignored so a stray single-character
+ * match like "—" on its own can't hide a real miss.
+ */
+export function evidenceLiteralsAppearInSource(
+  repoRoot: string,
+  tier2Files: readonly string[],
+  evidence: unknown,
+): boolean {
+  if (!evidence || typeof evidence !== 'object') return true;
+  const violations = (evidence as Record<string, unknown>).violations;
+  if (!Array.isArray(violations)) return true;
+  const literals: string[] = [];
+  for (const v of violations) {
+    if (!v || typeof v !== 'object') continue;
+    const lit = (v as Record<string, unknown>).literal;
+    const match = (v as Record<string, unknown>).match;
+    if (typeof lit === 'string' && lit.length >= 3) literals.push(lit);
+    else if (typeof match === 'string' && match.length >= 3) literals.push(match);
+  }
+  if (literals.length === 0) return true;
+  for (const file of tier2Files) {
+    let src: string;
+    try {
+      src = fs.readFileSync(path.join(repoRoot, file), 'utf-8');
+    } catch {
+      continue;
+    }
+    for (const lit of literals) {
+      if (src.includes(lit)) return true;
+    }
+  }
+  return false;
 }
 
 /** Pull a string[] out of evidence.affected_files; safe against missing/bad shapes. */

@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process';
 import {
   PatchAuthorExperiment,
   extractAffectedFiles,
+  evidenceLiteralsAppearInSource,
   listTier2Prefixes,
   collectFindingIdsAlreadyPatched,
   isPatchAuthorEnabled,
@@ -71,6 +72,55 @@ describe('listTier2Prefixes', () => {
     ];
     _setPathTierRegistryForTests(entries);
     expect(listTier2Prefixes().sort()).toEqual(['src/b/x.ts', 'src/d/y.ts']);
+  });
+});
+
+describe('evidenceLiteralsAppearInSource', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'evidence-literals-'));
+    fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'src/file.tsx'),
+      `const msg = "Observer — every action";\n`,
+    );
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('returns true when evidence has no violations array', () => {
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], {})).toBe(true);
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], null)).toBe(true);
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], { violations: 'x' })).toBe(true);
+  });
+
+  it('returns true when a violation literal is present verbatim in source', () => {
+    const ev = { violations: [{ literal: 'Observer — every action' }] };
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
+  });
+
+  it('returns false when all violation literals are absent from source', () => {
+    const ev = { violations: [{ literal: 'Chief of Staff — Mario Gonzalez' }] };
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(false);
+  });
+
+  it('falls back to match field when literal is missing', () => {
+    const ev = { violations: [{ match: 'every action' }] };
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
+  });
+
+  it('ignores violations whose literal/match is too short to be specific', () => {
+    const ev = { violations: [{ literal: '—' }] };
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
+  });
+
+  it('returns true if any listed file matches (OR across files)', () => {
+    fs.writeFileSync(path.join(tmp, 'src/other.tsx'), 'nothing relevant\n');
+    const ev = { violations: [{ literal: 'Observer — every action' }] };
+    expect(
+      evidenceLiteralsAppearInSource(tmp, ['src/other.tsx', 'src/file.tsx'], ev),
+    ).toBe(true);
   });
 });
 
