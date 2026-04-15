@@ -102,4 +102,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
   { migrationFile: '025-workspace-peers.sql', expectedTables: ['workspace_peers'] },
   { migrationFile: '022-knowledge-base.sql', expectedTables: ['agent_workforce_knowledge_documents', 'agent_workforce_knowledge_chunks', 'agent_workforce_knowledge_agent_config'] },
+  { migrationFile: '017-openclaw-call-logs.sql', expectedTables: ['openclaw_call_logs'] },
 ];
