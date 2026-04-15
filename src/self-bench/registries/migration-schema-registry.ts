@@ -107,4 +107,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '011-notification-preferences.sql', expectedTables: ['runtime_settings'] },
   { migrationFile: '007-deliverables.sql', expectedTables: ['agent_workforce_deliverables'] },
   { migrationFile: '005-telegram.sql', expectedTables: ['telegram_connections', 'telegram_chat_messages'] },
+  { migrationFile: '003-orchestrator-a2a.sql', expectedTables: ['a2a_connections', 'a2a_task_logs', 'agent_workforce_projects', 'agent_workforce_schedules', 'agent_workforce_workflows'] },
 ];
