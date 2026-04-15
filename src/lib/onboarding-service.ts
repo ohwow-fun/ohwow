@@ -238,6 +238,8 @@ export class OnboardingService {
       staleBranchPolicy: 'warn',
       staleBranchThreshold: 5,
       desktopToolsEnabled: false,
+      xIntelEnabled: false,
+      xIntelIntervalMinutes: 180,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

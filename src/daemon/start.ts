@@ -48,6 +48,8 @@ import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js
 import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
 import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
+import { BurnRateExperiment } from '../self-bench/experiments/burn-rate.js';
+import { ThroughputDailyExperiment } from '../self-bench/experiments/throughput-daily.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StrategistExperiment } from '../self-bench/experiments/strategist.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
@@ -97,6 +99,7 @@ import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { consolidateReflection } from '../oneiros/reflection-consolidator.js';
 import { runLlmCall } from '../execution/llm-organ.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
+import { XIntelScheduler } from '../scheduling/x-intel-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
@@ -1208,6 +1211,31 @@ export async function startDaemon(): Promise<DaemonHandle> {
       logger.warn(`[daemon] Scheduler failed: ${err instanceof Error ? err.message : err}`);
     });
 
+    // X intelligence scheduler: opt-in per workspace via xIntelEnabled.
+    // Shells out to scripts/x-experiments/x-intel.mjs on a cadence — the
+    // script itself handles browser attach, classification, synthesis, and
+    // knowledge upload through the approval queue. Decoupled child process
+    // so a pipeline bug cannot crash the daemon.
+    if (config.xIntelEnabled) {
+      // The daemon doesn't know where the ohwow source tree lives for
+      // arbitrary installs (the child needs to find scripts/x-experiments/
+      // x-intel.mjs). Prefer an env override; otherwise fall back to
+      // process.cwd() which is correct when launched from the repo root.
+      const repoRoot = process.env.OHWOW_REPO_ROOT || process.cwd();
+      const workspaceSlug = resolveActiveWorkspace().name;
+      const xIntel = new XIntelScheduler({
+        workspaceSlug,
+        dataDir,
+        repoRoot,
+        runOnBoot: false,
+      });
+      xIntel.start(config.xIntelIntervalMinutes * 60 * 1000);
+      logger.info(
+        { workspaceSlug, intervalMin: config.xIntelIntervalMinutes, repoRoot },
+        '[daemon] x-intel-scheduler started',
+      );
+    }
+
     // Wire schedule change notifications to orchestrator
     if (orchestrator) {
       orchestrator.setScheduleChangeCallback(() => scheduler?.notify());
@@ -1405,6 +1433,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // Phase 2: LedgerHealthExperiment watches the runner itself
         // — reads its own ledger to detect stalled or erroring peers.
         experimentRunner.register(new LedgerHealthExperiment());
+        // Always-on cost / throughput summaries. These surface the
+        // two numbers cold-prompt readers and the strategist ask for
+        // most often (burn and day-over-day shipping pace) into
+        // self_findings so they're one subject-scoped query away.
+        experimentRunner.register(new BurnRateExperiment());
+        experimentRunner.register(new ThroughputDailyExperiment());
         // Phase 2: StaleTaskCleanupExperiment is the first actionable
         // experiment — it sweeps zombie in_progress tasks every 5m,
         // marks them failed, and resets their agents to idle. The

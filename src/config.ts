@@ -172,6 +172,19 @@ export interface RuntimeConfig {
    * leaking cross-workspace data into the response. Opt-in only.
    */
   desktopToolsEnabled: boolean;
+  /**
+   * Opt-in for the X intelligence scheduler. When true, the daemon
+   * shells out to scripts/x-experiments/x-intel.mjs at the configured
+   * cadence — harvesting the ohwow Chrome profile's home feed, searches,
+   * and watched profiles; classifying into per-workspace buckets; and
+   * uploading daily briefs to the workspace knowledge store (with
+   * approval gating). Requires a per-workspace x-config.json at
+   * ~/.ohwow/workspaces/<ws>/x-config.json and debug Chrome logged into
+   * x.com on the configured chromeCdpPort. Default: false.
+   */
+  xIntelEnabled: boolean;
+  /** Cadence for XIntelScheduler in minutes. Default: 180 (every 3h). */
+  xIntelIntervalMinutes: number;
 }
 
 interface ConfigFile {
@@ -221,6 +234,8 @@ interface ConfigFile {
   workspaceGroup?: string;
   mcpServers?: McpServerConfig[];
   mcpServerEnabled?: boolean;
+  xIntelEnabled?: boolean;
+  xIntelIntervalMinutes?: number;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
   llamaCppUrl?: string;
@@ -438,6 +453,10 @@ export interface WorkspaceConfig {
    * See RuntimeConfig.desktopToolsEnabled for the security rationale.
    */
   desktopToolsEnabled?: boolean;
+  /** Per-workspace override: enable the X intelligence scheduler. */
+  xIntelEnabled?: boolean;
+  /** Per-workspace override: cadence in minutes for the X intelligence scheduler. */
+  xIntelIntervalMinutes?: number;
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -554,6 +573,16 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   // it globally, or vice-versa.
   if (typeof ws.desktopToolsEnabled === 'boolean') {
     next.desktopToolsEnabled = ws.desktopToolsEnabled;
+  }
+  // Per-workspace X intelligence scheduler overrides. Each workspace can
+  // opt in independently — e.g. enable intel on your GTM workspace while
+  // keeping it off on an ops workspace. Interval defaults to 180min via
+  // loadConfig when the override is omitted.
+  if (typeof ws.xIntelEnabled === 'boolean') {
+    next.xIntelEnabled = ws.xIntelEnabled;
+  }
+  if (typeof ws.xIntelIntervalMinutes === 'number' && ws.xIntelIntervalMinutes > 0) {
+    next.xIntelIntervalMinutes = ws.xIntelIntervalMinutes;
   }
   return next;
 }
@@ -705,6 +734,8 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     workspaceGroup: process.env.OHWOW_WORKSPACE_GROUP || fileConfig.workspaceGroup || 'default',
     mcpServers: fileConfig.mcpServers ?? [],
     mcpServerEnabled: fileConfig.mcpServerEnabled ?? false,
+    xIntelEnabled: process.env.OHWOW_X_INTEL_ENABLED === 'true' || fileConfig.xIntelEnabled === true,
+    xIntelIntervalMinutes: parseInt(process.env.OHWOW_X_INTEL_INTERVAL_MIN || '', 10) || fileConfig.xIntelIntervalMinutes || 180,
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',
