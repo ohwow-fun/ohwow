@@ -204,7 +204,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (47 total)
+### Active Experiments (48 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -253,12 +253,12 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 45. xiaomi-mimo-v2-flash-latency
 46. xiaomi-mimo-v2-pro-latency
 47. roadmap-observer (proposed, Layer B)
+48. burn-rate
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-### Missing Experiments (8)
+### Missing Experiments (7)
 The following experiment files are not yet listed in the Active Experiments section above:
-- burn-rate
 - intervention-audit
 - strategist
 - subprocess-smoke-1776294162273
