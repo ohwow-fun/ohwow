@@ -72,4 +72,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '073-knowledge-graph.sql', expectedTables: ['knowledge_graph_entities', 'knowledge_graph_edges'] },
   { migrationFile: '070-connectors.sql', expectedTables: ['data_source_connectors'] },
   { migrationFile: '069-rag-corpus-stats.sql', expectedTables: ['rag_corpus_stats'] },
+  { migrationFile: '068-hexis.sql', expectedTables: ['habits', 'habit_executions'] },
 ];
