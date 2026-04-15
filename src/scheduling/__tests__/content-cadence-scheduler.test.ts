@@ -171,23 +171,16 @@ describe('ContentCadenceScheduler — integration', () => {
   it('respects the daily budget — no dispatch when postsToday >= postsPerDay', async () => {
     seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
 
-    // Pre-seed today's post task so countXPostsAfter sees it.
+    // Pre-seed a delivered X deliverable so countXPostsAfter sees it.
     const todayStart = new Date();
     todayStart.setHours(8, 0, 0, 0);
     env.rawDb
       .prepare(
-        `INSERT INTO agent_workforce_tasks
-          (id, workspace_id, agent_id, title, status, completed_at, metadata)
-         VALUES (?, ?, ?, ?, 'completed', ?, ?)`,
+        `INSERT INTO agent_workforce_deliverables
+          (id, workspace_id, agent_id, deliverable_type, title, content, status, provider, delivered_at)
+         VALUES (?, ?, ?, 'post', 'earlier post', 'content', 'delivered', 'x', ?)`,
       )
-      .run(
-        'task-already-posted',
-        WORKSPACE_ID,
-        'a-1',
-        'earlier post',
-        todayStart.toISOString(),
-        JSON.stringify({ posted_via: 'x_compose_tweet' }),
-      );
+      .run('del-already-posted', WORKSPACE_ID, 'a-1', todayStart.toISOString());
 
     // Default knob is 1/day. With 1 post already today, no dispatch.
     await makeScheduler(env).tick();
@@ -202,23 +195,16 @@ describe('ContentCadenceScheduler — integration', () => {
   it('dispatches when knob raises postsPerDay above postsToday', async () => {
     seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
 
-    // Already 1 post today, but tuner widened the knob to 2.
+    // Already 1 post today (via deliverable), but tuner widened the knob to 2.
     const earlier = new Date();
     earlier.setHours(8, 0, 0, 0);
     env.rawDb
       .prepare(
-        `INSERT INTO agent_workforce_tasks
-          (id, workspace_id, agent_id, title, status, completed_at, metadata)
-         VALUES (?, ?, ?, ?, 'completed', ?, ?)`,
+        `INSERT INTO agent_workforce_deliverables
+          (id, workspace_id, agent_id, deliverable_type, title, content, status, provider, delivered_at)
+         VALUES (?, ?, ?, 'post', 'first post', 'content', 'delivered', 'x', ?)`,
       )
-      .run(
-        'task-1',
-        WORKSPACE_ID,
-        'a-1',
-        'first post',
-        earlier.toISOString(),
-        JSON.stringify({ posted_via: 'x_compose_tweet' }),
-      );
+      .run('del-1', WORKSPACE_ID, 'a-1', earlier.toISOString());
     await setRuntimeConfig(env.db, CONTENT_CADENCE_CONFIG_KEY, 2);
 
     await makeScheduler(env).tick();
@@ -229,40 +215,26 @@ describe('ContentCadenceScheduler — integration', () => {
   it('updates goal.current_value from the trailing-7d post count', async () => {
     seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
 
-    // Three posts within the last 7 days.
+    // Three delivered X deliverables within the last 7 days.
     const now = Date.now();
     for (let i = 0; i < 3; i++) {
-      const endedAt = new Date(now - (i + 1) * 24 * 60 * 60 * 1000).toISOString();
+      const deliveredAt = new Date(now - (i + 1) * 24 * 60 * 60 * 1000).toISOString();
       env.rawDb
         .prepare(
-          `INSERT INTO agent_workforce_tasks
-            (id, workspace_id, agent_id, title, status, completed_at, metadata)
-           VALUES (?, ?, ?, ?, 'completed', ?, ?)`,
+          `INSERT INTO agent_workforce_deliverables
+            (id, workspace_id, agent_id, deliverable_type, title, content, status, provider, delivered_at)
+           VALUES (?, ?, ?, 'post', ?, 'content', 'delivered', 'x', ?)`,
         )
-        .run(
-          `wk-${i}`,
-          WORKSPACE_ID,
-          'a-1',
-          `post ${i}`,
-          endedAt,
-          JSON.stringify({ posted_via: 'x_compose_tweet' }),
-        );
+        .run(`del-wk-${i}`, WORKSPACE_ID, 'a-1', `post ${i}`, deliveredAt);
     }
     // One older than 7d — should NOT be counted.
     env.rawDb
       .prepare(
-        `INSERT INTO agent_workforce_tasks
-          (id, workspace_id, agent_id, title, status, completed_at, metadata)
-         VALUES (?, ?, ?, ?, 'completed', ?, ?)`,
+        `INSERT INTO agent_workforce_deliverables
+          (id, workspace_id, agent_id, deliverable_type, title, content, status, provider, delivered_at)
+         VALUES (?, ?, ?, 'post', 'old', 'content', 'delivered', 'x', ?)`,
       )
-      .run(
-        'old-post',
-        WORKSPACE_ID,
-        'a-1',
-        'old',
-        new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
-        JSON.stringify({ posted_via: 'x_compose_tweet' }),
-      );
+      .run('del-old', WORKSPACE_ID, 'a-1', new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString());
 
     await makeScheduler(env).tick();
 
