@@ -67,4 +67,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '081-sequential-sequences.sql', expectedTables: ['agent_workforce_sequence_runs'] },
   { migrationFile: '076-conversation-persistence.sql', expectedTables: ['orchestrator_conversations', 'orchestrator_messages'] },
   { migrationFile: '077-device-pinned-data.sql', expectedTables: ['device_data_manifest', 'data_fetch_approvals'] },
+  { migrationFile: '075-bpp-wiring.sql', expectedTables: ['soul_snapshots', 'homeostasis_action_log', 'immune_state_transitions'] },
 ];
