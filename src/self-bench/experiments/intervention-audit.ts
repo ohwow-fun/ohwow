@@ -86,6 +86,14 @@ export class InterventionAuditExperiment implements Experiment {
   readonly hypothesis =
     'Every experiment that intervenes should hold more often than it fails; a persistent low hold rate means the intervention is cosmetic — it writes a finding but does not change the probed state.';
   readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: true };
+  // Opt out of suffix-based burn-down detection. performative_count
+  // and unmeasurable_count are this audit's own readings of the
+  // ledger, not pools its intervene() drains. Treating them as
+  // burn-down made every flat audit run resolve to 'failed' against
+  // itself — a self-referential false positive. With burn-down
+  // disabled, flat-verdict auto-followups route through the
+  // inconclusive branch (experiment-runner.ts:231) as intended.
+  readonly burnDownKeys: string[] = [];
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const since = new Date(Date.now() - WINDOW_MS).toISOString();

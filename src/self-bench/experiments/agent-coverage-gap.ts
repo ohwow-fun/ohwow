@@ -104,6 +104,14 @@ export class AgentCoverageGapExperiment implements Experiment {
   hypothesis =
     'Every agent in the workspace has recent task activity OR an idle status, and any agent with enough recent tasks has a failed-task ratio below 50%.';
   cadence = { everyMs: 60 * 60 * 1000, runOnBoot: false };
+  // Opt out of suffix-based burn-down detection. concerning_count,
+  // stale_count, and high_fail_rate_count are point-in-time
+  // observations of workspace shape, not pools this experiment is
+  // draining. Treating them as burn-down forced every flat-verdict
+  // auto-followup to come back as 'failed'. With burn-down disabled,
+  // those flat-verdict cases route through the inconclusive branch in
+  // autoFollowupValidate (experiment-runner.ts:231) instead.
+  burnDownKeys: string[] = [];
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const now = Date.now();

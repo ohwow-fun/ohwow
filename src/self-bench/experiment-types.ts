@@ -305,6 +305,26 @@ export interface Experiment {
     baseline: Record<string, unknown>,
     ctx: ExperimentContext,
   ): Promise<InterventionApplied | null>;
+  /**
+   * Opt-in list of evidence keys the auto-followup validator should
+   * treat as burn-down scalars (a decrease across the intervention is
+   * read as "held"). When defined, replaces the runner's default
+   * suffix-based heuristic (`_count`, `_pool`, `_backlog`, etc.) for
+   * this experiment only.
+   *
+   * Pass an empty array to opt OUT entirely — the validator will treat
+   * the experiment as having no measurable burn-down signal, so a flat
+   * verdict resolves to `inconclusive` instead of `failed`. Use this
+   * for experiments whose evidence happens to end in a burn-down
+   * suffix but is actually a fluctuating observation (e.g.
+   * agent-coverage-gap's `concerning_count`, intervention-audit's
+   * `performative_count`) rather than a draining pool.
+   *
+   * Pass an explicit list (e.g. `['unclaimed_count']`) to declare
+   * exactly which keys mean burn-down for this experiment, ignoring
+   * any other suffix-matching keys in the same evidence blob.
+   */
+  burnDownKeys?: string[];
 }
 
 /**

@@ -144,10 +144,20 @@ function isBurnDownKey(key: string): boolean {
   return BURN_DOWN_KEY_SUFFIXES.some((suf) => key.endsWith(suf));
 }
 
-function collectBurnDownScalars(ev: Record<string, unknown>): Map<string, number> {
+function collectBurnDownScalars(
+  ev: Record<string, unknown>,
+  allowedKeys?: readonly string[],
+): Map<string, number> {
   const out = new Map<string, number>();
+  // Opt-in list: empty array means "no burn-down keys for this
+  // experiment" (forces inconclusive when verdict is flat). A non-empty
+  // list means "only these exact keys count as burn-down." When
+  // undefined, fall back to suffix-based heuristic for back-compat.
+  const matches = allowedKeys
+    ? (k: string): boolean => allowedKeys.includes(k)
+    : isBurnDownKey;
   for (const [k, v] of Object.entries(ev)) {
-    if (typeof v === 'number' && Number.isFinite(v) && isBurnDownKey(k)) {
+    if (typeof v === 'number' && Number.isFinite(v) && matches(k)) {
       out.set(k, v);
     }
   }
@@ -205,9 +215,10 @@ async function autoFollowupValidate(
   const preSeverity = VERDICT_SEVERITY[preVerdict];
   const newSeverity = VERDICT_SEVERITY[newVerdict];
 
-  const preScalars = collectBurnDownScalars(preEvidence);
+  const preScalars = collectBurnDownScalars(preEvidence, exp.burnDownKeys);
   const postScalars = collectBurnDownScalars(
     probeResult.evidence as Record<string, unknown>,
+    exp.burnDownKeys,
   );
   const improvements: Array<{ key: string; from: number; to: number }> = [];
   for (const [k, before] of preScalars) {

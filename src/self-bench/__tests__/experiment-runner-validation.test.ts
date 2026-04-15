@@ -101,6 +101,7 @@ function makeExperiment(opts: {
     baseline: Record<string, unknown>,
     ctx: ExperimentContext,
   ) => Promise<ValidationResult>;
+  burnDownKeys?: string[];
 }): Experiment {
   return {
     id: opts.id,
@@ -112,6 +113,7 @@ function makeExperiment(opts: {
     judge: opts.judge,
     intervene: opts.intervene,
     validate: opts.validate,
+    burnDownKeys: opts.burnDownKeys,
   };
 }
 
@@ -478,6 +480,7 @@ describe('ExperimentRunner — autoFollowupValidate outcomes', () => {
   async function runAutoFollowupWith(opts: {
     probeResults: ProbeResult[];
     verdicts: Verdict[];
+    burnDownKeys?: string[];
   }): Promise<Record<string, unknown>> {
     const runner = buildRunner();
     let probeCall = 0;
@@ -489,6 +492,7 @@ describe('ExperimentRunner — autoFollowupValidate outcomes', () => {
       probe: async () => pick(opts.probeResults, probeCall++),
       judge: () => pick(opts.verdicts, judgeCall++),
       intervene: async () => ({ description: 'did it', details: {} }),
+      burnDownKeys: opts.burnDownKeys,
       // no validate → falls back to autoFollowupValidate
     });
     runner.register(exp);
@@ -542,5 +546,29 @@ describe('ExperimentRunner — autoFollowupValidate outcomes', () => {
       verdicts: ['warning', 'fail'],
     });
     expect(v.outcome).toBe('failed');
+  });
+
+  it('burnDownKeys=[] suppresses suffix detection → flat verdict resolves inconclusive even when _count keys are present', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: { concerning_count: 3 } },
+        { summary: 'p2', evidence: { concerning_count: 3 } },
+      ],
+      verdicts: ['warning', 'warning'],
+      burnDownKeys: [],
+    });
+    expect(v.outcome).toBe('inconclusive');
+  });
+
+  it('burnDownKeys=["claimed_pool"] honors explicit list, ignoring other suffix-matching keys', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: { claimed_pool: 5, noise_count: 99 } },
+        { summary: 'p2', evidence: { claimed_pool: 4, noise_count: 12 } },
+      ],
+      verdicts: ['warning', 'warning'],
+      burnDownKeys: ['claimed_pool'],
+    });
+    expect(v.outcome).toBe('held');
   });
 });
