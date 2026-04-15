@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+macOS launchd plist template for the x-intel pipeline.
+Copy to ~/Library/LaunchAgents/com.ohwow.x-intel.plist, edit the ABSOLUTE
+paths for your machine, then:
+
+  launchctl load  ~/Library/LaunchAgents/com.ohwow.x-intel.plist
+  launchctl start com.ohwow.x-intel     # fire once now
+  launchctl list | grep x-intel         # verify
+  launchctl unload ~/Library/LaunchAgents/com.ohwow.x-intel.plist
+
+StartInterval is in seconds. 10800 = every 3 hours. StandardOutPath/
+StandardErrorPath capture one line per run — tail those when tuning.
+
+Notes:
+- Requires debug Chrome already running on :9222 with the profile logged
+  into x.com. Otherwise every fire is a no-op. Use a separate launchd
+  agent to auto-start debug Chrome on login if you want hands-off ops.
+- Set OHWOW_WORKSPACE to pin the job to a specific workspace. Without it,
+  the script reads ~/.ohwow/current-workspace — which can shift if you
+  use the TUI's `workspace use` command.
+- EnvironmentVariables PATH must include whatever node installation
+  provides `npx`. The value below assumes Homebrew on Apple Silicon.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ohwow.x-intel</string>
+
+  <key>WorkingDirectory</key>
+  <string>/ABSOLUTE/PATH/TO/ohwow</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/npx</string>
+    <string>tsx</string>
+    <string>scripts/x-experiments/x-intel.mjs</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>OHWOW_WORKSPACE</key>
+    <string>default</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>10800</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/x-intel.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/x-intel.err.log</string>
+</dict>
+</plist>
