@@ -178,7 +178,7 @@ function QuickStatsRow({ agents, stats }: { agents: Agent[] | null; stats: Syste
             : successRate >= 50 ? 'text-warning'
             : 'text-critical'
         }`}>
-          {successRate === null ? '—' : `${successRate}%`}
+          {successRate === null ? '. ' : `${successRate}%`}
         </p>
       </div>
     </div>
