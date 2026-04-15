@@ -77,6 +77,7 @@ import { runInvariantsForPaths } from './patch-invariants.js';
 import { diffTopLevelSymbols, changedSymbolCount } from './patch-ast-bounds.js';
 import { verifyOnlyStringLiteralsChanged } from './patch-string-literal-bounds.js';
 import { resolvePathTier, resolvePatchMode, getAllowedPrefixes } from './path-trust-tiers.js';
+import { scanSelfCommitInputs, summarizeHits } from '../lib/secret-patterns.js';
 import {
   checkRoadmapShape,
   ROADMAP_FILES,
@@ -681,6 +682,34 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
         reason: `roadmap shape gate: ${shapeViolations.length} violation(s); first: ${first.rule} in ${first.file} — ${first.detail}`,
       };
     }
+  }
+
+  // 4d. Content gate — deterministic secret + personal-data scan over
+  //     every file byte we're about to write AND over the commit message
+  //     itself. The shell pre-commit hook the repo uses covers human
+  //     commits; this runs inside the autonomous path where no shell is
+  //     in the loop. The LLM that authored this patch gets NO override:
+  //     the OHWOW_ALLOW_PERSONAL_DATA env bypass is scoped to the shell
+  //     hook and has no effect here — a false positive should surface
+  //     as an operator review, not a silent pass. Landed after the AST
+  //     and roadmap-shape gates (so we've already established the
+  //     structural shape is valid) and before the audit log (so refused
+  //     rows don't pollute the trail).
+  const contentHits = scanSelfCommitInputs(opts.files, opts.commitMessage);
+  if (contentHits.length > 0) {
+    rollbackFiles(absPaths, preWriteSnapshots, opts.files);
+    logger.warn(
+      {
+        experimentId: opts.experimentId,
+        files: opts.files.map((f) => f.path),
+        hits: contentHits.slice(0, 10).map((h) => ({ kind: h.kind, source: h.source, line: h.line })),
+      },
+      '[self-commit] content gate refused autonomous commit',
+    );
+    return {
+      ok: false,
+      reason: `content gate: ${summarizeHits(contentHits)}`,
+    };
   }
 
   // 5. Pre-commit audit log. Fail-closed on write error — no

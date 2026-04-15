@@ -209,6 +209,55 @@ describe('safeSelfCommit — new-file-only', () => {
   });
 });
 
+describe('safeSelfCommit — content gate', () => {
+  it('refuses when a file being written contains a personal email', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/experiments/leaky.ts',
+        content: 'export const contact = "real@gmail.com";\n',
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('content gate');
+    expect(result.reason).toMatch(/personal-email/);
+    // Nothing should be written to disk.
+    expect(fs.existsSync(path.join(tempRoot, 'src/self-bench/experiments/leaky.ts'))).toBe(false);
+  });
+
+  it('refuses when a commit message contains a personal email in the body', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      commitMessage: 'feat(self-bench): auto-author placeholder\n\nExample lookup: real@gmail.com',
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('content gate');
+    expect(result.reason).toContain('commit-message');
+  });
+
+  it('refuses when a file contains a credential-shaped token', async () => {
+    const token = 'ghp_' + 'Z'.repeat(40);
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/experiments/leaky-token.ts',
+        content: `export const t = "${token}";\n`,
+      }],
+    }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('content gate');
+    expect(result.reason).toMatch(/github-token/);
+  });
+
+  it('passes clean content with placeholder examples', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'src/self-bench/experiments/clean.ts',
+        content: 'export const contact = "alice@example.com";\n',
+      }],
+      commitMessage: 'feat(self-bench): auto-author clean example\n\nSample: carol@acme.test',
+    }));
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('safeSelfCommit — happy path', () => {
   it('writes files, stages, commits, and returns sha', async () => {
     const beforeSha = currentSha(tempRoot);
