@@ -317,6 +317,17 @@ export class PatchAuthorExperiment implements Experiment {
       promptBody += `\n\n<context name="autonomy-goal">\n${redacted}\n</context>`;
     }
 
+    // Inject recent "what failed" observations from the hippocampus
+    // consolidator. These are the patterns the reflection pass flagged
+    // over the last 24h — seeding the LLM with them nudges it toward
+    // fixes that address repeated failures, not just this one finding.
+    // Run through the same prompt redactor so no real identifier leaks.
+    const rawReflectionCtx = await loadReflectionContext(ctx.db, ctx.workspaceId);
+    if (rawReflectionCtx) {
+      const { redacted } = redactForPrompt(rawReflectionCtx);
+      promptBody += `\n\n<context name="recent-reflections">\n${redacted}\n</context>`;
+    }
+
     const sys =
       patchMode === 'string-literal'
         ? buildStringLiteralSystemPrompt(targetPath, violationsForFile.length)
@@ -692,6 +703,44 @@ function loadRoadmapContext(repoRoot: string): string | null {
   }
   if (sections.length === 0) return null;
   return sections.join('\n\n');
+}
+
+/**
+ * Load up to 5 recent reflection observations (affect='failed' or
+ * 'repeated') from affective_memories, formatted as a compact bullet
+ * list. Returns null when the table has no reflection rows. Safe
+ * against a missing table or query failure — the patch-author path
+ * must keep working when the hippocampus hasn't run yet.
+ */
+export async function loadReflectionContext(
+  db: { from: (table: string) => unknown },
+  workspaceId: string,
+): Promise<string | null> {
+  try {
+    const chain = db.from('affective_memories') as {
+      select: (cols: string) => {
+        eq: (col: string, val: unknown) => {
+          in: (col: string, vals: unknown[]) => {
+            order: (col: string, opts: { ascending: boolean }) => {
+              limit: (n: number) => Promise<{ data: Array<{ affect: string; content: string }> | null }>;
+            };
+          };
+        };
+      };
+    };
+    const result = await chain
+      .select('affect, content')
+      .eq('workspace_id', workspaceId)
+      .in('affect', ['failed', 'repeated'])
+      .order('created_at', { ascending: false })
+      .limit(5);
+    const rows = result.data ?? [];
+    if (rows.length === 0) return null;
+    const lines = rows.map((r) => `- [${r.affect}] ${r.content}`);
+    return `Recent reflections from the hippocampus consolidator (last 24h):\n${lines.join('\n')}`;
+  } catch {
+    return null;
+  }
 }
 
 /** Pull a string[] out of evidence.affected_files; safe against missing/bad shapes. */
