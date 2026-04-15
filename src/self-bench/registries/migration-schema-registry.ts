@@ -95,4 +95,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '040-self-improvement-tables.sql', expectedTables: ['agent_workforce_routing_stats', 'agent_workforce_skills', 'agent_workforce_digital_twin_snapshots', 'agent_workforce_practice_sessions', 'agent_workforce_principles', 'agent_workforce_discovered_processes', 'agent_workforce_proactive_runs'] },
   { migrationFile: '032-nudge-type-update.sql', expectedTables: ['agent_workforce_nudges_new'] },
   { migrationFile: '033-template-bundles.sql', expectedTables: ['template_bundles', 'template_installs'] },
+  { migrationFile: '035-anomaly-alerts.sql', expectedTables: ['agent_workforce_anomaly_alerts'] },
 ];
