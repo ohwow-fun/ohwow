@@ -230,13 +230,15 @@ async function countViolationPool(
   ];
 
   try {
-    // Fetch findings for the 48h window in one query.
+    // Fetch findings for the 48h window newest-first so the 5000-row cap
+    // keeps the most recent data rather than the oldest.
     const { data } = await ctx.db
       .from<{ id: string; verdict: string; ran_at: string; evidence: unknown }>(
         'self_findings',
       )
       .select('id, verdict, ran_at, evidence')
       .gte('ran_at', yesterdayStart)
+      .order('ran_at', { ascending: false })
       .limit(5000);
 
     const rows = (data ?? []) as Array<{

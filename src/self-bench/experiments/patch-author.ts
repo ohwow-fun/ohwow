@@ -394,10 +394,17 @@ export class PatchAuthorExperiment implements Experiment {
   ): Promise<FindingRow[]> {
     const since = new Date(Date.now() - FINDING_LOOKBACK_MS).toISOString();
     try {
+      // Order newest-first so the 2000-row limit keeps the most actionable
+      // recent findings rather than the oldest ones. Without this, once the
+      // table exceeds 2000 rows in the 7-day window (which happens quickly at
+      // 5-min probe cadences), the query returns stale findings from 7 days
+      // ago and the patch-author sees "0 candidates" even when live violations
+      // exist.
       const { data } = await ctx.db
         .from<FindingRow>('self_findings')
         .select('id, experiment_id, subject, verdict, ran_at, evidence')
         .gte('ran_at', since)
+        .order('ran_at', { ascending: false })
         .limit(2000);
       return (data ?? []) as FindingRow[];
     } catch {

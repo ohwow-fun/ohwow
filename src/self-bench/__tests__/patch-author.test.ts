@@ -12,6 +12,7 @@ import {
   collectFindingIdsAlreadyPatched,
   isPatchAuthorEnabled,
   stripCodeFences,
+  _setPatchAuthorKillSwitchPathForTests,
   type PatchCandidate,
 } from '../experiments/patch-author.js';
 import {
@@ -30,20 +31,25 @@ interface FakeRow {
 }
 
 function fakeCtx(rows: FakeRow[]): ExperimentContext {
+  // Chainable stub: every method except limit() returns `this` so new
+  // query builder methods (e.g. .order()) don't break the chain.
+  const terminal = async () => ({ data: rows, error: null });
+  const chain: Record<string, unknown> = {};
+  const handler: ProxyHandler<object> = {
+    get(_t, prop) {
+      if (prop === 'limit') return terminal;
+      return () => new Proxy({}, handler);
+    },
+  };
   return {
     db: {
-      from: () => ({
-        select: () => ({
-          gte: () => ({
-            limit: async () => ({ data: rows, error: null }),
-          }),
-        }),
-      }),
+      from: () => new Proxy({}, handler),
     } as unknown as ExperimentContext['db'],
     workspaceId: 'test',
     engine: {} as ExperimentContext['engine'],
     recentFindings: async () => [],
   };
+  void chain; // suppress unused-var lint
 }
 
 describe('extractAffectedFiles', () => {
@@ -233,24 +239,31 @@ describe('stripCodeFences', () => {
 });
 
 describe('isPatchAuthorEnabled', () => {
-  it('returns false when neither file nor env bypass is set', () => {
-    const prior = process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
-    delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+  afterEach(() => _setPatchAuthorKillSwitchPathForTests(null));
+
+  it('returns true by default (opt-out model — no disabled file)', () => {
+    // Point the disabled-file path to a file that does NOT exist.
+    _setPatchAuthorKillSwitchPathForTests('/tmp/patch-author-disabled-does-not-exist-' + Math.random());
+    expect(isPatchAuthorEnabled()).toBe(true);
+  });
+
+  it('returns false when the disabled file exists', () => {
+    const disabledFile = path.join(os.tmpdir(), `patch-author-disabled-${Date.now()}`);
+    fs.writeFileSync(disabledFile, '');
+    _setPatchAuthorKillSwitchPathForTests(disabledFile);
     try {
       expect(isPatchAuthorEnabled()).toBe(false);
     } finally {
-      if (prior !== undefined) process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = prior;
+      try { fs.unlinkSync(disabledFile); } catch { /* ignore */ }
     }
   });
 
-  it('returns true when the env bypass is set to 1', () => {
-    const prior = process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
-    process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = '1';
+  it('returns false when OHWOW_PATCH_AUTHOR_TEST_DENY=1', () => {
+    process.env.OHWOW_PATCH_AUTHOR_TEST_DENY = '1';
     try {
-      expect(isPatchAuthorEnabled()).toBe(true);
+      expect(isPatchAuthorEnabled()).toBe(false);
     } finally {
-      if (prior === undefined) delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
-      else process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW = prior;
+      delete process.env.OHWOW_PATCH_AUTHOR_TEST_DENY;
     }
   });
 });
@@ -258,7 +271,7 @@ describe('isPatchAuthorEnabled', () => {
 describe('PatchAuthorExperiment.intervene', () => {
   afterEach(() => {
     _setPathTierRegistryForTests(null);
-    delete process.env.OHWOW_PATCH_AUTHOR_TEST_ALLOW;
+    _setPatchAuthorKillSwitchPathForTests(null);
   });
 
   it('returns null when verdict is pass', async () => {
@@ -271,7 +284,11 @@ describe('PatchAuthorExperiment.intervene', () => {
     expect(r).toBeNull();
   });
 
-  it('returns observe-only when the kill switch is closed', async () => {
+  it('returns observe-only when the kill switch is closed (disabled file exists)', async () => {
+    // Simulate kill switch closed by pointing disabled-file path at an existing file.
+    const disabledFile = path.join(os.tmpdir(), `patch-author-disabled-test-${Date.now()}`);
+    fs.writeFileSync(disabledFile, '');
+    _setPatchAuthorKillSwitchPathForTests(disabledFile);
     _setPathTierRegistryForTests([
       { prefix: 'src/lib/format-duration.ts', tier: 'tier-2', rationale: 't' },
     ]);
@@ -299,6 +316,7 @@ describe('PatchAuthorExperiment.intervene', () => {
     );
     expect(r?.description).toContain('observe-only');
     expect((r?.details as { mode?: string })?.mode).toBe('observe-only');
+    try { fs.unlinkSync(disabledFile); } catch { /* ignore */ }
   });
 });
 
