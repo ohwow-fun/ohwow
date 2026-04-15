@@ -64,14 +64,39 @@ export interface ExperimentBrief {
    *   Phase 7-B: 'model_latency_probe'
    *   Phase 7-C Rule 2: 'migration_schema_probe'
    *   Phase 7-C Rule 3+4: 'subprocess_health_probe'
+   *   Phase 7-C Rule 5: 'llm_authored_probe' — the author writes the
+   *     whole .ts file via LLM rather than slot-filling a skeleton.
    */
-  template: 'model_latency_probe' | 'migration_schema_probe' | 'subprocess_health_probe';
+  template:
+    | 'model_latency_probe'
+    | 'migration_schema_probe'
+    | 'subprocess_health_probe'
+    | 'llm_authored_probe';
   /** Template-specific parameters. Shape depends on `template`. */
   params:
     | ModelLatencyProbeParams
     | MigrationSchemaProbeParams
     | SubprocessHealthProbeParams
+    | LlmAuthoredProbeParams
     | Record<string, unknown>;
+}
+
+/**
+ * Parameters for the llm_authored_probe template. Unlike the other
+ * templates, the filler here does NOT slot values into a rigid
+ * skeleton — the LLM drafts the whole source + test file in
+ * ExperimentAuthor. The brief's job is to describe WHAT should be
+ * probed; the model's job is to write the code.
+ *
+ * safeSelfCommit's tier-1 new-file gate (typecheck + vitest + audit
+ * log) catches malformed output, so even a wildly wrong model draft
+ * fails closed without landing a commit.
+ */
+export interface LlmAuthoredProbeParams {
+  /** Natural-language description of what to measure and how. 40..2000 chars. */
+  probe_description: string;
+  /** Which experiment category the generated class should declare. */
+  category: 'model_health' | 'tool_reliability' | 'data_freshness' | 'other';
 }
 
 /** Parameters for the model_latency_probe template. */
@@ -256,6 +281,23 @@ export function validateBrief(brief: ExperimentBrief): string | null {
     return null;
   }
 
+  if (brief.template === 'llm_authored_probe') {
+    const p = brief.params as LlmAuthoredProbeParams;
+    if (
+      !p.probe_description ||
+      typeof p.probe_description !== 'string' ||
+      p.probe_description.length < 40 ||
+      p.probe_description.length > 2000
+    ) {
+      return 'params.probe_description must be 40..2000 chars';
+    }
+    const allowedCategories = ['model_health', 'tool_reliability', 'data_freshness', 'other'];
+    if (!allowedCategories.includes(p.category)) {
+      return `params.category must be one of: ${allowedCategories.join(', ')}`;
+    }
+    return null;
+  }
+
   if (brief.template === 'subprocess_health_probe') {
     const p = brief.params as SubprocessHealthProbeParams;
     if (!p.command || typeof p.command !== 'string' || p.command.length > 300) {
@@ -300,6 +342,14 @@ export function fillExperimentTemplate(brief: ExperimentBrief): GeneratedExperim
 
   if (brief.template === 'subprocess_health_probe') {
     return fillSubprocessHealthProbe(brief, brief.params as SubprocessHealthProbeParams);
+  }
+
+  if (brief.template === 'llm_authored_probe') {
+    // Sentinel: this template is authored by LLM inside ExperimentAuthor.
+    // Reaching the static filler means the caller forgot to route.
+    throw new Error(
+      'llm_authored_probe is not slot-filled — ExperimentAuthor must route it to authorViaLlm',
+    );
   }
 
   throw new Error(`unknown template: ${(brief as { template?: unknown }).template}`);

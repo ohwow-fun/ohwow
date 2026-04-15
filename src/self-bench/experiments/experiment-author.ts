@@ -50,10 +50,12 @@ import type {
 } from '../experiment-types.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ExperimentBrief } from '../experiment-template.js';
+import type { ExperimentBrief, LlmAuthoredProbeParams } from '../experiment-template.js';
 import { fillExperimentTemplate, validateBrief } from '../experiment-template.js';
 import { safeSelfCommit, getSelfCommitStatus } from '../self-commit.js';
 import { writeFinding, readRecentFindings } from '../findings-store.js';
+import { runLlmCall } from '../../execution/llm-organ.js';
+import { stripCodeFences } from './patch-author.js';
 
 /** How many proposal rows to read per run before deciding. */
 const PROPOSAL_SCAN_LIMIT = 50;
@@ -199,6 +201,13 @@ export class ExperimentAuthorExperiment implements Experiment {
       return await this.appendToParameterizedRegistry(brief, registryRoute, ctx);
     }
 
+    // Rule 5 path: llm_authored_probe briefs are drafted by the LLM
+    // rather than slot-filled. Tier-1 new-file gates still run on the
+    // result so a malformed draft fails closed without landing.
+    if (brief.template === 'llm_authored_probe') {
+      return await this.authorViaLlm(brief, ctx);
+    }
+
     // Fill the template. Throws if validation fails mid-fill,
     // which we catch and record.
     let files: ReturnType<typeof fillExperimentTemplate>;
@@ -294,6 +303,169 @@ export class ExperimentAuthorExperiment implements Experiment {
         commit_sha: commitResult.commitSha,
         commit_reason: commitResult.reason,
         files_written: commitResult.filesWritten,
+      },
+    };
+  }
+
+  /**
+   * Rule 5 path: ask the LLM to draft both source and test files
+   * for the brief, then route through safeSelfCommit's tier-1
+   * new-file gates. The typecheck + vitest gates catch malformed
+   * drafts — if the model returns something that doesn't compile
+   * or whose test fails, the commit is refused and the brief stays
+   * unclaimed for a future retry.
+   */
+  private async authorViaLlm(
+    brief: ExperimentBrief,
+    ctx: ExperimentContext,
+  ): Promise<InterventionApplied> {
+    if (!ctx.engine?.modelRouter) {
+      return {
+        description: `cannot author ${brief.slug} — no model router on engine`,
+        details: { brief_slug: brief.slug, stage: 'precheck' },
+      };
+    }
+
+    const params = brief.params as LlmAuthoredProbeParams;
+    const sourcePath = `src/self-bench/experiments/${brief.slug}.ts`;
+    const testPath = `src/self-bench/__tests__/${brief.slug}.test.ts`;
+
+    const system =
+      'You author one new self-bench Experiment as TypeScript. ' +
+      'Return ONLY a JSON object of the shape ' +
+      '{"source": "<full .ts file>", "test": "<full .test.ts file>"}. ' +
+      'No markdown fences, no commentary outside the JSON. Rules:\n' +
+      '  1. ESM imports must use .js extensions (e.g. ' +
+      "'../experiment-types.js').\n" +
+      '  2. source must `export class <PascalCaseSlug>Experiment ' +
+      'implements Experiment` and set id, name, category, hypothesis, ' +
+      'and cadence = { everyMs, runOnBoot: false } exactly from the brief.\n' +
+      '  3. probe(ctx: ExperimentContext) must be async and return ' +
+      'ProbeResult { subject, summary, evidence }. Use ctx.db for queries; ' +
+      "never throw — catch and surface errors via evidence.\n" +
+      '  4. judge(result, _history) returns Verdict: ' +
+      "'pass' | 'warning' | 'fail'.\n" +
+      '  5. No intervene method. This is observation-only.\n' +
+      '  6. No console.log; no file system writes; no subprocess spawns.\n' +
+      '  7. test file uses vitest (describe/it/expect) and covers at ' +
+      'least one pass case and one warning-or-fail case. Mock ctx.db ' +
+      'with a chainable object.\n' +
+      '  8. Keep each file under 200 lines.';
+
+    const prompt = [
+      `<brief>`,
+      `  slug: ${brief.slug}`,
+      `  name: ${brief.name}`,
+      `  hypothesis: ${brief.hypothesis}`,
+      `  category: ${params.category}`,
+      `  everyMs: ${brief.everyMs}`,
+      `  source_path: ${sourcePath}`,
+      `  test_path: ${testPath}`,
+      `</brief>`,
+      ``,
+      `<probe_description>`,
+      params.probe_description,
+      `</probe_description>`,
+    ].join('\n');
+
+    const llm = await runLlmCall(
+      {
+        modelRouter: ctx.engine.modelRouter!,
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+      },
+      {
+        purpose: 'reasoning',
+        system,
+        prompt,
+        max_tokens: 4096,
+        temperature: 0,
+      },
+    );
+    if (!llm.ok) {
+      return {
+        description: `model call failed for ${brief.slug}: ${llm.error}`,
+        details: { brief_slug: brief.slug, stage: 'model', error: llm.error },
+      };
+    }
+
+    const parsed = parseAuthoredFiles(llm.data.text);
+    if (!parsed.ok) {
+      return {
+        description: `could not parse model output for ${brief.slug}: ${parsed.error}`,
+        details: {
+          brief_slug: brief.slug,
+          stage: 'parse',
+          raw: llm.data.text.slice(0, 500),
+        },
+      };
+    }
+
+    const commitMessage = `feat(self-bench): auto-author ${brief.slug} via LLM from proposal brief`;
+    const commitResult = await safeSelfCommit({
+      files: [
+        { path: sourcePath, content: parsed.source },
+        { path: testPath, content: parsed.test },
+      ],
+      commitMessage,
+      experimentId: this.id,
+      extendsExperimentId: null,
+      whyNotEditExisting:
+        'Phase 7-C Rule 5 llm_authored_probe: new-file-only probe drafted by LLM; tier-1 gates validate safety.',
+    });
+
+    if (commitResult.ok && commitResult.filesWritten) {
+      try {
+        await this.appendToAutoRegistry(brief, commitResult.filesWritten);
+      } catch {
+        // non-fatal
+      }
+    }
+
+    try {
+      await writeFinding(ctx.db, {
+        experimentId: this.id,
+        category: 'experiment_proposal',
+        subject: `proposal:${brief.slug}`,
+        hypothesis: `LLM-authored outcome for proposal ${brief.slug}`,
+        verdict: commitResult.ok ? 'pass' : 'warning',
+        summary: commitResult.ok
+          ? `llm-authored ${brief.slug} → commit ${commitResult.commitSha?.slice(0, 8) ?? '?'}`
+          : `failed to llm-author ${brief.slug}: ${commitResult.reason}`,
+        evidence: {
+          is_authoring_outcome: true,
+          materialization: 'llm_authored',
+          brief,
+          claimed: commitResult.ok,
+          claimed_by: commitResult.ok ? this.id : null,
+          claimed_at: commitResult.ok ? new Date().toISOString() : null,
+          commit_sha: commitResult.commitSha ?? null,
+          files_written: commitResult.filesWritten ?? null,
+          commit_ok: commitResult.ok,
+          commit_reason: commitResult.reason ?? null,
+          model: llm.data.model_used,
+        },
+        interventionApplied: null,
+        ranAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+    } catch {
+      // non-fatal
+    }
+
+    return {
+      description: commitResult.ok
+        ? `llm-authored ${brief.slug} → ${commitResult.commitSha?.slice(0, 8) ?? '?'}`
+        : `llm-author failed for ${brief.slug}: ${commitResult.reason}`,
+      details: {
+        brief_slug: brief.slug,
+        template: brief.template,
+        materialization: 'llm_authored',
+        commit_ok: commitResult.ok,
+        commit_sha: commitResult.commitSha,
+        commit_reason: commitResult.reason,
+        files_written: commitResult.filesWritten,
+        model: llm.data.model_used,
       },
     };
   }
@@ -654,6 +826,35 @@ function escapeSingleQuoted(s: string): string {
  * Errors are swallowed — the autonomous loop must not fall over on
  * a transient ledger write failure.
  */
+/**
+ * Parse the LLM's {"source": "...", "test": "..."} response for
+ * llm_authored_probe authoring. Tolerates a wrapping code fence
+ * (via stripCodeFences) and verifies both fields are non-trivial
+ * TypeScript. Length floor mirrors patch-author's whole-file guard.
+ */
+function parseAuthoredFiles(
+  raw: string,
+): { ok: true; source: string; test: string } | { ok: false; error: string } {
+  const unfenced = stripCodeFences(raw);
+  let obj: unknown;
+  try {
+    obj = JSON.parse(unfenced);
+  } catch (err) {
+    return {
+      ok: false,
+      error: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!obj || typeof obj !== 'object') return { ok: false, error: 'not an object' };
+  const rec = obj as Record<string, unknown>;
+  if (typeof rec.source !== 'string' || typeof rec.test !== 'string') {
+    return { ok: false, error: 'missing string source/test fields' };
+  }
+  if (rec.source.length < 100) return { ok: false, error: 'source too short' };
+  if (rec.test.length < 100) return { ok: false, error: 'test too short' };
+  return { ok: true, source: rec.source, test: rec.test };
+}
+
 async function writeAuthorClaim(
   ctx: ExperimentContext,
   experimentId: string,
