@@ -26,7 +26,7 @@ type SortMode = 'recent' | 'tasks' | 'name';
 
 const AUTONOMY_LABELS: Record<number, { label: string; title: string }> = {
   1: { label: 'L1', title: 'Observer. Every non-informational action needs approval.' },
-  2: { label: 'L2', title: 'Supervised. deliverable outputs need approval' },
+  2: { label: 'L2', title: 'Supervised. Deliverable outputs need approval.' },
   3: { label: 'L3', title: 'Trusted. approvals only on verifier escalations' },
   4: { label: 'L4', title: 'Autonomous. no approval gates' },
 };
