@@ -59,4 +59,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '090-goal-checkpoints.sql', expectedTables: ['orchestrator_goal_checkpoints'] },
   { migrationFile: '088-meeting-sessions.sql', expectedTables: ['meeting_sessions'] },
   { migrationFile: '087-arena-trajectories.sql', expectedTables: ['arena_trajectories'] },
+  { migrationFile: '085-co-evolution.sql', expectedTables: ['agent_workforce_evolution_runs', 'agent_workforce_evolution_attempts'] },
 ];
