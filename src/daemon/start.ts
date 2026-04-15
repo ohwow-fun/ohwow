@@ -73,6 +73,7 @@ import { SourceCopyLintExperiment } from '../self-bench/experiments/source-copy-
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
+import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -1462,6 +1463,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // Layer 2 trailer + safeSelfCommit. See the experiment header
         // for the gating criteria.
         experimentRunner.register(new PatchAuthorExperiment());
+        // Keeps AUTONOMY_ROADMAP.md in sync with live loop state.
+        // Fires when the doc is >2h old AND at least one noteworthy
+        // signal is present (loop fail, violation pool surge, or
+        // experiment files missing from the roadmap). Tier-2 modify.
+        experimentRunner.register(new RoadmapUpdaterExperiment());
         // Phase B — first surprise-source experiment. Property-tests
         // src/lib/format-duration.ts (a tier-2 path) on a deterministic
         // seeded corpus. On a correct implementation this stays at zero
