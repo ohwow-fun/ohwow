@@ -55,6 +55,7 @@ import {
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { writeFinding } from '../findings-store.js';
 import { logger } from '../../lib/logger.js';
+import { redactForPrompt } from '../../lib/prompt-redact.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -298,10 +299,22 @@ export class PatchAuthorExperiment implements Experiment {
     // Inject roadmap context so the model understands the loop's goal,
     // the auto-revert mechanism, and the current convergence state.
     // Read-only — the model must not modify the roadmap, only use it
-    // for context when authoring the patch.
-    const roadmapCtx = loadRoadmapContext(repoRoot);
-    if (roadmapCtx) {
-      promptBody += `\n\n<context name="autonomy-goal">\n${roadmapCtx}\n</context>`;
+    // for context when authoring the patch. Pass it through the
+    // deterministic redactor first: roadmap prose may quote findings
+    // that carry real emails/handles/URLs from the running system, and
+    // the model could echo any such identifier into its patch output.
+    // Redaction is stable (same input → same placeholder) so it doesn't
+    // degrade the LLM's ability to reason about distinct entities.
+    const rawRoadmapCtx = loadRoadmapContext(repoRoot);
+    if (rawRoadmapCtx) {
+      const { redacted, replacements } = redactForPrompt(rawRoadmapCtx);
+      if (replacements.length > 0) {
+        logger.debug(
+          { count: replacements.length, kinds: [...new Set(replacements.map((r) => r.kind))] },
+          '[patch-author] redacted identifiers from roadmap prompt context',
+        );
+      }
+      promptBody += `\n\n<context name="autonomy-goal">\n${redacted}\n</context>`;
     }
 
     const sys =
