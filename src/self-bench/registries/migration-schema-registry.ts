@@ -63,4 +63,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '083-deliverables-enhancements.sql', expectedTables: ['agent_workforce_deliverables_new'] },
   { migrationFile: '084-recovery-audit-log.sql', expectedTables: ['recovery_audit_log'] },
   { migrationFile: '082-agent-evolution-lifecycle.sql', expectedTables: ['agent_workforce_lifecycle_events', 'agent_workforce_prompt_revisions'] },
+  { migrationFile: '080-doc-mount-peer-mirrors.sql', expectedTables: ['doc_mount_peer_mirrors'] },
 ];
