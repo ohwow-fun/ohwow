@@ -255,6 +255,12 @@ export class PatchAuthorExperiment implements Experiment {
       2,
     );
 
+    const patchMode = resolvePatchMode(targetPath);
+    const violationsForFile =
+      patchMode === 'string-literal'
+        ? extractViolationsForFile(findingRow.evidence, targetPath)
+        : [];
+
     const provenanceInputs: ProvenanceInput[] = [
       { source: 'finding', ref: candidate.findingId, content: findingBlob },
       { source: 'source-file', ref: targetPath, content: sourceContent },
@@ -266,12 +272,20 @@ export class PatchAuthorExperiment implements Experiment {
         details: { stage: 'provenance' },
       };
     }
-    const promptBody = buildProvenancePrompt(provenanceInputs);
+    let promptBody = buildProvenancePrompt(provenanceInputs);
+    if (violationsForFile.length > 0) {
+      // Enumerate each violation so the model returns ONE edit per
+      // rule hit in a single JSON array. Without this the model
+      // tends to emit a single-line edit per commit even when the
+      // finding reports 4+ violations in the same file — the "keep
+      // changes minimal" nudge in the system prompt pushes toward
+      // conservatism unless the task is spelled out.
+      promptBody += `\n\n<violations ref="${targetPath}" count="${violationsForFile.length}">\n${renderViolationList(violationsForFile)}\n</violations>`;
+    }
 
-    const patchMode = resolvePatchMode(targetPath);
     const sys =
       patchMode === 'string-literal'
-        ? buildStringLiteralSystemPrompt(targetPath)
+        ? buildStringLiteralSystemPrompt(targetPath, violationsForFile.length)
         : buildWholeFileSystemPrompt(targetPath);
 
     const llm = await runLlmCall(
@@ -393,7 +407,14 @@ function buildWholeFileSystemPrompt(targetPath: string): string {
   );
 }
 
-function buildStringLiteralSystemPrompt(targetPath: string): string {
+function buildStringLiteralSystemPrompt(
+  targetPath: string,
+  violationCount: number,
+): string {
+  const multi = violationCount > 1;
+  const batchRule = multi
+    ? `  5. The <violations> block lists ALL ${violationCount} rule hits in this file. Return ONE edit per listed violation in the SAME JSON array. Do not emit separate patches for separate violations — fix every listed violation in this single response.\n`
+    : '  5. Fix what the finding describes. Do not touch unrelated strings.\n';
   return (
     'You patch one TypeScript/TSX file by emitting a JSON array of ' +
     'string-literal edits. The file is referenced by ref="' +
@@ -409,13 +430,67 @@ function buildStringLiteralSystemPrompt(targetPath: string): string {
     '  4. `find` must match the source exactly. Whitespace matters. ' +
     'If `find` could match more than once, include a 1-based ' +
     '`occurrence` to disambiguate.\n' +
-    '  5. Only fix what the finding describes. Do not touch unrelated ' +
-    'strings. No identifier renames, no logic changes, no imports.\n' +
-    '  6. `replace` must differ from `find` and must obey the ' +
+    batchRule +
+    '  6. No identifier renames, no logic changes, no imports.\n' +
+    '  7. `replace` must differ from `find` and must obey the ' +
     'project copywriting rules the finding cites.\n' +
     'Example: [{"find":"Failed to save.","replace":"Couldn\'t save. ' +
-    'Try again?"}]'
+    'Try again?"},{"find":"Please enter a name","replace":"Give it a name first"}]'
   );
+}
+
+interface ViolationSpec {
+  literal: string;
+  ruleId?: string;
+  message?: string;
+}
+
+/**
+ * Pull out every violation from evidence.violations[] that names
+ * `targetPath` as its source file, keeping the literal/match text
+ * plus rule metadata. Skips violations whose literal is absent from
+ * the row or shorter than 3 chars (too coarse to patch reliably).
+ */
+export function extractViolationsForFile(
+  evidence: unknown,
+  targetPath: string,
+): ViolationSpec[] {
+  if (!evidence || typeof evidence !== 'object') return [];
+  const arr = (evidence as Record<string, unknown>).violations;
+  if (!Array.isArray(arr)) return [];
+  const out: ViolationSpec[] = [];
+  const seen = new Set<string>();
+  for (const v of arr) {
+    if (!v || typeof v !== 'object') continue;
+    const row = v as Record<string, unknown>;
+    const file = typeof row.file === 'string' ? row.file : undefined;
+    // If the violation tags a file, filter to ours; otherwise keep
+    // it (older finding shapes don't always attribute per-row).
+    if (file && file !== targetPath) continue;
+    const lit = typeof row.literal === 'string' ? row.literal : undefined;
+    const match = typeof row.match === 'string' ? row.match : undefined;
+    const literal = (lit && lit.length >= 3) ? lit : (match && match.length >= 3 ? match : null);
+    if (!literal) continue;
+    // Dedupe identical literals within one finding — four violations
+    // of the same literal would otherwise produce four prompt lines.
+    if (seen.has(literal)) continue;
+    seen.add(literal);
+    out.push({
+      literal,
+      ruleId: typeof row.ruleId === 'string' ? row.ruleId : undefined,
+      message: typeof row.message === 'string' ? row.message : undefined,
+    });
+  }
+  return out;
+}
+
+export function renderViolationList(violations: readonly ViolationSpec[]): string {
+  return violations
+    .map((v, i) => {
+      const head = `  ${i + 1}. [${v.ruleId ?? 'rule'}] ${JSON.stringify(v.literal)}`;
+      return v.message ? `${head}\n     ${v.message}` : head;
+    })
+    .join('\n');
 }
 
 /** All currently-registered tier-2 prefixes (longest-prefix-match candidates). */

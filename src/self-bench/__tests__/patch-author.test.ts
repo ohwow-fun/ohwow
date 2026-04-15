@@ -7,6 +7,7 @@ import {
   PatchAuthorExperiment,
   extractAffectedFiles,
   evidenceLiteralsAppearInSource,
+  extractViolationsForFile,
   listTier2Prefixes,
   collectFindingIdsAlreadyPatched,
   isPatchAuthorEnabled,
@@ -72,6 +73,43 @@ describe('listTier2Prefixes', () => {
     ];
     _setPathTierRegistryForTests(entries);
     expect(listTier2Prefixes().sort()).toEqual(['src/b/x.ts', 'src/d/y.ts']);
+  });
+});
+
+describe('extractViolationsForFile', () => {
+  it('returns empty for missing violations', () => {
+    expect(extractViolationsForFile(null, 'a.tsx')).toEqual([]);
+    expect(extractViolationsForFile({}, 'a.tsx')).toEqual([]);
+  });
+
+  it('keeps all violations in the target file and dedupes identical literals', () => {
+    const ev = {
+      violations: [
+        { file: 'a.tsx', ruleId: 'no-em-dash', literal: 'Observer — one', message: 'no em-dash' },
+        { file: 'a.tsx', ruleId: 'no-em-dash', literal: 'Observer — two' },
+        { file: 'a.tsx', ruleId: 'no-em-dash', literal: 'Observer — one' },
+        { file: 'b.tsx', ruleId: 'no-em-dash', literal: 'Should not appear' },
+      ],
+    };
+    const out = extractViolationsForFile(ev, 'a.tsx');
+    expect(out.map((v) => v.literal)).toEqual(['Observer — one', 'Observer — two']);
+    expect(out[0].ruleId).toBe('no-em-dash');
+    expect(out[0].message).toBe('no em-dash');
+  });
+
+  it('falls back to match when literal missing, and skips short literals', () => {
+    const ev = {
+      violations: [
+        { file: 'a.tsx', match: 'longer match' },
+        { file: 'a.tsx', match: '—' },
+      ],
+    };
+    expect(extractViolationsForFile(ev, 'a.tsx').map((v) => v.literal)).toEqual(['longer match']);
+  });
+
+  it('accepts violations without a file field (older shapes)', () => {
+    const ev = { violations: [{ literal: 'Failed to save' }] };
+    expect(extractViolationsForFile(ev, 'a.tsx')).toHaveLength(1);
   });
 });
 
