@@ -97,4 +97,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '033-template-bundles.sql', expectedTables: ['template_bundles', 'template_installs'] },
   { migrationFile: '035-anomaly-alerts.sql', expectedTables: ['agent_workforce_anomaly_alerts'] },
   { migrationFile: '029-goals.sql', expectedTables: ['agent_workforce_goals'] },
+  { migrationFile: '030-agent-suggestions.sql', expectedTables: ['agent_workforce_agent_suggestions'] },
 ];
