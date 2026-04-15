@@ -44,6 +44,14 @@ export function computeCorrectiveAction(sp: SetPoint): CorrectiveAction {
         ? { type: 'compress_memory', metric: sp.metric, reason: `Sleep debt ${sp.current.toFixed(2)} needs consolidation`, urgency }
         : { type: 'none', metric: sp.metric, reason: 'Sleep debt within target', urgency: 0 };
 
+    case 'revenue_vs_burn':
+      // Ratio is daily_cost / daily_revenue. Above tolerance: costs are
+      // eating revenue faster than the target margin. Throttle the
+      // spend. Below target is always fine — we don't penalize cheap.
+      return sp.errorSignal > 0
+        ? { type: 'throttle', metric: sp.metric, reason: `Runtime cost is ${(sp.current * 100).toFixed(0)}% of daily revenue (target ${(sp.target * 100).toFixed(0)}%)`, urgency }
+        : { type: 'none', metric: sp.metric, reason: 'Cost-to-revenue ratio within target', urgency: 0 };
+
     default:
       return { type: 'none', metric: sp.metric, reason: 'No corrective action mapped', urgency: 0 };
   }

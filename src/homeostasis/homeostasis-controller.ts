@@ -116,6 +116,27 @@ export class HomeostasisController {
   }
 
   /**
+   * Burn-throttle level derived from `revenue_vs_burn`:
+   *   0 — no throttle
+   *   1 — prefer cheap-tier models (urgency > 0)
+   *   2 — also defer low-priority tasks (urgency > 0.5)
+   *
+   * Callers (model router, task scheduler) consult this to actually
+   * take corrective action. Returns 0 if the metric hasn't been
+   * populated yet (current === target, deviation === 0), so
+   * pre-revenue workspaces are never throttled.
+   */
+  getBurnThrottleLevel(): 0 | 1 | 2 {
+    const sp = this.getSetPoint('revenue_vs_burn');
+    if (!sp) return 0;
+    if (sp.errorSignal <= 0) return 0;
+    if (sp.deviationMagnitude <= sp.tolerance) return 0;
+    const urgency = Math.min(1, (sp.deviationMagnitude - sp.tolerance) / Math.max(0.001, 1 - sp.tolerance));
+    if (urgency > 0.5) return 2;
+    return 1;
+  }
+
+  /**
    * Read the most recent `business_vitals` row for this workspace and
    * update the `revenue_vs_burn` metric. The ratio is
    *   daily_cost_cents / (mrr / 30)
