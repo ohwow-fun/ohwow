@@ -70,6 +70,7 @@ import type {
 } from '../experiment-types.js';
 import type {
   ExperimentBrief,
+  LlmAuthoredProbeParams,
   MigrationSchemaProbeParams,
   ModelLatencyProbeParams,
   SubprocessHealthProbeParams,
@@ -77,6 +78,8 @@ import type {
 import { validateBrief } from '../experiment-template.js';
 import { writeFinding } from '../findings-store.js';
 import { getSelfCommitStatus } from '../self-commit.js';
+import { runLlmCall } from '../../execution/llm-organ.js';
+import { stripCodeFences } from './patch-author.js';
 
 /** How many recent llm_calls rows to inspect per model for latency stats. */
 const SAMPLE_WINDOW = 200;
@@ -161,6 +164,25 @@ const MAX_TOOL_TEST_PROPOSALS_PER_TICK = 3;
 /** Cadence baked into each generated tool-test probe. */
 const TOOL_TEST_PROBE_EVERY_MS = 6 * 60 * 60 * 1000; // 6h
 
+/**
+ * Rule 5 — LLM-creative proposals. Fires only when rules 1-4 return
+ * zero new briefs. The model is asked to propose 1-3 novel experiment
+ * briefs that use template='llm_authored_probe' — ExperimentAuthor
+ * drafts the .ts source on the authoring side.
+ */
+const MAX_LLM_PROPOSALS_PER_TICK = 3;
+/** Top experiments whose recent findings are surfaced to the model for context. */
+const RULE5_CONTEXT_EXPERIMENTS: readonly string[] = [
+  'patch-author',
+  'roadmap-updater',
+  'experiment-author',
+  'experiment-proposal-generator',
+];
+/** How many recent findings to pass in per context experiment. */
+const RULE5_FINDINGS_PER_EXPERIMENT = 5;
+/** Default cadence for llm-authored probes (1h, mirrors migration probes). */
+const LLM_AUTHORED_PROBE_EVERY_MS = 60 * 60 * 1000;
+
 interface LlmCallRow {
   model: string;
   latency_ms: number;
@@ -180,6 +202,9 @@ interface ProposalGeneratorEvidence extends Record<string, unknown> {
   tool_handlers_scanned: number;
   tool_handlers_missing_tests: number;
   new_tool_test_proposals: number;
+  rule5_fired: boolean;
+  rule5_skipped_reason: string | null;
+  new_llm_authored_proposals: number;
   proposals: ExperimentBrief[];
 }
 
@@ -367,6 +392,14 @@ export class ExperimentProposalGenerator implements Experiment {
       existingProposals,
     );
 
+    // 6. Rule 5 — LLM-creative proposals. Fires only when rules 1-4
+    //    return zero new briefs. Expensive (one LLM call) but rare —
+    //    once the deterministic rules have exhausted what they can
+    //    derive from code and traffic, the model gets the mic.
+    const rule5Summary = proposals.length === 0
+      ? await this.proposeViaLlm(proposals, existingProposals, ctx)
+      : { fired: false, skipped_reason: 'rules_1_to_4_produced_proposals', new_proposals: 0 };
+
     const evidence: ProposalGeneratorEvidence = {
       inspected_models: byModel.size,
       existing_proposals: existingProposals.size,
@@ -380,6 +413,9 @@ export class ExperimentProposalGenerator implements Experiment {
       tool_handlers_scanned: toolTestSummary.tool_handlers_scanned,
       tool_handlers_missing_tests: toolTestSummary.tool_handlers_missing_tests,
       new_tool_test_proposals: toolTestSummary.new_tool_test_proposals,
+      rule5_fired: rule5Summary.fired,
+      rule5_skipped_reason: rule5Summary.skipped_reason,
+      new_llm_authored_proposals: rule5Summary.new_proposals,
       proposals,
     };
 
@@ -467,6 +503,164 @@ export class ExperimentProposalGenerator implements Experiment {
         proposal_count: proposalFindingIds.length,
         slugs: ev.proposals.map((p) => p.slug),
       },
+    };
+  }
+
+  /**
+   * Rule 5 — LLM-creative proposals.
+   *
+   * Fires only when Rules 1-4 produced zero new briefs. Builds a
+   * compact context pack (recent findings from the loop's core
+   * experiments + a list of slugs already covered + a roadmap
+   * excerpt) and asks the model to propose 1-3 novel experiments
+   * as a JSON array. Each accepted brief is pushed onto the
+   * shared `proposals` array as template='llm_authored_probe'
+   * so ExperimentAuthor's authorViaLlm path drafts the file.
+   *
+   * Fails closed: missing modelRouter, model error, parse error,
+   * or all-invalid briefs leave `proposals` empty and return a
+   * skipped_reason for evidence.
+   */
+  private async proposeViaLlm(
+    proposals: ExperimentBrief[],
+    existingProposals: Set<string>,
+    ctx: ExperimentContext,
+  ): Promise<{ fired: boolean; skipped_reason: string | null; new_proposals: number }> {
+    if (!ctx.engine?.modelRouter) {
+      return { fired: false, skipped_reason: 'no_model_router', new_proposals: 0 };
+    }
+
+    const status = getSelfCommitStatus();
+    const repoRoot = status.repoRoot;
+    const existingSlugs = repoRoot ? listExperimentBasenames(repoRoot) : [];
+    const roadmapCtx = repoRoot ? loadRoadmapContext(repoRoot) : null;
+
+    const findingsSummary: string[] = [];
+    for (const expId of RULE5_CONTEXT_EXPERIMENTS) {
+      let rows: Finding[] = [];
+      try {
+        rows = await ctx.recentFindings(expId, RULE5_FINDINGS_PER_EXPERIMENT);
+      } catch {
+        continue;
+      }
+      for (const f of rows) {
+        const summary = (f.summary ?? '').slice(0, 200);
+        findingsSummary.push(
+          `  - [${expId}] ${f.verdict}: ${summary}`,
+        );
+      }
+    }
+
+    const coveredList = Array.from(existingProposals)
+      .concat(existingSlugs)
+      .sort()
+      .slice(0, 200)
+      .join(', ');
+
+    const system =
+      'You propose novel self-bench experiment briefs for a local-first ' +
+      'AI runtime\'s autonomous observation loop. Return ONLY a JSON array ' +
+      'of 1 to 3 briefs. No markdown fences, no commentary. Each brief is ' +
+      'an object with: slug (kebab-case, 1-50 chars, letter-start), name ' +
+      '(<=200 chars), hypothesis (<=500 chars), everyMs (60000..86400000), ' +
+      'probe_description (40..2000 chars; prose describing what to measure ' +
+      'and how, including which tables/files/metrics to read), category ' +
+      "(one of: 'model_health', 'tool_reliability', 'data_freshness', 'other'). " +
+      'Rules: propose read-only observation probes; no writes, no subprocess ' +
+      'spawns unless the category is tool_reliability; do not duplicate ' +
+      'slugs already covered; each probe must target something concrete ' +
+      'the loop can observe via ctx.db or fs.';
+
+    const promptParts: string[] = [];
+    promptParts.push('<already_covered_slugs>');
+    promptParts.push(coveredList || '(none)');
+    promptParts.push('</already_covered_slugs>');
+    if (findingsSummary.length > 0) {
+      promptParts.push('');
+      promptParts.push('<recent_findings>');
+      promptParts.push(...findingsSummary);
+      promptParts.push('</recent_findings>');
+    }
+    if (roadmapCtx) {
+      promptParts.push('');
+      promptParts.push('<autonomy_roadmap excerpt="Known Gaps + Active Focus">');
+      promptParts.push(roadmapCtx);
+      promptParts.push('</autonomy_roadmap>');
+    }
+    promptParts.push('');
+    promptParts.push(
+      'Propose up to ' + MAX_LLM_PROPOSALS_PER_TICK + ' new experiments. ' +
+      'Return the JSON array now.',
+    );
+
+    const llm = await runLlmCall(
+      {
+        modelRouter: ctx.engine.modelRouter!,
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+      },
+      {
+        purpose: 'reasoning',
+        system,
+        prompt: promptParts.join('\n'),
+        max_tokens: 4096,
+        temperature: 0,
+      },
+    );
+    if (!llm.ok) {
+      return { fired: true, skipped_reason: `llm_error:${llm.error}`, new_proposals: 0 };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripCodeFences(llm.data.text));
+    } catch (err) {
+      return {
+        fired: true,
+        skipped_reason: `parse_error:${err instanceof Error ? err.message : String(err)}`,
+        new_proposals: 0,
+      };
+    }
+    if (!Array.isArray(parsed)) {
+      return { fired: true, skipped_reason: 'not_an_array', new_proposals: 0 };
+    }
+
+    let newCount = 0;
+    for (const raw of parsed.slice(0, MAX_LLM_PROPOSALS_PER_TICK)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const rec = raw as Record<string, unknown>;
+      if (
+        typeof rec.slug !== 'string' ||
+        typeof rec.name !== 'string' ||
+        typeof rec.hypothesis !== 'string' ||
+        typeof rec.everyMs !== 'number' ||
+        typeof rec.probe_description !== 'string' ||
+        typeof rec.category !== 'string'
+      ) {
+        continue;
+      }
+      if (existingProposals.has(rec.slug)) continue;
+      const brief: ExperimentBrief = {
+        slug: rec.slug,
+        name: rec.name,
+        hypothesis: rec.hypothesis,
+        everyMs: rec.everyMs > 0 ? rec.everyMs : LLM_AUTHORED_PROBE_EVERY_MS,
+        template: 'llm_authored_probe',
+        params: {
+          probe_description: rec.probe_description,
+          category: rec.category as LlmAuthoredProbeParams['category'],
+        } satisfies LlmAuthoredProbeParams,
+      };
+      if (validateBrief(brief) !== null) continue;
+      proposals.push(brief);
+      existingProposals.add(brief.slug);
+      newCount += 1;
+    }
+
+    return {
+      fired: true,
+      skipped_reason: newCount === 0 ? 'all_briefs_invalid_or_duplicate' : null,
+      new_proposals: newCount,
     };
   }
 
@@ -762,5 +956,44 @@ export class ExperimentProposalGenerator implements Experiment {
       tool_handlers_missing_tests: 0,
       new_tool_test_proposals: newCount,
     };
+  }
+}
+
+/**
+ * Enumerate .ts files under src/self-bench/experiments/ so Rule 5 can
+ * tell the model which slugs are already implemented. Mirrors the
+ * pattern used by roadmap-updater.
+ */
+function listExperimentBasenames(repoRoot: string): string[] {
+  const dir = path.join(repoRoot, 'src/self-bench/experiments');
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+      .map((f) => f.replace(/\.ts$/, ''))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Load a compact excerpt from AUTONOMY_ROADMAP.md (sections "Known
+ * Gaps" and "Active Focus") so Rule 5's prompt grounds the model in
+ * the loop's current convergence state. Best-effort — missing file
+ * or unreadable sections return null and Rule 5 proceeds without it.
+ */
+function loadRoadmapContext(repoRoot: string): string | null {
+  try {
+    const full = fs.readFileSync(path.join(repoRoot, 'AUTONOMY_ROADMAP.md'), 'utf-8');
+    const sections: string[] = [];
+    const gapMatch = full.match(/## 2\. Known Gaps[\s\S]*?(?=## \d|$)/);
+    const focusMatch = full.match(/## 3\. Active Focus[\s\S]*?(?=## \d|$)/);
+    if (gapMatch) sections.push(gapMatch[0].trim());
+    if (focusMatch) sections.push(focusMatch[0].trim());
+    if (sections.length === 0) return null;
+    return sections.join('\n\n');
+  } catch {
+    return null;
   }
 }
