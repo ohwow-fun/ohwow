@@ -584,6 +584,19 @@ export function portForWorkspace(name: string): number | null {
 }
 
 /**
+ * URL the local web dashboard is reachable at for a given workspace.
+ * Returns null if the workspace has never been assigned a port (i.e.
+ * was created --local-only before a daemon first ran). Self-bench
+ * experiments that drive Playwright against the dashboard use this
+ * so they never hardcode :7700.
+ */
+export function dashboardUrlForWorkspace(name: string): string | null {
+  const port = portForWorkspace(name);
+  if (port === null) return null;
+  return `http://localhost:${port}`;
+}
+
+/**
  * Pick a free port for a brand-new workspace daemon. Walks 7701..8700,
  * skipping any port already assigned to another local workspace (whether
  * the corresponding daemon is currently running or not — port assignments
