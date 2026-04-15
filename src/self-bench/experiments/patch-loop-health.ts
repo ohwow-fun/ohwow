@@ -73,7 +73,7 @@ export class PatchLoopHealthExperiment implements Experiment {
     'The autonomous patch loop should be converging: patches should hold ' +
     'more often than they are reverted (hold_rate > 0.5), and the active ' +
     'violation pool should be trending down or stable over a 24h window.';
-  readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: false };
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();

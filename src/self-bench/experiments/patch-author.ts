@@ -96,7 +96,7 @@ export class PatchAuthorExperiment implements Experiment {
     'path describe a real, currently-broken contract that the autonomous ' +
     'loop could fix. Surfacing them as patch candidates lets the operator ' +
     'audit the judgment before model-driven authoring is enabled.';
-  readonly cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();
@@ -204,7 +204,7 @@ export class PatchAuthorExperiment implements Experiment {
         );
       }
       return {
-        description: `observe-only: surfaced ${ev.candidates.length} tier-2 candidate(s); ${PATCH_AUTHOR_ENABLED_PATH} not present`,
+        description: `observe-only: surfaced ${ev.candidates.length} tier-2 candidate(s); disabled (create ${PATCH_AUTHOR_DISABLED_PATH} to keep off)`,
         details: { mode: 'observe-only', candidates: ev.candidates },
       };
     }
@@ -562,24 +562,37 @@ export function extractAffectedFiles(evidence: unknown): string[] {
 }
 
 /**
- * Patch-author kill switch. Distinct from self-commit-enabled and
- * auto-revert-enabled so the operator can open authoring without
- * opening reverts (and vice versa). Default closed.
+ * Patch-author kill switch — now opt-OUT. Distinct from self-commit and
+ * auto-revert so the operator can disable authoring without disabling reverts
+ * (and vice versa). Enabled by default; create the disabled file to turn off.
  */
-export const PATCH_AUTHOR_ENABLED_PATH = path.join(
+export const PATCH_AUTHOR_DISABLED_PATH = path.join(
   os.homedir(),
   '.ohwow',
-  'patch-author-enabled',
+  'patch-author-disabled',
 );
 
-const PATCH_AUTHOR_TEST_BYPASS_ENV = 'OHWOW_PATCH_AUTHOR_TEST_ALLOW';
+/** Test-only env var that forces patch-author DISABLED regardless of filesystem. */
+const PATCH_AUTHOR_TEST_DENY_ENV = 'OHWOW_PATCH_AUTHOR_TEST_DENY';
+
+/** Test-only override for the disabled-file path. Null = use the default. */
+let patchAuthorDisabledPathOverride: string | null = null;
+
+/**
+ * Test-only override for the kill-switch disabled-file path. Pass a path to a
+ * non-existent file to simulate patch-author being disabled, or null to restore.
+ */
+export function _setPatchAuthorKillSwitchPathForTests(p: string | null): void {
+  patchAuthorDisabledPathOverride = p;
+}
 
 export function isPatchAuthorEnabled(): boolean {
-  if (process.env[PATCH_AUTHOR_TEST_BYPASS_ENV] === '1') return true;
+  if (process.env[PATCH_AUTHOR_TEST_DENY_ENV] === '1') return false;
+  const disabledPath = patchAuthorDisabledPathOverride ?? PATCH_AUTHOR_DISABLED_PATH;
   try {
-    return fs.existsSync(PATCH_AUTHOR_ENABLED_PATH);
+    return !fs.existsSync(disabledPath);
   } catch {
-    return false;
+    return true;
   }
 }
 

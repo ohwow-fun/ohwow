@@ -120,9 +120,8 @@ export class DashboardSmokeExperiment implements Experiment {
   readonly hypothesis =
     'Every smokeable dashboard route loads with no console errors, ' +
     'no HTTP 4xx/5xx on subresources, and no global ErrorBoundary title.';
-  // 10min — long enough to not thrash, short enough that a UI break
-  // surfaces within one operator coffee-break.
-  readonly cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
+  // 5min — accelerated for fast observation cycles.
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const workspace = resolveActiveWorkspace().name;

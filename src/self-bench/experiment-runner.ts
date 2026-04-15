@@ -80,11 +80,12 @@ const JUDGE_HISTORY_LIMIT = 20;
 
 /**
  * Default delay between an intervention landing and its validation
- * firing. Tuned for stale-task-cleanup which wants ~15 min for agents
- * to potentially re-accumulate stale work. Individual experiments can
- * override via cadence.validationDelayMs.
+ * firing. Set to 5 min to match the accelerated 5-min probe cadences.
+ * Individual experiments can override via cadence.validationDelayMs
+ * (e.g. stale-task-cleanup uses a longer window so agents have time
+ * to re-accumulate stale work before the validation check fires).
  */
-export const DEFAULT_VALIDATION_DELAY_MS = 15 * 60 * 1000;
+export const DEFAULT_VALIDATION_DELAY_MS = 5 * 60 * 1000;
 
 /**
  * Map ValidationOutcome → Verdict for the validation finding row.

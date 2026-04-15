@@ -47,8 +47,13 @@ import {
 
 const MIN = 60 * 1000;
 
-/** Cool-off window: patches older than this are out of scope. */
-const COOLOFF_WINDOW_MS = 30 * MIN;
+/**
+ * Cool-off window: patches older than this are out of scope.
+ * Set to 10 min (2 probe cycles at 5-min cadence): enough time for
+ * source-copy-lint to re-run and confirm whether the patch held,
+ * without waiting so long that bad patches stay on main.
+ */
+const COOLOFF_WINDOW_MS = 10 * MIN;
 
 interface OriginalFindingRow {
   id: string;

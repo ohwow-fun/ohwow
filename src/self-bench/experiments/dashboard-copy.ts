@@ -82,7 +82,7 @@ export class DashboardCopyExperiment implements Experiment {
     'machine-checkable subset of the copywriting rules in CLAUDE.md.';
   // 15min — same shape as dashboard-smoke but a bit slower since
   // copy violations are about human perception, not uptime.
-  readonly cadence = { everyMs: 15 * 60 * 1000, runOnBoot: true };
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const workspace = resolveActiveWorkspace().name;

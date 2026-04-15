@@ -69,7 +69,7 @@ export class SourceCopyLintExperiment implements Experiment {
   readonly hypothesis =
     'No hardcoded string literal, template literal, or JSX text in the ' +
     'dashboard source tree violates the machine-checkable copy rules.';
-  readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: true };
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();
