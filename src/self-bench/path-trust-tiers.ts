@@ -161,6 +161,18 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'dashboard pages tree, copy-level edits only — Layer 4 skeleton gate freezes structure/imports/identifiers',
   },
+  // Autonomous-loop status doc. Rewritten whole-file by
+  // RoadmapUpdaterExperiment when the live loop state drifts from
+  // what the doc says. Layer 4 AST gate is a no-op for non-TS files
+  // (see self-commit.ts step 3b); safety envelope is the tier-2
+  // Fixes-Finding-Id trailer + typecheck/test gates + cool-off.
+  {
+    prefix: 'AUTONOMY_ROADMAP.md',
+    tier: 'tier-2',
+    patchMode: 'whole-file',
+    rationale:
+      'autonomous-loop status doc — whole-file rewrites by RoadmapUpdaterExperiment, gated by Fixes-Finding-Id trailer',
+  },
 ];
 
 let registryOverride: PathTierEntry[] | null = null;
