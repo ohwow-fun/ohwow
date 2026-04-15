@@ -39,8 +39,15 @@ const UI = '/ui';
  * experiment will remind you if you forget.
  */
 export const DASHBOARD_SITEMAP: readonly SitemapEntry[] = [
-  { reactRoute: '/login',                 url: '/login',                 category: 'public',   requiresSeed: false, family: 'auth' },
-  { reactRoute: '/onboarding',            url: '/onboarding',            category: 'public',   requiresSeed: false, family: 'onboarding' },
+  // /login and /onboarding are declared at the top level inside the
+  // React Router tree, but the Express server mounts the entire SPA
+  // under /ui — so the actual URLs the browser sees include the UI
+  // prefix. Early smoke runs with the bare paths returned 404 (the
+  // backend has no top-level /login route), which is how this was
+  // caught. Keep them tagged category:'public' because they don't
+  // require the authed bearer token to render.
+  { reactRoute: '/login',                 url: `${UI}/login`,            category: 'public',   requiresSeed: false, family: 'auth' },
+  { reactRoute: '/onboarding',            url: `${UI}/onboarding`,       category: 'public',   requiresSeed: false, family: 'onboarding' },
   { reactRoute: 'dashboard',              url: `${UI}/dashboard`,        category: 'authed',   requiresSeed: false, family: 'dashboard' },
   { reactRoute: 'agents',                 url: `${UI}/agents`,           category: 'authed',   requiresSeed: false, family: 'agents' },
   { reactRoute: 'agents/:id',             url: `${UI}/agents/:id`,       category: 'detail',   requiresSeed: true,  family: 'agents' },
