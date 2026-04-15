@@ -93,6 +93,8 @@ import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.j
 import { BusinessVitalsScheduler } from '../scheduling/business-vitals-scheduler.js';
 import { LogTailWatcher } from '../scheduling/log-tail-watcher.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
+import { consolidateReflection } from '../oneiros/reflection-consolidator.js';
+import { runLlmCall } from '../execution/llm-organ.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
@@ -1737,6 +1739,25 @@ export async function startDaemon(): Promise<DaemonHandle> {
     // emit on — it ran as a no-op and patterns were dropped.
     const improvementScheduler = new ImprovementScheduler(db, modelRouter, workspaceId);
     improvementScheduler.setSynthesisBus(bus);
+    // Hippocampus: wire the reflection consolidator so it fires once
+    // per deep_sleep phase. Adapter builds the LLM closure here so the
+    // consolidator module has no runtime dep on the model router.
+    improvementScheduler.setReflectionConsolidator(async () => {
+      await consolidateReflection({
+        db,
+        workspaceId,
+        dataDir,
+        bus,
+        llm: async (prompt: string) => {
+          const result = await runLlmCall(
+            { modelRouter, db, workspaceId },
+            { purpose: 'reasoning', prompt, max_tokens: 2048, temperature: 0 },
+          );
+          if (!result.ok) throw new Error(result.error);
+          return result.data.text;
+        },
+      });
+    });
     improvementScheduler.start().catch(err => {
       logger.warn(`[daemon] Improvement scheduler failed: ${err instanceof Error ? err.message : err}`);
     });

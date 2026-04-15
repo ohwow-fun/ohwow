@@ -43,6 +43,13 @@ export class ImprovementScheduler {
   private homeostasis: HomeostasisController | null = null;
   private synthesisBus: EventEmitter | null = null;
   private lastIdleCheck = Date.now();
+  /**
+   * Hippocampus reflection hook. When set and SleepCycle reports
+   * `shouldConsolidate()` on a tick, the scheduler invokes this
+   * callback once per deep_sleep entry, then marks consolidation on
+   * the sleep cycle so it doesn't fire again until the next cycle.
+   */
+  private reflectionConsolidator: (() => Promise<void>) | null = null;
 
   constructor(
     private db: DatabaseAdapter,
@@ -82,6 +89,16 @@ export class ImprovementScheduler {
   /** Get the sleep cycle instance (for external access). */
   getSleepCycle(): SleepCycle | null {
     return this.sleepCycle;
+  }
+
+  /**
+   * Wire the reflection consolidator so it fires during deep_sleep.
+   * The daemon builds the adapter that closes over db / dataDir / bus
+   * / llm; the scheduler just invokes it once per consolidation phase.
+   */
+  setReflectionConsolidator(fn: () => Promise<void>): void {
+    this.reflectionConsolidator = fn;
+    logger.info('[ImprovementScheduler] reflection consolidator wired');
   }
 
   /** Wire a HomeostasisController for synapse health metric updates. */
@@ -145,6 +162,18 @@ export class ImprovementScheduler {
           { phase: sleepState.phase, sleepDebt: sleepState.sleepDebt.toFixed(2) },
           '[ImprovementScheduler] Sleep phase tick',
         );
+
+        // Hippocampus pass: during deep_sleep run the reflection
+        // consolidator once per cycle. SleepCycle.markConsolidation
+        // bumps the timestamp so we don't re-fire on every tick.
+        if (this.sleepCycle.shouldConsolidate() && this.reflectionConsolidator) {
+          try {
+            await this.reflectionConsolidator();
+          } catch (err) {
+            logger.warn({ err }, '[ImprovementScheduler] reflection consolidator failed');
+          }
+          this.sleepCycle.markConsolidation();
+        }
 
         // During sleep, skip the normal improvement cycle — sleep handles it
         if (this.sleepCycle.isAsleep()) {
