@@ -73,12 +73,67 @@ function rowToFinding(row: SelfFindingRow): Finding {
 }
 
 /**
+ * Supersession window. When a new finding has the same
+ * (experiment_id, subject, summary) as an active finding inside this
+ * window, the older row gets its status flipped to 'superseded' and
+ * superseded_by pointed at the new id. Default 10 minutes.
+ *
+ * This is the dedup fix for the P0 convergence-unobservable problem:
+ * before this, dashboard-copy / ledger-health / patch-loop-health
+ * wrote a new "same problem, same value" row every 30s, blowing the
+ * violation pool up by 1000x against what was actually changing.
+ *
+ * Overridable via runtime_config_overrides key
+ * `findings.supersede_window_ms` so the strategist can tune it.
+ */
+const DEFAULT_SUPERSEDE_WINDOW_MS = 10 * 60 * 1000;
+
+async function supersedeDuplicates(
+  db: DatabaseAdapter,
+  newId: string,
+  row: NewFindingRow,
+  windowMs: number,
+): Promise<number> {
+  if (!row.subject || !row.summary) return 0;
+  const windowStart = new Date(Date.now() - windowMs).toISOString();
+  try {
+    const { data } = await db
+      .from<{ id: string; summary: string }>('self_findings')
+      .select('id, summary')
+      .eq('experiment_id', row.experimentId)
+      .eq('subject', row.subject)
+      .eq('status', 'active')
+      .gte('ran_at', windowStart);
+    const dupes = (data ?? []).filter((r) => r.summary === row.summary && r.id !== newId);
+    if (dupes.length === 0) return 0;
+    for (const d of dupes) {
+      await db
+        .from('self_findings')
+        .update({ status: 'superseded', superseded_by: newId })
+        .eq('id', d.id);
+    }
+    return dupes.length;
+  } catch {
+    // Never block an insert on a supersession failure — pool size is
+    // a soft optimization, ledger integrity is the priority.
+    return 0;
+  }
+}
+
+/**
  * Insert a finding row. Generates the id so callers don't have to.
  * Returns the new id.
+ *
+ * After insert, marks prior active findings with identical
+ * (experiment_id, subject, summary) inside a 10-minute window as
+ * `superseded` and points their `superseded_by` at the new id. Cuts
+ * the active-pool size dramatically when an experiment re-fires the
+ * same verdict every tick.
  */
 export async function writeFinding(
   db: DatabaseAdapter,
   row: NewFindingRow,
+  opts: { supersedeWindowMs?: number } = {},
 ): Promise<string> {
   const id = crypto.randomUUID();
   await db.from('self_findings').insert({
@@ -98,6 +153,7 @@ export async function writeFinding(
     status: 'active',
     created_at: new Date().toISOString(),
   });
+  await supersedeDuplicates(db, id, row, opts.supersedeWindowMs ?? DEFAULT_SUPERSEDE_WINDOW_MS);
   return id;
 }
 
