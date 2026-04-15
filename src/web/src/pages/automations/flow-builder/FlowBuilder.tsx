@@ -138,7 +138,7 @@ export function FlowBuilder({ automation }: FlowBuilderProps) {
         toast('success', 'Automation updated');
       }
     } catch (err) {
-      toast('error', err instanceof Error ? err.message : 'Something went wrong');
+      toast('error', err instanceof Error ? err.message : 'Couldn\'t save. Try again?');
     } finally {
       setSaving(false);
     }
