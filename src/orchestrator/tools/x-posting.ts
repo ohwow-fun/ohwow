@@ -218,6 +218,17 @@ export const X_POSTING_DELETE_TOOL_DEFINITIONS: Tool[] = [
 export interface ComposeTweetInput {
   text: string;
   dryRun?: boolean;
+  /**
+   * Expected X handle of the logged-in user on the target Chrome profile
+   * (no leading @). When set, the tool verifies the page's active account
+   * BEFORE typing or publishing — if the handle doesn't match, the call
+   * fails loudly rather than silently posting from the wrong profile.
+   * The core safety rail for live mode: every multi-profile debug Chrome
+   * we've tested sometimes routes a CDP attach to the wrong profile's
+   * window, and relying on URL heuristics ("pick any x.com tab") trusts
+   * something we can't verify.
+   */
+  expectedHandle?: string;
 }
 
 export interface ComposeThreadInput {
@@ -340,14 +351,27 @@ async function getCdpPage(urlHint?: string): Promise<CdpPage | null> {
       logger.warn('[x-posting] CDP context has no pages');
       return null;
     }
-    // Prefer a page already on x.com (or matching the hint) so we
-    // don't interrupt unrelated tabs.
+    // Prefer an existing x.com tab — it's profile-proof: the tab belongs
+    // to whichever Chrome profile window already has it open, and posting
+    // from there means posting from that profile's session. Only after
+    // we can't find one do we pick any https tab (which we'll verify
+    // via assertSignedInAs before typing). The prior "pages[0]" fallback
+    // silently hijacked unrelated tabs (WhatsApp, etc.) and navigated
+    // them to x.com — which forced a profile change to whichever was the
+    // first enumerated profile, not the intended one.
     let page: CdpPage | undefined;
     if (urlHint) {
       page = pages.find((p) => p.url().includes(urlHint));
     }
     if (!page) page = pages.find((p) => p.url().startsWith('https://x.com'));
-    if (!page) page = pages[0];
+    if (!page) page = pages.find((p) => p.url().startsWith('https://twitter.com'));
+    if (!page) {
+      logger.warn(
+        { pageUrls: pages.slice(0, 6).map((p) => p.url()) },
+        '[x-posting] no x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',
+      );
+      return null;
+    }
 
     // Install the beforeunload escape hatches and dialog handler.
     page.on('dialog', (d: unknown) => {
@@ -491,6 +515,78 @@ async function clickByText(page: CdpPage, text: string, selectorScope = 'button,
 }
 
 // ---------------------------------------------------------------------------
+// Profile / identity verification
+// ---------------------------------------------------------------------------
+
+/**
+ * Ask the attached X page which handle is currently signed in.
+ * Reads the profile tab link (`data-testid="AppTabBar_Profile_Link"`),
+ * whose href is `/<handle>`. Returns null if the page isn't logged in
+ * or the sidebar element isn't present yet.
+ *
+ * This is the single source of truth for "which account am I about to
+ * post from". Anything upstream (profile routing, window management,
+ * browserContextId mapping) is an optimization; this is the safety rail.
+ */
+async function readActiveHandle(page: CdpPage): Promise<string | null> {
+  try {
+    const raw = await page.evaluate<string | null>(`(() => {
+      const link = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
+      if (link) {
+        const href = link.getAttribute('href') || '';
+        const m = href.match(/^\\/([^/?#]+)/);
+        if (m) return m[1];
+      }
+      const anchor = document.querySelector('a[aria-label^="Profile"][href^="/"]');
+      if (anchor) {
+        const href = anchor.getAttribute('href') || '';
+        const m = href.match(/^\\/([^/?#]+)/);
+        if (m) return m[1];
+      }
+      return null;
+    })()`);
+    return raw ? raw.replace(/^@/, '').toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refuse to proceed if the attached page isn't signed in as `expected`.
+ * Navigates to x.com/home first if the current URL doesn't look like a
+ * signed-in page, so the sidebar probe has something to read. Returns a
+ * ComposeResult-shaped error when the mismatch is detected.
+ */
+async function assertSignedInAs(page: CdpPage, expected: string): Promise<ComposeResult | null> {
+  const target = expected.replace(/^@/, '').toLowerCase();
+  if (!/^https:\/\/(x|twitter)\.com/.test(page.url())) {
+    await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await wait(HYDRATION_WAIT_MS);
+  }
+  if (isLoginRedirect(page.url())) {
+    return { success: false, message: `X redirected to login; expected handle @${target} is not signed in on this profile.`, currentUrl: page.url() };
+  }
+  // Give the sidebar a couple of beats to render after a fresh navigation.
+  let handle: string | null = null;
+  for (let i = 0; i < 4; i++) {
+    handle = await readActiveHandle(page);
+    if (handle) break;
+    await wait(750);
+  }
+  if (!handle) {
+    return { success: false, message: 'Could not read the logged-in X handle from the page sidebar. Refusing to post without verifying identity.' };
+  }
+  if (handle !== target) {
+    return {
+      success: false,
+      message: `Profile mismatch: attached X tab is signed in as @${handle}, but the task expects @${target}. Refusing to post. Open x.com in the "${target}" profile window, or adjust runtime_settings.x_posting_profile.`,
+      currentUrl: page.url(),
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Tweet compose
 // ---------------------------------------------------------------------------
 
@@ -507,7 +603,12 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
   }
 
   const page = await getCdpPage('x.com');
-  if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222.' };
+  if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no x.com tab open in any profile window, or debug Chrome is down. Open x.com in the target profile window and retry.' };
+
+  if (input.expectedHandle) {
+    const mismatch = await assertSignedInAs(page, input.expectedHandle);
+    if (mismatch) return mismatch;
+  }
 
   await page.goto(COMPOSE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await wait(HYDRATION_WAIT_MS);

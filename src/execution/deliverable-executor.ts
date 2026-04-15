@@ -172,6 +172,24 @@ async function readPreferredXProfile(db: DatabaseAdapter): Promise<string | null
 }
 
 /**
+ * runtime_settings.x_posting_handle (e.g. "ohwow_fun") pins the expected
+ * @handle that should be signed into the chosen Chrome profile. Used as
+ * a hard check before composeTweetViaBrowser types anything. Optional —
+ * when unset, we post without identity verification and rely on the
+ * profile routing (less safe; logged in the result).
+ */
+async function readExpectedXHandle(db: DatabaseAdapter): Promise<string | null> {
+  try {
+    const { data } = await db.from('runtime_settings')
+      .select('value')
+      .eq('key', 'x_posting_handle')
+      .maybeSingle();
+    const val = (data as { value: string } | null)?.value;
+    return val && val.trim().length > 0 ? val.trim().replace(/^@/, '') : null;
+  } catch { return null; }
+}
+
+/**
  * Make sure debug Chrome is up on :9222 with the target profile's
  * window open *before* x-posting attaches over CDP. The tool-executor
  * path does this via `ctx.browserState.activate()`, but the
@@ -215,12 +233,13 @@ const postTweetHandler: Handler = async (content, ctx) => {
   const prep = await ensureProfileChrome(ctx.db);
   if (!prep.ok) return { ok: false, error: `post_tweet: ${prep.error}` };
 
+  const expectedHandle = await readExpectedXHandle(ctx.db);
   try {
-    const res = await composeTweetViaBrowser({ text, dryRun });
+    const res = await composeTweetViaBrowser({ text, dryRun, expectedHandle: expectedHandle || undefined });
     if (!res.success) {
       return { ok: false, error: res.message || 'compose failed', result: res as unknown as Record<string, unknown> };
     }
-    return { ok: true, result: { dryRun, ...(res as unknown as Record<string, unknown>) } };
+    return { ok: true, result: { dryRun, expectedHandle, ...(res as unknown as Record<string, unknown>) } };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
