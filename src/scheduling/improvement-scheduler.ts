@@ -34,6 +34,13 @@ const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** Settings key for tracking last improvement run */
 const LAST_RUN_KEY = 'improvement_last_run_at';
 const LAST_RUN_TASK_COUNT_KEY = 'improvement_last_task_count';
+/**
+ * Consolidation fallback window. If no deep_sleep pass fires within
+ * this interval (which is the normal case on busy workspaces that
+ * never idle), the scheduler forces one. 12h so the hippocampus
+ * runs at least twice a day even if the system stays awake.
+ */
+const CONSOLIDATION_FORCE_MS = 12 * 60 * 60 * 1000;
 
 export class ImprovementScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -50,6 +57,15 @@ export class ImprovementScheduler {
    * the sleep cycle so it doesn't fire again until the next cycle.
    */
   private reflectionConsolidator: (() => Promise<void>) | null = null;
+  /**
+   * Fallback for workspaces that never idle long enough to enter
+   * deep_sleep. When the last consolidation was more than
+   * CONSOLIDATION_FORCE_MS ago we run the hippocampus pass regardless
+   * of sleep phase. Without this, busy workspaces (>1 task/min) stay
+   * in `wake` forever and affective_memories never accumulates
+   * reflection rows — observed in the live daemon after landing W1.
+   */
+  private lastForcedConsolidationAt = 0;
 
   constructor(
     private db: DatabaseAdapter,
@@ -173,6 +189,7 @@ export class ImprovementScheduler {
             logger.warn({ err }, '[ImprovementScheduler] reflection consolidator failed');
           }
           this.sleepCycle.markConsolidation();
+          this.lastForcedConsolidationAt = now;
         }
 
         // During sleep, skip the normal improvement cycle — sleep handles it
@@ -182,6 +199,26 @@ export class ImprovementScheduler {
             '[ImprovementScheduler] Agent is asleep, skipping standard cycle',
           );
           return;
+        }
+      }
+
+      // Forced consolidation fallback: on busy workspaces the sleep
+      // cycle never reaches deep_sleep, so the hippocampus pass above
+      // never fires. Without this fallback, affective_memories stays
+      // empty and the reflection→patch-author seeding bridge is dead.
+      // Fires at most once every CONSOLIDATION_FORCE_MS regardless
+      // of phase, so on busy workspaces the hippocampus runs twice
+      // a day instead of never.
+      if (
+        this.reflectionConsolidator &&
+        Date.now() - this.lastForcedConsolidationAt > CONSOLIDATION_FORCE_MS
+      ) {
+        try {
+          await this.reflectionConsolidator();
+          this.lastForcedConsolidationAt = Date.now();
+          logger.info('[ImprovementScheduler] forced reflection consolidation (no deep_sleep in window)');
+        } catch (err) {
+          logger.warn({ err }, '[ImprovementScheduler] forced reflection consolidation failed');
         }
       }
 
