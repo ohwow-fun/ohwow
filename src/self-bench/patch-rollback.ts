@@ -41,12 +41,33 @@ export interface AutonomousPatch {
   sha: string;
   /** Value of the Fixes-Finding-Id: trailer — the justifying finding's uuid. */
   findingId: string;
-  /** Commit author timestamp as ISO string. */
+  /**
+   * Commit author timestamp as ISO string, normalized to UTC Z-form
+   * (e.g. 2026-04-15T02:26:01Z). Callers rely on lexicographic
+   * comparison against self_findings.ran_at (which is stored in
+   * Z-form) so we MUST normalize away the local offset that git's
+   * %aI emits — otherwise a commit at 21:26 -05:00 string-compares
+   * greater than a finding at 22:00Z the same UTC day.
+   */
   ts: string;
   /** Files touched by the commit (relative to repo root). */
   files: string[];
   /** The experimentId trailer (author of the patch), if present. */
   experimentId: string | null;
+}
+
+/**
+ * Normalize a git %aI timestamp (which carries a local offset like
+ * `-05:00`) to UTC Z-form. Throws on invalid input — upstream callers
+ * already filter records without a parsable ts, so a throw here means
+ * git gave us something unexpected and we want to know.
+ */
+export function normalizeCommitTsToUtc(ts: string): string {
+  const ms = Date.parse(ts);
+  if (!Number.isFinite(ms)) {
+    throw new Error(`unparseable commit timestamp: ${ts}`);
+  }
+  return new Date(ms).toISOString();
 }
 
 /**
@@ -122,7 +143,13 @@ export function findAutonomousPatchesInWindow(
     } catch {
       files = [];
     }
-    patches.push({ sha, findingId, ts, files, experimentId });
+    let tsUtc: string;
+    try {
+      tsUtc = normalizeCommitTsToUtc(ts);
+    } catch {
+      continue;
+    }
+    patches.push({ sha, findingId, ts: tsUtc, files, experimentId });
   }
   return patches;
 }

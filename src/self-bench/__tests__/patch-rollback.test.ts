@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import {
   findAutonomousPatchesInWindow,
+  normalizeCommitTsToUtc,
   revertCommit,
 } from '../patch-rollback.js';
 
@@ -81,6 +82,36 @@ describe('findAutonomousPatchesInWindow', () => {
     expect(patches[0].files).toEqual(['b.ts']);
   });
 
+  it('emits patch.ts in UTC Z-form regardless of committer local offset', () => {
+    // Simulate a committer in Chicago (UTC-5) making an autonomous patch.
+    // git %aI would emit e.g. 2026-04-14T21:26:01-05:00 — lexicographically
+    // greater than a UTC finding at the same UTC time. The normalization
+    // inside findAutonomousPatchesInWindow must strip the offset so
+    // downstream string compares against ran_at (stored as …Z) work.
+    const abs = path.join(repo, 'x.ts');
+    fs.writeFileSync(abs, 'export const x = 1;\n');
+    git('git add x.ts');
+    const msgFile = path.join(repo, '.git', 'COMMIT_MSG');
+    fs.writeFileSync(
+      msgFile,
+      'feat(self-bench): tz-skewed autonomous patch\n\nFixes-Finding-Id: bbbbbbbb-cccc-dddd-eeee-ffffffffffff\n',
+    );
+    execSync(`git commit -F "${msgFile}"`, {
+      cwd: repo,
+      stdio: 'pipe',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: '2026-04-14T21:26:01-05:00',
+        GIT_COMMITTER_DATE: '2026-04-14T21:26:01-05:00',
+      },
+    });
+    const patches = findAutonomousPatchesInWindow(repo, 24 * 60 * 60_000);
+    expect(patches).toHaveLength(1);
+    expect(patches[0].ts).toBe('2026-04-15T02:26:01.000Z');
+    // And a ran_at in the pre-patch gap must NOT be > patch.ts:
+    expect('2026-04-15T02:05:13Z' > patches[0].ts).toBe(false);
+  });
+
   it('excludes commits older than the window', () => {
     const abs = path.join(repo, 'a.ts');
     fs.writeFileSync(abs, 'export const a = 1;\n');
@@ -102,6 +133,18 @@ describe('findAutonomousPatchesInWindow', () => {
     });
     // Window of 5 minutes — the hour-old commit should be filtered out.
     expect(findAutonomousPatchesInWindow(repo, 5 * 60_000)).toEqual([]);
+  });
+});
+
+describe('normalizeCommitTsToUtc', () => {
+  it('strips a local offset into Z-form', () => {
+    expect(normalizeCommitTsToUtc('2026-04-14T21:26:01-05:00')).toBe('2026-04-15T02:26:01.000Z');
+    expect(normalizeCommitTsToUtc('2026-04-15T02:26:01Z')).toBe('2026-04-15T02:26:01.000Z');
+    expect(normalizeCommitTsToUtc('2026-04-15T04:26:01+02:00')).toBe('2026-04-15T02:26:01.000Z');
+  });
+
+  it('throws on unparseable input', () => {
+    expect(() => normalizeCommitTsToUtc('not-a-date')).toThrow();
   });
 });
 
