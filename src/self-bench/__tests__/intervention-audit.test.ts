@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   InterventionAuditExperiment,
   STRATEGY_PERFORMATIVE_KEY,
+  STRATEGY_UNMEASURABLE_KEY,
 } from '../experiments/intervention-audit.js';
 import { _resetRuntimeConfigCacheForTests } from '../runtime-config.js';
 import type { ExperimentContext } from '../experiment-types.js';
@@ -83,7 +84,7 @@ function makeCtx(env: ReturnType<typeof buildDb>): ExperimentContext {
 
 function validation(
   experimentId: string,
-  outcome: 'held' | 'failed',
+  outcome: 'held' | 'failed' | 'inconclusive',
 ): Record<string, unknown> {
   return {
     experiment_id: experimentId,
@@ -167,5 +168,52 @@ describe('InterventionAuditExperiment', () => {
     expect(row).toBeDefined();
     expect(JSON.parse(row?.value as string)).toEqual(['probe-x']);
     expect(row?.set_by).toBe('intervention-audit');
+  });
+
+  it('mostly-inconclusive experiment lands in unmeasurable, not performative', async () => {
+    // probe-u: 6 inconclusive, 0 held/failed → unmeasurable
+    // probe-ok: 5 held → clean
+    const rows = [
+      ...Array.from({ length: 6 }, () => validation('probe-u', 'inconclusive')),
+      ...Array.from({ length: 5 }, () => validation('probe-ok', 'held')),
+    ];
+    const env = buildDb(rows);
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      performative: string[];
+      unmeasurable: string[];
+      unmeasurable_count: number;
+      total_completed: number;
+      total_inconclusive: number;
+      overall_hold_rate: number | null;
+    };
+    expect(ev.unmeasurable).toEqual(['probe-u']);
+    expect(ev.unmeasurable_count).toBe(1);
+    expect(ev.performative).toEqual([]);
+    // probe-u contributes 0 to total_completed — its 6 inconclusive
+    // rows must not drag down the hold-rate denominator.
+    expect(ev.total_completed).toBe(5);
+    expect(ev.total_inconclusive).toBe(6);
+    expect(ev.overall_hold_rate).toBe(1);
+    expect(exp.judge(result, [])).toBe('warning');
+  });
+
+  it('intervene() writes strategy.unmeasurable_experiments to runtime_config_overrides', async () => {
+    const rows = Array.from({ length: 6 }, () =>
+      validation('probe-u', 'inconclusive'),
+    );
+    const env = buildDb(rows);
+    const ctx = makeCtx(env);
+    const result = await exp.probe(ctx);
+    const verdict = exp.judge(result, []);
+    const applied = await exp.intervene(verdict, result, ctx);
+    expect(applied).not.toBeNull();
+    expect(applied?.details.unmeasurable).toEqual(['probe-u']);
+
+    const row = env.tables.runtime_config_overrides.find(
+      (r) => r.key === STRATEGY_UNMEASURABLE_KEY,
+    );
+    expect(row).toBeDefined();
+    expect(JSON.parse(row?.value as string)).toEqual(['probe-u']);
   });
 });

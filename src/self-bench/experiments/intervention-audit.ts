@@ -28,6 +28,7 @@ import type {
 import { setRuntimeConfig } from '../runtime-config.js';
 
 export const STRATEGY_PERFORMATIVE_KEY = 'strategy.performative_experiments';
+export const STRATEGY_UNMEASURABLE_KEY = 'strategy.unmeasurable_experiments';
 
 interface ValidationRow {
   experiment_id: string;
@@ -41,23 +42,27 @@ interface PerformativeRow {
   completed: number;
   held: number;
   failed: number;
+  inconclusive: number;
   hold_rate: number;
 }
 
 interface AuditEvidence extends Record<string, unknown> {
   experiments: PerformativeRow[];
   performative: string[];
+  unmeasurable: string[];
   /**
-   * Burn-down scalar for autoFollowupValidate. The `_count` suffix is
-   * load-bearing: the validator reads it as a pool that should shrink
+   * Burn-down scalars for autoFollowupValidate. The `_count` suffix is
+   * load-bearing: the validator reads these as pools that should shrink
    * after the intervention (flagged experiments recover and drop off
-   * the performative list). Without it, pre=warning/post=warning
-   * validations always read as "failed" and the audit probe flags
-   * itself as performative in a self-confirming loop.
+   * the lists). Without them, pre=warning/post=warning validations
+   * always read as "failed" and the audit probe flags itself as
+   * performative in a self-confirming loop.
    */
   performative_count: number;
+  unmeasurable_count: number;
   total_completed: number;
   total_held: number;
+  total_inconclusive: number;
   overall_hold_rate: number | null;
   min_sample: number;
   hold_rate_floor: number;
@@ -101,9 +106,12 @@ export class InterventionAuditExperiment implements Experiment {
         evidence: {
           experiments: [],
           performative: [],
+          unmeasurable: [],
           performative_count: 0,
+          unmeasurable_count: 0,
           total_completed: 0,
           total_held: 0,
+          total_inconclusive: 0,
           overall_hold_rate: null,
           min_sample: MIN_SAMPLE,
           hold_rate_floor: HOLD_RATE_FLOOR,
@@ -113,55 +121,89 @@ export class InterventionAuditExperiment implements Experiment {
       };
     }
 
-    const counts = new Map<string, { held: number; failed: number }>();
+    const counts = new Map<
+      string,
+      { held: number; failed: number; inconclusive: number }
+    >();
     for (const r of rows) {
       if (!r.experiment_id) continue;
-      const bucket = counts.get(r.experiment_id) ?? { held: 0, failed: 0 };
+      const bucket =
+        counts.get(r.experiment_id) ?? { held: 0, failed: 0, inconclusive: 0 };
       if (r.outcome === 'held') bucket.held += 1;
       else if (r.outcome === 'failed') bucket.failed += 1;
+      else if (r.outcome === 'inconclusive') bucket.inconclusive += 1;
       counts.set(r.experiment_id, bucket);
     }
 
     const experiments: PerformativeRow[] = [];
     for (const [experimentId, c] of counts) {
+      // Inconclusive rows are excluded from the hold-rate denominator
+      // on purpose — they mean "we could not measure," not "it didn't
+      // work." Counting them as failed would penalize probes whose
+      // validation is structurally unmeasurable (no burn-down scalars).
       const completed = c.held + c.failed;
-      if (completed === 0) continue;
+      if (completed === 0 && c.inconclusive === 0) continue;
       experiments.push({
         experiment_id: experimentId,
         completed,
         held: c.held,
         failed: c.failed,
-        hold_rate: Math.round((c.held / completed) * 100) / 100,
+        inconclusive: c.inconclusive,
+        hold_rate:
+          completed > 0 ? Math.round((c.held / completed) * 100) / 100 : 0,
       });
     }
-    experiments.sort((a, b) => b.completed - a.completed);
+    experiments.sort(
+      (a, b) => b.completed + b.inconclusive - (a.completed + a.inconclusive),
+    );
 
     const performative = experiments
       .filter((e) => e.completed >= MIN_SAMPLE && e.hold_rate < HOLD_RATE_FLOOR)
       .map((e) => e.experiment_id);
 
+    // Unmeasurable = mostly inconclusive rows over a meaningful sample.
+    // Those probes need a validate() method that exposes burn-down
+    // signal, not a "performative" label. Surfaced separately so the
+    // strategist can route them to a different intervention.
+    const unmeasurable = experiments
+      .filter(
+        (e) =>
+          e.inconclusive >= MIN_SAMPLE && e.inconclusive > e.held + e.failed,
+      )
+      .map((e) => e.experiment_id);
+
     const totalCompleted = experiments.reduce((s, e) => s + e.completed, 0);
     const totalHeld = experiments.reduce((s, e) => s + e.held, 0);
+    const totalInconclusive = experiments.reduce(
+      (s, e) => s + e.inconclusive,
+      0,
+    );
     const overallHoldRate =
       totalCompleted > 0 ? Math.round((totalHeld / totalCompleted) * 100) / 100 : null;
 
     const evidence: AuditEvidence = {
       experiments,
       performative,
+      unmeasurable,
       performative_count: performative.length,
+      unmeasurable_count: unmeasurable.length,
       total_completed: totalCompleted,
       total_held: totalHeld,
+      total_inconclusive: totalInconclusive,
       overall_hold_rate: overallHoldRate,
       min_sample: MIN_SAMPLE,
       hold_rate_floor: HOLD_RATE_FLOOR,
       window_hours: WINDOW_MS / 3_600_000,
     };
 
+    const parts: string[] = [];
+    if (performative.length > 0) parts.push(`performative: ${performative.join(', ')}`);
+    if (unmeasurable.length > 0) parts.push(`unmeasurable: ${unmeasurable.join(', ')}`);
     const summary =
-      totalCompleted === 0
+      totalCompleted === 0 && totalInconclusive === 0
         ? 'no completed validations yet — hold rate unmeasurable'
         : `overall ${Math.round((overallHoldRate ?? 0) * 100)}% hold (${totalHeld}/${totalCompleted})${
-            performative.length > 0 ? `; performative: ${performative.join(', ')}` : ''
+            parts.length > 0 ? `; ${parts.join('; ')}` : ''
           }`;
 
     return { subject: 'meta:intervention-audit', summary, evidence };
@@ -170,8 +212,9 @@ export class InterventionAuditExperiment implements Experiment {
   judge(result: ProbeResult, _history: Finding[]): Verdict {
     const ev = result.evidence as AuditEvidence & { error?: boolean };
     if (ev.error) return 'warning';
-    if (ev.total_completed === 0) return 'pass';
+    if (ev.total_completed === 0 && ev.total_inconclusive === 0) return 'pass';
     if (ev.performative.length > 0) return 'warning';
+    if (ev.unmeasurable.length > 0) return 'warning';
     if (ev.overall_hold_rate !== null && ev.overall_hold_rate < 0.5) return 'warning';
     return 'pass';
   }
@@ -187,17 +230,26 @@ export class InterventionAuditExperiment implements Experiment {
       await setRuntimeConfig(ctx.db, STRATEGY_PERFORMATIVE_KEY, ev.performative, {
         setBy: this.id,
       });
+      await setRuntimeConfig(ctx.db, STRATEGY_UNMEASURABLE_KEY, ev.unmeasurable, {
+        setBy: this.id,
+      });
     } catch {
       // best-effort — the finding still lands
       return null;
     }
+    const parts: string[] = [];
+    if (ev.performative.length > 0)
+      parts.push(`${ev.performative.length} performative`);
+    if (ev.unmeasurable.length > 0)
+      parts.push(`${ev.unmeasurable.length} unmeasurable`);
     return {
       description:
-        ev.performative.length === 0
-          ? 'cleared performative_experiments (nothing below floor)'
-          : `flagged ${ev.performative.length} performative experiment(s)`,
+        parts.length === 0
+          ? 'cleared performative + unmeasurable lists (nothing to flag)'
+          : `flagged ${parts.join(', ')} experiment(s)`,
       details: {
         performative: ev.performative,
+        unmeasurable: ev.unmeasurable,
         overall_hold_rate: ev.overall_hold_rate,
       },
     };
