@@ -309,7 +309,10 @@ describe('ExperimentAuthorExperiment — intervene', () => {
 
   it('records a failure finding when commit fails (kill switch closed)', async () => {
     // Simulate the kill switch being closed by pointing the disabled-file path
-    // at a file that actually exists (the audit log is guaranteed to exist).
+    // at a file that actually exists. The audit log path is only populated
+    // after a prior commit in this describe block ran, so explicitly ensure
+    // it exists before flipping the switch — makes the test order-independent.
+    if (!fs.existsSync(auditLogPath)) fs.writeFileSync(auditLogPath, '');
     _setKillSwitchDisabledPathForTests(auditLogPath);
     const inserted: Array<Record<string, unknown>> = [];
     const ctx = makeCtx(tempRoot, {
