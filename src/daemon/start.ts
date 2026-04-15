@@ -66,6 +66,7 @@ import { FormatDurationFuzzExperiment } from '../self-bench/experiments/format-d
 import { TokenSimilarityFuzzExperiment } from '../self-bench/experiments/token-similarity-fuzz.js';
 import { StagnationFuzzExperiment } from '../self-bench/experiments/stagnation-fuzz.js';
 import { ErrorClassificationFuzzExperiment } from '../self-bench/experiments/error-classification-fuzz.js';
+import { SitemapDriftExperiment } from '../self-bench/experiments/sitemap-drift.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
@@ -1467,6 +1468,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
         experimentRunner.register(new TokenSimilarityFuzzExperiment());
         experimentRunner.register(new StagnationFuzzExperiment());
         experimentRunner.register(new ErrorClassificationFuzzExperiment());
+        // Self-UX loop, Sprint 1 — guards DASHBOARD_SITEMAP against
+        // App.tsx drift. Observe-only; fires a warning finding when
+        // the sitemap and the SPA routes disagree.
+        experimentRunner.register(new SitemapDriftExperiment());
         // Phase 8-A (live): ContentCadenceTunerExperiment is the first
         // BusinessExperiment in the live runner. Gated behind workspaceSlug
         // === 'default' because its probe anchors to a business goal that
