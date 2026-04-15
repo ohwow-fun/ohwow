@@ -8,6 +8,7 @@ import {
   extractAffectedFiles,
   evidenceLiteralsAppearInSource,
   extractViolationsForFile,
+  remainingPostPatchLiterals,
   listTier2Prefixes,
   collectFindingIdsAlreadyPatched,
   isPatchAuthorEnabled,
@@ -171,6 +172,55 @@ describe('evidenceLiteralsAppearInSource', () => {
     expect(
       evidenceLiteralsAppearInSource(tmp, ['src/other.tsx', 'src/file.tsx'], ev),
     ).toBe(true);
+  });
+});
+
+describe('remainingPostPatchLiterals', () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'remaining-literals-'));
+    fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+  });
+  afterEach(() => {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('returns literals that are still present in the post-commit file', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'src/file.tsx'),
+      `const a = "Failed to load";\nconst b = "fixed copy";\n`,
+    );
+    const remaining = remainingPostPatchLiterals(tmp, 'src/file.tsx', [
+      { literal: 'Failed to load' },
+      { literal: 'Please enter a name' },
+    ]);
+    expect(remaining).toEqual(['Failed to load']);
+  });
+
+  it('returns empty when every cited literal was removed', () => {
+    fs.writeFileSync(
+      path.join(tmp, 'src/file.tsx'),
+      `const a = "Couldn't load. Try again?";\n`,
+    );
+    expect(
+      remainingPostPatchLiterals(tmp, 'src/file.tsx', [{ literal: 'Failed to load' }]),
+    ).toEqual([]);
+  });
+
+  it('dedupes repeated literals and skips literals shorter than 3 chars', () => {
+    fs.writeFileSync(path.join(tmp, 'src/file.tsx'), `const a = "xyz";\n`);
+    const remaining = remainingPostPatchLiterals(tmp, 'src/file.tsx', [
+      { literal: 'xyz' },
+      { literal: 'xyz' },
+      { literal: '—' },
+    ]);
+    expect(remaining).toEqual(['xyz']);
+  });
+
+  it('returns empty when the target file cannot be read', () => {
+    expect(
+      remainingPostPatchLiterals(tmp, 'src/missing.tsx', [{ literal: 'anything' }]),
+    ).toEqual([]);
   });
 });
 

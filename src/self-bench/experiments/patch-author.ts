@@ -53,6 +53,7 @@ import {
   type ProvenanceInput,
 } from '../patch-prompt-provenance.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
+import { writeFinding } from '../findings-store.js';
 import { logger } from '../../lib/logger.js';
 
 const HOUR = 60 * 60 * 1000;
@@ -384,6 +385,62 @@ export class PatchAuthorExperiment implements Experiment {
         details: { stage: 'commit', reason: commit.reason, model: llm.data.model_used },
       };
     }
+
+    // P1 post-patch verification gate. Re-read the patched file
+    // synchronously and flag any original violation literal that
+    // survived the patch. Non-blocking: the commit already landed,
+    // we just surface a warning finding so Layer 5 can revert sooner
+    // than the next scheduled probe (kills the 10min lag).
+    let postPatchRemaining: string[] = [];
+    if (patchMode === 'string-literal' && violationsForFile.length > 0) {
+      postPatchRemaining = remainingPostPatchLiterals(
+        repoRoot,
+        targetPath,
+        violationsForFile,
+      );
+      if (postPatchRemaining.length > 0) {
+        try {
+          await writeFinding(ctx.db, {
+            experimentId: this.id,
+            category: 'other',
+            subject: `post_patch_verification_failed:${targetPath}`,
+            hypothesis:
+              'Autonomous patch should remove every violation literal named in the originating finding.',
+            verdict: 'warning',
+            summary:
+              `${postPatchRemaining.length}/${violationsForFile.length} original violation literal(s) still present in ${targetPath} after commit ${commit.commitSha?.slice(0, 12)}`,
+            evidence: {
+              post_patch_verification_failed: true,
+              commit_sha: commit.commitSha ?? null,
+              target_path: targetPath,
+              origin_finding_id: candidate.findingId,
+              remaining_literals: postPatchRemaining,
+              original_violation_count: violationsForFile.length,
+              affected_files: [targetPath],
+            },
+            interventionApplied: null,
+            ranAt: new Date().toISOString(),
+            durationMs: 0,
+          });
+          logger.warn(
+            {
+              commitSha: commit.commitSha,
+              targetPath,
+              remaining: postPatchRemaining.length,
+              total: violationsForFile.length,
+              originFindingId: candidate.findingId,
+            },
+            '[patch-author] post-patch verification failed — literals still present',
+          );
+        } catch (err) {
+          logger.warn(
+            { err, commitSha: commit.commitSha, targetPath },
+            '[patch-author] post-patch verification finding write failed',
+          );
+        }
+      }
+    }
+
     return {
       description: `landed autonomous patch ${commit.commitSha?.slice(0, 12)} on ${targetPath}`,
       details: {
@@ -391,6 +448,7 @@ export class PatchAuthorExperiment implements Experiment {
         commitSha: commit.commitSha,
         patchMode,
         edits: editsApplied,
+        post_patch_remaining: postPatchRemaining,
         model: llm.data.model_used,
         provider: llm.data.provider,
         cost_cents: llm.data.cost_cents,
@@ -535,6 +593,36 @@ export function listTier2Prefixes(): string[] {
  * Short literals (<3 chars) are ignored so a stray single-character
  * match like "—" on its own can't hide a real miss.
  */
+/**
+ * Post-commit check: given the list of violation literals the patch
+ * was supposed to remove, return the ones still present in the
+ * on-disk copy of `targetPath`. Empty array = patch fully addressed
+ * the cited violations. Used by the P1 verification gate to surface
+ * partial-patch cases immediately instead of waiting for the next
+ * scheduled lint probe (cuts ~10min lag before Layer 5 revert).
+ */
+export function remainingPostPatchLiterals(
+  repoRoot: string,
+  targetPath: string,
+  violations: readonly { literal: string }[],
+): string[] {
+  let src: string;
+  try {
+    src = fs.readFileSync(path.join(repoRoot, targetPath), 'utf-8');
+  } catch {
+    return [];
+  }
+  const remaining: string[] = [];
+  const seen = new Set<string>();
+  for (const v of violations) {
+    if (typeof v.literal !== 'string' || v.literal.length < 3) continue;
+    if (seen.has(v.literal)) continue;
+    seen.add(v.literal);
+    if (src.includes(v.literal)) remaining.push(v.literal);
+  }
+  return remaining;
+}
+
 export function evidenceLiteralsAppearInSource(
   repoRoot: string,
   tier2Files: readonly string[],
