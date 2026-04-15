@@ -72,6 +72,7 @@ import { DashboardCopyExperiment } from '../self-bench/experiments/dashboard-cop
 import { SourceCopyLintExperiment } from '../self-bench/experiments/source-copy-lint.js';
 import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
+import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -1447,6 +1448,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // experiment flags candidates in the ledger but does not
         // mutate main. Probe is read-only and always safe to run.
         experimentRunner.register(new AutonomousPatchRollbackExperiment());
+        // Convergence health monitor: measures hold_rate (patches that
+        // held vs reverted in 24h) and violation pool trend. Observe-
+        // only — signals whether the patch loop is converging or
+        // thrashing. Verdict=fail triggers operator attention.
+        experimentRunner.register(new PatchLoopHealthExperiment());
         // Capstone application of Layers 1-9: discovers self_findings
         // whose affected_files intersect a tier-2 path and surfaces
         // them as patch candidates. Observe-only on first ship — does
