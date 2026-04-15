@@ -50,6 +50,7 @@ import {
   listProfiles,
   openProfileWindow,
 } from '../execution/browser/chrome-profile-router.js';
+import { profileByHandleHint } from '../execution/browser/chrome-lifecycle.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -552,6 +553,7 @@ Constraints:
     // Chromium; x-posting requires the specific user-authenticated profile
     // from ~/.ohwow/chrome-cdp/. This mirrors deliverable-executor's
     // ensureProfileChrome() pattern.
+    let xBrowserContextId: string | null = null;
     {
       const profileOverride = (toolInput.profile as string | undefined) || null;
       const profiles = listProfiles();
@@ -569,13 +571,40 @@ Constraints:
             return val && val.trim().length > 0 ? val.trim() : null;
           } catch { return null; }
         })();
+      // Handle-derived fallback: if no explicit profile override, try to
+      // correlate x_posting_handle to a profile (e.g. handle 'example_com'
+      // ≈ email @example.com). Without this the selection falls through
+      // to the first profile with an email — which on multi-profile
+      // rigs is almost never the intended X account (it's alphabetically
+      // "Default", often a personal/test profile).
+      const handleHint = profileHint
+        ? null
+        : await (async () => {
+          try {
+            const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'x_posting_handle').maybeSingle();
+            const val = (data as { value: string } | null)?.value;
+            return val && val.trim().length > 0 ? val.trim() : null;
+          } catch { return null; }
+        })();
       const target = (profileHint && findProfileByIdentity(profiles, profileHint))
+        || (handleHint && profileByHandleHint(profiles, handleHint))
         || profiles.find((p) => !!p.email)
         || profiles[0];
       yield { type: 'status', message: `Ensuring Chrome profile "${target.email || target.directory}" for X...` };
       try {
         await ensureDebugChrome({ preferredProfile: target.directory });
-        await openProfileWindow({ profileDir: target.directory });
+        // Capture browserContextId from the opened window so we can pin
+        // x-posting's CDP attach to THIS profile's tab rather than any
+        // x.com tab Chrome happens to have open in another profile.
+        // url='https://x.com/home' forces `open -a` to create a fresh
+        // tab even when the profile window is already open — without
+        // it Chrome just focuses the existing window and no new CDP
+        // target appears, making the polling step time out.
+        const opened = await openProfileWindow({
+          profileDir: target.directory,
+          url: 'https://x.com/home',
+        });
+        xBrowserContextId = opened.browserContextId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errorResult: ToolResult = { success: false, error: `Couldn't open Chrome profile for X: ${msg}` };
@@ -609,20 +638,23 @@ Constraints:
       threads?: unknown[];
     };
     try {
+      const ctxId = xBrowserContextId || undefined;
       if (request.name === 'x_compose_tweet') {
         opResult = await composeTweetViaBrowser({
           text: String(toolInput.text || ''),
           dryRun,
           expectedHandle: expectedXHandle,
+          expectedBrowserContextId: ctxId,
         });
       } else if (request.name === 'x_compose_thread') {
         const tweets = Array.isArray(toolInput.tweets) ? (toolInput.tweets as string[]) : [];
-        opResult = await composeThreadViaBrowser({ tweets, dryRun });
+        opResult = await composeThreadViaBrowser({ tweets, dryRun, expectedBrowserContextId: ctxId });
       } else if (request.name === 'x_compose_article') {
         opResult = await composeArticleViaBrowser({
           title: String(toolInput.title || ''),
           body: String(toolInput.body || ''),
           dryRun,
+          expectedBrowserContextId: ctxId,
         });
       } else if (request.name === 'x_send_dm') {
         opResult = await sendDmViaBrowser({
@@ -630,9 +662,13 @@ Constraints:
           handle: toolInput.handle as string | undefined,
           text: String(toolInput.text || ''),
           dryRun,
+          expectedBrowserContextId: ctxId,
         });
       } else if (request.name === 'x_list_dms') {
-        const listed = await listDmsViaBrowser({ limit: toolInput.limit as number | undefined });
+        const listed = await listDmsViaBrowser({
+          limit: toolInput.limit as number | undefined,
+          expectedBrowserContextId: ctxId,
+        });
         opResult = {
           success: listed.success,
           message: listed.message,
@@ -644,6 +680,7 @@ Constraints:
           handle: String(toolInput.handle || ''),
           marker: String(toolInput.marker || ''),
           dryRun,
+          expectedBrowserContextId: ctxId,
         });
       }
     } catch (err) {

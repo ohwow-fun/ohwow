@@ -23,9 +23,9 @@
  *      Google-sign-in metadata from Preferences (gaia_name, user_name,
  *      account_info) BUT left Cookies SQLite untouched, because cookies
  *      are site data, not Google auth. Result: the profile looked
- *      signed out in the Chrome UI but site sessions (PH @ogsus, X,
+ *      signed out in the Chrome UI but site sessions (Product Hunt, X,
  *      Reddit, etc) were still live. The exact "signed out but cookies
- *      kept" hybrid state Jesus flagged.
+ *      kept" hybrid state flagged in the field.
  *
  *   2. **Chrome's singleton lock is on `--user-data-dir`.** You cannot
  *      run two Chrome processes against the same data-dir. But you can
@@ -84,6 +84,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../../lib/logger.js';
+import { RawCdpBrowser } from './raw-cdp.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -227,8 +228,8 @@ export function parseLocalState(raw: string, dataDir: string): ProfileInfo[] {
  * is reliable enough that we can use it to correlate osascript-
  * reported windows back to profile directories.
  *
- * Input: a title string like "Products - Pinned - Google Chrome - Jesus".
- * Output: the profile suffix ("Jesus") or null if no suffix detected.
+ * Input: a title string like "Products - Pinned - Google Chrome - Alice".
+ * Output: the profile suffix ("Alice") or null if no suffix detected.
  *
  * Exported for unit testing.
  */
@@ -528,6 +529,41 @@ export function findProfileByIdentity(
   return substr ?? null;
 }
 
+/**
+ * Best-effort correlate an X handle to a debug Chrome profile when
+ * the operator hasn't pinned one via runtime_settings.x_posting_profile.
+ * Heuristics, tried in order:
+ *   - handle ↔ email domain: `example_com` → domain `example.com` → profile
+ *     with email `*@example.com`. Underscores map to dots.
+ *   - handle ↔ localProfileName substring (punctuation stripped).
+ *   - handle ↔ email substring.
+ * Returns null when no signal is strong enough — caller falls back to
+ * the generic "first profile with an email" default.
+ *
+ * Lives here because it's shared by both the deliverable-executor
+ * post_tweet path and the orchestrator tool-executor x_* tools — both
+ * need the same "guess the right profile from an X handle" behavior so
+ * operators don't have to explicitly set x_posting_profile.
+ */
+export function profileByHandleHint(
+  profiles: ProfileInfo[],
+  handle: string,
+): ProfileInfo | null {
+  const h = handle.replace(/^@/, '').toLowerCase();
+  if (!h) return null;
+  const normalized = h.replace(/[_.-]/g, '');
+  const domainCandidate = h.replace(/_/g, '.');
+  const byDomain = profiles.find((p) => p.email?.toLowerCase().endsWith(`@${domainCandidate}`));
+  if (byDomain) return byDomain;
+  const byLocal = profiles.find((p) => {
+    const local = (p.localProfileName || '').toLowerCase().replace(/[_.\s-]/g, '');
+    return local && (local.includes(normalized) || normalized.includes(local));
+  });
+  if (byLocal) return byLocal;
+  const byEmail = profiles.find((p) => p.email?.toLowerCase().includes(normalized));
+  return byEmail ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // macOS window-title-to-profile mapping (for target-to-profile correlation)
 // ---------------------------------------------------------------------------
@@ -692,40 +728,83 @@ export async function ensureDebugChrome(opts: {
  *
  * This is the experimentally-verified path — confirmed on 2026-04-13
  * via `osascript` listing two windows with different profile suffixes
- * (`- Jesus` and `- ohwow.fun`) after a single `open -a` call against
+ * (`- Alice` and `- example.com`) after a single `open -a` call against
  * a running debug Chrome on port 9222.
  *
  * Waits for a new page target to appear in the CDP target list before
  * returning, so callers can immediately reach for it.
  */
+export interface OpenProfileWindowResult {
+  /** The new page target's id (same shape listPageTargets returns). */
+  targetId: string;
+  /**
+   * CDP `browserContextId` of the new target. In a multi-profile debug
+   * Chrome each profile maps to its own browserContextId, so this value
+   * is the only reliable per-profile handle — URL heuristics break when
+   * two profiles both have x.com / twitter.com / etc. open. Null when
+   * the raw-CDP probe failed (rare; callers must fall back to URL-only
+   * routing in that case).
+   */
+  browserContextId: string | null;
+}
+
 export async function openProfileWindow(opts: {
   profileDir: string;
   port?: number;
   timeoutMs?: number;
-}): Promise<void> {
+  /**
+   * Optional URL to open as a new tab in the target profile. Without
+   * a URL the invocation just focuses the profile's existing window
+   * (if any) and no new CDP page target appears, so the "poll for a
+   * new target" step times out. Passing a URL makes the invocation
+   * always create a fresh tab — we get a detectable new target and
+   * we get one whose URL we chose (useful for routing to x.com/home
+   * in the right profile in one shot).
+   */
+  url?: string;
+}): Promise<OpenProfileWindowResult> {
   const port = opts.port ?? DEFAULT_CDP_PORT;
   const timeoutMs = opts.timeoutMs ?? 8000;
 
   if (process.platform !== 'darwin') {
     throw new ChromeLifecycleError(
       'PROFILE_WINDOW_TIMEOUT',
-      'openProfileWindow is macOS-only (uses `open -a`). Windows/Linux support is a follow-up.',
+      'openProfileWindow is macOS-only today (Windows/Linux support is a follow-up).',
     );
   }
 
   // Snapshot the CURRENT page targets so we can detect the new one.
   const beforeIds = new Set((await listPageTargets(port)).map((t) => t.id));
   logger.debug(
-    { profileDir: opts.profileDir, beforeCount: beforeIds.size },
+    { profileDir: opts.profileDir, beforeCount: beforeIds.size, url: opts.url },
     '[chrome-lifecycle] opening profile window',
   );
 
-  const cmd = `open -a "Google Chrome" --args --user-data-dir=${JSON.stringify(DEBUG_DATA_DIR)} --profile-directory=${JSON.stringify(opts.profileDir)}`;
+  // IMPORTANT: invoke the Chrome binary DIRECTLY rather than via
+  // `open -a "Google Chrome" --args ...`. With two Chrome instances
+  // running on the host (the user's real Chrome + ohwow's debug
+  // Chrome under DEBUG_DATA_DIR), `open -a` routes to whichever
+  // Chrome app is frontmost — almost always the real one — so the
+  // `--profile-directory` flag never reaches debug Chrome and no new
+  // CDP target appears on :9222. Direct-binary invocation uses
+  // Chromium's SingletonLock protocol: the freshly-spawned Chrome
+  // sees that DEBUG_DATA_DIR is already in use by the debug process,
+  // signals that process to open the requested profile + URL, and
+  // exits immediately (stdout: "Opening in existing browser session.").
+  // Verified 2026-04-15: this produces a new page target in a
+  // distinct browserContextId (= the target profile's identity).
+  const bin = chromeBinaryPath();
+  const args = [
+    `--user-data-dir=${DEBUG_DATA_DIR}`,
+    `--profile-directory=${opts.profileDir}`,
+  ];
+  if (opts.url) args.push(opts.url);
+  const cmd = [bin, ...args].map((a) => JSON.stringify(a)).join(' ');
   const { code, stderr } = await execCapture(cmd);
   if (code !== 0) {
     throw new ChromeLifecycleError(
       'PROFILE_WINDOW_TIMEOUT',
-      `open -a failed: ${stderr.slice(0, 200) || 'unknown error'}`,
+      `Chrome profile open failed: ${stderr.slice(0, 200) || 'unknown error'}`,
     );
   }
 
@@ -733,23 +812,48 @@ export async function openProfileWindow(opts: {
   // `chrome://newtab/` page in the new window; that's enough to
   // confirm the window exists.
   const startedAt = Date.now();
+  let newOne: { id: string; url: string } | undefined;
   while (Date.now() - startedAt < timeoutMs) {
     await sleep(300);
     const now = await listPageTargets(port);
-    const newOne = now.find((t) => !beforeIds.has(t.id));
-    if (newOne) {
-      logger.info(
-        { profileDir: opts.profileDir, targetId: newOne.id.slice(0, 8), url: newOne.url },
-        '[chrome-lifecycle] profile window opened',
-      );
-      return;
-    }
+    newOne = now.find((t) => !beforeIds.has(t.id));
+    if (newOne) break;
   }
 
-  throw new ChromeLifecycleError(
-    'PROFILE_WINDOW_TIMEOUT',
-    `Opened profile window for "${opts.profileDir}" but no new CDP target appeared within ${timeoutMs}ms. The window may be in a profile that Chrome refuses to open (e.g., managed profile without consent), or open -a silently failed.`,
+  if (!newOne) {
+    throw new ChromeLifecycleError(
+      'PROFILE_WINDOW_TIMEOUT',
+      `Opened profile window for "${opts.profileDir}" but no new CDP target appeared within ${timeoutMs}ms. The window may be in a profile that Chrome refuses to open (e.g., managed profile without consent), or open -a silently failed.`,
+    );
+  }
+
+  // Resolve the new target's browserContextId via raw CDP. The HTTP
+  // /json endpoint doesn't expose browserContextId — we need the
+  // Target.getTargets RPC. One-shot connection, closed immediately.
+  // Failure here is soft: callers still get a usable targetId and can
+  // fall back to URL-based routing.
+  let browserContextId: string | null = null;
+  try {
+    const browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+    try {
+      const targets = await browser.getTargets();
+      const match = targets.find((t) => t.targetId === newOne!.id);
+      browserContextId = match?.browserContextId ?? null;
+    } finally {
+      browser.close();
+    }
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, targetId: newOne.id.slice(0, 8) },
+      '[chrome-lifecycle] could not resolve browserContextId for new profile window',
+    );
+  }
+
+  logger.info(
+    { profileDir: opts.profileDir, targetId: newOne.id.slice(0, 8), ctx: browserContextId?.slice(0, 8), url: newOne.url },
+    '[chrome-lifecycle] profile window opened',
   );
+  return { targetId: newOne.id, browserContextId };
 }
 
 /**

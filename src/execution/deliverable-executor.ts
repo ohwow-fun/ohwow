@@ -23,6 +23,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
 import { composeTweetViaBrowser } from '../orchestrator/tools/x-posting.js';
 import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
+import { profileByHandleHint } from './browser/chrome-lifecycle.js';
 
 export interface DeliverableRow {
   id: string;
@@ -172,7 +173,7 @@ async function readPreferredXProfile(db: DatabaseAdapter): Promise<string | null
 }
 
 /**
- * runtime_settings.x_posting_handle (e.g. "ohwow_fun") pins the expected
+ * runtime_settings.x_posting_handle (e.g. "example_handle") pins the expected
  * @handle that should be signed into the chosen Chrome profile. Used as
  * a hard check before composeTweetViaBrowser types anything. Optional —
  * when unset, we post without identity verification and rely on the
@@ -201,25 +202,46 @@ async function readExpectedXHandle(db: DatabaseAdapter): Promise<string | null> 
  * Chromium with no persistent profile — meaning we tried to post
  * logged out.
  */
-async function ensureProfileChrome(db: DatabaseAdapter): Promise<{ ok: true } | { ok: false; error: string }> {
+async function ensureProfileChrome(
+  db: DatabaseAdapter,
+): Promise<{ ok: true; browserContextId: string | null } | { ok: false; error: string }> {
   const override = await readPreferredXProfile(db);
+  const expectedHandle = await readExpectedXHandle(db);
   const profiles = listProfiles();
   if (profiles.length === 0) {
     return { ok: false, error: 'no profiles in ~/.ohwow/chrome-cdp/. Log into X in desktop Chrome once via the onboarding, or set runtime_settings.x_posting_profile.' };
   }
-  // Preference order: explicit override → first profile with an email →
-  // first profile overall. Keeps behavior sane in single-profile setups
-  // while letting multi-account workspaces pin which account posts.
+  // Preference order:
+  //   1. explicit runtime_settings.x_posting_profile override
+  //   2. handle-derived match — when only x_posting_handle is set, try to
+  //      correlate it to a profile by email/localname. Without this the
+  //      fallback picks whichever profile Chrome lists first (alphabetical
+  //      / Default), which on multi-profile rigs is almost never the
+  //      intended X account.
+  //   3. first profile with an email
+  //   4. first profile overall
+  const handleDerived = expectedHandle ? profileByHandleHint(profiles, expectedHandle) : null;
   const target = (override && findProfileByIdentity(profiles, override))
+    || handleDerived
     || profiles.find((p) => !!p.email)
     || profiles[0];
   try {
     await ensureDebugChrome({ preferredProfile: target.directory });
     // ensureDebugChrome only guarantees the process is running; it does
     // not guarantee a window for THIS profile is open. openProfileWindow
-    // is idempotent — it no-ops if the window already exists.
-    await openProfileWindow({ profileDir: target.directory });
-    return { ok: true };
+    // is idempotent — it no-ops if the window already exists. We return
+    // its browserContextId so x-posting can attach to a tab in THIS
+    // profile's context, not just any x.com tab in CDP.
+    // url='https://x.com/home' guarantees `open -a` creates a fresh tab
+    // (needed when the profile window is already open — without a URL
+    // arg Chrome just focuses it and no new CDP target appears). The
+    // tab lands in the intended profile's browserContextId, which is
+    // the handle x-posting uses to pin its CDP attach.
+    const opened = await openProfileWindow({
+      profileDir: target.directory,
+      url: 'https://x.com/home',
+    });
+    return { ok: true, browserContextId: opened.browserContextId };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -235,7 +257,12 @@ const postTweetHandler: Handler = async (content, ctx) => {
 
   const expectedHandle = await readExpectedXHandle(ctx.db);
   try {
-    const res = await composeTweetViaBrowser({ text, dryRun, expectedHandle: expectedHandle || undefined });
+    const res = await composeTweetViaBrowser({
+      text,
+      dryRun,
+      expectedHandle: expectedHandle || undefined,
+      expectedBrowserContextId: prep.browserContextId || undefined,
+    });
     if (!res.success) {
       return { ok: false, error: res.message || 'compose failed', result: res as unknown as Record<string, unknown> };
     }

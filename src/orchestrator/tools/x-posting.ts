@@ -26,7 +26,7 @@
  *     unless the caller passes `dry_run: false`.
  *   - All text is length-checked client-side before any browser work.
  *
- * Proven selectors (verified live on ohwow_fun account, 2026-04-13):
+ * Proven selectors (verified live on a real X account, 2026-04-13):
  *   - Tweet compose textbox: `div[data-testid="tweetTextarea_0"][role="textbox"]`
  *   - Tweet publish:         `[data-testid="tweetButton"]`
  *   - Thread add row:        `[data-testid="addButton"]` → next row is `tweetTextarea_N`
@@ -57,6 +57,7 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
+import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -86,7 +87,7 @@ export const X_POSTING_HEAD_TOOL_DEFINITIONS: Tool[] = [
         },
         profile: {
           type: 'string',
-          description: 'Chrome profile to use for the real logged-in session. Accepts an email (e.g. "ogsus@ohwow.fun") or a profile directory name. Defaults to the owner\'s profile.',
+          description: 'Chrome profile to use for the real logged-in session. Accepts an email (e.g. "alice@example.com") or a profile directory name. Defaults to the owner\'s profile.',
         },
       },
       required: ['text'],
@@ -229,17 +230,28 @@ export interface ComposeTweetInput {
    * something we can't verify.
    */
   expectedHandle?: string;
+  /**
+   * CDP `browserContextId` of the Chrome profile window we should post
+   * from. When set, the tool attaches to an x.com tab in THIS context
+   * only — never an x.com tab belonging to some other profile — and
+   * opens a new tab in that context if no x.com tab exists. Passed
+   * down from `openProfileWindow`'s return value; the upstream
+   * `ensureProfileChrome` / tool-executor paths own that lookup.
+   */
+  expectedBrowserContextId?: string;
 }
 
 export interface ComposeThreadInput {
   tweets: string[];
   dryRun?: boolean;
+  expectedBrowserContextId?: string;
 }
 
 export interface ComposeArticleInput {
   title: string;
   body: string;
   dryRun?: boolean;
+  expectedBrowserContextId?: string;
 }
 
 export interface SendDmInput {
@@ -254,10 +266,12 @@ export interface SendDmInput {
   handle?: string;
   text: string;
   dryRun?: boolean;
+  expectedBrowserContextId?: string;
 }
 
 export interface ListDmsInput {
   limit?: number;
+  expectedBrowserContextId?: string;
 }
 
 export interface DeleteLastTweetInput {
@@ -266,6 +280,7 @@ export interface DeleteLastTweetInput {
   /** Substring to match — picks the most recent tweet whose text contains this marker. */
   marker: string;
   dryRun?: boolean;
+  expectedBrowserContextId?: string;
 }
 
 export interface ComposeResult {
@@ -297,96 +312,116 @@ const KEYBOARD_DELAY_MS = 15;
 // CDP connection
 // ---------------------------------------------------------------------------
 
-// Minimal structural types for the Playwright surface we use. Avoids
-// taking a hard dep on playwright-core's public types — we import
-// lazily and the module may be absent in some test harnesses.
-type CdpPage = {
-  goto: (url: string, opts?: { waitUntil?: string; timeout?: number }) => Promise<unknown>;
-  url: () => string;
-  title: () => Promise<string>;
-  evaluate: <T>(fn: string | ((...args: unknown[]) => T)) => Promise<T>;
-  click: (selector: string, opts?: { timeout?: number }) => Promise<void>;
-  waitForSelector: (selector: string, opts?: { state?: string; timeout?: number }) => Promise<unknown>;
-  screenshot: (opts?: { type?: 'jpeg' | 'png'; quality?: number }) => Promise<Buffer>;
-  keyboard: {
-    type: (text: string, opts?: { delay?: number }) => Promise<void>;
-    press: (key: string) => Promise<void>;
-  };
-  on: (event: string, handler: (arg: unknown) => void) => void;
-};
-
-type CdpContext = { pages: () => CdpPage[] };
-type CdpBrowser = { contexts: () => CdpContext[] };
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let cachedPlaywright: any = null;
-
-async function getPlaywright(): Promise<{ chromium: { connectOverCDP: (url: string) => Promise<CdpBrowser> } }> {
-  if (!cachedPlaywright) {
-    cachedPlaywright = await import('playwright-core');
-  }
-  return cachedPlaywright;
-}
+// Use the raw CDP driver instead of Playwright's `chromium.connectOverCDP`.
+// Playwright collapses every Chrome profile into a single BrowserContext,
+// which means `browser.contexts()[0]` picks an arbitrary profile — when
+// the daemon is posting from a multi-profile debug Chrome we'd land in
+// whichever context was enumerated first (often the unauthenticated one)
+// even though ensureProfileChrome correctly set up the right window. The
+// raw driver exposes targets with their real `browserContextId`, so we
+// can pick the exact profile's x.com tab. See raw-cdp.ts top-of-file
+// comment for the full rationale + the hang repro.
+type CdpPage = RawCdpPage;
 
 /**
- * Connect to the already-running debug Chrome at `CDP_URL` and return
- * a Playwright Page we can drive. Caller is responsible for ensuring
- * Chrome is up (via `ctx.browserState.activate()` in tool-executor).
+ * Connect to the already-running debug Chrome at `CDP_URL` and return a
+ * RawCdpPage attached to an x.com tab. Caller is responsible for ensuring
+ * Chrome is up (via ctx.browserState.activate() in tool-executor, or
+ * ensureProfileChrome() in the deliverable-executor path).
  *
- * This does NOT close the browser when done — that'd kill Chrome for
- * the rest of the daemon. We just let the reference fall out of scope.
+ * Profile pinning via `expectedContextId`:
+ *   In a multi-profile debug Chrome, more than one profile may have an
+ *   x.com tab open. URL alone does not identify the right profile — we
+ *   could attach to another profile's x.com tab even though the caller
+ *   intended to post from a specific account. CDP's `browserContextId`
+ *   is the only reliable per-profile handle, and it's the value
+ *   `openProfileWindow` now returns.
+ *
+ *   When `expectedContextId` is set we restrict page targets to that
+ *   context and — if no x.com tab exists inside it — open a new tab in
+ *   that context via `Target.createTarget`. This is the missing step
+ *   that lets the runtime post from the intended profile regardless of
+ *   what tabs other profiles have open.
+ *
+ *   When `expectedContextId` is not set we fall back to the old
+ *   URL-heuristic behavior (used by callers that haven't threaded the
+ *   context through yet, and by tests).
+ *
+ * Returns null when no suitable tab exists and we can't safely create
+ * one — callers surface the error to the operator rather than posting
+ * from the wrong session.
  */
-async function getCdpPage(urlHint?: string): Promise<CdpPage | null> {
+async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise<CdpPage | null> {
   try {
-    const pw = await getPlaywright();
-    const browser = await pw.chromium.connectOverCDP(CDP_URL);
-    const contexts = browser.contexts();
-    if (contexts.length === 0) {
-      logger.warn('[x-posting] CDP browser has no contexts');
+    const browser = await RawCdpBrowser.connect(CDP_URL, 5000);
+    const targets = await browser.getTargets();
+    const pageTargets = targets.filter((t) => t.type === 'page');
+    if (pageTargets.length === 0) {
+      logger.warn('[x-posting] CDP browser has no page targets');
       return null;
     }
-    const ctx = contexts[0];
-    const pages = ctx.pages();
-    if (pages.length === 0) {
-      logger.warn('[x-posting] CDP context has no pages');
-      return null;
+
+    if (expectedContextId) {
+      const inContext = pageTargets.filter((t) => t.browserContextId === expectedContextId);
+      let target = urlHint ? inContext.find((t) => t.url.includes(urlHint)) : undefined;
+      if (!target) target = inContext.find((t) => t.url.startsWith('https://x.com'));
+      if (!target) target = inContext.find((t) => t.url.startsWith('https://twitter.com'));
+
+      if (!target) {
+        // No x.com tab in the target profile yet. Open one in that exact
+        // browserContextId via Target.createTarget — this is the only
+        // way to guarantee the new tab belongs to the right profile.
+        // Without this step the runtime would either return null
+        // (current behavior before the fix) or attach to an unrelated
+        // profile's x.com tab.
+        try {
+          const newTargetId = await browser.createTargetInContext(expectedContextId, 'https://x.com/home');
+          logger.info(
+            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8) },
+            '[x-posting] opened new x.com tab in target profile context',
+          );
+          const page = await browser.attachToPage(newTargetId);
+          await page.installUnloadEscapes();
+          return page;
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : err, ctx: expectedContextId.slice(0, 8) },
+            '[x-posting] createTargetInContext failed',
+          );
+          return null;
+        }
+      }
+
+      logger.debug(
+        { targetId: target.targetId.slice(0, 8), ctx: target.browserContextId?.slice(0, 8), url: target.url },
+        '[x-posting] attaching to x.com tab in pinned profile context',
+      );
+      const page = await browser.attachToPage(target.targetId);
+      await page.installUnloadEscapes();
+      return page;
     }
-    // Prefer an existing x.com tab — it's profile-proof: the tab belongs
-    // to whichever Chrome profile window already has it open, and posting
-    // from there means posting from that profile's session. Only after
-    // we can't find one do we pick any https tab (which we'll verify
-    // via assertSignedInAs before typing). The prior "pages[0]" fallback
-    // silently hijacked unrelated tabs (WhatsApp, etc.) and navigated
-    // them to x.com — which forced a profile change to whichever was the
-    // first enumerated profile, not the intended one.
-    let page: CdpPage | undefined;
-    if (urlHint) {
-      page = pages.find((p) => p.url().includes(urlHint));
-    }
-    if (!page) page = pages.find((p) => p.url().startsWith('https://x.com'));
-    if (!page) page = pages.find((p) => p.url().startsWith('https://twitter.com'));
-    if (!page) {
+
+    // Fallback: no context hint. Prefer urlHint match, then x.com, then
+    // twitter.com. Never hijack an unrelated tab because navigating it
+    // would force a profile change.
+    let target = urlHint
+      ? pageTargets.find((t) => t.url.includes(urlHint))
+      : undefined;
+    if (!target) target = pageTargets.find((t) => t.url.startsWith('https://x.com'));
+    if (!target) target = pageTargets.find((t) => t.url.startsWith('https://twitter.com'));
+    if (!target) {
       logger.warn(
-        { pageUrls: pages.slice(0, 6).map((p) => p.url()) },
+        { pageUrls: pageTargets.slice(0, 6).map((t) => t.url) },
         '[x-posting] no x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',
       );
       return null;
     }
-
-    // Install the beforeunload escape hatches and dialog handler.
-    page.on('dialog', (d: unknown) => {
-      (d as { accept: () => Promise<void> }).accept().catch(() => {});
-    });
-    await page.evaluate(`(() => {
-      try {
-        window.onbeforeunload = null;
-        window.addEventListener('beforeunload', (e) => {
-          e.stopImmediatePropagation && e.stopImmediatePropagation();
-          delete e.returnValue;
-        }, { capture: true });
-      } catch {}
-      return true;
-    })()`).catch(() => {});
+    logger.debug(
+      { targetId: target.targetId.slice(0, 8), ctx: target.browserContextId?.slice(0, 8), url: target.url },
+      '[x-posting] attaching to existing x.com tab (URL-only routing; no context hint supplied)',
+    );
+    const page = await browser.attachToPage(target.targetId);
+    await page.installUnloadEscapes();
     return page;
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, '[x-posting] CDP connect failed');
@@ -449,8 +484,7 @@ function isLoginRedirect(url: string): boolean {
 
 async function captureScreenshot(page: CdpPage): Promise<string | undefined> {
   try {
-    const buffer = await page.screenshot({ type: 'jpeg', quality: 70 });
-    return buffer.toString('base64');
+    return await page.screenshotJpeg(70);
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, '[x-posting] screenshot failed');
     return undefined;
@@ -500,7 +534,7 @@ async function clickByText(page: CdpPage, text: string, selectorScope = 'button,
       return false;
     })()`);
     if (!found) return false;
-    await page.click('[data-x-click-target="1"]', { timeout: 5000 });
+    const clicked = await page.clickSelector('[data-x-click-target="1"]', 5000);
     // Clean up the attribute so a subsequent clickByText call doesn't
     // pick up the old node.
     await page.evaluate(`(() => {
@@ -508,7 +542,7 @@ async function clickByText(page: CdpPage, text: string, selectorScope = 'button,
       if (el) el.removeAttribute('data-x-click-target');
       return true;
     })()`).catch(() => {});
-    return true;
+    return clicked;
   } catch {
     return false;
   }
@@ -559,12 +593,14 @@ async function readActiveHandle(page: CdpPage): Promise<string | null> {
  */
 async function assertSignedInAs(page: CdpPage, expected: string): Promise<ComposeResult | null> {
   const target = expected.replace(/^@/, '').toLowerCase();
-  if (!/^https:\/\/(x|twitter)\.com/.test(page.url())) {
-    await page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  let currentUrl = await page.url();
+  if (!/^https:\/\/(x|twitter)\.com/.test(currentUrl)) {
+    await page.goto('https://x.com/home');
     await wait(HYDRATION_WAIT_MS);
+    currentUrl = await page.url();
   }
-  if (isLoginRedirect(page.url())) {
-    return { success: false, message: `X redirected to login; expected handle @${target} is not signed in on this profile.`, currentUrl: page.url() };
+  if (isLoginRedirect(currentUrl)) {
+    return { success: false, message: `X redirected to login; expected handle @${target} is not signed in on this profile.`, currentUrl };
   }
   // Give the sidebar a couple of beats to render after a fresh navigation.
   let handle: string | null = null;
@@ -580,7 +616,7 @@ async function assertSignedInAs(page: CdpPage, expected: string): Promise<Compos
     return {
       success: false,
       message: `Profile mismatch: attached X tab is signed in as @${handle}, but the task expects @${target}. Refusing to post. Open x.com in the "${target}" profile window, or adjust runtime_settings.x_posting_profile.`,
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
   return null;
@@ -602,7 +638,7 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     };
   }
 
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no x.com tab open in any profile window, or debug Chrome is down. Open x.com in the target profile window and retry.' };
 
   if (input.expectedHandle) {
@@ -610,10 +646,11 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     if (mismatch) return mismatch;
   }
 
-  await page.goto(COMPOSE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(COMPOSE_URL);
   await wait(HYDRATION_WAIT_MS);
-  if (isLoginRedirect(page.url())) {
-    return { success: false, message: `X redirected to login (${page.url()}).`, currentUrl: page.url() };
+  const currentUrl = await page.url();
+  if (isLoginRedirect(currentUrl)) {
+    return { success: false, message: `X redirected to login (${currentUrl}).`, currentUrl };
   }
 
   const focused = await focusByTestid(page, 'tweetTextarea_0');
@@ -622,17 +659,17 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       success: false,
       message: 'Could not focus tweetTextarea_0',
       screenshotBase64: await captureScreenshot(page),
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
 
   // Small warmup: a single space + backspace reliably eats the
   // intermittent first-keystroke-dropped glitch we saw when typing
   // straight after focus.
-  await page.keyboard.type(' ', { delay: KEYBOARD_DELAY_MS });
-  await page.keyboard.press('Backspace');
+  await page.typeText(' ');
+  await page.pressKey('Backspace');
 
-  await page.keyboard.type(text, { delay: KEYBOARD_DELAY_MS });
+  await page.typeText(text);
   await wait(400);
 
   const screenshotBase64 = await captureScreenshot(page);
@@ -645,16 +682,15 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       screenshotBase64,
       tweetsTyped: 1,
       tweetsPublished: 0,
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
 
-  try {
-    await page.click('[data-testid="tweetButton"]', { timeout: 10000 });
-  } catch (err) {
+  const clicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
+  if (!clicked) {
     return {
       success: false,
-      message: `Post click failed: ${err instanceof Error ? err.message : String(err)}`,
+      message: 'Post button never became clickable within 10s.',
       screenshotBase64,
       tweetsTyped: 1,
       tweetsPublished: 0,
@@ -669,7 +705,7 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     screenshotBase64: postShot || screenshotBase64,
     tweetsTyped: 1,
     tweetsPublished: 1,
-    currentUrl: page.url(),
+    currentUrl: await page.url(),
   };
 }
 
@@ -691,13 +727,14 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     }
   }
 
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
-  await page.goto(COMPOSE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(COMPOSE_URL);
   await wait(HYDRATION_WAIT_MS);
-  if (isLoginRedirect(page.url())) {
-    return { success: false, message: `X redirected to login.`, currentUrl: page.url() };
+  const afterGoto = await page.url();
+  if (isLoginRedirect(afterGoto)) {
+    return { success: false, message: `X redirected to login.`, currentUrl: afterGoto };
   }
 
   if (!await focusByTestid(page, 'tweetTextarea_0')) {
@@ -707,18 +744,17 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
       screenshotBase64: await captureScreenshot(page),
     };
   }
-  await page.keyboard.type(' ', { delay: KEYBOARD_DELAY_MS });
-  await page.keyboard.press('Backspace');
-  await page.keyboard.type(tweets[0], { delay: KEYBOARD_DELAY_MS });
+  await page.typeText(' ');
+  await page.pressKey('Backspace');
+  await page.typeText(tweets[0]);
   let tweetsTyped = 1;
 
   for (let i = 1; i < tweets.length; i++) {
-    try {
-      await page.click('[data-testid="addButton"]', { timeout: 5000 });
-    } catch (err) {
+    const addClicked = await page.clickSelector('[data-testid="addButton"]', 5000);
+    if (!addClicked) {
       return {
         success: false,
-        message: `Could not click Add Button for row ${i + 1}: ${err instanceof Error ? err.message : String(err)}`,
+        message: `Could not click Add Button for row ${i + 1}.`,
         screenshotBase64: await captureScreenshot(page),
         tweetsTyped,
       };
@@ -732,7 +768,7 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
         tweetsTyped,
       };
     }
-    await page.keyboard.type(tweets[i], { delay: KEYBOARD_DELAY_MS });
+    await page.typeText(tweets[i]);
     tweetsTyped++;
   }
 
@@ -747,16 +783,15 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
       screenshotBase64,
       tweetsTyped,
       tweetsPublished: 0,
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
 
-  try {
-    await page.click('[data-testid="tweetButton"]', { timeout: 10000 });
-  } catch (err) {
+  const postClicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
+  if (!postClicked) {
     return {
       success: false,
-      message: `Failed to click Post all: ${err instanceof Error ? err.message : String(err)}`,
+      message: 'Post all button never became clickable within 10s.',
       screenshotBase64,
       tweetsTyped,
       tweetsPublished: 0,
@@ -770,7 +805,7 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     screenshotBase64: await captureScreenshot(page) || screenshotBase64,
     tweetsTyped,
     tweetsPublished: tweetsTyped,
-    currentUrl: page.url(),
+    currentUrl: await page.url(),
   };
 }
 
@@ -786,20 +821,17 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   if (!title) return { success: false, message: 'title is required' };
   if (!body || body.length < 100) return { success: false, message: 'body must be at least 100 chars for an article' };
 
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
-  await page.goto(ARTICLE_LANDING_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(ARTICLE_LANDING_URL);
   await wait(HYDRATION_WAIT_MS);
 
   // Click the Write button — testid is `empty_state_button_text` when
   // there are no drafts. If drafts exist, we try the fallback "Write"
   // text-match instead.
-  let clickedWrite = false;
-  try {
-    await page.click('[data-testid="empty_state_button_text"]', { timeout: 3000 });
-    clickedWrite = true;
-  } catch {
+  let clickedWrite = await page.clickSelector('[data-testid="empty_state_button_text"]', 3000);
+  if (!clickedWrite) {
     clickedWrite = await clickByText(page, 'Write');
   }
   if (!clickedWrite) {
@@ -812,7 +844,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   await wait(HYDRATION_WAIT_MS);
 
   // The editor URL now contains a draft ID.
-  const draftUrl = page.url();
+  const draftUrl = await page.url();
   if (!/\/compose\/articles\/edit\//.test(draftUrl)) {
     return {
       success: false,
@@ -835,7 +867,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
       screenshotBase64: await captureScreenshot(page),
     };
   }
-  await page.keyboard.type(title, { delay: KEYBOARD_DELAY_MS });
+  await page.typeText(title);
   await wait(300);
 
   // Fill body — contenteditable at [data-testid="composer"].
@@ -847,7 +879,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
     };
   }
   const { plainText: bodyPlain } = stripMarkdownForXArticle(body);
-  await page.keyboard.type(bodyPlain, { delay: KEYBOARD_DELAY_MS });
+  await page.typeText(bodyPlain);
   await wait(400);
 
   const screenshotBase64 = await captureScreenshot(page);
@@ -881,14 +913,13 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   }
 
   // Wait for the confirmation dialog to mount.
-  try {
-    await page.waitForSelector('div[role="dialog"]', { state: 'attached', timeout: 8000 });
-  } catch {
+  const dialogMounted = await page.waitForSelector('div[role="dialog"]', 8000);
+  if (!dialogMounted) {
     return {
       success: false,
       message: 'Publish confirmation dialog did not appear within 8s.',
       screenshotBase64: await captureScreenshot(page),
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
   await wait(400);
@@ -913,15 +944,14 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
       success: false,
       message: 'Publish button not found inside confirmation dialog.',
       screenshotBase64: await captureScreenshot(page),
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
-  try {
-    await page.click('[data-x-click-target="1"]', { timeout: 5000 });
-  } catch (err) {
+  const dialogClicked = await page.clickSelector('[data-x-click-target="1"]', 5000);
+  if (!dialogClicked) {
     return {
       success: false,
-      message: `Dialog Publish click failed: ${err instanceof Error ? err.message : String(err)}`,
+      message: 'Dialog Publish button was not clickable within 5s.',
       screenshotBase64: await captureScreenshot(page),
     };
   }
@@ -930,11 +960,12 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   // The redirect is the ground-truth signal that publish succeeded —
   // otherwise we'd falsely report success on a stalled confirmation.
   const redirectDeadline = Date.now() + POST_SETTLE_MS + 3000;
+  let finalUrl = await page.url();
   while (Date.now() < redirectDeadline) {
     await wait(400);
-    if (/\/status\/\d+/.test(page.url())) break;
+    finalUrl = await page.url();
+    if (/\/status\/\d+/.test(finalUrl)) break;
   }
-  const finalUrl = page.url();
   const publishedOk = /\/status\/\d+/.test(finalUrl);
   logger.info(`[x-posting] Article publish ${publishedOk ? 'succeeded' : 'uncertain'}: ${title.slice(0, 80)}`);
   return {
@@ -968,13 +999,13 @@ export interface ListDmsResult {
 
 export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsResult> {
   const limit = Math.max(1, Math.min(50, input.limit ?? 20));
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
-  await page.goto(DM_INBOX_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(DM_INBOX_URL);
   await wait(HYDRATION_WAIT_MS);
 
-  const threads = await page.evaluate(`(() => {
+  const threads = await page.evaluate<DmThreadSummary[]>(`(() => {
     const limit = ${limit};
     const items = Array.from(document.querySelectorAll('[data-testid^="dm-conversation-item-"]'));
     return items.slice(0, limit).map((it) => {
@@ -989,8 +1020,8 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
 
   return {
     success: true,
-    message: `Found ${(threads as DmThreadSummary[]).length} DM thread(s).`,
-    threads: threads as DmThreadSummary[],
+    message: `Found ${threads.length} DM thread(s).`,
+    threads,
     screenshotBase64: await captureScreenshot(page),
   };
 }
@@ -1009,14 +1040,14 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
   const pairColon = pair.replace(/-/g, ':');
   const pairHyphen = pair.replace(/:/g, '-');
 
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   // Either navigate directly to the thread URL, or open from the inbox.
   if (pairHyphen) {
-    await page.goto(`https://x.com/i/chat/${pairHyphen}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(`https://x.com/i/chat/${pairHyphen}`);
   } else {
-    await page.goto(DM_INBOX_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(DM_INBOX_URL);
   }
   await wait(HYDRATION_WAIT_MS);
 
@@ -1047,28 +1078,25 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
         screenshotBase64: await captureScreenshot(page),
       };
     }
-    try {
-      await page.click('[data-x-click-target="1"]', { timeout: 5000 });
-    } catch {
-      return { success: false, message: 'Failed to open matched conversation' };
+    if (!await page.clickSelector('[data-x-click-target="1"]', 5000)) {
+      return { success: false, message: 'Could not open matched conversation within 5s.' };
     }
     await wait(HYDRATION_WAIT_MS);
   }
 
   // Wait for the composer to appear, then type.
-  try {
-    await page.waitForSelector('textarea[data-testid="dm-composer-textarea"]', { state: 'attached', timeout: 10000 });
-  } catch {
+  const composerReady = await page.waitForSelector('textarea[data-testid="dm-composer-textarea"]', 10000);
+  if (!composerReady) {
     return {
       success: false,
-      message: 'DM composer textarea did not appear — conversation may not have opened.',
+      message: 'DM composer textarea did not appear. The conversation may not have opened.',
       screenshotBase64: await captureScreenshot(page),
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
     };
   }
 
-  await page.click('textarea[data-testid="dm-composer-textarea"]');
-  await page.keyboard.type(text, { delay: KEYBOARD_DELAY_MS });
+  await page.clickSelector('textarea[data-testid="dm-composer-textarea"]', 2000);
+  await page.typeText(text);
   await wait(400);
 
   const screenshotBase64 = await captureScreenshot(page);
@@ -1080,17 +1108,16 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
       success: true,
       message: `Dry run complete. Composed DM to ${landedPair}: "${text.slice(0, 60)}...". Call again with dry_run=false to send.`,
       screenshotBase64,
-      currentUrl: page.url(),
+      currentUrl: await page.url(),
       landedAt: landedPair,
     };
   }
 
-  try {
-    await page.click('[data-testid="dm-composer-send-button"]', { timeout: 5000 });
-  } catch (err) {
+  const sendClicked = await page.clickSelector('[data-testid="dm-composer-send-button"]', 5000);
+  if (!sendClicked) {
     return {
       success: false,
-      message: `DM send click failed: ${err instanceof Error ? err.message : String(err)}`,
+      message: 'DM send button never became clickable within 5s.',
       screenshotBase64,
     };
   }
@@ -1100,7 +1127,7 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
     success: true,
     message: `DM sent to ${landedPair}.`,
     screenshotBase64: await captureScreenshot(page) || screenshotBase64,
-    currentUrl: page.url(),
+    currentUrl: await page.url(),
     landedAt: landedPair,
   };
 }
@@ -1116,10 +1143,10 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
   if (!handle) return { success: false, message: 'handle is required' };
   if (!marker) return { success: false, message: 'marker is required' };
 
-  const page = await getCdpPage('x.com');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
-  await page.goto(`https://x.com/${handle}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`https://x.com/${handle}`);
   await wait(HYDRATION_WAIT_MS);
 
   const located = await page.evaluate(`(() => {
@@ -1155,10 +1182,8 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
     };
   }
 
-  try {
-    await page.click('[data-x-click-target="1"]', { timeout: 5000 });
-  } catch (err) {
-    return { success: false, message: `Caret click failed: ${err instanceof Error ? err.message : String(err)}` };
+  if (!await page.clickSelector('[data-x-click-target="1"]', 5000)) {
+    return { success: false, message: 'Caret button was not clickable within 5s.' };
   }
   await wait(600);
 
@@ -1172,9 +1197,8 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
   }
   await wait(600);
 
-  try {
-    await page.click('[data-testid="confirmationSheetConfirm"]', { timeout: 5000 });
-  } catch {
+  const confirmPrimary = await page.clickSelector('[data-testid="confirmationSheetConfirm"]', 5000);
+  if (!confirmPrimary) {
     // Fallback: confirm by text
     const confirmed = await clickByText(page, 'Delete');
     if (!confirmed) {
@@ -1187,6 +1211,6 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
     success: true,
     message: `Tweet deleted (marker: ${marker}).`,
     screenshotBase64: await captureScreenshot(page),
-    currentUrl: page.url(),
+    currentUrl: await page.url(),
   };
 }

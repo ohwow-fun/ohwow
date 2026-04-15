@@ -27,14 +27,14 @@ describe('parseLocalState', () => {
       profile: {
         info_cache: {
           'Profile 2': {
-            user_name: 'ing.jesusonoro@gmail.com',
-            gaia_name: 'Jesus Oñoro',
-            gaia_given_name: 'Jesus',
-            name: 'Jesus',
+            user_name: 'alice@example.com',
+            gaia_name: 'Alice Example',
+            gaia_given_name: 'Alice',
+            name: 'Alice',
           },
           'Profile 1': {
             user_name: '',
-            name: 'ohwow.fun',
+            name: 'example.com',
           },
         },
       },
@@ -43,9 +43,9 @@ describe('parseLocalState', () => {
     expect(profiles).toHaveLength(2);
 
     const p2 = profiles.find((p) => p.directory === 'Profile 2')!;
-    expect(p2.email).toBe('ing.jesusonoro@gmail.com');
-    expect(p2.gaiaName).toBe('Jesus');
-    expect(p2.localProfileName).toBe('Jesus');
+    expect(p2.email).toBe('alice@example.com');
+    expect(p2.gaiaName).toBe('Alice');
+    expect(p2.localProfileName).toBe('Alice');
     expect(p2.path).toBe(`${dataDir}/Profile 2`);
 
     // Profile 1 is the "signed out but cookies kept" shape we saw in
@@ -53,7 +53,7 @@ describe('parseLocalState', () => {
     // represented with email=null (not an empty string).
     const p1 = profiles.find((p) => p.directory === 'Profile 1')!;
     expect(p1.email).toBeNull();
-    expect(p1.localProfileName).toBe('ohwow.fun');
+    expect(p1.localProfileName).toBe('example.com');
   });
 
   it('prefers gaia_given_name over gaia_name for gaiaName', () => {
@@ -61,16 +61,16 @@ describe('parseLocalState', () => {
       profile: {
         info_cache: {
           'Profile 3': {
-            user_name: 'dbuidler@aved.ai',
-            gaia_given_name: 'Jesus',
-            gaia_name: 'Jesus Onoro',
-            name: 'aved.ai',
+            user_name: 'bob@example.net',
+            gaia_given_name: 'Alice',
+            gaia_name: 'Alice Example',
+            name: 'example.net',
           },
         },
       },
     });
     const profiles = parseLocalState(raw, dataDir);
-    expect(profiles[0].gaiaName).toBe('Jesus');
+    expect(profiles[0].gaiaName).toBe('Alice');
   });
 
   it('returns [] on unparseable JSON without throwing', () => {
@@ -88,8 +88,8 @@ describe('parseLocalState', () => {
 
 describe('parseWindowTitleSuffix', () => {
   it('extracts the profile suffix from a standard Chrome title', () => {
-    expect(parseWindowTitleSuffix('Products - Google Chrome - Jesus')).toBe('Jesus');
-    expect(parseWindowTitleSuffix("Product Hunt - Google Chrome - ohwow.fun")).toBe('ohwow.fun');
+    expect(parseWindowTitleSuffix('Products - Google Chrome - Alice')).toBe('Alice');
+    expect(parseWindowTitleSuffix("Product Hunt - Google Chrome - example.com")).toBe('example.com');
   });
 
   it('handles the "- Pinned -" inflection before " - Google Chrome -"', () => {
@@ -97,8 +97,8 @@ describe('parseWindowTitleSuffix', () => {
     // suffix regex matches on the LAST "- Google Chrome - X" so it
     // still picks up the correct suffix.
     expect(
-      parseWindowTitleSuffix("Who's using Chrome? - Pinned - Google Chrome - Jesus"),
-    ).toBe('Jesus');
+      parseWindowTitleSuffix("Who's using Chrome? - Pinned - Google Chrome - Alice"),
+    ).toBe('Alice');
   });
 
   it('returns null when no profile suffix is present', () => {
@@ -147,16 +147,16 @@ describe('parseUserDataDirArg', () => {
 
 describe('findProfileByIdentity', () => {
   const fixture: ProfileInfo[] = [
-    { directory: 'Profile 1', path: '/x/Profile 1', email: null, gaiaName: null, localProfileName: 'ohwow.fun' },
-    { directory: 'Profile 2', path: '/x/Profile 2', email: 'ing.jesusonoro@gmail.com', gaiaName: 'Jesus', localProfileName: 'Jesus' },
-    { directory: 'Profile 3', path: '/x/Profile 3', email: 'dbuidler@aved.ai', gaiaName: 'Jesus Onoro', localProfileName: 'aved.ai' },
-    { directory: 'Profile 8', path: '/x/Profile 8', email: 'ourpandaworld08@gmail.com', gaiaName: 'Jesus', localProfileName: 'Pandas' },
+    { directory: 'Profile 1', path: '/x/Profile 1', email: null, gaiaName: null, localProfileName: 'example.com' },
+    { directory: 'Profile 2', path: '/x/Profile 2', email: 'alice@example.com', gaiaName: 'Alice', localProfileName: 'Alice' },
+    { directory: 'Profile 3', path: '/x/Profile 3', email: 'bob@example.net', gaiaName: 'Alice Example', localProfileName: 'example.net' },
+    { directory: 'Profile 8', path: '/x/Profile 8', email: 'eve@example.org', gaiaName: 'Alice', localProfileName: 'Eve' },
   ];
 
   it('matches an exact email (case-insensitive)', () => {
-    const match = findProfileByIdentity(fixture, 'ing.jesusonoro@gmail.com');
+    const match = findProfileByIdentity(fixture, 'alice@example.com');
     expect(match?.directory).toBe('Profile 2');
-    expect(findProfileByIdentity(fixture, 'ING.JESUSONORO@GMAIL.COM')?.directory).toBe('Profile 2');
+    expect(findProfileByIdentity(fixture, 'ALICE@EXAMPLE.COM')?.directory).toBe('Profile 2');
   });
 
   it('matches an exact directory name', () => {
@@ -164,15 +164,15 @@ describe('findProfileByIdentity', () => {
   });
 
   it('matches an exact localProfileName', () => {
-    expect(findProfileByIdentity(fixture, 'Pandas')?.directory).toBe('Profile 8');
-    expect(findProfileByIdentity(fixture, 'ohwow.fun')?.directory).toBe('Profile 1');
+    expect(findProfileByIdentity(fixture, 'Eve')?.directory).toBe('Profile 8');
+    expect(findProfileByIdentity(fixture, 'example.com')?.directory).toBe('Profile 1');
   });
 
   it('falls back to substring match on any identity field', () => {
     // Substring on email.
-    expect(findProfileByIdentity(fixture, 'jesusonoro')?.directory).toBe('Profile 2');
+    expect(findProfileByIdentity(fixture, 'alice')?.directory).toBe('Profile 2');
     // Substring on localProfileName.
-    expect(findProfileByIdentity(fixture, 'panda')?.directory).toBe('Profile 8');
+    expect(findProfileByIdentity(fixture, 'eve')?.directory).toBe('Profile 8');
   });
 
   it('returns null when nothing matches', () => {
@@ -181,9 +181,48 @@ describe('findProfileByIdentity', () => {
   });
 
   it('prefers exact over substring when both would match', () => {
-    // "Jesus" is an exact localProfileName on Profile 2 AND substring of
-    // "Jesus Onoro" gaiaName on Profile 3. Exact must win.
-    expect(findProfileByIdentity(fixture, 'Jesus')?.directory).toBe('Profile 2');
+    // "Alice" is an exact localProfileName on Profile 2 AND substring of
+    // "Alice Example" gaiaName on Profile 3. Exact must win.
+    expect(findProfileByIdentity(fixture, 'Alice')?.directory).toBe('Profile 2');
+  });
+});
+
+describe('profileByHandleHint', () => {
+  const fixture: ProfileInfo[] = [
+    { directory: 'Default', path: '/x/Default', email: 'carol@acme.test', gaiaName: null, localProfileName: 'acme.test' },
+    { directory: 'Profile 1', path: '/x/Profile 1', email: 'dave@example.com', gaiaName: null, localProfileName: 'example.com' },
+    { directory: 'Profile 2', path: '/x/Profile 2', email: 'alice@other.net', gaiaName: null, localProfileName: 'Alice' },
+  ];
+
+  it('maps an X handle with underscore to the matching email domain', async () => {
+    const { profileByHandleHint } = await import('../chrome-lifecycle.js');
+    // 'example_com' → domain 'example.com' → email @example.com → Profile 1.
+    expect(profileByHandleHint(fixture, 'example_com')?.directory).toBe('Profile 1');
+  });
+
+  it('strips a leading @ before matching', async () => {
+    const { profileByHandleHint } = await import('../chrome-lifecycle.js');
+    expect(profileByHandleHint(fixture, '@example_com')?.directory).toBe('Profile 1');
+  });
+
+  it('falls back to localProfileName substring match', async () => {
+    const { profileByHandleHint } = await import('../chrome-lifecycle.js');
+    // 'acmetest' has no @acmetest email domain, but Default's localProfileName
+    // 'acme.test' normalizes to 'acmetest' → substring hit.
+    expect(profileByHandleHint(fixture, 'acmetest')?.directory).toBe('Default');
+  });
+
+  it('returns null when nothing correlates', async () => {
+    const { profileByHandleHint } = await import('../chrome-lifecycle.js');
+    expect(profileByHandleHint(fixture, 'randohandle')).toBeNull();
+    expect(profileByHandleHint(fixture, '')).toBeNull();
+  });
+
+  it('prefers the domain match over looser substring hits', async () => {
+    // 'example_com' matches Profile 1 by domain AND by localProfileName
+    // substring. The domain route must win because it's the stronger signal.
+    const { profileByHandleHint } = await import('../chrome-lifecycle.js');
+    expect(profileByHandleHint(fixture, 'example_com')?.directory).toBe('Profile 1');
   });
 });
 
@@ -293,8 +332,8 @@ describe('describeDebugChromeState integration (temp dir)', () => {
       JSON.stringify({
         profile: {
           info_cache: {
-            'Profile 1': { user_name: '', name: 'ohwow.fun' },
-            'Profile 2': { user_name: 'ing.jesusonoro@gmail.com', name: 'Jesus' },
+            'Profile 1': { user_name: '', name: 'example.com' },
+            'Profile 2': { user_name: 'alice@example.com', name: 'Alice' },
           },
         },
       }),
@@ -304,7 +343,7 @@ describe('describeDebugChromeState integration (temp dir)', () => {
     expect(state.status).toBe('ready');
     if (state.status === 'ready') {
       expect(state.profileCount).toBe(2);
-      expect(state.profiles.find((p) => p.directory === 'Profile 2')?.email).toBe('ing.jesusonoro@gmail.com');
+      expect(state.profiles.find((p) => p.directory === 'Profile 2')?.email).toBe('alice@example.com');
     }
   });
 

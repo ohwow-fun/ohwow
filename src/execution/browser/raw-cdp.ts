@@ -289,6 +289,54 @@ export class RawCdpPage {
   }
 
   /**
+   * JPEG screenshot (base64). Used by x-posting to keep tool-result
+   * payloads small — JPEG quality 70 is ~5-10× smaller than PNG for
+   * the same X compose UI and fits inside orchestrator screenshot
+   * budgets comfortably.
+   */
+  async screenshotJpeg(quality = 70): Promise<string> {
+    const r = await this.send<{ data: string }>('Page.captureScreenshot', { format: 'jpeg', quality });
+    return r.data;
+  }
+
+  /**
+   * Dispatch a single key press (keydown + keyup) against whatever has
+   * focus. Matches Playwright's `page.keyboard.press(key)` surface.
+   * Handles the common keys x-posting uses (Backspace, Enter, Tab); for
+   * full fidelity fall back to page.send('Input.dispatchKeyEvent').
+   */
+  async pressKey(key: string): Promise<void> {
+    const codeMap: Record<string, { code: string; keyCode: number }> = {
+      Backspace: { code: 'Backspace', keyCode: 8 },
+      Enter: { code: 'Enter', keyCode: 13 },
+      Tab: { code: 'Tab', keyCode: 9 },
+      Escape: { code: 'Escape', keyCode: 27 },
+    };
+    const m = codeMap[key] ?? { code: key, keyCode: 0 };
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: m.code, windowsVirtualKeyCode: m.keyCode });
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: m.code, windowsVirtualKeyCode: m.keyCode });
+  }
+
+  /**
+   * Poll until a selector matches at least one element in the document.
+   * Mirrors Playwright's `page.waitForSelector(sel, { state: 'attached' })`
+   * — existence is enough, visibility is not required. Used by DM +
+   * article flows where the dialog/composer mounts asynchronously.
+   * Returns true when found before timeout, false otherwise.
+   */
+  async waitForSelector(selector: string, timeoutMs = 10000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const present = await this.evaluate<boolean>(
+        `(() => !!document.querySelector(${JSON.stringify(selector)}))()`,
+      );
+      if (present) return true;
+      await sleep(150);
+    }
+    return false;
+  }
+
+  /**
    * Suppress beforeunload / dialog popups so navigations away from
    * compose don't freeze the whole flow. Mirrors what getCdpPage used
    * to install in the Playwright driver.
