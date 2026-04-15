@@ -228,6 +228,32 @@ export class ExperimentRunner implements ExperimentScheduler {
   }
 
   /**
+   * Restore nextRunAt from self_findings so experiments survive daemon
+   * restarts. Without this, register() always schedules the next run at
+   * now + everyMs, and any experiment whose cadence is longer than the
+   * average daemon restart interval never fires — we caught this with
+   * LoopCadenceProbe flagging 20 hourly migration-schema probes stuck
+   * after dev-loop restarts.
+   *
+   * Call once after all register() calls and before start(). For each
+   * experiment with runOnBoot:false and a prior finding, set
+   * nextRunAt = max(now, lastRanAt + everyMs). Overdue clamps to now
+   * so the next tick picks them up; fresh runs wait out the remainder.
+   */
+  async rehydrateSchedule(): Promise<void> {
+    const now = this.now();
+    for (const [id, exp] of this.experiments) {
+      if (exp.cadence.runOnBoot) continue;
+      const recent = await readRecentFindings(this.db, id, 1).catch(() => [] as Finding[]);
+      if (recent.length === 0) continue;
+      const lastRanMs = Date.parse(recent[0].ranAt);
+      if (!Number.isFinite(lastRanMs)) continue;
+      const next = Math.max(now, lastRanMs + Math.max(0, exp.cadence.everyMs));
+      this.nextRunAt.set(id, next);
+    }
+  }
+
+  /**
    * Start the tick interval. The first tick fires immediately so
    * experiments with runOnBoot: true execute without a full tick
    * delay. Subsequent ticks run every tickIntervalMs.

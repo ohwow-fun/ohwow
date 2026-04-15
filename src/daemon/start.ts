@@ -1643,6 +1643,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
           logger.debug({ err }, '[daemon] auto-registry not found or failed to load');
         }
 
+        await experimentRunner.rehydrateSchedule().catch((err) => {
+          logger.warn({ err }, '[daemon] rehydrateSchedule failed; continuing with fresh schedule');
+        });
         experimentRunner.start();
         logger.debug(
           { experiments: experimentRunner.registeredIds() },

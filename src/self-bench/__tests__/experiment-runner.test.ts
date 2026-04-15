@@ -494,6 +494,83 @@ describe('ExperimentRunner', () => {
     expect(exp.probeCallCount).toBeGreaterThanOrEqual(2);
   });
 
+  it('rehydrateSchedule: overdue experiment with prior finding fires on next tick', async () => {
+    // Simulate a daemon that last ran this hourly experiment ~2h ago,
+    // then restarted. Without rehydrate, register() pushes nextRunAt to
+    // now + 1h and the experiment never fires if restarts are frequent.
+    // With rehydrate, lastRanAt + 1h is in the past → clamps to now → fires.
+    const runner = buildRunner();
+    const exp = makeStubExperiment({
+      id: 'hourly',
+      everyMs: 60 * 60 * 1000,
+      runOnBoot: false,
+      probe: async () => ({ summary: 'ok', evidence: {} }),
+      judge: () => 'pass',
+    });
+    const twoHoursAgoMs = currentTime - 2 * 60 * 60 * 1000;
+    env.rows.push({
+      id: 'prior-1',
+      experiment_id: 'hourly',
+      category: 'other',
+      subject: null,
+      hypothesis: 'h',
+      verdict: 'pass',
+      summary: 'earlier run',
+      evidence: '{}',
+      intervention_applied: null,
+      ran_at: new Date(twoHoursAgoMs).toISOString(),
+      duration_ms: 0,
+      status: 'active',
+      superseded_by: null,
+    });
+    runner.register(exp);
+
+    // Without rehydrate the register() scheduled next run at now+1h,
+    // so a tick at now fires nothing.
+    await runner.tick();
+    expect(exp.probeCallCount).toBe(0);
+
+    await runner.rehydrateSchedule();
+    await runner.tick();
+    expect(exp.probeCallCount).toBe(1);
+  });
+
+  it('rehydrateSchedule: fresh run defers until remainder of cadence', async () => {
+    const runner = buildRunner();
+    const exp = makeStubExperiment({
+      id: 'recent',
+      everyMs: 60 * 60 * 1000,
+      runOnBoot: false,
+      probe: async () => ({ summary: 'ok', evidence: {} }),
+      judge: () => 'pass',
+    });
+    const tenMinAgoMs = currentTime - 10 * 60 * 1000;
+    env.rows.push({
+      id: 'prior-2',
+      experiment_id: 'recent',
+      category: 'other',
+      subject: null,
+      hypothesis: 'h',
+      verdict: 'pass',
+      summary: 'earlier run',
+      evidence: '{}',
+      intervention_applied: null,
+      ran_at: new Date(tenMinAgoMs).toISOString(),
+      duration_ms: 0,
+      status: 'active',
+      superseded_by: null,
+    });
+    runner.register(exp);
+    await runner.rehydrateSchedule();
+
+    await runner.tick();
+    expect(exp.probeCallCount).toBe(0); // not due for another ~50min
+
+    currentTime += 51 * 60 * 1000;
+    await runner.tick();
+    expect(exp.probeCallCount).toBe(1);
+  });
+
   it('unregister removes an experiment from the schedule', async () => {
     const runner = buildRunner();
     const exp = makeStubExperiment({
