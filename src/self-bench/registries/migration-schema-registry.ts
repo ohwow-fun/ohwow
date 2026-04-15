@@ -79,4 +79,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '078-doc-mounts.sql', expectedTables: ['doc_mounts', 'doc_mount_pages'] },
   { migrationFile: '065-immune-system.sql', expectedTables: ['threat_signatures', 'immune_memories', 'immune_incidents'] },
   { migrationFile: '063-homeostasis.sql', expectedTables: ['homeostasis_set_points', 'allostasis_events'] },
+  { migrationFile: '061-affect-system.sql', expectedTables: ['somatic_markers', 'affective_memories'] },
 ];
