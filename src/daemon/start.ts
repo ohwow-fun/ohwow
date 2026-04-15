@@ -74,6 +74,7 @@ import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
+import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -1468,6 +1469,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // signal is present (loop fail, violation pool surge, or
         // experiment files missing from the roadmap). Tier-2 modify.
         experimentRunner.register(new RoadmapUpdaterExperiment());
+        // Structural invariants for the three-file roadmap suite. Fires
+        // fail findings the moment a RoadmapUpdaterExperiment patch
+        // drops an anchor H2, reorders the iteration log, or dangles a
+        // cross-link. Wired into safeSelfCommit in a follow-up so
+        // those patches auto-revert.
+        experimentRunner.register(new RoadmapShapeProbeExperiment());
         // Phase B — first surprise-source experiment. Property-tests
         // src/lib/format-duration.ts (a tier-2 path) on a deterministic
         // seeded corpus. On a correct implementation this stays at zero
