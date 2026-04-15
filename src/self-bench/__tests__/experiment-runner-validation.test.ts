@@ -453,3 +453,94 @@ describe('ExperimentRunner — validation queue processing', () => {
     expect(validateSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ExperimentRunner — autoFollowupValidate outcomes', () => {
+  let env: ReturnType<typeof buildDb>;
+  let currentTime: number;
+
+  beforeEach(() => {
+    env = buildDb();
+    currentTime = 1_000_000;
+  });
+
+  function buildRunner() {
+    return new ExperimentRunner(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      env.db as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      {} as any,
+      'ws-1',
+      'default',
+      { tickIntervalMs: 60_000, now: () => currentTime },
+    );
+  }
+
+  async function runAutoFollowupWith(opts: {
+    probeResults: ProbeResult[];
+    verdicts: Verdict[];
+  }): Promise<Record<string, unknown>> {
+    const runner = buildRunner();
+    let probeCall = 0;
+    let judgeCall = 0;
+    const pick = <T>(arr: T[], i: number): T => arr[Math.min(i, arr.length - 1)]!;
+    const exp = makeExperiment({
+      id: 'auto',
+      validationDelayMs: 60_000,
+      probe: async () => pick(opts.probeResults, probeCall++),
+      judge: () => pick(opts.verdicts, judgeCall++),
+      intervene: async () => ({ description: 'did it', details: {} }),
+      // no validate → falls back to autoFollowupValidate
+    });
+    runner.register(exp);
+    await runner.tick(); // probe + intervene; enqueue validation
+    currentTime += 120_000;
+    await runner.tick(); // process validation → autoFollowupValidate runs
+    const v = env.tables.experiment_validations[0];
+    return v;
+  }
+
+  it('pre=warning, post=warning, no scalars on either side → inconclusive', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: { note: 'no scalars' } },
+        { summary: 'p2', evidence: { note: 'still no scalars' } },
+      ],
+      verdicts: ['warning', 'warning'],
+    });
+    expect(v.status).toBe('completed');
+    expect(v.outcome).toBe('inconclusive');
+  });
+
+  it('pre=warning, post=warning, scalars present but flat → failed', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: { backlog_count: 5 } },
+        { summary: 'p2', evidence: { backlog_count: 5 } },
+      ],
+      verdicts: ['warning', 'warning'],
+    });
+    expect(v.outcome).toBe('failed');
+  });
+
+  it('pre=warning, post=warning, scalars decreased → held', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: { backlog_count: 5 } },
+        { summary: 'p2', evidence: { backlog_count: 3 } },
+      ],
+      verdicts: ['warning', 'warning'],
+    });
+    expect(v.outcome).toBe('held');
+  });
+
+  it('pre=warning, post=fail (regression) → failed', async () => {
+    const v = await runAutoFollowupWith({
+      probeResults: [
+        { summary: 'p1', evidence: {} },
+        { summary: 'p2', evidence: {} },
+      ],
+      verdicts: ['warning', 'fail'],
+    });
+    expect(v.outcome).toBe('failed');
+  });
+});

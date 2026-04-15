@@ -168,7 +168,11 @@ function collectBurnDownScalars(ev: Record<string, unknown>): Map<string, number
  *   - new severity < pre severity      → held (state improved)
  *   - any burn-down scalar decreased   → held (incremental progress)
  *   - new severity > pre severity      → failed (regressed after intervention)
- *   - new severity === pre severity    → failed (intervention didn't move the needle)
+ *   - severity flat, no scalars on either side → inconclusive (unmeasurable —
+ *     the probe exposes no burn-down signal, so "failed" would be a false
+ *     positive for every probe in this shape)
+ *   - severity flat, scalars present but didn't improve → failed
+ *     (intervention didn't move the needle)
  */
 async function autoFollowupValidate(
   exp: Experiment,
@@ -221,9 +225,19 @@ async function autoFollowupValidate(
   } else if (improvements.length > 0) {
     outcome = 'held';
     reason = `${improvements.length} burn-down scalar(s) decreased`;
+  } else if (newSeverity > preSeverity) {
+    outcome = 'failed';
+    reason = 'verdict regressed after intervention';
+  } else if (preScalars.size === 0 && postScalars.size === 0) {
+    // No burn-down scalars on either side AND verdict is flat. We have
+    // no measurable signal to judge the intervention — marking this
+    // `failed` would be a false positive (every auto-followup for a
+    // probe in this shape is mathematically guaranteed to fail).
+    outcome = 'inconclusive';
+    reason = 'no burn-down signal to measure — verdict flat, no scalars';
   } else {
     outcome = 'failed';
-    reason = 'no verdict or scalar improvement';
+    reason = 'verdict flat and burn-down scalars did not improve';
   }
 
   return {
