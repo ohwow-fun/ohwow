@@ -5,7 +5,7 @@ Updated by agents and humans who pick up this work. Always read this first.
 
 ---
 
-## 1. Current System State (as of 2026-04-15, accelerated mode active)
+## 1. Current System State (as of 2026-04-15T16:15Z, loop active + roadmap-aware)
 
 ### Architecture Summary
 
@@ -62,15 +62,16 @@ Updated by agents and humans who pick up this work. Always read this first.
 |------|-------|----------------------------|
 | tier-1 | `src/self-bench/experiments/`, `src/self-bench/__tests__/`, `auto-registry.ts`, migration/toolchain registries | Create NEW files only. Never modify existing. |
 | tier-2 (whole-file) | `src/lib/format-duration.ts`, `src/lib/token-similarity.ts`, `src/lib/stagnation.ts`, `src/lib/error-classification.ts` | Replace entire file. 1 top-level symbol changed (L4 gate). |
-| tier-2 (string-literal) | `src/web/src/pages/` | Only string literal / JSX text node values may differ. Structure/imports/identifiers frozen (L4 gate). |
+| tier-2 (string-literal) | `src/web/src/pages/`, `src/web/src/components/ErrorBoundary.tsx` | Only string literal / JSX text node values may differ. Structure/imports/identifiers frozen (L4 gate). |
 | tier-3 | Everything else | Humans only. |
 
 ### Key Experiments Running
 
-- **PatchAuthorExperiment** — LLM patch authoring from findings (every 10min)
-- **AutonomousPatchRollbackExperiment** — Layer 5 cool-off watcher (every 5min)
-- **DashboardSmokeExperiment** — headless browser walk of all routes (every 10min)
-- **DashboardCopyExperiment / SourceCopyLintExperiment** — copy rules violation detection
+- **PatchAuthorExperiment** — LLM patch authoring from findings (every 5min). Now reads AUTONOMY_ROADMAP.md as context.
+- **AutonomousPatchRollbackExperiment** — Layer 5 cool-off watcher (every 5min, 10min cool-off window)
+- **PatchLoopHealthExperiment** — hold_rate + pool delta convergence monitor (every 5min)
+- **DashboardSmokeExperiment** — headless browser walk of all routes (every 5min)
+- **DashboardCopyExperiment / SourceCopyLintExperiment** — copy rules violation detection (every 5min)
 - **AdaptiveSchedulerExperiment** — dynamic cadence adjustment
 - **MigrationSchemaProbeExperiment** — per-migration schema validation
 - **ToolchainTestProbeExperiment** — per-tool test execution
@@ -120,14 +121,36 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 3. Active Focus
 
-**Live observation: do cadence changes + ae52755 fix stabilize the loop?**
+**Loop is converging. Watching hold_rate recover as old reverts age out.**
 
-All key experiments now run every 5min. PatchLoopHealth fires every 5min and
-records hold_rate. Watching for: hold_rate trending toward 0.8+, violation pool
-shrinking over successive windows, Layer 5 revert frequency dropping to near zero.
+As of 2026-04-15T16:15Z:
+- 6 patches landed in the 24h window, 4 reverted (hold_rate=33%) — but the 4
+  reverts are ALL pre-session (oscillation era). The 2 patches from this session
+  (Agents.tsx, Dashboard.tsx) have both held. A third patch (FlowBuilder.tsx) is
+  expected on the next cycle.
+- The old 4 reverts will age out of the 24h window by ~2026-04-16T09-13. After
+  that, hold_rate should jump to 100% (all current-era patches holding).
+- Violation pool: 3 remaining open violations (FlowBuilder.tsx "Something went
+  wrong", ErrorBoundary.tsx was fixed manually and promoted to tier-2).
+- PatchAuthorExperiment now reads this roadmap as LLM context — the model is
+  strategically aware of the loop goal.
 
-If hold_rate < 0.5 persists after 6+ cycles (30min): pause patch-author via
-kill switch, diagnose, revert cadence changes.
+**Roadmap in the loop — phased design:**
+
+Layer A (done): Read-only roadmap context injected into PatchAuthor LLM prompt.
+  The model sees sections 2 (Known Gaps) + 3 (Active Focus) before generating
+  each patch. Makes patches more likely to hold because the model understands
+  the auto-revert mechanism and the convergence goal.
+
+Layer B (next): RoadmapObserverExperiment (tier-1). Reads PatchLoopHealth
+  findings + recent interventions, writes a proposed iteration log entry to
+  AUTONOMY_LOOP_NOTES.md (a new tier-1 file). The system accumulates its own
+  loop observations in its own voice. A human or future upgrade merges them
+  into this roadmap.
+
+Layer C (later): Promote AUTONOMY_ROADMAP.md to tier-2 whole-file mode once
+  hold_rate is consistently >0.8 for 48h. The system earns write access to
+  its own goal document.
 
 ---
 
@@ -152,6 +175,37 @@ will be the early-warning system for future regressions in the patch loop.
 ---
 
 ## 4. Iteration Log
+
+### 2026-04-15T16:15 — Roadmap awareness + tier-2 expansion
+
+**What was done**:
+1. Fixed X posting auth bug in `tool-executor.ts` — was skipping profile setup when
+   browser service already active; now always calls `ensureDebugChrome` + `openProfileWindow`
+   from chrome-profile-router and passes `expectedHandle` to `composeTweetViaBrowser`.
+
+2. Fixed `ErrorBoundary.tsx` fallback copy (was "Something went wrong", now "Something broke
+   on this page") and promoted the file to tier-2 string-literal mode so future violations
+   auto-fix. Also made `PatchLoopHealthExperiment` derive its tier-2 prefix list from the
+   authoritative registry instead of a hardcoded copy.
+
+3. Injected AUTONOMY_ROADMAP.md as read-only context into `PatchAuthorExperiment`'s LLM
+   prompt (sections 2+3 only — gaps + active focus, not the full log). The model now
+   knows about the auto-revert mechanism, the hold_rate target, and the P1 gap before
+   authoring each patch.
+
+4. Answered the "roadmap in the loop" question with a 3-layer design (A=done, B+C=next).
+
+**Observed loop behavior**:
+- Agents.tsx "Couldn't create agent. Try again?" patch held (commit `6612c78`).
+- Dashboard.tsx em dash → ". " patch held (commit `6cf7a93`).
+- hold_rate=33% is temporarily dragged down by 4 pre-session reverts; will recover as
+  they age out of the 24h window overnight.
+- FlowBuilder.tsx "Something went wrong" still pending the next patch cycle.
+
+**Decision**: Continue at 5min cadences. Observe hold_rate recovery overnight.
+If hold_rate reaches >0.8 by 2026-04-16 morning, begin Layer B (RoadmapObserverExperiment).
+
+---
 
 ### 2026-04-15T10:40 — Accelerated cadences
 
@@ -243,22 +297,18 @@ PatchLoopHealthExperiment as next implementation step.
 
 ### Immediate (next session)
 
-1. **Implement PatchLoopHealthExperiment** (tier-1, new file in `src/self-bench/experiments/`)
-   - Reads git log for autonomous patches + reverts in last 24h
-   - Reads `self_findings` for violation pool count trend
-   - Emits hold_rate + violation_pool metrics as evidence
-   - Verdict: pass/warning/fail based on hold_rate thresholds
-   - No intervene — observe only
-   - This is the canary for "is the loop converging after ae52755?"
+1. **Implement RoadmapObserverExperiment** (Layer B — tier-1)
+   - probe(): read PatchLoopHealth findings + recent autonomous commits
+   - Generate proposed iteration log entry for AUTONOMY_LOOP_NOTES.md
+   - No intervene — human decides what to merge into the roadmap
+   - This is the system's first "own voice" contribution to its goals
 
-2. **Observe for 24–48h after ae52755**
-   - The literal-level intersection fix may have resolved the oscillation.
-   - Watch the PatchLoopHealthExperiment findings and the Layer 5 revert frequency.
-   - If hold_rate > 0.8 and reverts drop to near zero → the loop is stable.
-   - If reverts continue → diagnose: are there still literal mismatches? Is the
-     LLM generating edits that don't survive applyStringLiteralEdits?
+2. **Observe hold_rate recovery overnight**
+   - The 4 old reverts age out of the 24h window by ~09:00-13:00 on 2026-04-16
+   - Expected jump: hold_rate goes from 33% to ~100% as new-era patches all hold
+   - If hold_rate does NOT recover → diagnose: is FlowBuilder.tsx patch oscillating?
 
-3. **If loop is stable: add P1 post-patch verification gate**
+3. **Add P1 post-patch verification gate**
    - After safeSelfCommit returns ok, immediately run copy-lint on the patched file
    - If violations remain that WERE in the original finding → log a warning finding
    - This is a pure observability addition — no blocking behavior yet
