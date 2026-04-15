@@ -75,4 +75,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '068-hexis.sql', expectedTables: ['habits', 'habit_executions'] },
   { migrationFile: '067-ethos.sql', expectedTables: ['ethical_evaluations', 'moral_profile'] },
   { migrationFile: '066-narrative.sql', expectedTables: ['narrative_episodes', 'character_profiles'] },
+  { migrationFile: '064-oneiros.sql', expectedTables: ['sleep_state', 'dream_associations'] },
 ];
