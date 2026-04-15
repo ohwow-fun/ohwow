@@ -568,27 +568,29 @@ export function evidenceLiteralsAppearInSource(
 }
 
 /**
- * Load a compact excerpt from AUTONOMY_ROADMAP.md — sections "Known Gaps"
- * and "Active Focus" — to give the LLM context about the loop's current
- * convergence state and why patches need to hold. Returns null when the
- * file is absent or unreadable so this is always a soft enhancement.
+ * Load a compact excerpt from the roadmap suite — Known Gaps (roadmap/gaps.md)
+ * and the Active Focus section of AUTONOMY_ROADMAP.md — to give the LLM context
+ * about the loop's current convergence state and why patches need to hold.
+ * Returns null when both files are absent so this is always a soft enhancement.
  */
 function loadRoadmapContext(repoRoot: string): string | null {
+  const sections: string[] = [];
   try {
-    const roadmapPath = path.join(repoRoot, 'AUTONOMY_ROADMAP.md');
-    const full = fs.readFileSync(roadmapPath, 'utf-8');
-    // Extract sections 2 (Known Gaps) and 3 (Active Focus) only.
-    // The iteration log is verbose and not useful for patch authoring.
-    const sections: string[] = [];
-    const gapMatch = full.match(/## 2\. Known Gaps[\s\S]*?(?=## \d|$)/);
-    const focusMatch = full.match(/## 3\. Active Focus[\s\S]*?(?=## \d|$)/);
+    const gaps = fs.readFileSync(path.join(repoRoot, 'roadmap/gaps.md'), 'utf-8');
+    const gapMatch = gaps.match(/##\s+Known Gaps[\s\S]*$/);
     if (gapMatch) sections.push(gapMatch[0].trim());
-    if (focusMatch) sections.push(focusMatch[0].trim());
-    if (sections.length === 0) return null;
-    return sections.join('\n\n');
   } catch {
-    return null;
+    // optional
   }
+  try {
+    const index = fs.readFileSync(path.join(repoRoot, 'AUTONOMY_ROADMAP.md'), 'utf-8');
+    const focusMatch = index.match(/##\s+(?:\d+\.\s+)?Active Focus[\s\S]*?(?=\n##\s|$)/);
+    if (focusMatch) sections.push(focusMatch[0].trim());
+  } catch {
+    // optional
+  }
+  if (sections.length === 0) return null;
+  return sections.join('\n\n');
 }
 
 /** Pull a string[] out of evidence.affected_files; safe against missing/bad shapes. */

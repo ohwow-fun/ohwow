@@ -161,9 +161,11 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'dashboard pages tree, copy-level edits only — Layer 4 skeleton gate freezes structure/imports/identifiers',
   },
-  // Autonomous-loop status doc. Rewritten whole-file by
+  // Autonomous-loop status doc suite. Hand-split into index + two
+  // companions so the updater can touch a specific surface instead of
+  // rewriting a monolith. Rewritten whole-file by
   // RoadmapUpdaterExperiment when the live loop state drifts from
-  // what the doc says. Layer 4 AST gate is a no-op for non-TS files
+  // what the docs say. Layer 4 AST gate is a no-op for non-TS files
   // (see self-commit.ts step 3b); safety envelope is the tier-2
   // Fixes-Finding-Id trailer + typecheck/test gates + cool-off.
   {
@@ -171,7 +173,21 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     tier: 'tier-2',
     patchMode: 'whole-file',
     rationale:
-      'autonomous-loop status doc — whole-file rewrites by RoadmapUpdaterExperiment, gated by Fixes-Finding-Id trailer',
+      'autonomous-loop top-level index — Active Focus + Next Steps rewrites by RoadmapUpdaterExperiment',
+  },
+  {
+    prefix: 'roadmap/gaps.md',
+    tier: 'tier-2',
+    patchMode: 'whole-file',
+    rationale:
+      'autonomous-loop Known Gaps companion — whole-file rewrites by RoadmapUpdaterExperiment',
+  },
+  {
+    prefix: 'roadmap/iteration-log.md',
+    tier: 'tier-2',
+    patchMode: 'whole-file',
+    rationale:
+      'autonomous-loop Recent Iterations companion — whole-file rewrites by RoadmapUpdaterExperiment',
   },
 ];
 

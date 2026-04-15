@@ -73,8 +73,21 @@ PATCH_AUTHOR=$(sqlite3 "$DB" "
   ORDER BY ran_at DESC LIMIT 1;
 " 2>/dev/null || echo '{}')
 
-# --- Roadmap last updated ---
-ROADMAP_MTIME=$(stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' "$REPO/AUTONOMY_ROADMAP.md" 2>/dev/null || echo 'unknown')
+# --- Roadmap last updated (newest mtime across the 3 roadmap files) ---
+ROADMAP_FILES=(
+  "$REPO/AUTONOMY_ROADMAP.md"
+  "$REPO/roadmap/gaps.md"
+  "$REPO/roadmap/iteration-log.md"
+)
+ROADMAP_MTIME='unknown'
+for f in "${ROADMAP_FILES[@]}"; do
+  mt=$(stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' "$f" 2>/dev/null || true)
+  if [[ -n "$mt" ]]; then
+    if [[ "$ROADMAP_MTIME" == 'unknown' || "$mt" > "$ROADMAP_MTIME" ]]; then
+      ROADMAP_MTIME="$mt"
+    fi
+  fi
+done
 
 NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
