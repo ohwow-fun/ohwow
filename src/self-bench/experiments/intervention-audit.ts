@@ -47,6 +47,15 @@ interface PerformativeRow {
 interface AuditEvidence extends Record<string, unknown> {
   experiments: PerformativeRow[];
   performative: string[];
+  /**
+   * Burn-down scalar for autoFollowupValidate. The `_count` suffix is
+   * load-bearing: the validator reads it as a pool that should shrink
+   * after the intervention (flagged experiments recover and drop off
+   * the performative list). Without it, pre=warning/post=warning
+   * validations always read as "failed" and the audit probe flags
+   * itself as performative in a self-confirming loop.
+   */
+  performative_count: number;
   total_completed: number;
   total_held: number;
   overall_hold_rate: number | null;
@@ -92,6 +101,7 @@ export class InterventionAuditExperiment implements Experiment {
         evidence: {
           experiments: [],
           performative: [],
+          performative_count: 0,
           total_completed: 0,
           total_held: 0,
           overall_hold_rate: null,
@@ -138,6 +148,7 @@ export class InterventionAuditExperiment implements Experiment {
     const evidence: AuditEvidence = {
       experiments,
       performative,
+      performative_count: performative.length,
       total_completed: totalCompleted,
       total_held: totalHeld,
       overall_hold_rate: overallHoldRate,
