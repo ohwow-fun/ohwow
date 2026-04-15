@@ -245,7 +245,7 @@ function CreateAgentModal({ open, onClose, onCreated }: { open: boolean; onClose
       });
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong. Try again?');
+      setError(err instanceof Error ? err.message : 'Couldn\'t create agent. Try again?');
     } finally {
       setSaving(false);
     }
