@@ -286,20 +286,30 @@ export class ContentCadenceScheduler {
   private async findXAgent(): Promise<string | null> {
     try {
       const { data } = await this.db
-        .from<{ id: string; name: string }>('agent_workforce_agents')
-        .select('id, name')
+        .from<{ id: string; name: string; role: string | null }>('agent_workforce_agents')
+        .select('id, name, role')
         .eq('workspace_id', this.workspaceId)
         .eq('status', 'idle');
 
-      const agents = (data ?? []) as Array<{ id: string; name: string }>;
+      const agents = (data ?? []) as Array<{ id: string; name: string; role?: string | null }>;
       if (agents.length === 0) return null;
 
-      // Prefer social/content/post-focused agents.
-      const contentKeywords = ['social', 'content', 'post', 'twitter', 'x '];
-      const preferred = agents.find((a) =>
-        contentKeywords.some((kw) => a.name.toLowerCase().includes(kw)),
-      );
-      return preferred?.id ?? agents[0]?.id ?? null;
+      // Preference order: the Public-Communications agent ("The Voice") first,
+      // then anyone else with a social/posting mandate. Content Writer is
+      // intentionally last-resort — it authors copy but doesn't own the
+      // posting surface, and it was previously winning the pick by matching
+      // the "content" keyword, which produced tasks that never got posted.
+      const tiers: Array<(a: { name: string; role?: string | null }) => boolean> = [
+        (a) => /voice|public communic|public comm/i.test(`${a.name} ${a.role ?? ''}`),
+        (a) => /social|twitter|\bx\b/i.test(`${a.name} ${a.role ?? ''}`),
+        (a) => /\bpost|publish|broadcast/i.test(`${a.name} ${a.role ?? ''}`),
+        (a) => /content/i.test(`${a.name} ${a.role ?? ''}`),
+      ];
+      for (const match of tiers) {
+        const hit = agents.find(match);
+        if (hit) return hit.id;
+      }
+      return agents[0]?.id ?? null;
     } catch (err) {
       logger.warn({ err }, '[ContentCadenceScheduler] findXAgent failed');
       return null;

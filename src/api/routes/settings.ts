@@ -24,6 +24,10 @@ const ALLOWED_SETTINGS = new Set([
   'ghl_location_id',
   'ghl_api_key',
   'license_key',
+  // deliverable-executor live mode flips /api/approvals + cadence-scheduled
+  // tasks from "stage only, no real action" to "actually post/send". Stored
+  // as string 'true' or '1' per deliverable-executor.ts readLiveMode().
+  'deliverable_executor_live',
 ]);
 
 const SENSITIVE_SETTINGS = new Set([
