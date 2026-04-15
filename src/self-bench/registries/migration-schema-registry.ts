@@ -49,6 +49,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '116-self-findings.sql', expectedTables: ['self_findings'] },
   { migrationFile: '117-experiment-validations.sql', expectedTables: ['experiment_validations'] },
   { migrationFile: '119-runtime-config-overrides.sql', expectedTables: ['runtime_config_overrides'] },
+  { migrationFile: '120-business-vitals.sql', expectedTables: ['business_vitals'] },
   { migrationFile: '101-llm-calls.sql', expectedTables: ['llm_calls'] },
   { migrationFile: '097-human-growth.sql', expectedTables: ['skill_progression', 'growth_milestones', 'delegation_decisions'] },
   { migrationFile: '095-transition-engine.sql', expectedTables: ['task_patterns', 'task_transitions'] },
@@ -99,4 +100,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '029-goals.sql', expectedTables: ['agent_workforce_goals'] },
   { migrationFile: '030-agent-suggestions.sql', expectedTables: ['agent_workforce_agent_suggestions'] },
   { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
+  { migrationFile: '025-workspace-peers.sql', expectedTables: ['workspace_peers'] },
 ];
