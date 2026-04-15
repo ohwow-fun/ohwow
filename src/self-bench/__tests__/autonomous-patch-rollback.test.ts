@@ -107,7 +107,7 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const sha = seedPatchCommit(findingId);
 
     const db = stubDb({
-      original: [{ id: findingId, experiment_id: 'probe-x', subject: 'loop:goal-1', ran_at: '2026-04-13T00:00:00Z' }],
+      original: [{ id: findingId, experiment_id: 'probe-x', subject: 'loop:goal-1', ran_at: '2026-04-13T00:00:00Z', evidence: {} }],
       refire: [{ id: 'refire-1', verdict: 'fail', ran_at: '2026-04-14T18:00:00Z', evidence: { affected_files: ['bad.ts'] } }],
     });
     const exp = new AutonomousPatchRollbackExperiment();
@@ -143,7 +143,7 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const findingId = 'dddddddd-0000-0000-0000-000000000000';
     seedPatchCommit(findingId);
     const db = stubDb({
-      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z' }],
+      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z', evidence: {} }],
       refire: [{
         id: 'refire-other',
         verdict: 'warning',
@@ -161,7 +161,7 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const findingId = 'eeeeeeee-0000-0000-0000-000000000000';
     seedPatchCommit(findingId); // touches bad.ts
     const db = stubDb({
-      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z' }],
+      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z', evidence: {} }],
       refire: [{
         id: 'refire-overlap',
         verdict: 'warning',
@@ -182,8 +182,65 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const findingId = 'ffffffff-0000-0000-0000-000000000000';
     seedPatchCommit(findingId);
     const db = stubDb({
-      original: [{ id: findingId, experiment_id: 'probe-legacy', subject: 'loop:goal-legacy', ran_at: '2026-04-13T00:00:00Z' }],
+      original: [{ id: findingId, experiment_id: 'probe-legacy', subject: 'loop:goal-legacy', ran_at: '2026-04-13T00:00:00Z', evidence: {} }],
       refire: [{ id: 'refire-legacy', verdict: 'fail', ran_at: '2026-04-14T18:00:00Z', evidence: {} }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toHaveLength(1);
+  });
+
+  it('does NOT flag when refire literals do not intersect original literals', async () => {
+    // Key regression: dashboard-copy lists both "Observer — every..."
+    // (healed) and "Chief of Staff — Mario Gonzalez" (runtime data
+    // that isn't in source). File-level intersection would revert.
+    // Literal-level intersection must not — the healed literal is
+    // gone from the refire.
+    const findingId = 'gggggggg-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId);
+    const db = stubDb({
+      original: [{
+        id: findingId,
+        experiment_id: 'dashboard-copy',
+        subject: 'meta:dashboard-copy',
+        ran_at: '2026-04-13T00:00:00Z',
+        evidence: { violations: [{ literal: 'Observer — every action' }] },
+      }],
+      refire: [{
+        id: 'refire-other-violation',
+        verdict: 'fail',
+        ran_at: '2026-04-14T18:00:00Z',
+        evidence: {
+          affected_files: ['bad.ts'],
+          violations: [{ literal: 'Chief of Staff — Mario Gonzalez' }],
+        },
+      }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toEqual([]);
+  });
+
+  it('flags when refire literals DO intersect original literals', async () => {
+    const findingId = 'hhhhhhhh-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId);
+    const db = stubDb({
+      original: [{
+        id: findingId,
+        experiment_id: 'dashboard-copy',
+        subject: 'meta:dashboard-copy',
+        ran_at: '2026-04-13T00:00:00Z',
+        evidence: { violations: [{ literal: 'Observer — every action' }] },
+      }],
+      refire: [{
+        id: 'refire-same-literal',
+        verdict: 'fail',
+        ran_at: '2026-04-14T18:00:00Z',
+        evidence: {
+          affected_files: ['bad.ts'],
+          violations: [{ literal: 'Observer — every action' }],
+        },
+      }],
     });
     const exp = new AutonomousPatchRollbackExperiment();
     const result = await exp.probe(makeCtx(db));

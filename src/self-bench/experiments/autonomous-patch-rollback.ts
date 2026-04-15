@@ -55,6 +55,7 @@ interface OriginalFindingRow {
   experiment_id: string;
   subject: string | null;
   ran_at: string;
+  evidence: unknown;
 }
 
 interface RefireRow {
@@ -171,12 +172,14 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
   ): Promise<RollbackCandidate | null> {
     const original = await this.fetchOriginal(ctx, patch.findingId);
     if (!original) return null;
+    const originalLiterals = extractViolationLiterals(original.evidence);
     const refire = await this.fetchRefire(
       ctx,
       original.experiment_id,
       original.subject,
       patch.ts,
       patch.files,
+      originalLiterals,
     );
     if (!refire) return null;
     return {
@@ -197,7 +200,7 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
     try {
       const query = ctx.db
         .from<OriginalFindingRow>('self_findings')
-        .select('id, experiment_id, subject, ran_at')
+        .select('id, experiment_id, subject, ran_at, evidence')
         .eq('id', findingId)
         .limit(1);
       const { data } = await query;
@@ -214,6 +217,7 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
     subject: string | null,
     afterTs: string,
     patchFiles: readonly string[],
+    originalLiterals: readonly string[],
   ): Promise<RefireRow | null> {
     try {
       let builder = ctx.db
@@ -226,25 +230,37 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
       }
       const { data } = await builder.limit(50);
       const rows = (data ?? []) as RefireRow[];
-      // A refire only counts as "the patched problem came back" if
-      // the refire's evidence.affected_files overlaps with the files
-      // the patch actually changed. Without this intersection, any
-      // warning from the same experiment about an unrelated file
-      // spuriously reverts the patch — e.g. source-copy-lint firing
-      // on Dashboard.tsx would revert a heal on Agents.tsx because
-      // both share subject="meta:source-copy-lint". Intersecting on
-      // affected_files keeps the reverter's meaning tight: "the
-      // files you patched still have violations," not "anything your
-      // experiment flags anywhere still fails."
+      // Three-level "did this patch heal" gate, most specific first:
+      //
+      //  1. Literal-level: if the ORIGINAL finding listed specific
+      //     violation literals (source-copy-lint / dashboard-copy
+      //     both do), we only consider the patch "not healed" if
+      //     at least one of THOSE literals is still in the refire's
+      //     violation list. A new violation on the same page about
+      //     unrelated copy is NOT the same problem coming back —
+      //     it's a different problem the patch never addressed.
+      //
+      //  2. File-level: if we don't have literal evidence, fall
+      //     back to affected_files intersection. Used by
+      //     experiments that populate affected_files but not
+      //     violations (e.g. smoke tests).
+      //
+      //  3. Experiment-level: if the refire has no affected_files
+      //     at all, behave like the pre-f7f7c0d gate and revert
+      //     on any same-experiment-same-subject warning. Preserves
+      //     the safety net for legacy experiments.
+      const originalSet = new Set(originalLiterals);
       const patchedSet = new Set(normalizeFiles(patchFiles));
       for (const r of rows) {
         if (r.verdict !== 'warning' && r.verdict !== 'fail') continue;
+        const refireLiterals = extractViolationLiterals(r.evidence);
+        if (originalSet.size > 0 && refireLiterals.length > 0) {
+          // Strict literal-level check. Only fire if at least one
+          // of the patch's justifying literals is still present.
+          if (refireLiterals.some((l) => originalSet.has(l))) return r;
+          continue;
+        }
         const affected = extractAffectedFilesFromEvidence(r.evidence);
-        // If the refire declares no affected_files at all, fall back
-        // to the old experiment+subject match so we don't silently
-        // disable the reverter for experiments that never populate
-        // affected_files. Tighter experiments (those that do populate
-        // it) get the stricter intersection gate.
         if (affected.length === 0) return r;
         const overlap = affected.some((f) => patchedSet.has(f));
         if (overlap) return r;
@@ -258,6 +274,28 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
 
 function normalizeFiles(files: readonly string[]): string[] {
   return files.map((f) => f.replace(/\\/g, '/'));
+}
+
+/**
+ * Pull violation literals out of evidence.violations[]. Checks both
+ * `literal` and `match` fields. Returns strings ≥3 chars so a bare
+ * em-dash like "—" can't match "different em-dash on another page"
+ * as the same-literal-coming-back — it has to be a longer phrase
+ * that uniquely identifies the specific copy we patched.
+ */
+function extractViolationLiterals(evidence: unknown): string[] {
+  if (!evidence || typeof evidence !== 'object') return [];
+  const arr = (evidence as Record<string, unknown>).violations;
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const v of arr) {
+    if (!v || typeof v !== 'object') continue;
+    const lit = (v as Record<string, unknown>).literal;
+    const match = (v as Record<string, unknown>).match;
+    if (typeof lit === 'string' && lit.length >= 3) out.push(lit);
+    else if (typeof match === 'string' && match.length >= 3) out.push(match);
+  }
+  return out;
 }
 
 function extractAffectedFilesFromEvidence(evidence: unknown): string[] {
