@@ -85,4 +85,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '058-turboquant-stats.sql', expectedTables: ['turboquant_stats'] },
   { migrationFile: '057-persona-soul.sql', expectedTables: ['persona_observations', 'persona_model'] },
   { migrationFile: '056-sandbox-tables.sql', expectedTables: ['agent_workforce_tool_recordings', 'agent_workforce_shadow_runs'] },
+  { migrationFile: '055-resource-usage.sql', expectedTables: ['resource_usage_daily'] },
 ];
