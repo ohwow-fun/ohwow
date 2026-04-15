@@ -255,3 +255,14 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 47. roadmap-observer (proposed, Layer B)
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
+
+### Missing Experiments (8)
+The following experiment files are not yet listed in the Active Experiments section above:
+- burn-rate
+- intervention-audit
+- strategist
+- subprocess-smoke-1776294162273
+- throughput-daily
+- toolchain-lint
+- toolchain-tests
+- toolchain-typecheck
