@@ -33,6 +33,35 @@ import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
 import { scrollAndHarvest, loadSeen, appendSeen, filterPosts } from './_x-harvest.mjs';
 import { propose } from './_approvals.mjs';
+import crypto from 'node:crypto';
+
+function predictionId(bucketId, what) {
+  return crypto.createHash('sha1').update(`${bucketId}::${what}`).digest('hex').slice(0, 16);
+}
+
+function scoresPath(workspace) {
+  return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, 'x-predictions-scores.jsonl');
+}
+
+// Rolling N-day accuracy per bucket, computed from the scorer's output.
+// Verdict weights: hit=1, partial=0.5, miss=0. Returns {bucketId: {n, acc}}.
+function loadRollingAccuracy(workspace, daysBack = 30) {
+  const p = scoresPath(workspace);
+  if (!fs.existsSync(p)) return {};
+  const cutoff = Date.now() - daysBack * 86400_000;
+  const rows = fs.readFileSync(p, 'utf8').split('\n').filter(Boolean)
+    .map(l => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(r => r && r.judged_at && new Date(r.judged_at).getTime() >= cutoff);
+  const agg = {};
+  for (const r of rows) {
+    if (!agg[r.bucket]) agg[r.bucket] = { n: 0, sum: 0 };
+    agg[r.bucket].n++;
+    agg[r.bucket].sum += r.verdict === 'hit' ? 1 : r.verdict === 'partial' ? 0.5 : 0;
+  }
+  const out = {};
+  for (const [b, v] of Object.entries(agg)) out[b] = { n: v.n, acc: v.sum / v.n };
+  return out;
+}
 
 const DRY = process.env.DRY === '1';
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
@@ -84,7 +113,7 @@ const { workspace } = resolveOhwow();
 const cfg = loadConfig(workspace);
 const today = new Date().toISOString().slice(0, 10);
 const t0 = Date.now();
-const budget = { llmCalls: 0, tokensIn: 0, tokensOut: 0, costCents: 0, uploads: 0, autoApplied: 0, pending: 0 };
+const budget = { llmCalls: 0, tokensIn: 0, tokensOut: 0, costCents: 0, uploads: 0, autoApplied: 0, pending: 0, predictionsEmitted: 0 };
 console.log(`[x-intel] workspace=${workspace} date=${today} dry=${DRY}`);
 console.log(`[x-intel] buckets: ${cfg.buckets.map(b => b.id).join(', ')}`);
 
@@ -250,7 +279,15 @@ Given raw X posts already classified into this bucket, produce STRICT JSON:
   "emerging_patterns": [ "bullet", ... ],                                    // 0-5, what's trending across multiple posts
   "continuity": [ "bullet on how today relates to prior briefs", ... ],      // 0-4, empty if no prior history
   "watch_next": [ "question or hypothesis to test next week", ... ],         // 0-4
-  "skip_list": [ "perma=... — one-line why skipped", ... ]                   // low-signal items we're not keeping
+  "skip_list": [ "perma=... — one-line why skipped", ... ],                  // low-signal items we're not keeping
+  "predictions": [                                                           // 0-4 falsifiable, concrete, dated
+    {
+      "what": "concrete, falsifiable outcome — name the actor and artefact where possible",
+      "by_when": "YYYY-MM-DD — when this should be judged; pick a date you'd actually bet on",
+      "confidence": 0.0,                                                     // 0..1 calibrated — 0.5 = coin-flip
+      "citations": [ "/author/status/id", ... ]                              // permalinks grounding the call
+    }
+  ]
 }
 Cite permalinks concretely. Concrete over generic. Never invent posts. No corporate speak.`;
 
@@ -289,6 +326,19 @@ Cite permalinks concretely. Concrete over generic. Never invent posts. No corpor
   fs.writeFileSync(draftPath, md);
   console.log(`  draft → ${draftPath} (${md.length} chars)`);
 
+  const predictions = Array.isArray(brief.predictions) ? brief.predictions : [];
+  const normalizedPredictions = predictions
+    .filter(p => p && typeof p.what === 'string' && p.what.trim() && typeof p.by_when === 'string')
+    .map(p => ({
+      id: predictionId(bucketDef.id, p.what),
+      what: p.what.trim(),
+      by_when: p.by_when,
+      confidence: typeof p.confidence === 'number' ? Math.max(0, Math.min(1, p.confidence)) : 0.5,
+      citations: Array.isArray(p.citations) ? p.citations.slice(0, 6) : [],
+      made_at: today,
+    }));
+  budget.predictionsEmitted += normalizedPredictions.length;
+
   appendHistory(workspace, {
     date: today,
     bucket: bucketDef.id,
@@ -296,6 +346,7 @@ Cite permalinks concretely. Concrete over generic. Never invent posts. No corpor
     emerging_patterns: brief.emerging_patterns || [],
     highlights: (brief.highlights || []).slice(0, 3),
     posts: top.length,
+    predictions: normalizedPredictions,
   });
 
   const entry = propose({
@@ -322,6 +373,11 @@ Cite permalinks concretely. Concrete over generic. Never invent posts. No corpor
 }
 
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+const accuracy = loadRollingAccuracy(workspace, 30);
+const accLine = Object.keys(accuracy).length
+  ? Object.entries(accuracy).map(([b, v]) => `${b}=${(v.acc * 100).toFixed(0)}% (n=${v.n})`).join(', ')
+  : 'no scored predictions yet';
 console.log('\n[x-intel] done');
-console.log(`[x-intel] report: ${elapsed}s · ${budget.llmCalls} llm calls · ${budget.tokensIn} in / ${budget.tokensOut} out tok · ${(budget.costCents / 100).toFixed(3)} USD · ${budget.autoApplied} auto-uploaded · ${budget.pending} pending approval`);
+console.log(`[x-intel] report: ${elapsed}s · ${budget.llmCalls} llm calls · ${budget.tokensIn} in / ${budget.tokensOut} out tok · ${(budget.costCents / 100).toFixed(3)} USD · ${budget.autoApplied} auto-uploaded · ${budget.pending} pending approval · ${budget.predictionsEmitted} predictions emitted`);
+console.log(`[x-intel] forecast accuracy (30d): ${accLine}`);
 browser.close();
