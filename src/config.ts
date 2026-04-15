@@ -185,6 +185,15 @@ export interface RuntimeConfig {
   xIntelEnabled: boolean;
   /** Cadence for XIntelScheduler in minutes. Default: 180 (every 3h). */
   xIntelIntervalMinutes: number;
+  /**
+   * Opt-in for the X forecast scorer — daily companion to x-intel that
+   * judges past predictions once their by_when date has passed and
+   * writes calibrated-accuracy data the brief can surface. Read-only wrt
+   * workspace knowledge; safe to enable by default. Default: true.
+   */
+  xForecastEnabled: boolean;
+  /** Cadence for the forecast scorer in minutes. Default: 1440 (daily). */
+  xForecastIntervalMinutes: number;
 }
 
 interface ConfigFile {
@@ -236,6 +245,8 @@ interface ConfigFile {
   mcpServerEnabled?: boolean;
   xIntelEnabled?: boolean;
   xIntelIntervalMinutes?: number;
+  xForecastEnabled?: boolean;
+  xForecastIntervalMinutes?: number;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
   llamaCppUrl?: string;
@@ -457,6 +468,10 @@ export interface WorkspaceConfig {
   xIntelEnabled?: boolean;
   /** Per-workspace override: cadence in minutes for the X intelligence scheduler. */
   xIntelIntervalMinutes?: number;
+  /** Per-workspace override: enable the X forecast scorer. */
+  xForecastEnabled?: boolean;
+  /** Per-workspace override: cadence in minutes for the X forecast scorer. */
+  xForecastIntervalMinutes?: number;
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -583,6 +598,12 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   }
   if (typeof ws.xIntelIntervalMinutes === 'number' && ws.xIntelIntervalMinutes > 0) {
     next.xIntelIntervalMinutes = ws.xIntelIntervalMinutes;
+  }
+  if (typeof ws.xForecastEnabled === 'boolean') {
+    next.xForecastEnabled = ws.xForecastEnabled;
+  }
+  if (typeof ws.xForecastIntervalMinutes === 'number' && ws.xForecastIntervalMinutes > 0) {
+    next.xForecastIntervalMinutes = ws.xForecastIntervalMinutes;
   }
   return next;
 }
@@ -736,6 +757,14 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     mcpServerEnabled: fileConfig.mcpServerEnabled ?? false,
     xIntelEnabled: process.env.OHWOW_X_INTEL_ENABLED === 'true' || fileConfig.xIntelEnabled === true,
     xIntelIntervalMinutes: parseInt(process.env.OHWOW_X_INTEL_INTERVAL_MIN || '', 10) || fileConfig.xIntelIntervalMinutes || 180,
+    xForecastEnabled:
+      process.env.OHWOW_X_FORECAST_ENABLED === 'false'
+        ? false
+        : process.env.OHWOW_X_FORECAST_ENABLED === 'true'
+          ? true
+          : fileConfig.xForecastEnabled ?? true,
+    xForecastIntervalMinutes:
+      parseInt(process.env.OHWOW_X_FORECAST_INTERVAL_MIN || '', 10) || fileConfig.xForecastIntervalMinutes || 1440,
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',

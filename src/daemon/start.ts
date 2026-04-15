@@ -1234,6 +1234,28 @@ export async function startDaemon(): Promise<DaemonHandle> {
         { workspaceSlug, intervalMin: config.xIntelIntervalMinutes, repoRoot },
         '[daemon] x-intel-scheduler started',
       );
+
+      // Forecast scorer — reuses XIntelScheduler mechanics (child-process
+      // isolation, wall-clock kill, heartbeat, executing-guard) but spawns
+      // the scorer script on its own slower cadence. Enabled by default
+      // because it's read-only: judges predictions emitted by x-intel and
+      // writes x-predictions-scores.jsonl. No knowledge uploads, no DMs.
+      if (config.xForecastEnabled) {
+        const xForecast = new XIntelScheduler({
+          workspaceSlug,
+          dataDir,
+          repoRoot,
+          runOnBoot: false,
+          scriptRelPath: 'scripts/x-experiments/x-forecast-scorer.mjs',
+          heartbeatName: 'x-forecast-last-run.json',
+          logTag: '[XForecastScheduler]',
+        });
+        xForecast.start(config.xForecastIntervalMinutes * 60 * 1000);
+        logger.info(
+          { workspaceSlug, intervalMin: config.xForecastIntervalMinutes },
+          '[daemon] x-forecast-scheduler started',
+        );
+      }
     }
 
     // Wire schedule change notifications to orchestrator

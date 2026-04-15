@@ -49,6 +49,12 @@ export interface XIntelSchedulerOptions {
   repoRoot: string;
   /** Fire once immediately on start(), don't wait a full interval. Default: false. */
   runOnBoot?: boolean;
+  /** Relative path (from repoRoot) to the script to spawn. Default: scripts/x-experiments/x-intel.mjs. */
+  scriptRelPath?: string;
+  /** Heartbeat filename under dataDir. Default: x-intel-last-run.json. */
+  heartbeatName?: string;
+  /** Log tag for this scheduler instance. Default: XIntelScheduler. */
+  logTag?: string;
 }
 
 export class XIntelScheduler {
@@ -58,6 +64,16 @@ export class XIntelScheduler {
   private lastExitCode: number | null = null;
 
   constructor(private readonly opts: XIntelSchedulerOptions) {}
+
+  private get tag(): string {
+    return this.opts.logTag ?? '[XIntelScheduler]';
+  }
+  private get scriptRelPath(): string {
+    return this.opts.scriptRelPath ?? 'scripts/x-experiments/x-intel.mjs';
+  }
+  private get heartbeatName(): string {
+    return this.opts.heartbeatName ?? 'x-intel-last-run.json';
+  }
 
   get isRunning(): boolean {
     return this.running;
@@ -77,7 +93,7 @@ export class XIntelScheduler {
     this.timer = setInterval(() => void this.tick(), intervalMs);
     logger.info(
       { workspaceSlug: this.opts.workspaceSlug, intervalMs, runOnBoot: !!this.opts.runOnBoot },
-      '[XIntelScheduler] started',
+      `${this.tag} started`,
     );
   }
 
@@ -87,7 +103,7 @@ export class XIntelScheduler {
       this.timer = null;
     }
     this.running = false;
-    logger.info('[XIntelScheduler] stopped');
+    logger.info(`${this.tag} stopped`);
   }
 
   /**
@@ -96,7 +112,7 @@ export class XIntelScheduler {
    */
   async tick(): Promise<void> {
     if (this.executing) {
-      logger.debug('[XIntelScheduler] tick already executing — skip');
+      logger.debug(`${this.tag} tick already executing — skip`);
       return;
     }
     this.executing = true;
@@ -107,10 +123,10 @@ export class XIntelScheduler {
       const durationMs = Date.now() - started;
       logger.info(
         { workspaceSlug: this.opts.workspaceSlug, exitCode, durationMs },
-        '[XIntelScheduler] tick complete',
+        `${this.tag} tick complete`,
       );
     } catch (err) {
-      logger.error({ err }, '[XIntelScheduler] tick failed');
+      logger.error({ err }, `${this.tag} tick failed`);
     } finally {
       this.executing = false;
     }
@@ -118,7 +134,7 @@ export class XIntelScheduler {
 
   private runChild(): Promise<number> {
     return new Promise((resolveRun) => {
-      const scriptPath = resolvePath(this.opts.repoRoot, 'scripts/x-experiments/x-intel.mjs');
+      const scriptPath = resolvePath(this.opts.repoRoot, this.scriptRelPath);
       const child = spawn('npx', ['tsx', scriptPath], {
         cwd: this.opts.repoRoot,
         env: {
@@ -143,7 +159,7 @@ export class XIntelScheduler {
       const wallTimer = setTimeout(() => {
         logger.warn(
           { workspaceSlug: this.opts.workspaceSlug, maxMs: MAX_RUN_WALL_MS },
-          '[XIntelScheduler] wall-clock exceeded — killing child',
+          `${this.tag} wall-clock exceeded — killing child`,
         );
         child.kill('SIGTERM');
         setTimeout(() => child.kill('SIGKILL'), 5000).unref();
@@ -151,7 +167,7 @@ export class XIntelScheduler {
 
       child.on('error', (err) => {
         clearTimeout(wallTimer);
-        logger.error({ err }, '[XIntelScheduler] child spawn failed');
+        logger.error({ err }, `${this.tag} child spawn failed`);
         this.writeHeartbeat({ exitCode: -1, durationMs: 0, stdoutTail: stderrBuf.slice(-HEARTBEAT_STDOUT_BYTES) });
         resolveRun(-1);
       });
@@ -170,7 +186,7 @@ export class XIntelScheduler {
 
   private writeHeartbeat(record: { exitCode: number; durationMs: number; stdoutTail: string }): void {
     try {
-      const heartbeatPath = join(this.opts.dataDir, 'x-intel-last-run.json');
+      const heartbeatPath = join(this.opts.dataDir, this.heartbeatName);
       mkdirSync(dirname(heartbeatPath), { recursive: true });
       writeFileSync(
         heartbeatPath,
@@ -185,7 +201,7 @@ export class XIntelScheduler {
         ),
       );
     } catch (err) {
-      logger.warn({ err }, '[XIntelScheduler] failed to write heartbeat');
+      logger.warn({ err }, `${this.tag} failed to write heartbeat`);
     }
   }
 }

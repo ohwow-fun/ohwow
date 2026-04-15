@@ -240,6 +240,8 @@ export class OnboardingService {
       desktopToolsEnabled: false,
       xIntelEnabled: false,
       xIntelIntervalMinutes: 180,
+      xForecastEnabled: true,
+      xForecastIntervalMinutes: 1440,
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

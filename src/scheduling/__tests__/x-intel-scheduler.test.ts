@@ -89,4 +89,28 @@ describe('XIntelScheduler', () => {
     s.stop();
     expect(s.isRunning).toBe(false);
   });
+
+  it('honors scriptRelPath + heartbeatName for the forecast-scorer sibling', async () => {
+    // Two schedulers sharing mechanics but pointed at different scripts
+    // and different heartbeat files. Mirrors how start.ts runs them.
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-forecast-scorer.mjs'),
+      `process.stdout.write('forecast-ran'); process.exit(0);`,
+    );
+    const scorer = new XIntelScheduler({
+      workspaceSlug: 'default',
+      dataDir,
+      repoRoot,
+      scriptRelPath: 'scripts/x-experiments/x-forecast-scorer.mjs',
+      heartbeatName: 'x-forecast-last-run.json',
+      logTag: '[XForecastScheduler]',
+    });
+    await scorer.tick();
+    expect(scorer.lastExit).toBe(0);
+    const hb = JSON.parse(readFileSync(join(dataDir, 'x-forecast-last-run.json'), 'utf8'));
+    expect(hb.stdoutTail).toContain('forecast-ran');
+    // Intel heartbeat must remain absent — the two schedulers write to
+    // different files even though they share the class.
+    expect(existsSync(join(dataDir, 'x-intel-last-run.json'))).toBe(false);
+  });
 });
