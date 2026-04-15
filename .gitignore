@@ -15,3 +15,10 @@ screenshots/
 *.db
 .claude/settings.local.json
 .claude/skills/_*/
+.claude/scheduled_tasks.lock
+# Leaked artifacts from experiment-template.test.ts compilation smoke
+# tests when the vitest process is killed mid-run before the finally
+# block can unlink them. See scripts/self-bench/audit-orphans.sh.
+src/self-bench/experiments/tmpl-smoke-*.ts
+src/self-bench/experiments/mig-smoke-*.ts
+src/self-bench/experiments/subprocess-smoke-*.ts
