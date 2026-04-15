@@ -231,29 +231,20 @@ export class ContentCadenceScheduler {
    */
   private async countXPostsAfter(since: string): Promise<number> {
     try {
-      // The metadata column is JSON TEXT. SQLite's json_extract lets us
-      // filter; the DatabaseAdapter .from() chain doesn't expose raw SQL,
-      // so we fetch recently-completed tasks and filter in JS.
-      // In practice the window is ≤168 tasks (7 days × up to 24/day at max
-      // cadence), so in-process filtering is fine here.
+      // Count deliverables that actually landed on X (provider='x',
+      // status='delivered'). This is the authoritative signal for "a post
+      // happened" — before, the counter keyed on task.metadata.posted_via
+      // which nothing in the new DeliverableExecutor flow ever sets, so
+      // the goal meter stayed at 0 even after real posts went live.
       const { data } = await this.db
-        .from<{ id: string; metadata: string | null; completed_at: string | null }>('agent_workforce_tasks')
-        .select('id, metadata, completed_at')
+        .from<{ id: string; delivered_at: string | null; provider: string | null; status: string }>('agent_workforce_deliverables')
+        .select('id, delivered_at, provider, status')
         .eq('workspace_id', this.workspaceId)
-        .eq('status', 'completed');
+        .eq('status', 'delivered')
+        .eq('provider', 'x');
 
-      const rows = (data ?? []) as Array<{
-        id: string;
-        metadata: string | null;
-        completed_at: string | null;
-      }>;
-
-      return rows.filter((r) => {
-        if (!r.completed_at || r.completed_at < since) return false;
-        const meta = parseMetadata(r.metadata);
-        const via = meta.posted_via as string | undefined;
-        return typeof via === 'string' && via.startsWith('x_compose');
-      }).length;
+      const rows = (data ?? []) as Array<{ delivered_at: string | null }>;
+      return rows.filter((r) => !!r.delivered_at && r.delivered_at >= since).length;
     } catch (err) {
       logger.warn({ err, since }, '[ContentCadenceScheduler] countXPostsAfter failed');
       return 0;
@@ -390,16 +381,3 @@ export class ContentCadenceScheduler {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function parseMetadata(raw: string | null | undefined): Record<string, unknown> {
-  if (!raw) return {};
-  if (typeof raw === 'object') return raw as Record<string, unknown>;
-  try {
-    return JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
