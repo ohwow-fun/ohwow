@@ -18,7 +18,20 @@ interface Peer {
   status: string;
   capabilities: string | null;
   last_seen: string | null;
+  last_seen_at?: string | null;
+  last_health_at?: string | null;
+  consecutive_failures?: number;
   created_at: string;
+}
+
+const ONLINE_STALE_MS = 2 * 60 * 1000;
+
+function isPeerOnline(p: Peer): boolean {
+  if (p.status !== 'connected') return false;
+  const seen = p.last_health_at || p.last_seen_at || p.last_seen;
+  if (!seen) return false;
+  const ts = /Z$|[+-]\d\d:?\d\d$/.test(seen) ? new Date(seen) : new Date(seen.replace(' ', 'T') + 'Z');
+  return (Date.now() - ts.getTime()) < ONLINE_STALE_MS && (p.consecutive_failures ?? 0) === 0;
 }
 
 interface PeerAgent {
@@ -29,7 +42,8 @@ interface PeerAgent {
 }
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
+  const d = /Z$|[+-]\d\d:?\d\d$/.test(dateStr) ? new Date(dateStr) : new Date(dateStr.replace(' ', 'T') + 'Z');
+  const diff = Date.now() - d.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -60,7 +74,7 @@ export function PeersPage() {
     if (!peers) return { total: 0, online: 0 };
     return {
       total: peers.length,
-      online: peers.filter(p => p.status === 'active' || p.status === 'online').length,
+      online: peers.filter(isPeerOnline).length,
     };
   }, [peers]);
 
@@ -166,12 +180,14 @@ export function PeersPage() {
                   onClick={() => viewPeerAgents(peer)}
                 >
                   <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${peer.status === 'active' || peer.status === 'online' ? 'bg-success' : 'bg-neutral-500'}`} />
+                    <span className={`w-2 h-2 rounded-full ${isPeerOnline(peer) ? 'bg-success' : 'bg-neutral-500'}`} />
                     <p className="text-sm font-medium truncate">{peer.name}</p>
                   </div>
                   <p className="text-xs text-neutral-400 ml-4">
                     {peer.base_url}
-                    {peer.last_seen && <span className="ml-2">· seen {timeAgo(peer.last_seen)}</span>}
+                    {(peer.last_health_at || peer.last_seen_at || peer.last_seen) && (
+                      <span className="ml-2">· seen {timeAgo((peer.last_health_at || peer.last_seen_at || peer.last_seen) as string)}</span>
+                    )}
                   </p>
                 </button>
                 <div className="flex items-center gap-2 shrink-0">
