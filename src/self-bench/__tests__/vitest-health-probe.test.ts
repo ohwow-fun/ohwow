@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   VitestHealthProbeExperiment,
   parseFailingFiles,
+  parseVitestSummary,
   type VitestHealthEvidence,
 } from '../experiments/vitest-health-probe.js';
 import type { ProbeResult } from '../experiment-types.js';
@@ -52,6 +53,24 @@ describe('VitestHealthProbeExperiment.judge', () => {
     expect(
       exp.judge(probe(evidence({ runner_error: 'timeout' })), []),
     ).toBe('warning');
+  });
+});
+
+describe('parseVitestSummary', () => {
+  it('skips preceding pino log objects and finds the reporter summary', () => {
+    const noisy =
+      '{"level":30,"msg":"[runner] registered experiment","experimentId":"x"}\n' +
+      '{"level":30,"msg":"another log line"}\n' +
+      '{"numTotalTestSuites":2,"numTotalTests":5,"numPassedTests":4,"numFailedTests":1,"testResults":[]}';
+    const parsed = parseVitestSummary(noisy);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.numTotalTests).toBe(5);
+    expect(parsed!.numFailedTests).toBe(1);
+  });
+
+  it('returns null when no vitest summary is present', () => {
+    expect(parseVitestSummary('{"level":30,"msg":"only logs"}')).toBeNull();
+    expect(parseVitestSummary('')).toBeNull();
   });
 });
 

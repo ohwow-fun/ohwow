@@ -150,13 +150,21 @@ export async function runVitestJson(
   }
 }
 
+export function parseVitestSummary(raw: string): VitestJsonSummary | null {
+  return safeParse(raw);
+}
+
 function safeParse(raw: string): VitestJsonSummary | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const start = trimmed.indexOf('{');
+  if (!raw) return null;
+  // Anchor on the vitest summary's signature key. Loaded modules can log
+  // pino JSON lines to stdout before the reporter output, so a naive
+  // indexOf('{') can land on a log line, return a complete unrelated
+  // object, and report numTotalTests=0.
+  const anchor = '{"numTotalTestSuites"';
+  const start = raw.lastIndexOf(anchor);
   if (start < 0) return null;
   try {
-    return JSON.parse(trimmed.slice(start)) as VitestJsonSummary;
+    return JSON.parse(raw.slice(start)) as VitestJsonSummary;
   } catch {
     return null;
   }
