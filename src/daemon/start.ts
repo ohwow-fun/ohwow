@@ -76,6 +76,7 @@ import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
+import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
 import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
@@ -1482,6 +1483,10 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // file. Observe-only; the PatchAuthor pipeline reacts when the
         // affected_files point at patchable paths.
         experimentRunner.register(new VitestHealthProbeExperiment());
+        // Self-observation: every minute, compute per-peer median
+        // inter-run gap and flag stale experiments. Operators no
+        // longer need to eyeball sqlite to know the loop is healthy.
+        experimentRunner.register(new LoopCadenceProbeExperiment());
         // Surfaces tier-2 sources that lack a sibling vitest suite.
         // Emits warning findings whose affected_files is the proposed
         // new test path under a tier-1 prefix, ready for new-file
