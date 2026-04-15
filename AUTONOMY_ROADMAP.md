@@ -88,7 +88,6 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-
 **Loop is converging. Watching hold_rate recover as old reverts age out.**
 
 As of 2026-04-15T16:15Z:
@@ -121,10 +120,7 @@ Layer C (now in progress): Promote the roadmap suite to tier-2 whole-file mode
   with a roadmap-shape-probe guarding structural invariants and auto-reverting
   any RoadmapUpdaterExperiment patch that breaks the shape.
 
----
-
 ## 3. Next Steps
-
 ### Immediate (next session)
 
 1. **Implement RoadmapObserverExperiment** (Layer B, tier-1)
