@@ -189,6 +189,21 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'autonomous-loop Recent Iterations companion — whole-file rewrites by RoadmapUpdaterExperiment',
   },
+  // Generic tier-2 entry for any future markdown file the updater
+  // decides to author inside roadmap/. New-file creation under this
+  // prefix is gated by ~/.ohwow/roadmap-restructure-disabled
+  // (opt-out) in self-commit.ts; existing-file edits on the three
+  // explicit companions above always work regardless. The
+  // roadmap-shape-probe gate (L4c in self-commit) auto-reverts any
+  // patch that breaks the cross-link graph so new files can't orphan
+  // the suite silently.
+  {
+    prefix: 'roadmap/',
+    tier: 'tier-2',
+    patchMode: 'whole-file',
+    rationale:
+      'roadmap/ companion directory — new companion files the updater may author (opt-out via kill switch)',
+  },
 ];
 
 let registryOverride: PathTierEntry[] | null = null;

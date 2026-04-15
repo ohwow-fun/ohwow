@@ -77,6 +77,13 @@ import { runInvariantsForPaths } from './patch-invariants.js';
 import { diffTopLevelSymbols, changedSymbolCount } from './patch-ast-bounds.js';
 import { verifyOnlyStringLiteralsChanged } from './patch-string-literal-bounds.js';
 import { resolvePathTier, resolvePatchMode, getAllowedPrefixes } from './path-trust-tiers.js';
+import {
+  checkRoadmapShape,
+  ROADMAP_FILES,
+  ROADMAP_GAPS_REL,
+  ROADMAP_INDEX_REL,
+  ROADMAP_LOG_REL,
+} from './experiments/roadmap-shape-probe.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -233,6 +240,35 @@ export const AUDIT_LOG_PATH = path.join(
   '.ohwow',
   'self-commit-log',
 );
+
+/**
+ * Self-reorganization kill switch. Opt-OUT: absent = enabled. When this
+ * file exists, safeSelfCommit refuses NEW-file creation under `roadmap/`
+ * (existing-file edits on the three explicit companions still work).
+ * Mirrors the PATCH_AUTHOR_DISABLED_PATH pattern so operators can pause
+ * the updater's structural authority without touching code.
+ */
+export const ROADMAP_RESTRUCTURE_DISABLED_PATH = path.join(
+  os.homedir(),
+  '.ohwow',
+  'roadmap-restructure-disabled',
+);
+
+function isRoadmapRestructureEnabled(): boolean {
+  try {
+    return !fs.existsSync(ROADMAP_RESTRUCTURE_DISABLED_PATH);
+  } catch {
+    return true;
+  }
+}
+
+function readMaybe(p: string): string | null {
+  try {
+    return fs.readFileSync(p, 'utf-8');
+  } catch {
+    return null;
+  }
+}
 
 const COMMIT_MESSAGE_MIN_LENGTH = 40;
 const COMMIT_MESSAGE_PREFIX = 'feat(self-bench): ';
@@ -435,12 +471,23 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   //    AST gate can diff against them after the write.
   const absPaths: string[] = [];
   const preWriteSnapshots = new Map<string, string>();
+  const EXISTING_ROADMAP_FILES = new Set<string>(ROADMAP_FILES);
   for (const f of opts.files) {
     const abs = path.join(repoRoot, f.path);
     const normalized = path.normalize(f.path).replace(/\\/g, '/');
     const legacyModifyOk = MODIFY_ALLOWED_EXACT_PATHS.has(normalized);
     const tier2ModifyOk = resolvePathTier(normalized).tier === 'tier-2';
     const modifyOk = legacyModifyOk || tier2ModifyOk;
+    const isNewRoadmapFile =
+      normalized.startsWith('roadmap/') &&
+      !EXISTING_ROADMAP_FILES.has(normalized) &&
+      !fs.existsSync(abs);
+    if (isNewRoadmapFile && !isRoadmapRestructureEnabled()) {
+      return {
+        ok: false,
+        reason: `roadmap restructure is disabled. To re-enable, remove ${ROADMAP_RESTRUCTURE_DISABLED_PATH}`,
+      };
+    }
     if (fs.existsSync(abs)) {
       if (!modifyOk) {
         return { ok: false, reason: `target already exists: ${f.path}` };
@@ -599,6 +646,39 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
       return {
         ok: false,
         reason: `finding ${opts.fixesFindingId} affected_files [${affected.join(', ')}] does not intersect patched files [${[...patched].join(', ')}]`,
+      };
+    }
+  }
+
+  // 4c. Roadmap shape gate. For any patch that touches the roadmap
+  //     suite, re-read the three files from disk (post-write) and
+  //     verify structural invariants still hold. Fail → rollback.
+  //     This turns a broken RoadmapUpdaterExperiment patch into an
+  //     immediate refusal instead of landing + waiting for an
+  //     auto-revert cycle. The probe itself runs every 5 min as an
+  //     external observability signal.
+  const touchesRoadmap = opts.files.some((f) => {
+    const n = path.normalize(f.path).replace(/\\/g, '/');
+    return (
+      n === ROADMAP_INDEX_REL ||
+      n === ROADMAP_GAPS_REL ||
+      n === ROADMAP_LOG_REL ||
+      n.startsWith('roadmap/')
+    );
+  });
+  if (touchesRoadmap) {
+    const shapeInput = {
+      index: readMaybe(path.join(repoRoot, ROADMAP_INDEX_REL)),
+      gaps: readMaybe(path.join(repoRoot, ROADMAP_GAPS_REL)),
+      log: readMaybe(path.join(repoRoot, ROADMAP_LOG_REL)),
+    };
+    const shapeViolations = checkRoadmapShape(shapeInput);
+    if (shapeViolations.length > 0) {
+      rollbackFiles(absPaths, preWriteSnapshots, opts.files);
+      const first = shapeViolations[0];
+      return {
+        ok: false,
+        reason: `roadmap shape gate: ${shapeViolations.length} violation(s); first: ${first.rule} in ${first.file} — ${first.detail}`,
       };
     }
   }

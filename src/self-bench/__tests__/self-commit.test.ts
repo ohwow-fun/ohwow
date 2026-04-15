@@ -798,3 +798,55 @@ describe('safeSelfCommit — concurrent staging isolation (race condition fix)',
     expect(status).toContain('D  will-be-removed.txt');
   });
 });
+
+describe('safeSelfCommit — roadmap shape gate', () => {
+  function seedRoadmapSuite(root: string) {
+    fs.writeFileSync(
+      path.join(root, 'AUTONOMY_ROADMAP.md'),
+      '# AUTONOMY_ROADMAP.md\n\nSee [roadmap/gaps.md](roadmap/gaps.md) and [roadmap/iteration-log.md](roadmap/iteration-log.md).\n\n## 2. Active Focus\nfocus\n',
+    );
+    fs.mkdirSync(path.join(root, 'roadmap'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'roadmap/gaps.md'),
+      '# Known Gaps\n\n[../AUTONOMY_ROADMAP.md](../AUTONOMY_ROADMAP.md)\n\n## Known Gaps\n\n### P0 — Something\nbody\n',
+    );
+    fs.writeFileSync(
+      path.join(root, 'roadmap/iteration-log.md'),
+      '# Iteration Log\n\n[../AUTONOMY_ROADMAP.md](../AUTONOMY_ROADMAP.md)\n\n## Recent Iterations\n\n### 2026-04-15 — Entry\nbody\n',
+    );
+    execSync('git add AUTONOMY_ROADMAP.md roadmap/', { cwd: root, stdio: 'pipe' });
+    execSync('git commit -m "seed roadmap suite"', { cwd: root, stdio: 'pipe' });
+  }
+
+  it('rolls back a gaps.md patch that drops the ## Known Gaps anchor', async () => {
+    seedRoadmapSuite(tempRoot);
+    const shaBefore = currentSha(tempRoot);
+
+    const finding: FindingLookup = {
+      id: 'shape-test-finding',
+      verdict: 'warning',
+      ranAt: new Date().toISOString(),
+      affectedFiles: ['roadmap/gaps.md'],
+    };
+
+    const result = await safeSelfCommit(baseOpts({
+      files: [{
+        path: 'roadmap/gaps.md',
+        content: '# Known Gaps\n\n[../AUTONOMY_ROADMAP.md](../AUTONOMY_ROADMAP.md)\n\n## Gaps\n\n### P0 — Something\nbody\n',
+      }],
+      commitMessage: 'feat(self-bench): refresh Known Gaps section from live loop state',
+      experimentId: 'roadmap-updater',
+      fixesFindingId: finding.id,
+      findingResolver: async (id) => (id === finding.id ? finding : null),
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('roadmap shape gate');
+    expect(result.reason).toContain('missing-h2');
+    // Rollback worked: file on disk is the seeded version, and HEAD
+    // hasn't moved.
+    const onDisk = fs.readFileSync(path.join(tempRoot, 'roadmap/gaps.md'), 'utf-8');
+    expect(onDisk).toContain('## Known Gaps');
+    expect(currentSha(tempRoot)).toBe(shaBefore);
+  });
+});
