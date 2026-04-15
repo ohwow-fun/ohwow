@@ -59,6 +59,32 @@ describe('lintCopy', () => {
     const ok = "Couldn't load agents. Try refreshing.";
     expect(lintCopy(ok)).toEqual([]);
   });
+
+  it('flags "Something went wrong"', () => {
+    expect(lintCopy('Something went wrong.').map((v) => v.ruleId)).toContain('no-something-went-wrong');
+  });
+
+  it('flags utilize variants and suggests "use"', () => {
+    expect(lintCopy('You utilize the API').map((v) => v.ruleId)).toContain('no-utilize');
+    expect(lintCopy('Utilized the tool').map((v) => v.ruleId)).toContain('no-utilize');
+  });
+
+  it('flags "leverage" as a verb', () => {
+    expect(lintCopy('Leverage the new framework').map((v) => v.ruleId)).toContain('no-leverage-verb');
+  });
+
+  it('flags "in order to"', () => {
+    expect(lintCopy('Click here in order to save').map((v) => v.ruleId)).toContain('no-in-order-to');
+  });
+
+  it('flags bureaucratic "X role or above" phrasing', () => {
+    expect(lintCopy('You need member role or above to do this').map((v) => v.ruleId)).toContain('no-role-or-above');
+    expect(lintCopy('Requires admin role or above.').map((v) => v.ruleId)).toContain('no-role-or-above');
+  });
+
+  it('flags "Try again later"', () => {
+    expect(lintCopy('Couldn\'t save. Try again later.').map((v) => v.ruleId)).toContain('no-try-again-later');
+  });
 });
 
 describe('COPY_RULES', () => {

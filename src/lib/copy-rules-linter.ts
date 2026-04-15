@@ -104,6 +104,50 @@ export const COPY_RULES: readonly CopyRule[] = [
     message:
       'Avoid generic "An error occurred". Say what broke and what the user can try.',
   },
+  {
+    id: 'no-something-went-wrong',
+    pattern: /\bsomething went wrong\b/i,
+    severity: 'error',
+    message:
+      'Avoid generic "Something went wrong". Say what broke and what the user can try.',
+  },
+  {
+    id: 'no-utilize',
+    pattern: /\butiliz(e|ed|ing|es)\b/i,
+    severity: 'warning',
+    message: 'Prefer plain "use" over "utilize".',
+    suggest: (m) => m.toLowerCase().startsWith('utiliz') ? m.replace(/utiliz(e|ed|ing|es)/i, (_s, suf) => {
+      const map: Record<string, string> = { e: 'use', ed: 'used', ing: 'using', es: 'uses' };
+      return map[suf.toLowerCase()] ?? 'use';
+    }) : m,
+  },
+  {
+    id: 'no-leverage-verb',
+    pattern: /\bleverag(e|ed|ing|es)\b/i,
+    severity: 'warning',
+    message: 'Avoid "leverage" as a verb. Prefer "use" or a concrete action word.',
+  },
+  {
+    id: 'no-in-order-to',
+    pattern: /\bin order to\b/i,
+    severity: 'warning',
+    message: 'Replace "in order to" with "to".',
+    suggest: (m) => m.replace(/^in order to$/i, 'to'),
+  },
+  {
+    id: 'no-role-or-above',
+    pattern: /\b(you need|requires?)\s+(the\s+)?\w+\s+role\s+or\s+above\b/i,
+    severity: 'warning',
+    message:
+      'Avoid bureaucratic "X role or above" phrasing. Prefer "Only members and above can...".',
+  },
+  {
+    id: 'no-try-again-later',
+    pattern: /\btry again later\b/i,
+    severity: 'warning',
+    message:
+      'Avoid vague "Try again later". Say what the user should do, or "Try refreshing".',
+  },
 ];
 
 /**
