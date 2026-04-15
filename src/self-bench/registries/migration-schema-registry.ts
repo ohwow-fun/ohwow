@@ -105,4 +105,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '017-openclaw-call-logs.sql', expectedTables: ['openclaw_call_logs'] },
   { migrationFile: '013-voice-profile-settings.sql', expectedTables: ['runtime_settings'] },
   { migrationFile: '011-notification-preferences.sql', expectedTables: ['runtime_settings'] },
+  { migrationFile: '007-deliverables.sql', expectedTables: ['agent_workforce_deliverables'] },
 ];
