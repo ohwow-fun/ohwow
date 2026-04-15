@@ -41,7 +41,12 @@ import {
   safeSelfCommit,
   type FindingLookup,
 } from '../self-commit.js';
-import { getAllowedPrefixes, resolvePathTier } from '../path-trust-tiers.js';
+import { getAllowedPrefixes, resolvePathTier, resolvePatchMode } from '../path-trust-tiers.js';
+import {
+  parseStringLiteralEditsResponse,
+  applyStringLiteralEdits,
+  type StringLiteralEdit,
+} from './string-literal-patch.js';
 import {
   buildProvenancePrompt,
   validateProvenanceInputs,
@@ -252,16 +257,11 @@ export class PatchAuthorExperiment implements Experiment {
     }
     const promptBody = buildProvenancePrompt(provenanceInputs);
 
+    const patchMode = resolvePatchMode(targetPath);
     const sys =
-      'You patch one TypeScript file in response to one self-bench finding. ' +
-      'Output ONLY the full new contents of the source file shown in the ' +
-      '<source name="source-file"> block. No markdown fences, no commentary, ' +
-      'no diff. The output must be valid TypeScript that preserves the file\'s ' +
-      'public API and only changes what the finding describes. Keep changes ' +
-      'minimal — one top-level symbol modified at most. The file you are ' +
-      'editing is referenced by ref="' +
-      targetPath +
-      '".';
+      patchMode === 'string-literal'
+        ? buildStringLiteralSystemPrompt(targetPath)
+        : buildWholeFileSystemPrompt(targetPath);
 
     const llm = await runLlmCall(
       {
@@ -283,12 +283,34 @@ export class PatchAuthorExperiment implements Experiment {
         details: { stage: 'model' },
       };
     }
-    const newContent = stripCodeFences(llm.data.text);
-    if (!newContent || newContent.length < 20) {
-      return {
-        description: 'model returned empty or implausibly short patch',
-        details: { stage: 'parse', length: newContent.length },
-      };
+
+    let newContent: string;
+    let editsApplied: StringLiteralEdit[] | null = null;
+    if (patchMode === 'string-literal') {
+      const parsed = parseStringLiteralEditsResponse(llm.data.text);
+      if (!Array.isArray(parsed)) {
+        return {
+          description: `string-literal edits parse failed: ${parsed.error}`,
+          details: { stage: 'parse', raw: llm.data.text.slice(0, 500) },
+        };
+      }
+      const applied = applyStringLiteralEdits(sourceContent, parsed);
+      if (!applied.ok || !applied.content) {
+        return {
+          description: `string-literal edits could not be applied: ${applied.reason}`,
+          details: { stage: 'apply', edits: parsed, raw: llm.data.text.slice(0, 500) },
+        };
+      }
+      newContent = applied.content;
+      editsApplied = parsed;
+    } else {
+      newContent = stripCodeFences(llm.data.text);
+      if (!newContent || newContent.length < 20) {
+        return {
+          description: 'model returned empty or implausibly short patch',
+          details: { stage: 'parse', length: newContent.length },
+        };
+      }
     }
 
     const findingResolver = (id: string): Promise<FindingLookup | null> =>
@@ -322,6 +344,8 @@ export class PatchAuthorExperiment implements Experiment {
       details: {
         stage: 'committed',
         commitSha: commit.commitSha,
+        patchMode,
+        edits: editsApplied,
         model: llm.data.model_used,
         provider: llm.data.provider,
         cost_cents: llm.data.cost_cents,
@@ -344,6 +368,43 @@ export class PatchAuthorExperiment implements Experiment {
       return [];
     }
   }
+}
+
+function buildWholeFileSystemPrompt(targetPath: string): string {
+  return (
+    'You patch one TypeScript file in response to one self-bench finding. ' +
+    'Output ONLY the full new contents of the source file shown in the ' +
+    '<source name="source-file"> block. No markdown fences, no commentary, ' +
+    'no diff. The output must be valid TypeScript that preserves the file\'s ' +
+    "public API and only changes what the finding describes. Keep changes " +
+    'minimal — one top-level symbol modified at most. The file you are ' +
+    `editing is referenced by ref="${targetPath}".`
+  );
+}
+
+function buildStringLiteralSystemPrompt(targetPath: string): string {
+  return (
+    'You patch one TypeScript/TSX file by emitting a JSON array of ' +
+    'string-literal edits. The file is referenced by ref="' +
+    targetPath +
+    '" in the <source name="source-file"> block. Rules:\n' +
+    '  1. Output ONLY a JSON array. No markdown fences, no commentary.\n' +
+    '  2. Each element is {"find": string, "replace": string, ' +
+    '"occurrence"?: number}.\n' +
+    '  3. `find` must match characters that live INSIDE a string ' +
+    'literal, template-literal chunk, or JSX text in the source. Do ' +
+    'NOT include surrounding quotes, JSX tags, or any syntax outside ' +
+    'the string.\n' +
+    '  4. `find` must match the source exactly. Whitespace matters. ' +
+    'If `find` could match more than once, include a 1-based ' +
+    '`occurrence` to disambiguate.\n' +
+    '  5. Only fix what the finding describes. Do not touch unrelated ' +
+    'strings. No identifier renames, no logic changes, no imports.\n' +
+    '  6. `replace` must differ from `find` and must obey the ' +
+    'project copywriting rules the finding cites.\n' +
+    'Example: [{"find":"Failed to save.","replace":"Couldn\'t save. ' +
+    'Try again?"}]'
+  );
 }
 
 /** All currently-registered tier-2 prefixes (longest-prefix-match candidates). */

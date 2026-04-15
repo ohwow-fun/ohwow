@@ -135,6 +135,20 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'pure error→category dispatch, fuzzed by error-classification-fuzz (totality + fixtures + retry-contract)',
   },
+  // First string-literal-mode tier-2 entry. UI page file — the
+  // component body is too big for whole-file rewrites, but the
+  // source-copy-lint experiment repeatedly flags em-dashes in the
+  // AUTONOMY_LABELS titles. String-literal patch mode lets the
+  // autonomous author heal those em-dashes without exposing JSX
+  // structure or imports to model edits. Promoted one file at a
+  // time — do not mass-promote src/web/src/pages/.
+  {
+    prefix: 'src/web/src/pages/Agents.tsx',
+    tier: 'tier-2',
+    patchMode: 'string-literal',
+    rationale:
+      'UI page, copy-level edits only — string-literal gate blocks structural AST changes',
+  },
 ];
 
 let registryOverride: PathTierEntry[] | null = null;
