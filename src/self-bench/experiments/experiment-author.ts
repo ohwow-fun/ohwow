@@ -788,6 +788,26 @@ export class ExperimentAuthorExperiment implements Experiment {
       }
     }
 
+    // Per-slug auto-demotion. Build a failure counter per proposal
+    // slug so a brief that has repeatedly failed to author falls out
+    // of the unclaimed pool even if it's technically still unclaimed.
+    // Two failures is enough — templates fail the same way each time,
+    // so the third retry is near-guaranteed wasted model budget.
+    const PER_SLUG_FAILURE_THRESHOLD = 2;
+    const failuresBySlug = new Map<string, number>();
+    for (const f of authorFindings) {
+      const ev = f.evidence as {
+        is_authoring_outcome?: boolean;
+        commit_ok?: boolean;
+        brief?: { slug?: string };
+      };
+      if (!ev.is_authoring_outcome) continue;
+      if (ev.commit_ok !== false) continue;
+      const slug = ev.brief?.slug;
+      if (!slug) continue;
+      failuresBySlug.set(slug, (failuresBySlug.get(slug) ?? 0) + 1);
+    }
+
     const candidates: ProposalCandidate[] = [];
     for (const [subject, finding] of latestBySubject.entries()) {
       const evidence = finding.evidence as {
@@ -802,6 +822,13 @@ export class ExperimentAuthorExperiment implements Experiment {
 
       // Must have an embedded brief to be actionable.
       if (!evidence.brief) continue;
+
+      // Per-slug demotion: if this brief has already failed to author
+      // N times, skip it. The brief stays in the ledger (operators can
+      // unstick manually by opening the strategist) but doesn't burn
+      // more budget in the authoring loop.
+      const failures = failuresBySlug.get(evidence.brief.slug) ?? 0;
+      if (failures >= PER_SLUG_FAILURE_THRESHOLD) continue;
 
       candidates.push({
         findingId: finding.id,
