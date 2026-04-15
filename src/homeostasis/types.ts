@@ -10,7 +10,8 @@ export type MetricName =
   | 'utilization'
   | 'error_rate'
   | 'sleep_debt'
-  | 'synapse_health';
+  | 'synapse_health'
+  | 'revenue_vs_burn';
 
 export interface SetPoint {
   metric: MetricName;
@@ -55,4 +56,9 @@ export const DEFAULT_SET_POINTS: Record<MetricName, { target: number; tolerance:
   error_rate:     { target: 0.05, tolerance: 0.5,  adaptationRate: 0.05 },
   sleep_debt:     { target: 0.2,  tolerance: 0.3,  adaptationRate: 0.02 },
   synapse_health: { target: 0.7,  tolerance: 0.2,  adaptationRate: 0.05 },
+  // revenue_vs_burn: daily_cost_cents / (mrr/30). Target 0.3 = runtime
+  // costs ~30% of daily revenue; pressure rises sharply past 1.0 (cost
+  // exceeds revenue). Widest tolerance because early-stage workspaces
+  // have no revenue signal and the metric defaults to 0.
+  revenue_vs_burn: { target: 0.3, tolerance: 0.5, adaptationRate: 0.05 },
 };

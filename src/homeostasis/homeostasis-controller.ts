@@ -9,6 +9,23 @@ import { initializeSetPoints, updateSetPoint, adaptSetPoint } from './set-points
 import { computeAllCorrectiveActions } from './feedback-loops.js';
 import { logger } from '../lib/logger.js';
 
+/**
+ * Pressure ratio: (runtime cost today) / (daily revenue equivalent).
+ *  - Returns 0 when MRR is absent or zero: no meaningful comparison.
+ *  - Returns 0 when cost is absent.
+ *  - Clamped at 5.0 so a runaway cost doesn't break downstream math.
+ */
+export function computeRevenueVsBurnRatio(
+  mrrCents: number | null | undefined,
+  dailyCostCents: number | null | undefined,
+): number {
+  if (!mrrCents || mrrCents <= 0) return 0;
+  if (!dailyCostCents || dailyCostCents <= 0) return 0;
+  const dailyRevenueCents = mrrCents / 30;
+  const ratio = dailyCostCents / dailyRevenueCents;
+  return Math.min(5, ratio);
+}
+
 export class HomeostasisController {
   private setPoints: SetPoint[];
   private lastAllostasisCheck: number;
@@ -96,6 +113,35 @@ export class HomeostasisController {
 
     this.lastAllostasisCheck = now;
     return events;
+  }
+
+  /**
+   * Read the most recent `business_vitals` row for this workspace and
+   * update the `revenue_vs_burn` metric. The ratio is
+   *   daily_cost_cents / (mrr / 30)
+   * which collapses to 0 when there is no revenue row to compare
+   * against (safe default — early-stage workspaces don't want a cost
+   * alarm firing purely from the absence of MRR).
+   *
+   * Called from a scheduler tick; errors are logged, not thrown, so
+   * the controller stays up if the table hasn't been created yet.
+   */
+  async refreshBusinessVitals(): Promise<void> {
+    if (!this.db) return;
+    try {
+      const { data } = await this.db
+        .from<{ mrr: number | null; daily_cost_cents: number | null }>('business_vitals')
+        .select('mrr, daily_cost_cents')
+        .eq('workspace_id', this.workspaceId)
+        .order('ts', { ascending: false })
+        .limit(1);
+      const row = (data ?? [])[0];
+      if (!row) return;
+      const ratio = computeRevenueVsBurnRatio(row.mrr, row.daily_cost_cents);
+      this.updateMetric('revenue_vs_burn', ratio);
+    } catch (err) {
+      logger.warn({ err }, 'homeostasis: failed to refresh business vitals');
+    }
   }
 
   /** Get current state of a specific metric */
