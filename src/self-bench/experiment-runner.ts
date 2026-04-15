@@ -122,17 +122,53 @@ const VERDICT_SEVERITY: Record<Verdict, number> = {
 };
 
 /**
+ * Keys we treat as "burn-down" scalars: a decrease after the
+ * intervention means real progress even if the coarse verdict stayed
+ * the same. Pool-draining experiments (experiment-author walking a
+ * registry backlog, source-copy-lint fixing violations N-at-a-time)
+ * produce this shape — one tick moves a counter by 1/N but verdict
+ * stays warning until the whole pool drains. Without this, every
+ * honest incremental fix reads as "failed" in the validator.
+ */
+const BURN_DOWN_KEY_SUFFIXES = [
+  '_count',
+  '_pool',
+  '_backlog',
+  '_unclaimed',
+  '_failures',
+  '_violations',
+  '_pending',
+];
+
+function isBurnDownKey(key: string): boolean {
+  return BURN_DOWN_KEY_SUFFIXES.some((suf) => key.endsWith(suf));
+}
+
+function collectBurnDownScalars(ev: Record<string, unknown>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const [k, v] of Object.entries(ev)) {
+    if (typeof v === 'number' && Number.isFinite(v) && isBurnDownKey(k)) {
+      out.set(k, v);
+    }
+  }
+  return out;
+}
+
+/**
  * Fallback validator used when an experiment produced an intervention
  * but didn't implement validate() itself. Re-runs probe()+judge() and
  * compares the fresh verdict against the verdict at intervene time
- * (stashed under `__autoFollowupPreVerdict` in the baseline).
+ * (stashed under `__autoFollowupPreVerdict` in the baseline), then
+ * falls back to scalar-improvement detection on burn-down keys so
+ * pool-draining interventions aren't misread as regressions.
  *
  * Contract:
- *   - new verdict === 'pass'         → held (intervention moved us to healthy)
- *   - new verdict < pre-verdict      → held (state improved even if not green)
- *   - new verdict > pre-verdict      → failed (regressed after intervention)
- *   - new verdict === pre-verdict    → failed (intervention didn't move the needle)
- *   - probe errored                  → inconclusive
+ *   - probe errored                    → inconclusive
+ *   - new verdict === 'pass'           → held (intervention moved us to healthy)
+ *   - new severity < pre severity      → held (state improved)
+ *   - any burn-down scalar decreased   → held (incremental progress)
+ *   - new severity > pre severity      → failed (regressed after intervention)
+ *   - new severity === pre severity    → failed (intervention didn't move the needle)
  */
 async function autoFollowupValidate(
   exp: Experiment,
@@ -144,6 +180,11 @@ async function autoFollowupValidate(
     rawPre === 'pass' || rawPre === 'warning' || rawPre === 'fail' || rawPre === 'error'
       ? rawPre
       : 'warning';
+  const preEvidenceRaw = baseline['__autoFollowupPreEvidence'];
+  const preEvidence =
+    preEvidenceRaw && typeof preEvidenceRaw === 'object'
+      ? (preEvidenceRaw as Record<string, unknown>)
+      : {};
 
   let probeResult: ProbeResult;
   try {
@@ -160,22 +201,42 @@ async function autoFollowupValidate(
   const preSeverity = VERDICT_SEVERITY[preVerdict];
   const newSeverity = VERDICT_SEVERITY[newVerdict];
 
+  const preScalars = collectBurnDownScalars(preEvidence);
+  const postScalars = collectBurnDownScalars(
+    probeResult.evidence as Record<string, unknown>,
+  );
+  const improvements: Array<{ key: string; from: number; to: number }> = [];
+  for (const [k, before] of preScalars) {
+    const after = postScalars.get(k);
+    if (after !== undefined && after < before) {
+      improvements.push({ key: k, from: before, to: after });
+    }
+  }
+
   let outcome: ValidationOutcome;
+  let reason: string;
   if (newVerdict === 'pass' || newSeverity < preSeverity) {
     outcome = 'held';
+    reason = 'verdict improved';
+  } else if (improvements.length > 0) {
+    outcome = 'held';
+    reason = `${improvements.length} burn-down scalar(s) decreased`;
   } else {
     outcome = 'failed';
+    reason = 'no verdict or scalar improvement';
   }
 
   return {
     outcome,
-    summary: `auto-followup: pre=${preVerdict} post=${newVerdict} → ${outcome}`,
+    summary: `auto-followup: pre=${preVerdict} post=${newVerdict} → ${outcome} (${reason})`,
     evidence: {
       auto_followup: true,
       pre_verdict: preVerdict,
       post_verdict: newVerdict,
       post_summary: probeResult.summary,
       post_evidence: probeResult.evidence,
+      improvements,
+      outcome_reason: reason,
     },
   };
 }
@@ -442,6 +503,7 @@ export class ExperimentRunner implements ExperimentScheduler {
     const cleanBaseline: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(pending.baseline)) {
       if (k === '__autoFollowupPreVerdict') continue;
+      if (k === '__autoFollowupPreEvidence') continue;
       cleanBaseline[k] = v;
     }
 
@@ -703,6 +765,9 @@ export class ExperimentRunner implements ExperimentScheduler {
             baseline: {
               ...intervention.details,
               __autoFollowupPreVerdict: verdict,
+              ...(probeResult
+                ? { __autoFollowupPreEvidence: probeResult.evidence }
+                : {}),
             },
             validateAt,
           });

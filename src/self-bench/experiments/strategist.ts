@@ -41,7 +41,8 @@ import type {
   ProbeResult,
   Verdict,
 } from '../experiment-types.js';
-import { setRuntimeConfig, deleteRuntimeConfig } from '../runtime-config.js';
+import { setRuntimeConfig, deleteRuntimeConfig, getRuntimeConfig } from '../runtime-config.js';
+import { STRATEGY_PERFORMATIVE_KEY } from './intervention-audit.js';
 
 export const STRATEGY_ACTIVE_FOCUS_KEY = 'strategy.active_focus';
 export const STRATEGY_PRIORITY_KEY = 'strategy.priority_experiments';
@@ -100,6 +101,7 @@ export function decideStrategy(facts: {
   patchLoop: { holdRate: number | null; poolDelta: number | null } | null;
   burn: { ratio: number | null } | null;
   burnConcentration?: BurnConcentration | null;
+  performativeExperiments?: string[];
   reflectionCount: number;
 }): StrategyDecision {
   const priority: string[] = [];
@@ -183,6 +185,21 @@ export function decideStrategy(facts: {
     }
   }
 
+  // 5. Performative experiments — their interventions don't hold per
+  //    the InterventionAudit probe. Demote them so the scheduler
+  //    stops spending budget running them on their normal cadence.
+  //    Adaptive-scheduler will still fire them occasionally to catch
+  //    a state change; demotion is just a priority hint, not a ban.
+  const performative = facts.performativeExperiments ?? [];
+  if (performative.length > 0) {
+    reasons.push(`performative (hold<20%): ${performative.join(', ')}`);
+    for (const id of performative) {
+      if (!demoted.includes(id)) demoted.push(id);
+      const idx = priority.indexOf(id);
+      if (idx >= 0) priority.splice(idx, 1);
+    }
+  }
+
   const active_focus = reasons.length > 0 ? reasons.join('; ') : 'steady state — no intervention';
   return {
     active_focus,
@@ -218,6 +235,10 @@ export class StrategistExperiment implements Experiment {
     const burn = await this.readBurn(ctx);
     const burnConcentration = await this.readBurnConcentration(ctx);
     const reflectionCount = await this.readReflectionCount(ctx);
+    const performativeExperiments = getRuntimeConfig<string[]>(
+      STRATEGY_PERFORMATIVE_KEY,
+      [],
+    );
 
     const decision = decideStrategy({
       topFailing,
@@ -227,6 +248,7 @@ export class StrategistExperiment implements Experiment {
       },
       burn,
       burnConcentration,
+      performativeExperiments,
       reflectionCount,
     });
 

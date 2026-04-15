@@ -50,6 +50,7 @@ import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { BurnRateExperiment } from '../self-bench/experiments/burn-rate.js';
 import { ThroughputDailyExperiment } from '../self-bench/experiments/throughput-daily.js';
+import { InterventionAuditExperiment } from '../self-bench/experiments/intervention-audit.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StrategistExperiment } from '../self-bench/experiments/strategist.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
@@ -1461,6 +1462,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // self_findings so they're one subject-scoped query away.
         experimentRunner.register(new BurnRateExperiment());
         experimentRunner.register(new ThroughputDailyExperiment());
+        // Reads experiment_validations and flags experiments whose
+        // interventions don't hold — writes strategy.performative_experiments.
+        experimentRunner.register(new InterventionAuditExperiment());
         // Phase 2: StaleTaskCleanupExperiment is the first actionable
         // experiment — it sweeps zombie in_progress tasks every 5m,
         // marks them failed, and resets their agents to idle. The
