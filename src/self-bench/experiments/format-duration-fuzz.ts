@@ -37,7 +37,6 @@ import type {
 } from '../experiment-types.js';
 import { formatDuration } from '../../lib/format-duration.js';
 
-const HOUR = 60 * 60 * 1000;
 
 const TARGET_FILE = 'src/lib/format-duration.ts';
 const SAMPLE_COUNT = 200;
@@ -67,7 +66,7 @@ export class FormatDurationFuzzExperiment implements Experiment {
   readonly hypothesis =
     'For every non-negative finite ms input, formatDuration returns a ' +
     'non-empty string of legal unit tokens that round-trips back to floor(input).';
-  readonly cadence = { everyMs: 6 * HOUR, runOnBoot: true };
+  readonly cadence = { everyMs: 5 * 60 * 1000, runOnBoot: true };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const inputs = buildCorpus(SAMPLE_COUNT, RNG_SEED);

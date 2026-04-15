@@ -91,7 +91,7 @@ export class PatchAuthorExperiment implements Experiment {
     'path describe a real, currently-broken contract that the autonomous ' +
     'loop could fix. Surfacing them as patch candidates lets the operator ' +
     'audit the judgment before model-driven authoring is enabled.';
-  readonly cadence = { everyMs: 6 * HOUR, runOnBoot: false };
+  readonly cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();
