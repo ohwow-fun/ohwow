@@ -17,6 +17,20 @@ import { LlamaCppProvider } from './providers/llama-cpp-provider.js';
 import { MLXProvider } from './providers/mlx-provider.js';
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider.js';
 import { linkRequestSignal, abortPromise } from '../lib/with-timeout.js';
+import { logger } from '../lib/logger.js';
+
+/**
+ * Pure decision: should `selectForPurpose` clamp routing to local
+ * models for this call? True when the caller explicitly asked for it
+ * or when the burn-throttle level is >= 1. Exposed so the decision
+ * is independently testable without constructing a full ModelRouter.
+ */
+export function shouldForceLocalForBurn(
+  burnLevel: 0 | 1 | 2,
+  callerForceLocal: boolean,
+): boolean {
+  return callerForceLocal || burnLevel >= 1;
+}
 import type {
   TextBlock,
   MessageParam,
@@ -1620,6 +1634,23 @@ export class ModelRouter {
   private _onOllamaResponse: ((model: string, inputTokens: number, outputTokens: number, durationMs: number) => void) | null = null;
   /** Cached credit balance percentage (0-100). Updated from heartbeat responses. */
   private _creditBalancePercent = 100;
+  /**
+   * Burn-throttle provider. When set, selectForPurpose consults it
+   * before dispatch; a returned level >= 1 forces local-only routing
+   * for the call. Injected by the daemon from HomeostasisController
+   * so `revenue_vs_burn` pressure shows up as cheaper model choices
+   * without the router needing a direct dep on homeostasis.
+   */
+  private _burnThrottleProvider: (() => 0 | 1 | 2) | null = null;
+
+  setBurnThrottleProvider(fn: (() => 0 | 1 | 2) | null): void {
+    this._burnThrottleProvider = fn;
+  }
+
+  /** Test-only accessor so the mock in tests can inspect current provider. */
+  getBurnThrottleProvider(): (() => 0 | 1 | 2) | null {
+    return this._burnThrottleProvider;
+  }
 
   constructor(opts: {
     anthropicApiKey?: string;
@@ -2056,7 +2087,19 @@ export class ModelRouter {
 
     // Hard constraint: localOnly from either the agent or the call site clamps
     // the modelSource for this selection without mutating router state.
-    const forceLocal = constraints?.localOnly === true || agent?.localOnly === true;
+    const callerForceLocal = constraints?.localOnly === true || agent?.localOnly === true;
+
+    // Burn-throttle: when homeostasis reports revenue_vs_burn pressure
+    // (level 1 = tight margin, level 2 = cost exceeds revenue) we
+    // route this selection to local models even if the caller didn't
+    // ask for it. Below level 1 the provider returns 0 and this is a
+    // no-op. Never mutates router state — the clamp only applies to
+    // this call.
+    const burnLevel = this._burnThrottleProvider ? this._burnThrottleProvider() : 0;
+    const forceLocal = shouldForceLocalForBurn(burnLevel, callerForceLocal);
+    if (burnLevel >= 1 && !callerForceLocal) {
+      logger.info({ burnLevel, purpose }, 'model-router: revenue_vs_burn throttle → forcing local-only');
+    }
 
     // Map Purpose → TaskType for the existing getProvider dispatch. New purposes
     // fall into 'orchestrator' (fast interactive) or 'agent_task' (deliberate)
