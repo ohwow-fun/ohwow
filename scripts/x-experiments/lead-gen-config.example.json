@@ -1,0 +1,40 @@
+{
+  "_comment": "Example lead-gen rubric. Copy to ~/.ohwow/workspaces/<ws>/lead-gen-config.json and edit. The private copy is gitignored. This file is the schema contract: workspace-specific ICP, competitors, and attribution URLs belong in the private copy and must never be committed here.",
+
+  "icp": {
+    "description": "Who your workspace sells to, in natural language. Used to prime the buyer-intent classifier. Keep it specific: 'small-team founders shipping AI agents' beats 'developers'.",
+    "disqualifiers": ["obvious bot accounts", "nsfw", "job-seekers only"]
+  },
+
+  "freeGates": {
+    "_comment": "Zero-cost filters applied to each ledger row before any LLM call. A row must pass ALL of these to reach the classifier.",
+    "minScore": 0.6,
+    "minReplies": 0,
+    "minLikes": 0,
+    "minTouches": 1,
+    "allowedBuckets": ["market_signal", "competitors"],
+    "engagerBoost": {
+      "_comment": "If a row's sources include engager:own-post, engager:competitor, or dm, drop the score floor this low. Captures people engaging with us directly even when their post score is modest.",
+      "ownPostReplyReducesMinScoreTo": 0.4
+    }
+  },
+
+  "intentClassifier": {
+    "_comment": "After freeGates, one simple_classification LLM call decides intent. Only acceptClasses with confidence >= minConfidence get promoted to the CRM.",
+    "minConfidence": 0.7,
+    "acceptClasses": ["buyer_intent"]
+  },
+
+  "engagerSurfaces": {
+    "_comment": "Where to harvest engagers. Own-post replies/quotes are the strongest signal. Competitor-handle threads find people shopping in-category. Keep these lists small so each run finishes fast.",
+    "ownPostsWindowDays": 14,
+    "ownPostsMax": 10,
+    "competitorHandles": ["acme_competitor", "widgetco"],
+    "competitorPostsPerHandle": 5
+  },
+
+  "attribution": {
+    "_comment": "Outbound links embed the contact's outreach_token. Landing URL should be a workspace-specific endpoint that records the token hit and redirects to the paid signup flow.",
+    "landingUrl": "https://example.com/from/x"
+  }
+}
