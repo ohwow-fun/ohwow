@@ -22,3 +22,4 @@ screenshots/
 src/self-bench/experiments/tmpl-smoke-*.ts
 src/self-bench/experiments/mig-smoke-*.ts
 src/self-bench/experiments/subprocess-smoke-*.ts
+.github-support-ticket.txt
