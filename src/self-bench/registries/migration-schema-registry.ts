@@ -90,4 +90,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '047-outbound-queue.sql', expectedTables: ['outbound_queue'] },
   { migrationFile: '051-execution-engine-tables.sql', expectedTables: ['agent_workforce_workflow_runs', 'agent_workforce_sessions', 'agent_workforce_action_journal', 'agent_workforce_autonomy_history', 'agent_workforce_prompt_versions', 'agent_workforce_data_store'] },
   { migrationFile: '046-state-changelog.sql', expectedTables: ['agent_workforce_state_changelog'] },
+  { migrationFile: '044-multi-connection-fixes.sql', expectedTables: ['telegram_connections_new', 'connection_locks'] },
 ];
