@@ -153,7 +153,7 @@ describe('ExperimentRunner — validation scheduling', () => {
     expect(v.experiment_id).toBe('actor');
     expect(v.status).toBe('pending');
     const baseline = JSON.parse(v.baseline as string);
-    expect(baseline).toEqual({ undo_key: 'abc' });
+    expect(baseline).toEqual({ undo_key: 'abc', __autoFollowupPreVerdict: 'warning' });
     // validate_at = now + default delay (15 min)
     const expected = new Date(currentTime + DEFAULT_VALIDATION_DELAY_MS).toISOString();
     expect(v.validate_at).toBe(expected);
@@ -191,7 +191,12 @@ describe('ExperimentRunner — validation scheduling', () => {
     expect(env.tables.experiment_validations).toHaveLength(0);
   });
 
-  it('does NOT enqueue a validation when experiment has no validate method', async () => {
+  it('enqueues an auto-followup validation when experiment has no validate method', async () => {
+    // New contract: every intervention enqueues a validation, even
+    // when the experiment doesn't implement validate() itself. The
+    // runner falls back to autoFollowupValidate (probe + verdict
+    // comparison) so fire-and-forget interventions still get an
+    // accountability row.
     const runner = buildRunner();
     const exp = makeExperiment({
       id: 'unvalidated',
@@ -202,7 +207,10 @@ describe('ExperimentRunner — validation scheduling', () => {
     });
     runner.register(exp);
     await runner.tick();
-    expect(env.tables.experiment_validations).toHaveLength(0);
+    expect(env.tables.experiment_validations).toHaveLength(1);
+    const v = env.tables.experiment_validations[0];
+    const baseline = JSON.parse(v.baseline as string);
+    expect(baseline).toEqual({ undo: 1, __autoFollowupPreVerdict: 'warning' });
   });
 
   it('DOES enqueue a validation on pass verdict if intervene returns non-null (meta-experiments)', async () => {

@@ -114,6 +114,72 @@ function verdictForOutcome(outcome: ValidationOutcome): Verdict {
   return 'fail';
 }
 
+const VERDICT_SEVERITY: Record<Verdict, number> = {
+  pass: 0,
+  warning: 1,
+  fail: 2,
+  error: 3,
+};
+
+/**
+ * Fallback validator used when an experiment produced an intervention
+ * but didn't implement validate() itself. Re-runs probe()+judge() and
+ * compares the fresh verdict against the verdict at intervene time
+ * (stashed under `__autoFollowupPreVerdict` in the baseline).
+ *
+ * Contract:
+ *   - new verdict === 'pass'         → held (intervention moved us to healthy)
+ *   - new verdict < pre-verdict      → held (state improved even if not green)
+ *   - new verdict > pre-verdict      → failed (regressed after intervention)
+ *   - new verdict === pre-verdict    → failed (intervention didn't move the needle)
+ *   - probe errored                  → inconclusive
+ */
+async function autoFollowupValidate(
+  exp: Experiment,
+  baseline: Record<string, unknown>,
+  ctx: ExperimentContext,
+): Promise<ValidationResult> {
+  const rawPre = baseline['__autoFollowupPreVerdict'];
+  const preVerdict: Verdict =
+    rawPre === 'pass' || rawPre === 'warning' || rawPre === 'fail' || rawPre === 'error'
+      ? rawPre
+      : 'warning';
+
+  let probeResult: ProbeResult;
+  try {
+    probeResult = await exp.probe(ctx);
+  } catch (err) {
+    return {
+      outcome: 'inconclusive',
+      summary: `auto-followup probe threw: ${err instanceof Error ? err.message : String(err)}`,
+      evidence: { auto_followup: true, pre_verdict: preVerdict, probe_error: true },
+    };
+  }
+
+  const newVerdict = exp.judge(probeResult, []);
+  const preSeverity = VERDICT_SEVERITY[preVerdict];
+  const newSeverity = VERDICT_SEVERITY[newVerdict];
+
+  let outcome: ValidationOutcome;
+  if (newVerdict === 'pass' || newSeverity < preSeverity) {
+    outcome = 'held';
+  } else {
+    outcome = 'failed';
+  }
+
+  return {
+    outcome,
+    summary: `auto-followup: pre=${preVerdict} post=${newVerdict} → ${outcome}`,
+    evidence: {
+      auto_followup: true,
+      pre_verdict: preVerdict,
+      post_verdict: newVerdict,
+      post_summary: probeResult.summary,
+      post_evidence: probeResult.evidence,
+    },
+  };
+}
+
 export interface ExperimentRunnerOptions {
   /** Override the tick interval (useful for tests). */
   tickIntervalMs?: number;
@@ -363,22 +429,33 @@ export class ExperimentRunner implements ExperimentScheduler {
       return;
     }
 
-    if (!exp.validate) {
-      await markValidationSkipped(
-        this.db,
-        pending.id,
-        `experiment ${pending.experimentId} no longer implements validate()`,
-      ).catch((err) => logger.warn({ err }, '[runner] failed to mark validation skipped'));
-      return;
-    }
-
     const started = this.now();
     const ctx = this.buildContext();
     let result: ValidationResult | null = null;
     let errorMessage: string | null = null;
 
+    // Strip the reserved auto-followup metadata so user-defined
+    // validate()/rollback() and the evidence ledger see exactly the
+    // intervention.details the experiment produced. The raw baseline
+    // (with __autoFollowupPreVerdict) is passed only to
+    // autoFollowupValidate, which needs the stashed preVerdict.
+    const cleanBaseline: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(pending.baseline)) {
+      if (k === '__autoFollowupPreVerdict') continue;
+      cleanBaseline[k] = v;
+    }
+
     try {
-      result = await exp.validate(pending.baseline, ctx);
+      if (exp.validate) {
+        result = await exp.validate(cleanBaseline, ctx);
+      } else {
+        // Auto-followup: experiment didn't implement validate(), so
+        // re-run its probe and compare the new verdict against the
+        // pre-intervention verdict we stashed at enqueue time. This
+        // wires every intervening experiment into the accountability
+        // loop without requiring each to author its own validator.
+        result = await autoFollowupValidate(exp, pending.baseline, ctx);
+      }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
       logger.warn(
@@ -403,7 +480,7 @@ export class ExperimentRunner implements ExperimentScheduler {
             is_validation: true,
             intervention_finding_id: pending.interventionFindingId,
             validation_id: pending.id,
-            baseline: pending.baseline,
+            baseline: cleanBaseline,
             error: errorMessage,
           },
           interventionApplied: null,
@@ -427,7 +504,7 @@ export class ExperimentRunner implements ExperimentScheduler {
           is_validation: true,
           intervention_finding_id: pending.interventionFindingId,
           validation_id: pending.id,
-          baseline: pending.baseline,
+          baseline: cleanBaseline,
           outcome: result.outcome,
           ...result.evidence,
         },
@@ -470,7 +547,7 @@ export class ExperimentRunner implements ExperimentScheduler {
       let rollbackApplied: InterventionApplied | null = null;
       let rollbackError: string | null = null;
       try {
-        rollbackApplied = (await exp.rollback(pending.baseline, ctx)) ?? null;
+        rollbackApplied = (await exp.rollback(cleanBaseline, ctx)) ?? null;
       } catch (err) {
         rollbackError = err instanceof Error ? err.message : String(err);
         logger.warn(
@@ -493,7 +570,7 @@ export class ExperimentRunner implements ExperimentScheduler {
               intervention_finding_id: pending.interventionFindingId,
               validation_id: pending.id,
               validation_finding_id: validationFindingId,
-              baseline: pending.baseline,
+              baseline: cleanBaseline,
               rollback_details: rollbackApplied.details,
             },
             interventionApplied: rollbackApplied,
@@ -533,7 +610,7 @@ export class ExperimentRunner implements ExperimentScheduler {
               intervention_finding_id: pending.interventionFindingId,
               validation_id: pending.id,
               error: rollbackError,
-              baseline: pending.baseline,
+              baseline: cleanBaseline,
             },
             interventionApplied: null,
             ranAt: new Date(rollbackStarted).toISOString(),
@@ -607,19 +684,26 @@ export class ExperimentRunner implements ExperimentScheduler {
         logger.warn({ err, experimentId: exp.id }, '[runner] failed to persist finding');
       }
 
-      // Phase 3: if this run applied an intervention AND the experiment
-      // implements validate(), enqueue a validation row so the runner
-      // loops back and verifies the intervention held. Without this,
-      // interventions are fire-and-forget — no audit trail, no rollback
-      // signal, no feedback loop.
-      if (findingId && intervention && exp.validate) {
+      // Phase 3: if this run applied an intervention, enqueue a
+      // validation row so the runner loops back and verifies the
+      // intervention held. Without this, interventions are fire-and-
+      // forget — no audit trail, no rollback signal, no feedback loop.
+      //
+      // Experiments that implement validate() get their own accountability
+      // hook. Experiments that don't fall through to the auto-followup
+      // path in runOneValidation: probe again, compare verdicts against
+      // the stored preVerdict, call it held/failed/inconclusive.
+      if (findingId && intervention) {
         const delay = exp.cadence.validationDelayMs ?? DEFAULT_VALIDATION_DELAY_MS;
         const validateAt = new Date(this.now() + delay).toISOString();
         try {
           await enqueueValidation(this.db, {
             interventionFindingId: findingId,
             experimentId: exp.id,
-            baseline: intervention.details,
+            baseline: {
+              ...intervention.details,
+              __autoFollowupPreVerdict: verdict,
+            },
             validateAt,
           });
           logger.debug(
