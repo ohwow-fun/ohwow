@@ -45,7 +45,7 @@ export class TestCoverageProbeExperiment implements Experiment {
     'Every tier-2 TypeScript source should have a sibling vitest suite. ' +
     'Surfacing gaps as findings lets the author pipeline propose new ' +
     'tier-1 test files to close them.';
-  readonly cadence = { everyMs: 60 * 60 * 1000, runOnBoot: false };
+  readonly cadence = { everyMs: 60 * 60 * 1000, runOnBoot: true };
 
   async probe(_ctx: ExperimentContext): Promise<ProbeResult> {
     const { repoRoot } = getSelfCommitStatus();

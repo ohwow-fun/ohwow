@@ -78,7 +78,7 @@ export class VitestHealthProbeExperiment implements Experiment {
     'Autonomous patches that introduce a failing test should surface as ' +
     'fail findings within one cadence so the patch author can react before ' +
     'the failure compounds.';
-  readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: false };
+  readonly cadence = { everyMs: 30 * 60 * 1000, runOnBoot: true };
 
   constructor(
     private readonly testGlob: string = DEFAULT_TEST_GLOB,
