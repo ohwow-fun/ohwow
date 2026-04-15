@@ -33,7 +33,7 @@ import { getSelfCommitStatus } from '../self-commit.js';
 
 const execFileP = promisify(execFile);
 
-const DEFAULT_TEST_GLOB = 'src/self-bench/__tests__/**/*.test.ts';
+const DEFAULT_TEST_GLOB = 'src/self-bench/__tests__/';
 const DEFAULT_TIMEOUT_MS = 180_000;
 
 export interface VitestFailure {
@@ -135,7 +135,7 @@ export async function runVitestJson(
   try {
     const { stdout } = await execFileP(
       'npx',
-      ['vitest', 'run', '--reporter=json', '--silent', testGlob],
+      ['vitest', 'run', '--reporter=json', testGlob],
       { cwd: repoRoot, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env } },
     );
     return { json: safeParse(stdout), error: null };
