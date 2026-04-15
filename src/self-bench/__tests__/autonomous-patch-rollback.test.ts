@@ -108,7 +108,7 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
 
     const db = stubDb({
       original: [{ id: findingId, experiment_id: 'probe-x', subject: 'loop:goal-1', ran_at: '2026-04-13T00:00:00Z' }],
-      refire: [{ id: 'refire-1', verdict: 'fail', ran_at: '2026-04-14T18:00:00Z' }],
+      refire: [{ id: 'refire-1', verdict: 'fail', ran_at: '2026-04-14T18:00:00Z', evidence: { affected_files: ['bad.ts'] } }],
     });
     const exp = new AutonomousPatchRollbackExperiment();
     const result = await exp.probe(makeCtx(db));
@@ -133,6 +133,61 @@ describe('AutonomousPatchRollbackExperiment.probe', () => {
     const ev = result.evidence as { candidates: unknown[] };
     expect(ev.candidates).toEqual([]);
     expect(exp.judge(result, [])).toBe('pass');
+  });
+
+  it('does NOT flag a patch when the refire affects a DIFFERENT file', async () => {
+    // Regression guard: the patch edited bad.ts; a subsequent
+    // source-copy-lint-shaped warning lists only 'other.ts' in
+    // affected_files. Old logic reverted on same experiment+subject
+    // regardless of which file refired; new logic requires overlap.
+    const findingId = 'dddddddd-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId);
+    const db = stubDb({
+      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z' }],
+      refire: [{
+        id: 'refire-other',
+        verdict: 'warning',
+        ran_at: '2026-04-14T18:00:00Z',
+        evidence: { affected_files: ['src/web/src/pages/Other.tsx'] },
+      }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toEqual([]);
+    expect(exp.judge(result, [])).toBe('pass');
+  });
+
+  it('flags a patch when refire affected_files INTERSECT the patched files', async () => {
+    const findingId = 'eeeeeeee-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId); // touches bad.ts
+    const db = stubDb({
+      original: [{ id: findingId, experiment_id: 'source-copy-lint', subject: 'meta:source-copy-lint', ran_at: '2026-04-13T00:00:00Z' }],
+      refire: [{
+        id: 'refire-overlap',
+        verdict: 'warning',
+        ran_at: '2026-04-14T18:00:00Z',
+        evidence: { affected_files: ['bad.ts', 'some/other.ts'] },
+      }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toHaveLength(1);
+    expect(exp.judge(result, [])).toBe('fail');
+  });
+
+  it('falls back to experiment+subject match when refire has no affected_files', async () => {
+    // Experiments that don't populate affected_files still benefit
+    // from the reverter — we'd rather over-revert for them than
+    // silently disable the gate.
+    const findingId = 'ffffffff-0000-0000-0000-000000000000';
+    seedPatchCommit(findingId);
+    const db = stubDb({
+      original: [{ id: findingId, experiment_id: 'probe-legacy', subject: 'loop:goal-legacy', ran_at: '2026-04-13T00:00:00Z' }],
+      refire: [{ id: 'refire-legacy', verdict: 'fail', ran_at: '2026-04-14T18:00:00Z', evidence: {} }],
+    });
+    const exp = new AutonomousPatchRollbackExperiment();
+    const result = await exp.probe(makeCtx(db));
+    expect((result.evidence as { candidates: unknown[] }).candidates).toHaveLength(1);
   });
 
   it('ignores a patch whose original finding no longer exists in the ledger', async () => {

@@ -61,6 +61,7 @@ interface RefireRow {
   id: string;
   verdict: string;
   ran_at: string;
+  evidence: unknown;
 }
 
 interface RollbackCandidate {
@@ -175,6 +176,7 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
       original.experiment_id,
       original.subject,
       patch.ts,
+      patch.files,
     );
     if (!refire) return null;
     return {
@@ -211,11 +213,12 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
     experimentId: string,
     subject: string | null,
     afterTs: string,
+    patchFiles: readonly string[],
   ): Promise<RefireRow | null> {
     try {
       let builder = ctx.db
         .from<RefireRow>('self_findings')
-        .select('id, verdict, ran_at')
+        .select('id, verdict, ran_at, evidence')
         .eq('experiment_id', experimentId)
         .gt('ran_at', afterTs);
       if (subject !== null) {
@@ -223,11 +226,45 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
       }
       const { data } = await builder.limit(50);
       const rows = (data ?? []) as RefireRow[];
-      return (
-        rows.find((r) => r.verdict === 'warning' || r.verdict === 'fail') ?? null
-      );
+      // A refire only counts as "the patched problem came back" if
+      // the refire's evidence.affected_files overlaps with the files
+      // the patch actually changed. Without this intersection, any
+      // warning from the same experiment about an unrelated file
+      // spuriously reverts the patch — e.g. source-copy-lint firing
+      // on Dashboard.tsx would revert a heal on Agents.tsx because
+      // both share subject="meta:source-copy-lint". Intersecting on
+      // affected_files keeps the reverter's meaning tight: "the
+      // files you patched still have violations," not "anything your
+      // experiment flags anywhere still fails."
+      const patchedSet = new Set(normalizeFiles(patchFiles));
+      for (const r of rows) {
+        if (r.verdict !== 'warning' && r.verdict !== 'fail') continue;
+        const affected = extractAffectedFilesFromEvidence(r.evidence);
+        // If the refire declares no affected_files at all, fall back
+        // to the old experiment+subject match so we don't silently
+        // disable the reverter for experiments that never populate
+        // affected_files. Tighter experiments (those that do populate
+        // it) get the stricter intersection gate.
+        if (affected.length === 0) return r;
+        const overlap = affected.some((f) => patchedSet.has(f));
+        if (overlap) return r;
+      }
+      return null;
     } catch {
       return null;
     }
   }
+}
+
+function normalizeFiles(files: readonly string[]): string[] {
+  return files.map((f) => f.replace(/\\/g, '/'));
+}
+
+function extractAffectedFilesFromEvidence(evidence: unknown): string[] {
+  if (!evidence || typeof evidence !== 'object') return [];
+  const raw = (evidence as Record<string, unknown>).affected_files;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is string => typeof x === 'string' && x.length > 0)
+    .map((p) => p.replace(/\\/g, '/'));
 }
