@@ -156,7 +156,7 @@ export class ContentCadenceTunerExperiment extends BusinessExperiment {
     // a separate experiment can do that) and never above the max.
     const proposedCadence = Math.min(
       CONTENT_CADENCE_MAX,
-      Math.max(currentCadence, Math.ceil(velocity.requiredPerDay)),
+      Math.max(currentCadence, Math.ceil(velocity.requiredPerDay - 1e-9)),
     );
     const shouldWiden = proposedCadence > currentCadence;
 
