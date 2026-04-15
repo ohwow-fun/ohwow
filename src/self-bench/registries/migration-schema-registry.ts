@@ -110,4 +110,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '003-orchestrator-a2a.sql', expectedTables: ['a2a_connections', 'a2a_task_logs', 'agent_workforce_projects', 'agent_workforce_schedules', 'agent_workforce_workflows'] },
   { migrationFile: '004-whatsapp.sql', expectedTables: ['whatsapp_connections', 'whatsapp_allowed_chats', 'whatsapp_chat_messages'] },
   { migrationFile: '001-data-plane-tables.sql', expectedTables: ['agent_workforce_tasks', 'agent_workforce_task_messages', 'agent_workforce_agent_memory', 'agent_workforce_memory_extraction_log', 'agent_workforce_browser_sessions', 'telegram_chat_messages', 'orchestrator_chat_sessions', 'agent_workforce_contact_events', 'agent_workforce_briefings', 'local_agent_configs', 'local_schedule_configs', 'local_workflow_configs'] },
+  { migrationFile: '002-agents-table.sql', expectedTables: ['agent_workforce_agents', 'agent_workforce_activity'] },
 ];
