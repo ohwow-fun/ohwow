@@ -1,0 +1,120 @@
+/**
+ * Shared collection primitives for X/Twitter browsing.
+ *
+ * Any URL that renders a timeline of <article data-testid="tweet">
+ * elements can be scraped with `scrollAndHarvest`. That includes:
+ *   x.com/home, x.com/explore,
+ *   x.com/search?q=...&f=live,
+ *   x.com/<handle>, x.com/<handle>/likes, x.com/i/lists/<id>.
+ *
+ * Dedup lives in a per-workspace JSONL at
+ *   ~/.ohwow/workspaces/<ws>/x-seen.jsonl
+ * with one line per seen permalink + first-seen timestamp. Cheap to append,
+ * O(n) to load on startup — at the volumes we scrape (hundreds per day)
+ * that's fine for months. Promote to SQLite if it becomes a problem.
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { resolveOhwow } from './_ohwow.mjs';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+export const HARVEST_JS = `(() => {
+  const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+  const num = (s) => {
+    if (!s) return 0;
+    const m = String(s).replace(/[,\\s]/g,'').match(/([\\d.]+)([kKmM]?)/);
+    if (!m) return 0;
+    const n = parseFloat(m[1]);
+    const mult = m[2]?.toLowerCase() === 'k' ? 1e3 : m[2]?.toLowerCase() === 'm' ? 1e6 : 1;
+    return Math.round(n * mult);
+  };
+  return articles.map(a => {
+    const text = a.querySelector('[data-testid="tweetText"]')?.innerText || '';
+    const userLink = a.querySelector('[data-testid="User-Name"] a[href^="/"]');
+    const time = a.querySelector('time');
+    const permalink = time?.closest('a')?.getAttribute('href') || null;
+    const author = userLink?.getAttribute('href')?.replace(/^\\//, '') || null;
+    const displayName = a.querySelector('[data-testid="User-Name"] span')?.textContent || null;
+    const isRetweet = !!a.querySelector('[data-testid="socialContext"]');
+    const hasMedia = !!(a.querySelector('img[alt][draggable="true"]') || a.querySelector('video'));
+    const linkCards = Array.from(a.querySelectorAll('a[role="link"][target="_blank"]')).map(x => x.href).filter(Boolean);
+    // Detect reply-to-others: if the first "Replying to @handle" block shows and it's not the same author
+    const replyingTo = a.querySelector('[data-testid="socialContext"]')?.textContent?.includes('Replying to') ? true : false;
+    const lang = a.querySelector('[data-testid="tweetText"]')?.getAttribute('lang') || null;
+    return {
+      permalink, author, displayName, isRetweet, hasMedia, replyingTo, lang,
+      datetime: time?.getAttribute('datetime') || null,
+      text,
+      replies: num(a.querySelector('[data-testid="reply"]')?.textContent),
+      reposts: num(a.querySelector('[data-testid="retweet"]')?.textContent),
+      likes: num(a.querySelector('[data-testid="like"]')?.textContent),
+      views: num(a.querySelector('a[href*="/analytics"]')?.textContent),
+      linkCards,
+    };
+  }).filter(p => p.permalink);
+})()`;
+
+/**
+ * Navigate `page` to `url`, scroll up to `maxScrolls` times, accumulate
+ * unique posts by permalink, return the list. Uses the same End-key +
+ * deep-scroll pattern feed-explore proved out.
+ */
+export async function scrollAndHarvest(page, url, maxScrolls = 10) {
+  await page.goto(url);
+  await sleep(2800);
+  const seen = new Map();
+  let stagnant = 0;
+  for (let i = 0; i < maxScrolls; i++) {
+    const batch = await page.evaluate(HARVEST_JS);
+    const before = seen.size;
+    for (const p of batch) if (p.permalink && !seen.has(p.permalink)) seen.set(p.permalink, p);
+    const gained = seen.size - before;
+    if (gained === 0) stagnant++; else stagnant = 0;
+    if (stagnant >= 3) break;
+    await page.pressKey('End');
+    await page.evaluate('window.scrollBy(0, window.innerHeight * 1.8)');
+    await sleep(1400);
+    await page.evaluate('window.scrollBy(0, window.innerHeight * 0.4)');
+    await sleep(1000);
+  }
+  return Array.from(seen.values());
+}
+
+// --- dedup store ----------------------------------------------------------
+
+function seenPath(workspace) {
+  const ws = workspace || resolveOhwow().workspace;
+  return path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-seen.jsonl');
+}
+
+export function loadSeen(workspace) {
+  const p = seenPath(workspace);
+  if (!fs.existsSync(p)) return new Map();
+  const out = new Map();
+  for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+    if (!line) continue;
+    try { const r = JSON.parse(line); if (r.permalink) out.set(r.permalink, r); } catch {}
+  }
+  return out;
+}
+
+export function appendSeen(workspace, newRecords) {
+  const p = seenPath(workspace);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const lines = newRecords.map(r => JSON.stringify(r)).join('\n') + (newRecords.length ? '\n' : '');
+  fs.appendFileSync(p, lines);
+}
+
+export function filterPosts(posts, filters) {
+  return posts.filter(p => {
+    if (filters.drop_retweets && p.isRetweet) return false;
+    if (filters.drop_replies_to_others && p.replyingTo) return false;
+    if (filters.language && p.lang && p.lang !== filters.language) return false;
+    const m = filters.min_engagement || {};
+    if ((m.likes ?? 0) > p.likes) return false;
+    if ((m.replies ?? 0) > p.replies) return false;
+    return true;
+  });
+}

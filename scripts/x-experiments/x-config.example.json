@@ -1,0 +1,66 @@
+{
+  "_comment": "Example X-intel config. Copy to ~/.ohwow/workspaces/<workspace>/x-config.json and edit. The private copy is gitignored. The public example has generic placeholders only.",
+
+  "workspace_description": "What this workspace is building. Used to prime the classifier so it knows what 'relevant' means for us.",
+
+  "brand_voice": {
+    "positioning": "one-line pitch",
+    "tone": "warm, direct, builder-to-builder; no marketing speak; no hashtags",
+    "dont_do": ["don't pitch unless asked", "don't corporate-speak", "no em-dashes"]
+  },
+
+  "buckets": [
+    {
+      "id": "advancements",
+      "label": "AI advancements",
+      "description": "Novel research, model releases, new capabilities, benchmarks. What moved the state of the art this week.",
+      "keywords": ["model release", "benchmark", "sota", "paper", "eval", "inference", "fine-tune", "reinforcement learning", "multimodal"],
+      "auto_approve_after": 3
+    },
+    {
+      "id": "hacks",
+      "label": "Tricks & hacks",
+      "description": "Tactical engineering tricks builders are sharing. Prompt patterns, tool-use patterns, integration recipes, unexpected uses.",
+      "keywords": ["prompt", "trick", "hack", "recipe", "workflow", "integration", "MCP", "tool use"],
+      "auto_approve_after": 3
+    },
+    {
+      "id": "competitors",
+      "label": "Competitor moves",
+      "description": "What direct or adjacent competitors are shipping, announcing, or complaining about.",
+      "keywords": [],
+      "auto_approve_after": 5
+    },
+    {
+      "id": "inspiration",
+      "label": "Inspiration",
+      "description": "Design, taste, product craft. Threads that make us want to build.",
+      "keywords": ["design", "craft", "taste", "shipping", "product"],
+      "auto_approve_after": 3
+    }
+  ],
+
+  "sources": {
+    "home_feed": { "enabled": true, "max_scrolls": 20 },
+    "searches": [
+      { "query": "local-first AI agents", "bucket_hint": "advancements", "max_scrolls": 6 },
+      { "query": "MCP servers", "bucket_hint": "hacks", "max_scrolls": 6 }
+    ],
+    "profiles": [
+      { "handle": "example_competitor", "bucket_hint": "competitors", "max_scrolls": 4 },
+      { "handle": "example_inspiration_account", "bucket_hint": "inspiration", "max_scrolls": 4 }
+    ]
+  },
+
+  "filters": {
+    "min_engagement": { "likes": 3, "replies": 0 },
+    "drop_retweets": false,
+    "drop_replies_to_others": true,
+    "language": "en"
+  },
+
+  "budget": {
+    "max_posts_per_run": 200,
+    "max_posts_synthesized_per_bucket": 25
+  }
+}
