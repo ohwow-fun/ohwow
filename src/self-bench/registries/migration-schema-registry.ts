@@ -69,4 +69,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '077-device-pinned-data.sql', expectedTables: ['device_data_manifest', 'data_fetch_approvals'] },
   { migrationFile: '075-bpp-wiring.sql', expectedTables: ['soul_snapshots', 'homeostasis_action_log', 'immune_state_transitions'] },
   { migrationFile: '072-document-processing-queue.sql', expectedTables: ['document_processing_queue'] },
+  { migrationFile: '073-knowledge-graph.sql', expectedTables: ['knowledge_graph_entities', 'knowledge_graph_edges'] },
 ];
