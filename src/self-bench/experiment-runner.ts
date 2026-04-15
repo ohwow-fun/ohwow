@@ -70,7 +70,22 @@ import { logger } from '../lib/logger.js';
  * the daemon wire point — the default here is conservative (60s) so
  * tests can override it.
  */
-export const DEFAULT_TICK_INTERVAL_MS = 60_000;
+export const DEFAULT_TICK_INTERVAL_MS = 5_000;
+
+/**
+ * When a run yields a warning/fail verdict, pull the next run in to
+ * this short delay instead of waiting the full cadence.everyMs. Gives
+ * the loop real-time reactivity on signal while passing probes stay
+ * on their normal schedule.
+ */
+export const REACTIVE_RESCHEDULE_MS = 5_000;
+
+/**
+ * Cap on back-to-back synchronous tick() sweeps per outer tick. After
+ * the cap we yield to setInterval. This is the circuit breaker if an
+ * experiment has everyMs=0 or clocks misbehave.
+ */
+export const MAX_CHAIN_DEPTH = 8;
 
 /**
  * How many past findings the runner fetches and passes to judge(). A
@@ -125,6 +140,8 @@ export class ExperimentRunner implements ExperimentScheduler {
    * pending validations completed.
    */
   private processingValidations = false;
+  /** Recursion depth for synchronous tick chaining (T3). */
+  private chainDepth = 0;
   private readonly tickIntervalMs: number;
   private readonly now: () => number;
 
@@ -255,12 +272,22 @@ export class ExperimentRunner implements ExperimentScheduler {
     // so a throwing experiment still releases its claim.
     await Promise.all(due.map((exp) => this.runOne(exp)));
 
+    // T3: if this sweep ran anything, chain one more sweep so the
+    // next eligible experiment fires immediately instead of waiting
+    // for the heartbeat. MAX_CHAIN_DEPTH is the circuit breaker.
+    if (due.length > 0 && this.chainDepth < MAX_CHAIN_DEPTH) {
+      this.chainDepth++;
+      try {
+        await this.tick();
+      } finally {
+        this.chainDepth--;
+      }
+    }
+
     // Validation queue: process every pending validation whose
-    // validate_at has passed. Runs AFTER this tick's experiment
-    // awaits so a brand-new intervention doesn't immediately cascade
-    // into its own validation on the same tick. Guarded against
-    // parallel drains from overlapping ticks so we never double-mark
-    // a pending row completed.
+    // validate_at has passed. Only drain at the outer tick so
+    // recursive chains don't re-enter the drain loop for no reason.
+    if (this.chainDepth > 0) return;
     if (this.processingValidations) return;
     this.processingValidations = true;
     try {
@@ -587,7 +614,14 @@ export class ExperimentRunner implements ExperimentScheduler {
       // run, even if something above threw. Using now-after-completion
       // so a slow probe doesn't pile up missed runs back-to-back.
       this.inFlight.delete(exp.id);
-      this.nextRunAt.set(exp.id, this.now() + Math.max(0, exp.cadence.everyMs));
+      // T2: on warning/fail, pull the next run in so the loop reacts
+      // to signal in near-real-time. Passing probes keep their normal
+      // cadence.
+      const reactive = verdict === 'warning' || verdict === 'fail';
+      const delay = reactive
+        ? REACTIVE_RESCHEDULE_MS
+        : Math.max(0, exp.cadence.everyMs);
+      this.nextRunAt.set(exp.id, this.now() + delay);
     }
   }
 }

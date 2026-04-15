@@ -401,6 +401,99 @@ describe('ExperimentRunner', () => {
     expect(runner.registeredIds().sort()).toEqual(['a', 'b']);
   });
 
+  it('T2: warning verdict reschedules at REACTIVE_RESCHEDULE_MS, not everyMs', async () => {
+    const runner = buildRunner();
+    const warning = makeStubExperiment({
+      id: 'warn',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: async () => ({ summary: 'probe', evidence: {} }),
+      judge: () => 'warning',
+    });
+    runner.register(warning);
+    await runner.tick();
+    expect(warning.probeCallCount).toBe(1);
+
+    // Advance 6s — well under the 60s cadence but past the 5s reactive
+    // window. Without T2 the probe would still be gated until +60s.
+    currentTime += 6_000;
+    await runner.tick();
+    expect(warning.probeCallCount).toBe(2);
+  });
+
+  it('T2: fail verdict reschedules reactively; pass uses full cadence', async () => {
+    const runner = buildRunner();
+    const passing = makeStubExperiment({
+      id: 'pass-exp',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: async () => ({ summary: 'ok', evidence: {} }),
+      judge: () => 'pass',
+    });
+    runner.register(passing);
+    await runner.tick();
+
+    // Passing probe stays on its normal cadence — 6s later is not due.
+    currentTime += 6_000;
+    await runner.tick();
+    expect(passing.probeCallCount).toBe(1);
+  });
+
+  it('T3: a second experiment becomes eligible mid-tick and runs back-to-back', async () => {
+    const runner = buildRunner();
+    let nudged = false;
+    const a = makeStubExperiment({
+      id: 'a',
+      everyMs: 60_000,
+      runOnBoot: true,
+      probe: async () => ({ summary: 'a', evidence: {} }),
+      judge: () => 'pass',
+      intervene: async (_v, _r, ctx) => {
+        if (!nudged) {
+          nudged = true;
+          ctx.scheduler?.setNextRunAt('b', currentTime);
+        }
+        return null;
+      },
+    });
+    const b = makeStubExperiment({
+      id: 'b',
+      everyMs: 60_000,
+      // Not runOnBoot — only becomes due when a's intervene nudges it.
+      runOnBoot: false,
+      probe: async () => ({ summary: 'b', evidence: {} }),
+      judge: () => 'pass',
+    });
+    runner.register(a);
+    runner.register(b);
+
+    await runner.tick();
+
+    // Without T3, b would wait for a heartbeat. With T3, the chain
+    // runs b back-to-back within the same synchronous tick call.
+    expect(a.probeCallCount).toBe(1);
+    expect(b.probeCallCount).toBe(1);
+  });
+
+  it('T3: chain depth is capped to prevent unbounded recursion', async () => {
+    const runner = buildRunner();
+    // everyMs=0 means the experiment is eligible again the moment it
+    // finishes. Without the cap, tick() would recurse forever. With
+    // the cap at 8, we expect at most 1 initial run + 8 chain sweeps
+    // before setInterval has to take over.
+    const exp = makeStubExperiment({
+      id: 'hot',
+      everyMs: 0,
+      runOnBoot: true,
+      probe: async () => ({ summary: 'hot', evidence: {} }),
+      judge: () => 'pass',
+    });
+    runner.register(exp);
+    await runner.tick();
+    expect(exp.probeCallCount).toBeLessThanOrEqual(9);
+    expect(exp.probeCallCount).toBeGreaterThanOrEqual(2);
+  });
+
   it('unregister removes an experiment from the schedule', async () => {
     const runner = buildRunner();
     const exp = makeStubExperiment({
