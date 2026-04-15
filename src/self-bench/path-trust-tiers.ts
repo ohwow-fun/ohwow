@@ -135,6 +135,15 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'pure error→category dispatch, fuzzed by error-classification-fuzz (totality + fixtures + retry-contract)',
   },
+  // Components that carry user-facing copy and are safe for string-literal
+  // patching (structure is frozen by the Layer 4 skeleton gate).
+  {
+    prefix: 'src/web/src/components/ErrorBoundary.tsx',
+    tier: 'tier-2',
+    patchMode: 'string-literal',
+    rationale:
+      'error boundary fallback copy — structure is a single render method, copy-only edits safe',
+  },
   // UI pages — bulk-promoted under string-literal patch mode. The
   // Layer 4 AST skeleton gate (patch-string-literal-bounds.ts) is
   // the load-bearing safety here: only StringLiteral /
