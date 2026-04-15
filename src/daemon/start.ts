@@ -49,6 +49,7 @@ import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-st
 import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
 import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
+import { StrategistExperiment } from '../self-bench/experiments/strategist.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
 import { ContentCadenceTunerExperiment } from '../self-bench/experiments/content-cadence-tuner.js';
 import { ContentCadenceLoopHealthExperiment } from '../self-bench/experiments/content-cadence-loop-health.js';
@@ -1410,6 +1411,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // cleanup is reversible by reading the ledger's
         // intervention_applied field.
         experimentRunner.register(new StaleTaskCleanupExperiment());
+        // Prefrontal cortex: every 15m reads aggregate loop state
+        // (active-finding counts, patch-loop hold_rate + pool delta,
+        // burn ratio, reflection count) and writes three advisory
+        // keys to runtime_config_overrides — active_focus, priority
+        // experiments, demoted experiments. Downstream consumers
+        // (adaptive scheduler, patch-author prompt) read them to
+        // shape this-window behavior without any new plumbing.
+        experimentRunner.register(new StrategistExperiment());
         // Phase 4: AdaptiveSchedulerExperiment is the meta-loop that
         // reads the ledger every 10m and adjusts peer cadences: pass
         // streaks get stretched (up to 4x), recent failures get
