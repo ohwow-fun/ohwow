@@ -326,6 +326,30 @@ export class ExperimentAuthorExperiment implements Experiment {
       };
     }
 
+    // Stagnation breaker: if the last N llm-authored attempts all
+    // failed at the typecheck gate, pause the template. Without this
+    // the author burns model budget grinding the same error shape
+    // every 5 minutes — observed in prod as 100+ consecutive
+    // "Command failed: npm run typecheck" rows with no progress.
+    //
+    // Pause is soft: the brief stays unclaimed, the strategist sees
+    // a demotion finding, and the next cycle (or a manual probe
+    // revert) can retry. Threshold is tight (3) so one bad LLM day
+    // doesn't gum up the whole pipeline.
+    const stagnation = await this.detectAuthoringStagnation(ctx);
+    if (stagnation.shouldPause) {
+      return {
+        description: `llm_authored template paused: ${stagnation.reason}`,
+        details: {
+          brief_slug: brief.slug,
+          stage: 'stagnation_gate',
+          template: 'llm_authored_probe',
+          consecutive_failures: stagnation.consecutive,
+          recent_reasons: stagnation.sampleReasons,
+        },
+      };
+    }
+
     const params = brief.params as LlmAuthoredProbeParams;
     const sourcePath = `src/self-bench/experiments/${brief.slug}.ts`;
     const testPath = `src/self-bench/__tests__/${brief.slug}.test.ts`;
@@ -684,6 +708,55 @@ export class ExperimentAuthorExperiment implements Experiment {
    * markers. Both use the same proposal:<slug> subject shape so
    * a subject-keyed map collates them correctly.
    */
+  /**
+   * Count consecutive llm-authored failures in the recent window.
+   * Returns `shouldPause=true` when the last N authoring outcomes
+   * all came back with commit_ok=false — the signal that the
+   * LLM→typecheck pipeline is stuck in a rut. Keeps reading past
+   * non-authoring rows (stagnation-gate demotions, registry appends)
+   * so a short burst of those doesn't reset the counter.
+   */
+  private async detectAuthoringStagnation(
+    ctx: ExperimentContext,
+  ): Promise<{
+    shouldPause: boolean;
+    consecutive: number;
+    reason: string;
+    sampleReasons: string[];
+  }> {
+    const THRESHOLD = 3;
+    const findings = await ctx
+      .recentFindings(this.id, 30)
+      .catch(() => [] as Finding[]);
+    let consecutive = 0;
+    const sampleReasons: string[] = [];
+    for (const f of findings) {
+      const ev = f.evidence as {
+        is_authoring_outcome?: boolean;
+        materialization?: string;
+        commit_ok?: boolean;
+        commit_reason?: string | null;
+      };
+      if (!ev.is_authoring_outcome) continue;
+      if (ev.materialization !== 'llm_authored') break;
+      if (ev.commit_ok === true) break;
+      consecutive += 1;
+      if (ev.commit_reason && sampleReasons.length < 3) {
+        sampleReasons.push(ev.commit_reason.slice(0, 120));
+      }
+      if (consecutive >= THRESHOLD) break;
+    }
+    if (consecutive >= THRESHOLD) {
+      return {
+        shouldPause: true,
+        consecutive,
+        reason: `${consecutive} consecutive llm_authored failures`,
+        sampleReasons,
+      };
+    }
+    return { shouldPause: false, consecutive, reason: '', sampleReasons };
+  }
+
   private async readUnclaimedProposals(ctx: ExperimentContext): Promise<ProposalCandidate[]> {
     const authorFindings = await ctx
       .recentFindings(this.id, PROPOSAL_SCAN_LIMIT)

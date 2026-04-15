@@ -36,11 +36,12 @@ const LAST_RUN_KEY = 'improvement_last_run_at';
 const LAST_RUN_TASK_COUNT_KEY = 'improvement_last_task_count';
 /**
  * Consolidation fallback window. If no deep_sleep pass fires within
- * this interval (which is the normal case on busy workspaces that
- * never idle), the scheduler forces one. 12h so the hippocampus
- * runs at least twice a day even if the system stays awake.
+ * this interval (the normal case on busy workspaces that never idle),
+ * the scheduler forces one. 1h so affective_memories refreshes within
+ * an operator's working session — at 12h the organ observably froze
+ * mid-session and cold prompts fell back to stale reflections.
  */
-const CONSOLIDATION_FORCE_MS = 12 * 60 * 60 * 1000;
+const CONSOLIDATION_FORCE_MS = 60 * 60 * 1000;
 
 export class ImprovementScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
