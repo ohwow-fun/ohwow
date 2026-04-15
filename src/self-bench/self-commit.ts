@@ -474,10 +474,16 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   //     pre-write bytes and the new content must touch at most one
   //     top-level symbol. Creates are unaffected — a new file has no
   //     "prior" AST to compare against.
+  //     Non-TypeScript files (e.g. .md) bypass this gate: the TS
+  //     parser has no useful notion of "top-level symbol" for them,
+  //     so the count is meaningless. Tier-2 allowlist + Fixes-Finding-Id
+  //     trailer + typecheck + test gates + cool-off + daily budget
+  //     remain as the safety envelope for non-TS tier-2 paths.
   for (const f of opts.files) {
     const normalized = path.normalize(f.path).replace(/\\/g, '/');
     const prior = preWriteSnapshots.get(normalized);
     if (prior === undefined) continue;
+    if (!/\.(ts|tsx)$/.test(normalized)) continue;
     const mode = resolvePatchMode(normalized);
     if (mode === 'string-literal') {
       // Stricter gate: only string-literal / jsx-text node contents
