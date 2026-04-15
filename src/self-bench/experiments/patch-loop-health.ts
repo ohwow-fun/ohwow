@@ -43,6 +43,14 @@ import { getSelfCommitStatus } from '../self-commit.js';
 import { getAllowedPrefixes, resolvePathTier } from '../path-trust-tiers.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Minimum post-restart window before hold_rate / pool_delta signals
+ * are treated as real. Below this, the 24h lookback mixes pre-restart
+ * state (stale probes, dead patch attempts) with live state and the
+ * verdict oscillates nonsensically. Verdict=pass with reason=warmup
+ * until we have at least this much live data.
+ */
+const WARMUP_MS = 30 * 60 * 1000;
 
 interface PatchRecord {
   sha: string;
@@ -99,29 +107,65 @@ export class PatchLoopHealthExperiment implements Experiment {
       };
     }
 
-    const { landed, reverted } = scanGitLog(repoRoot, DAY_MS);
+    // Restart is a state boundary. If the runner recently started,
+    // the 24h window is dominated by pre-restart artifacts (stranded
+    // experiments, dead patch attempts). Emit warmup pass until we
+    // have enough live data to judge.
+    const now = Date.now();
+    const uptimeMs = ctx.runnerStartedAtMs ? now - ctx.runnerStartedAtMs : DAY_MS;
+    if (uptimeMs < WARMUP_MS) {
+      const evidence: LoopHealthEvidence = {
+        window_hours: Math.round((uptimeMs / (60 * 60 * 1000)) * 100) / 100,
+        patches_landed: 0,
+        patches_reverted: 0,
+        patches_held: 0,
+        hold_rate: null,
+        violation_pool_today: 0,
+        violation_pool_yesterday: 0,
+        pool_delta: null,
+        repo_root: repoRoot,
+        reason: 'post_restart_warmup',
+      };
+      return {
+        subject: 'meta:patch-loop-health',
+        summary: `post-restart warmup (${Math.round(uptimeMs / 60000)}min of ${WARMUP_MS / 60000}min)`,
+        evidence,
+      };
+    }
+
+    // Floor the lookback at boot time so we never count patches or
+    // findings from a prior daemon instance against the live loop.
+    const windowMs = Math.min(DAY_MS, uptimeMs);
+    const { landed, reverted } = scanGitLog(repoRoot, windowMs);
     const held = landed.length - reverted.size;
     const holdRate =
       landed.length > 0 ? held / landed.length : null;
 
-    const { today, yesterday } = await countViolationPool(ctx);
-    const poolDelta = today - yesterday;
+    // pool_delta compares today vs yesterday (needs 48h history).
+    // When uptime < 48h, the yesterday bucket is partially or fully
+    // pre-restart — suppress the delta rather than emit noise.
+    const { today, yesterday } = await countViolationPool(ctx, windowMs);
+    const haveFullComparison = uptimeMs >= 2 * DAY_MS;
+    const poolDelta = haveFullComparison ? today - yesterday : null;
 
     const evidence: LoopHealthEvidence = {
-      window_hours: 24,
+      window_hours: Math.round((windowMs / (60 * 60 * 1000)) * 100) / 100,
       patches_landed: landed.length,
       patches_reverted: reverted.size,
       patches_held: held,
       hold_rate: holdRate !== null ? Math.round(holdRate * 100) / 100 : null,
       violation_pool_today: today,
-      violation_pool_yesterday: yesterday,
+      violation_pool_yesterday: haveFullComparison ? yesterday : 0,
       pool_delta: poolDelta,
       repo_root: repoRoot,
     };
 
     const rateStr =
       holdRate !== null ? `hold_rate=${(holdRate * 100).toFixed(0)}%` : 'no patches';
-    const poolStr = `pool ${today} (${poolDelta >= 0 ? '+' : ''}${poolDelta} vs yesterday)`;
+    const poolStr =
+      poolDelta === null
+        ? `pool ${today} (no yesterday comparison)`
+        : `pool ${today} (${poolDelta >= 0 ? '+' : ''}${poolDelta} vs yesterday)`;
     const summary = `${landed.length} landed, ${reverted.size} reverted — ${rateStr}; violation ${poolStr}`;
 
     return { subject: 'meta:patch-loop-health', summary, evidence };
@@ -130,6 +174,7 @@ export class PatchLoopHealthExperiment implements Experiment {
   judge(result: ProbeResult, _history: Finding[]): Verdict {
     const ev = result.evidence as LoopHealthEvidence;
     if (ev.reason === 'no_repo_root') return 'pass';
+    if (ev.reason === 'post_restart_warmup') return 'pass';
     if (ev.hold_rate === null) return 'pass'; // no patches in window
     if (ev.hold_rate < 0.5) return 'fail';
     if (ev.hold_rate < 0.8) return 'warning';
@@ -217,10 +262,14 @@ function scanGitLog(
  */
 async function countViolationPool(
   ctx: ExperimentContext,
+  todayWindowMs: number,
 ): Promise<{ today: number; yesterday: number }> {
   const now = Date.now();
-  const todayStart = new Date(now - DAY_MS).toISOString();
-  const yesterdayStart = new Date(now - 2 * DAY_MS).toISOString();
+  // Floor the "today" window at runner boot so pre-restart findings
+  // never count as live violations.
+  const todayStartMs = now - todayWindowMs;
+  const todayStart = new Date(todayStartMs).toISOString();
+  const yesterdayStart = new Date(todayStartMs - DAY_MS).toISOString();
 
   // Derive tier-2 prefixes from the authoritative registry so this
   // list stays in sync automatically when new paths are promoted.

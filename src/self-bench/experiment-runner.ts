@@ -144,6 +144,12 @@ export class ExperimentRunner implements ExperimentScheduler {
   private chainDepth = 0;
   private readonly tickIntervalMs: number;
   private readonly now: () => number;
+  /**
+   * Wall-clock ms recorded at start(). Exposed via ExperimentContext
+   * so history-aggregating probes can treat restart as a state
+   * boundary and floor their lookback windows here.
+   */
+  private startedAtMs = 0;
 
   constructor(
     private readonly db: DatabaseAdapter,
@@ -260,6 +266,7 @@ export class ExperimentRunner implements ExperimentScheduler {
    */
   start(): void {
     if (this.timer) return;
+    this.startedAtMs = this.now();
     this.timer = setInterval(() => { void this.tick(); }, this.tickIntervalMs);
     void this.tick();
     logger.info({ tickIntervalMs: this.tickIntervalMs }, '[runner] started');
@@ -546,6 +553,7 @@ export class ExperimentRunner implements ExperimentScheduler {
       recentFindings: (experimentId: string, limit?: number) =>
         readRecentFindings(this.db, experimentId, limit),
       scheduler: this,
+      runnerStartedAtMs: this.startedAtMs || undefined,
     };
   }
 

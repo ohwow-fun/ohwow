@@ -143,6 +143,46 @@ describe('PatchLoopHealthExperiment', () => {
     expect(exp.judge(result, [])).toBe('fail');
   });
 
+  it('returns warmup pass when runnerStartedAtMs is recent (<30min uptime)', async () => {
+    // Seed what would otherwise be a failing signal (2 patches, both
+    // reverted → hold_rate=0). With warmup active, verdict must be pass
+    // because the pre-restart state can't be distinguished from live.
+    const sha1 = seedCommit(
+      'warm-a.ts',
+      'feat(self-bench): patch\n\nFixes-Finding-Id: aaa00000-0000-0000-0000-000000000000\n',
+    );
+    const sha2 = seedCommit(
+      'warm-b.ts',
+      'feat(self-bench): patch\n\nFixes-Finding-Id: bbb00000-0000-0000-0000-000000000000\n',
+    );
+    seedCommit('warm-c.ts', `revert\n\nAuto-Reverts: ${sha1}\n`);
+    seedCommit('warm-d.ts', `revert\n\nAuto-Reverts: ${sha2}\n`);
+
+    const ctx = makeCtx();
+    ctx.runnerStartedAtMs = Date.now() - 60_000; // 1min uptime
+
+    const exp = new PatchLoopHealthExperiment();
+    const result = await exp.probe(ctx);
+    const ev = result.evidence as Record<string, unknown>;
+    expect(ev.reason).toBe('post_restart_warmup');
+    expect(ev.patches_landed).toBe(0);
+    expect(ev.hold_rate).toBeNull();
+    expect(exp.judge(result, [])).toBe('pass');
+  });
+
+  it('suppresses pool_delta when uptime < 48h', async () => {
+    // 31min uptime: past warmup but below 48h, so yesterday comparison
+    // is unreliable. pool_delta must be null, summary should say so.
+    const ctx = makeCtx();
+    ctx.runnerStartedAtMs = Date.now() - 31 * 60 * 1000;
+    const exp = new PatchLoopHealthExperiment();
+    const result = await exp.probe(ctx);
+    const ev = result.evidence as Record<string, unknown>;
+    expect(ev.reason).toBeUndefined();
+    expect(ev.pool_delta).toBeNull();
+    expect(result.summary).toContain('no yesterday comparison');
+  });
+
   it('returns pass with no_repo_root reason when repo root is not configured', async () => {
     _resetSelfCommitForTests();
     // Do not call setSelfCommitRepoRoot — repo root will be null.

@@ -190,6 +190,15 @@ export interface ExperimentContext {
    * need to modify peer cadences must null-check.
    */
   scheduler?: ExperimentScheduler;
+  /**
+   * Wall-clock ms at which the runner's start() was called for this
+   * process. Daemon restart is a state boundary — probes that
+   * aggregate recent findings (patch-loop-health, anything with a
+   * multi-hour lookback) should floor their window at this value
+   * and emit a warmup pass when the post-restart window is too
+   * short to be meaningful. Absent in tests that build ctx directly.
+   */
+  runnerStartedAtMs?: number;
 }
 
 /**
