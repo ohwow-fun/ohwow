@@ -134,10 +134,21 @@ export class PatchAuthorExperiment implements Experiment {
       // findings often attribute runtime data (e.g. a person's role)
       // to a page path; that data isn't in source, so a patch-author
       // LLM call would waste a token budget refusing at the applier.
-      // When evidence has no literals to inspect, the gate stays
-      // permissive so every finding shape keeps working.
-      if (repoRoot && !evidenceLiteralsAppearInSource(repoRoot, tier2Files, row.evidence)) {
-        continue;
+      //
+      // For string-literal-mode targets we go further: the model can
+      // ONLY emit copy-level edits, so a finding with no usable
+      // literal evidence (e.g. dashboard-smoke fires on a runtime
+      // failure that has no text to rewrite) will produce an empty
+      // edits array. Reject those at probe time instead of burning
+      // an LLM call. Whole-file-mode targets keep the permissive
+      // fallback so pure-util fuzzers keep working.
+      if (repoRoot) {
+        const anyStringLiteral = tier2Files.some(
+          (f) => resolvePatchMode(f) === 'string-literal',
+        );
+        if (!evidenceLiteralsAppearInSource(repoRoot, tier2Files, row.evidence, anyStringLiteral)) {
+          continue;
+        }
       }
       candidates.push({
         findingId: row.id,
@@ -512,10 +523,11 @@ export function evidenceLiteralsAppearInSource(
   repoRoot: string,
   tier2Files: readonly string[],
   evidence: unknown,
+  strict = false,
 ): boolean {
-  if (!evidence || typeof evidence !== 'object') return true;
+  if (!evidence || typeof evidence !== 'object') return !strict;
   const violations = (evidence as Record<string, unknown>).violations;
-  if (!Array.isArray(violations)) return true;
+  if (!Array.isArray(violations)) return !strict;
   const literals: string[] = [];
   for (const v of violations) {
     if (!v || typeof v !== 'object') continue;
@@ -524,7 +536,7 @@ export function evidenceLiteralsAppearInSource(
     if (typeof lit === 'string' && lit.length >= 3) literals.push(lit);
     else if (typeof match === 'string' && match.length >= 3) literals.push(match);
   }
-  if (literals.length === 0) return true;
+  if (literals.length === 0) return !strict;
   for (const file of tier2Files) {
     let src: string;
     try {

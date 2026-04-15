@@ -127,10 +127,16 @@ describe('evidenceLiteralsAppearInSource', () => {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('returns true when evidence has no violations array', () => {
+  it('returns true when evidence has no violations array (permissive)', () => {
     expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], {})).toBe(true);
     expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], null)).toBe(true);
     expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], { violations: 'x' })).toBe(true);
+  });
+
+  it('returns false in strict mode when evidence has no literals', () => {
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], {}, true)).toBe(false);
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], null, true)).toBe(false);
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], { violations: [] }, true)).toBe(false);
   });
 
   it('returns true when a violation literal is present verbatim in source', () => {
