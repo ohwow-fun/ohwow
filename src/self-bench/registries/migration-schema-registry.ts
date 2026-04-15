@@ -82,4 +82,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '061-affect-system.sql', expectedTables: ['somatic_markers', 'affective_memories'] },
   { migrationFile: '060-consciousness-items.sql', expectedTables: ['consciousness_items'] },
   { migrationFile: '059-claude-code-sessions.sql', expectedTables: ['claude_code_sessions'] },
+  { migrationFile: '058-turboquant-stats.sql', expectedTables: ['turboquant_stats'] },
 ];
