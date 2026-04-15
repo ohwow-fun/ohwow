@@ -935,6 +935,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
     });
     orchestrator.setConnectorRegistry(connectorRegistry);
     orchestrator.setChromeProfileAliases(config.chromeProfileAliases);
+    // Propagate the configured Chrome profile to every spawn path that
+    // reads OHWOW_CHROME_PROFILE (ensureDebugChrome, x-intel child, etc).
+    // Without this, a daemon restart that has to spawn a fresh debug
+    // Chrome lands on 'Default' profile, which is rarely the Google
+    // account signed into x.com for this workspace.
+    if (config.chromeDefaultProfile) {
+      process.env.OHWOW_CHROME_PROFILE = config.chromeDefaultProfile;
+    }
     orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
 
     // LSP manager — lazy-start language servers on first tool call

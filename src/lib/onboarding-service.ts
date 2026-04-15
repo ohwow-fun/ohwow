@@ -245,6 +245,7 @@ export class OnboardingService {
       xAuthorsToCrmEnabled: false,
       xAuthorsMinSignal: 0.6,
       xAuthorsBuckets: ['market_signal', 'competitors'],
+      chromeDefaultProfile: 'Default',
     };
 
     const path = configPath || DEFAULT_CONFIG_PATH;

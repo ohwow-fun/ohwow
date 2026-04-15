@@ -59,6 +59,16 @@ export interface RuntimeConfig {
    * account_info. Example: { "ogsus@ohwow.fun": "Profile 1" }.
    */
   chromeProfileAliases: Record<string, string>;
+  /**
+   * Default Chrome profile directory (as it lives in chrome-debug/) for
+   * this workspace's debug Chrome. Used when the daemon needs to spawn
+   * a fresh debug Chrome and no call site passed an explicit profile.
+   * Most boxes have multiple Google accounts under a single debug
+   * data-dir; without this, spawns land on 'Default', which is rarely
+   * the account signed into the workspace's target sites (x.com etc.).
+   * Set e.g. 'Profile 1' in ~/.ohwow/config.json or workspace.json.
+   */
+  chromeDefaultProfile: string;
   /** Ollama URL for local model inference (default: http://localhost:11434) */
   ollamaUrl: string;
   /** Ollama model name (default: llama3.1) */
@@ -230,6 +240,7 @@ interface ConfigFile {
   browserTarget?: 'chromium' | 'chrome';
   chromeCdpPort?: number;
   chromeProfileAliases?: Record<string, string>;
+  chromeDefaultProfile?: string;
   ollamaUrl?: string;
   ollamaModel?: string;
   preferLocalModel?: boolean;
@@ -769,6 +780,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     browserTarget: (process.env.OHWOW_BROWSER_TARGET as 'chromium' | 'chrome') || fileConfig.browserTarget || 'chrome',
     chromeCdpPort: parseInt(process.env.OHWOW_CHROME_CDP_PORT || '', 10) || fileConfig.chromeCdpPort || 9222,
     chromeProfileAliases: fileConfig.chromeProfileAliases || {},
+    chromeDefaultProfile: process.env.OHWOW_CHROME_PROFILE || fileConfig.chromeDefaultProfile || 'Default',
     ollamaUrl: process.env.OHWOW_OLLAMA_URL || fileConfig.ollamaUrl || 'http://localhost:11434',
     ollamaModel: process.env.OHWOW_OLLAMA_MODEL || fileConfig.ollamaModel || 'qwen3:4b',
     preferLocalModel: process.env.OHWOW_PREFER_LOCAL === 'true' || fileConfig.preferLocalModel === true,

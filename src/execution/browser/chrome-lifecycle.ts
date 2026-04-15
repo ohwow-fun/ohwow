@@ -682,7 +682,15 @@ export async function ensureDebugChrome(opts: {
   preferredProfile?: string;
 } = {}): Promise<DebugChromeHandle> {
   const port = opts.port ?? DEFAULT_CDP_PORT;
-  const preferredProfile = opts.preferredProfile ?? 'Default';
+  // Spawn-profile resolution order: explicit arg > OHWOW_CHROME_PROFILE
+  // env (daemon-wide default, set from config at boot) > 'Default'.
+  // Restarts used to land on 'Default' (which on most machines is a
+  // different Google account than the one logged into the workspace's
+  // target sites), so the x-intel + dm-to-code scripts would attach to
+  // a Chrome that wasn't signed in to x.com. The env knob fixes that
+  // without forcing every call site to thread a profile through.
+  const preferredProfile = opts.preferredProfile
+    ?? (process.env.OHWOW_CHROME_PROFILE || 'Default');
 
   // Fast path: debug Chrome already on port.
   const existing = await probeCdp(port);
