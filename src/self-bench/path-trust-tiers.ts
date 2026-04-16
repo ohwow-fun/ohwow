@@ -144,6 +144,25 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'error boundary fallback copy — structure is a single render method, copy-only edits safe',
   },
+  // Cross-domain tier-2: outreach-thermostat's draft-message template is
+  // the copy surface the operator rejects most often (see Phase 2
+  // context-pack's operator-rejections section). The Layer 4 string-
+  // literal gate freezes every AST node except StringLiteral /
+  // NoSubstitutionTemplateLiteral / TemplateHead|Middle|Tail so the
+  // author can only edit the message bodies, not the control flow that
+  // picks a channel or applies a cooldown. Combined with tier-2's
+  // Fixes-Finding-Id receipt gate + Layer 5 auto-revert + the new
+  // Cites-Sales-Signal trailer, this is the first file where the
+  // autonomous loop can close a true cross-domain feedback cycle:
+  // operator rejection → finding → copy rewrite → next tick's rejection
+  // rate moves.
+  {
+    prefix: 'src/self-bench/experiments/outreach-thermostat.ts',
+    tier: 'tier-2',
+    patchMode: 'string-literal',
+    rationale:
+      'outreach draft-message copy — string-literal-only edits heal the patterns the operator keeps rejecting (Phase 4 cross-domain surface)',
+  },
   // UI pages — bulk-promoted under string-literal patch mode. The
   // Layer 4 AST skeleton gate (patch-string-literal-bounds.ts) is
   // the load-bearing safety here: only StringLiteral /

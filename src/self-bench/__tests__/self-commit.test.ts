@@ -758,6 +758,42 @@ describe('safeSelfCommit — Layer 2 fixesFindingId gate', () => {
     expect(entry.fixes_finding_id).toBe(EXAMPLE_UUID);
   });
 
+  it('citesSalesSignal appends a Cites-Sales-Signal trailer and is sanitized', async () => {
+    const result = await safeSelfCommit(
+      l2Opts({
+        citesSalesSignal:
+          'experiment=attribution-observer; subject=attribution:rollup; score=4.20',
+      }),
+    );
+    expect(result.ok).toBe(true);
+    const msg = lastCommitMessage(tempRoot);
+    expect(msg).toContain(`Fixes-Finding-Id: ${EXAMPLE_UUID}`);
+    expect(msg).toContain('Cites-Sales-Signal: experiment=attribution-observer');
+    expect(msg).toContain('score=4.20');
+  });
+
+  it('citesSalesSignal strips embedded newlines so it cannot inject extra trailers', async () => {
+    const result = await safeSelfCommit(
+      l2Opts({
+        citesSalesSignal: 'experiment=foo\nMalicious-Trailer: injected',
+      }),
+    );
+    expect(result.ok).toBe(true);
+    const msg = lastCommitMessage(tempRoot);
+    // The '\n' inside the signal collapses to a single space — the
+    // payload survives in one line but cannot produce a second trailer.
+    expect(msg).toContain('Cites-Sales-Signal: experiment=foo Malicious-Trailer: injected');
+    const trailerLines = msg.split('\n').filter((l) => l.startsWith('Cites-Sales-Signal:'));
+    expect(trailerLines).toHaveLength(1);
+  });
+
+  it('omits Cites-Sales-Signal trailer when citesSalesSignal is undefined', async () => {
+    const result = await safeSelfCommit(l2Opts());
+    expect(result.ok).toBe(true);
+    const msg = lastCommitMessage(tempRoot);
+    expect(msg).not.toContain('Cites-Sales-Signal');
+  });
+
   it('fixesFindingId absent: no trailer, audit line has fixes_finding_id: null (regression guard)', async () => {
     const result = await safeSelfCommit(baseOpts({
       files: [{ path: 'src/self-bench/experiments/no-fix.ts', content: 'export const n = 1;' }],

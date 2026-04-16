@@ -302,7 +302,7 @@ export class PatchAuthorExperiment implements Experiment {
       };
     }
 
-    const outcome = await this.draftAndCommit(candidate, repoRoot, ctx);
+    const outcome = await this.draftAndCommit(candidate, repoRoot, ctx, ev.top_pick ?? null);
     return {
       description: outcome.description,
       details: { mode: 'authoring', candidate, ...outcome.details },
@@ -313,6 +313,7 @@ export class PatchAuthorExperiment implements Experiment {
     candidate: PatchCandidate,
     repoRoot: string,
     ctx: ExperimentContext,
+    topPick: NonNullable<CandidatesEvidence['top_pick']> | null,
   ): Promise<{ description: string; details: Record<string, unknown> }> {
     const targetPath = candidate.tier2Files[0];
     const sourceContent = readRepoFile(repoRoot, targetPath);
@@ -489,11 +490,24 @@ export class PatchAuthorExperiment implements Experiment {
     const findingResolver = (id: string): Promise<FindingLookup | null> =>
       resolveFindingForCommit(ctx, id);
 
+    // Phase 4 — cross-domain pollination. When the ranker picked this
+    // candidate because of a revenue-proximal signal (sales experiment,
+    // goal/attribution subject, or funnel path), record it as a
+    // Cites-Sales-Signal trailer so operators can grep for patches
+    // whose selection was steered by sales state. Advisory — absent
+    // when the pick scored zero on revenue_proximity.
+    const citesSalesSignal = topPick && topPick.breakdown.revenue_proximity > 0
+      ? buildSalesSignalTrailer(candidate, topPick)
+      : undefined;
+    const hypothesisBlock = citesSalesSignal
+      ? `\nHypothesis: ${buildCrossDomainHypothesis(candidate, findingRow.hypothesis ?? null, findingRow.summary ?? null)}\n`
+      : `\nHypothesis: ${findingRow.hypothesis ?? '(none)'}\n`;
+
     const commitMessage =
       `feat(self-bench): patch ${path.basename(targetPath)} for finding ${candidate.findingId.slice(0, 8)}\n\n` +
       `Autonomous tier-2 patch in response to finding ${candidate.findingId} ` +
       `(experiment=${candidate.experimentId}, verdict=${candidate.verdict}).\n` +
-      `Hypothesis: ${findingRow.hypothesis ?? '(none)'}\n` +
+      hypothesisBlock +
       `Summary: ${findingRow.summary ?? '(none)'}\n`;
 
     const commit = await safeSelfCommit({
@@ -504,6 +518,7 @@ export class PatchAuthorExperiment implements Experiment {
       whyNotEditExisting:
         `Tier-2 patch path: this commit MODIFIES ${targetPath} in response to finding ${candidate.findingId}; the patch is the intervention.`,
       fixesFindingId: candidate.findingId,
+      citesSalesSignal,
       findingResolver,
     });
     if (commit.ok) {
@@ -624,6 +639,56 @@ export class PatchAuthorExperiment implements Experiment {
       return [];
     }
   }
+}
+
+/**
+ * Build the Cites-Sales-Signal trailer body. Names the revenue-
+ * proximal signal(s) that pushed this candidate to the top of the
+ * value ranker. Format: semicolon-separated key=value pairs, short
+ * enough to live inline in a commit trailer (<240 chars total).
+ */
+export function buildSalesSignalTrailer(
+  candidate: PatchCandidate,
+  topPick: NonNullable<CandidatesEvidence['top_pick']>,
+): string {
+  const parts: string[] = [];
+  parts.push(`experiment=${candidate.experimentId}`);
+  if (candidate.subject) parts.push(`subject=${candidate.subject}`);
+  parts.push(`score=${topPick.score.toFixed(2)}`);
+  parts.push(`revenue_proximity=${topPick.breakdown.revenue_proximity.toFixed(2)}`);
+  if (topPick.breakdown.evidence_strength > 0) {
+    parts.push(`evidence_strength=${topPick.breakdown.evidence_strength.toFixed(2)}`);
+  }
+  return parts.join('; ');
+}
+
+/**
+ * Build a "When I change X, metric Y should move because Z" hypothesis
+ * string the commit message carries when the patch was selected for
+ * its revenue-proximity. Keeps the pattern consistent so operators
+ * can scan for "When I change..." in cross-domain commits and audit
+ * whether the claimed hypothesis actually played out in the
+ * attribution rollup N ticks later.
+ */
+export function buildCrossDomainHypothesis(
+  candidate: PatchCandidate,
+  findingHypothesis: string | null,
+  findingSummary: string | null,
+): string {
+  const metric = guessRevenueMetric(candidate);
+  const change = candidate.tier2Files[0] ?? 'this file';
+  const becauseFragment = findingHypothesis ?? findingSummary ?? 'the finding describes the broken contract';
+  return `When I change ${change}, ${metric} should move because ${becauseFragment.slice(0, 200)}`;
+}
+
+function guessRevenueMetric(candidate: PatchCandidate): string {
+  if (candidate.experimentId === 'attribution-observer') return 'overall_conversion_rate';
+  if (candidate.experimentId === 'outreach-thermostat') return 'proposal rejection rate';
+  if (candidate.experimentId === 'revenue-pipeline-observer') return 'goal pacing';
+  if (candidate.subject && candidate.subject.startsWith('goal:')) return `goal ${candidate.subject.slice(5)}`;
+  if (candidate.subject && candidate.subject.startsWith('attribution:')) return 'overall_conversion_rate';
+  if (candidate.experimentId === 'x-engagement-observer') return 'engagement depth';
+  return 'a revenue metric';
 }
 
 function buildWholeFileSystemPrompt(targetPath: string): string {

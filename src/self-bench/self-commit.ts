@@ -142,6 +142,20 @@ export interface SelfCommitOptions {
    */
   fixesFindingId?: string;
   /**
+   * Phase 4 — cross-domain pollination receipt. Short string naming
+   * the sales-side signal(s) that informed this patch's selection:
+   * a revenue-proximal finding, the attribution worst-bucket, an
+   * active goal. Lands as a `Cites-Sales-Signal:` trailer on the
+   * commit so operators can grep for patches whose selection was
+   * steered by sales state (vs. pure code-local signals).
+   *
+   * Advisory — safeSelfCommit does not gate on it. The patch-author
+   * populates it when the value ranker's top pick scored positive on
+   * revenue_proximity; otherwise it stays undefined and no trailer
+   * is emitted.
+   */
+  citesSalesSignal?: string;
+  /**
    * Callback that resolves a finding id to its {verdict, ranAt,
    * evidence} tuple. Takes a callback (not a DatabaseAdapter ref)
    * so self-commit.ts stays free of the DB dep and stays trivially
@@ -769,7 +783,14 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   const fixesTrailer = opts.fixesFindingId
     ? `Fixes-Finding-Id: ${opts.fixesFindingId}\n`
     : '';
-  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}`;
+  // Cites-Sales-Signal trailer — defensive size cap + newline strip
+  // so a malformed signal string can't inject extra trailers into the
+  // commit message.
+  const citesTrailer =
+    typeof opts.citesSalesSignal === 'string' && opts.citesSalesSignal.length > 0
+      ? `Cites-Sales-Signal: ${opts.citesSalesSignal.replace(/[\r\n]+/g, ' ').slice(0, 240)}\n`
+      : '';
+  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}${citesTrailer}`;
   const fileArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
   try {
     runInRepo(`git add -N -- ${fileArgs}`, repoRoot);

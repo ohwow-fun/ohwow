@@ -13,6 +13,8 @@ import {
   collectFindingIdsAlreadyPatched,
   isPatchAuthorEnabled,
   stripCodeFences,
+  buildSalesSignalTrailer,
+  buildCrossDomainHypothesis,
   _setPatchAuthorKillSwitchPathForTests,
   type PatchCandidate,
 } from '../experiments/patch-author.js';
@@ -32,25 +34,31 @@ interface FakeRow {
 }
 
 function fakeCtx(rows: FakeRow[]): ExperimentContext {
-  // Chainable stub: every method except limit() returns `this` so new
-  // query builder methods (e.g. .order()) don't break the chain.
-  const terminal = async () => ({ data: rows, error: null });
-  const chain: Record<string, unknown> = {};
-  const handler: ProxyHandler<object> = {
+  // Chainable stub: every method except limit() returns a fresh
+  // proxy so new query builder methods (e.g. .order()) don't break
+  // the chain. Terminal payload depends on the table name — only
+  // self_findings returns the seeded rows; other tables (e.g.
+  // patches_attempted_log reads from the Phase 3 pre-flight) return
+  // empty so they don't accidentally mask candidates.
+  const makeHandler = (table: string): ProxyHandler<object> => ({
     get(_t, prop) {
-      if (prop === 'limit') return terminal;
-      return () => new Proxy({}, handler);
+      if (prop === 'limit') {
+        return async () => ({
+          data: table === 'self_findings' ? rows : [],
+          error: null,
+        });
+      }
+      return () => new Proxy({}, makeHandler(table));
     },
-  };
+  });
   return {
     db: {
-      from: () => new Proxy({}, handler),
+      from: (table: string) => new Proxy({}, makeHandler(table)),
     } as unknown as ExperimentContext['db'],
     workspaceId: 'test',
     engine: {} as ExperimentContext['engine'],
     recentFindings: async () => [],
   };
-  void chain; // suppress unused-var lint
 }
 
 describe('extractAffectedFiles', () => {
@@ -448,5 +456,104 @@ describe('PatchAuthorExperiment.probe', () => {
       tier2Files: ['src/lib/format-duration.ts'],
     });
     expect(exp.judge(r, [])).toBe('warning');
+  });
+});
+
+describe('buildSalesSignalTrailer', () => {
+  it('formats the trailer with experiment, subject, score, and revenue_proximity', () => {
+    const candidate: PatchCandidate = {
+      findingId: 'f-1',
+      experimentId: 'attribution-observer',
+      subject: 'attribution:rollup',
+      verdict: 'warning',
+      ranAt: new Date().toISOString(),
+      tier2Files: ['src/self-bench/experiments/attribution-observer.ts'],
+    };
+    const topPick = {
+      findingId: 'f-1',
+      score: 4.2,
+      breakdown: {
+        revenue_proximity: 1,
+        evidence_strength: 0.4,
+        blast_radius: 0.75,
+        recency: 1,
+      },
+      rationale: ['+3.0 revenue-proximal experiment'],
+    };
+    const trailer = buildSalesSignalTrailer(candidate, topPick);
+    expect(trailer).toContain('experiment=attribution-observer');
+    expect(trailer).toContain('subject=attribution:rollup');
+    expect(trailer).toContain('score=4.20');
+    expect(trailer).toContain('revenue_proximity=1.00');
+    expect(trailer).toContain('evidence_strength=0.40');
+  });
+
+  it('omits evidence_strength when the breakdown is zero', () => {
+    const candidate: PatchCandidate = {
+      findingId: 'f-1',
+      experimentId: 'outreach-thermostat',
+      subject: null,
+      verdict: 'warning',
+      ranAt: new Date().toISOString(),
+      tier2Files: ['src/self-bench/experiments/outreach-thermostat.ts'],
+    };
+    const topPick = {
+      findingId: 'f-1',
+      score: 3,
+      breakdown: { revenue_proximity: 1, evidence_strength: 0, blast_radius: 0, recency: 0 },
+      rationale: [],
+    };
+    const trailer = buildSalesSignalTrailer(candidate, topPick);
+    expect(trailer).not.toContain('evidence_strength');
+  });
+});
+
+describe('buildCrossDomainHypothesis', () => {
+  it('names the attribution metric for the attribution-observer experiment', () => {
+    const h = buildCrossDomainHypothesis(
+      {
+        findingId: 'f-1',
+        experimentId: 'attribution-observer',
+        subject: 'attribution:rollup',
+        verdict: 'warning',
+        ranAt: new Date().toISOString(),
+        tier2Files: ['src/self-bench/experiments/attribution-observer.ts'],
+      },
+      'market_signal bucket converts at 0%',
+      'summary here',
+    );
+    expect(h).toMatch(/^When I change src\/self-bench\/experiments\/attribution-observer\.ts, overall_conversion_rate should move because/);
+  });
+
+  it('names proposal rejection rate for the outreach-thermostat experiment', () => {
+    const h = buildCrossDomainHypothesis(
+      {
+        findingId: 'f-1',
+        experimentId: 'outreach-thermostat',
+        subject: null,
+        verdict: 'warning',
+        ranAt: new Date().toISOString(),
+        tier2Files: ['src/self-bench/experiments/outreach-thermostat.ts'],
+      },
+      null,
+      null,
+    );
+    expect(h).toContain('proposal rejection rate');
+  });
+
+  it('falls back to generic metric when no revenue-experiment signal is present', () => {
+    const h = buildCrossDomainHypothesis(
+      {
+        findingId: 'f-1',
+        experimentId: 'source-copy-lint',
+        subject: 'copy:Agents.tsx',
+        verdict: 'warning',
+        ranAt: new Date().toISOString(),
+        tier2Files: ['src/web/src/pages/Agents.tsx'],
+      },
+      'em dash in copy',
+      'summary',
+    );
+    expect(h).toMatch(/^When I change src\/web\/src\/pages\/Agents\.tsx, a revenue metric should move/);
   });
 });
