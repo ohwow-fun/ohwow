@@ -38,6 +38,7 @@ import {
   type ReadDmThreadInput,
   type ReadDmThreadResult,
 } from '../orchestrator/tools/x-posting.js';
+import { detectTriggerPhrase } from './x-dm-triggers.js';
 
 /** Default tick interval — every hour. */
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
@@ -308,9 +309,11 @@ export class XDmPollerScheduler {
 
     const nowIso = new Date().toISOString();
     let newCount = 0;
+    let signalCount = 0;
     let newest: DmMessage | null = null;
     for (const msg of result.messages) {
       newest = msg;
+      let inserted = false;
       try {
         await this.db.from('x_dm_messages').insert({
           workspace_id: this.workspaceId,
@@ -322,6 +325,7 @@ export class XDmPollerScheduler {
           observed_at: nowIso,
         });
         newCount++;
+        inserted = true;
         this.appendJsonl({
           kind: 'message',
           ts: nowIso,
@@ -340,6 +344,31 @@ export class XDmPollerScheduler {
           logger.debug({ err: errMsg, pair: thread.pair, msgId: msg.id }, '[XDmPollerScheduler] message insert failed');
         }
       }
+      // Signal emission: only on freshly-inserted, inbound, text-bearing,
+      // non-media messages. The signal table itself dedups via UNIQUE
+      // on (workspace_id, message_id, signal_type), so re-runs are safe
+      // even if `inserted` were a false positive.
+      if (
+        inserted
+        && msg.direction === 'inbound'
+        && !msg.isMedia
+        && msg.text
+      ) {
+        const wroteSignal = await this.maybeEmitTriggerSignal({
+          pair: thread.pair,
+          message_id: msg.id,
+          text: msg.text,
+          primary_name: result.conversationName ?? thread.primaryName,
+          observed_at: nowIso,
+        });
+        if (wroteSignal) signalCount++;
+      }
+    }
+    if (signalCount > 0) {
+      logger.info(
+        { pair: thread.pair, count: signalCount },
+        '[XDmPollerScheduler] trigger-phrase signals emitted',
+      );
     }
 
     // Promote the in-thread header name (more accurate than the inbox
@@ -374,6 +403,60 @@ export class XDmPollerScheduler {
         '[XDmPollerScheduler] findThread failed; assuming new',
       );
       return null;
+    }
+  }
+
+  /**
+   * Insert one x_dm_signals row for an inbound message that matches a
+   * trigger phrase. Returns true when a row was newly written; false
+   * when no phrase matched OR the UNIQUE dedup short-circuited an
+   * already-known signal.
+   *
+   * Why we run this only on freshly-inserted messages: the signal
+   * table's UNIQUE constraint already prevents double-emission, but
+   * skipping the detector entirely on known messages saves the
+   * substring scan on every tick of long historical threads.
+   */
+  private async maybeEmitTriggerSignal(args: {
+    pair: string;
+    message_id: string;
+    text: string;
+    primary_name: string | null;
+    observed_at: string;
+  }): Promise<boolean> {
+    const phrase = detectTriggerPhrase(args.text);
+    if (!phrase) return false;
+    try {
+      await this.db.from('x_dm_signals').insert({
+        workspace_id: this.workspaceId,
+        conversation_pair: args.pair,
+        message_id: args.message_id,
+        signal_type: 'trigger_phrase',
+        trigger_phrase: phrase,
+        primary_name: args.primary_name,
+        text: args.text.slice(0, 500),
+        observed_at: args.observed_at,
+      });
+      this.appendJsonl({
+        kind: 'signal',
+        ts: args.observed_at,
+        signal_type: 'trigger_phrase',
+        pair: args.pair,
+        message_id: args.message_id,
+        trigger_phrase: phrase,
+        primary_name: args.primary_name,
+        text: args.text.slice(0, 500),
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) {
+        logger.debug(
+          { err: msg, pair: args.pair, messageId: args.message_id },
+          '[XDmPollerScheduler] signal insert failed',
+        );
+      }
+      return false;
     }
   }
 

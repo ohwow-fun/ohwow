@@ -369,6 +369,86 @@ describe('XDmPollerScheduler', () => {
     expect(messageCount).toBe(8);
   });
 
+  it('emits x_dm_signals rows for inbound trigger-phrase hits only', async () => {
+    const lister = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'pricing q', hasUnread: true }],
+    });
+    const reader = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice Canonical',
+        messages: [
+          msg('uuid-1', 'Hey, quick question about pricing?', 'inbound'),
+          msg('uuid-2', 'We posted demo details yesterday', 'outbound'), // outbound — must not signal
+          msg('uuid-3', 'Sent you a demo video', 'inbound', true),      // media — must not signal
+          msg('uuid-4', 'Just saying hi', 'inbound'),                   // no trigger
+          msg('uuid-5', 'Interested in onboarding for the team', 'inbound'),
+        ],
+      },
+    });
+    const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      dataDir: env.dir,
+      inboxLister: lister,
+      threadReader: reader,
+    });
+    await sched.tick();
+
+    const signals = env.rawDb
+      .prepare('SELECT message_id, trigger_phrase, primary_name FROM x_dm_signals ORDER BY message_id')
+      .all() as Array<{ message_id: string; trigger_phrase: string; primary_name: string }>;
+    expect(signals).toHaveLength(2);
+    expect(signals.map((s) => [s.message_id, s.trigger_phrase])).toEqual([
+      ['uuid-1', 'pricing'],
+      ['uuid-5', 'onboarding'],
+    ]);
+    // Signal carries the in-thread header name, not the inbox row name.
+    expect(signals[0].primary_name).toBe('Alice Canonical');
+  });
+
+  it('does not re-emit signals for messages seen on a prior tick', async () => {
+    const lister = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'pricing q', hasUnread: true }],
+    });
+    const reader = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice',
+        messages: [msg('uuid-1', 'Need pricing info', 'inbound')],
+      },
+    });
+    const sched1 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: lister, threadReader: reader,
+    });
+    await sched1.tick();
+
+    const lister2 = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'followup', hasUnread: true }],
+    });
+    const reader2 = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice',
+        // Same message as before + a new one that doesn't trigger.
+        messages: [
+          msg('uuid-1', 'Need pricing info', 'inbound'),
+          msg('uuid-2', 'thanks for the reply', 'inbound'),
+        ],
+      },
+    });
+    const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: lister2, threadReader: reader2,
+    });
+    await sched2.tick();
+
+    const n = (env.rawDb
+      .prepare('SELECT COUNT(*) as n FROM x_dm_signals')
+      .get() as { n: number }).n;
+    expect(n).toBe(1);
+  });
+
   it('skips entering threads that are already known and unchanged', async () => {
     // First tick: ingest one thread + body.
     const initialLister = listerOf({
