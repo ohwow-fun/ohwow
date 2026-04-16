@@ -177,4 +177,28 @@ describe('DeliverableActionSentinelExperiment', () => {
     expect(NARRATED_FAILURE_CANARIES).toContain('login page');
     expect(NARRATED_FAILURE_CANARIES).toContain("don't have access");
   });
+
+  it('flags infra-failure narrations (tool timeout, Chrome crash) alongside auth refusals', async () => {
+    const exp = new DeliverableActionSentinelExperiment();
+    const res = await exp.probe(makeCtx([
+      row({
+        id: 't-timeout',
+        output: 'The x_compose_tweet tool timed out after 90000ms; I could not complete the post.',
+      }),
+      row({
+        id: 't-chrome',
+        output: 'Chrome closed unexpectedly while I was drafting the tweet.',
+      }),
+      row({
+        id: 't-ok',
+        output: 'Posted the tweet. https://x.com/acct/status/123',
+      }),
+    ]));
+    const ev = res.evidence as DeliverableActionSentinelEvidence;
+    expect(ev.flagged_tasks).toBe(2);
+    const ids = ev.flagged.map((f) => f.task_id).sort();
+    expect(ids).toEqual(['t-chrome', 't-timeout']);
+    // 2/3 ≥ MIN_FAIL_SAMPLES=2 and rate ≥ 0.5 → promotes to fail.
+    expect(exp.judge(res, [])).toBe('fail');
+  });
 });

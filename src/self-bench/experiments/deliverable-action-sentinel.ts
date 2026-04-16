@@ -124,6 +124,23 @@ export const NARRATED_FAILURE_CANARIES: readonly string[] = [
   'post it manually',
   'send manually',
   'ready for manual',
+  // Infra-failure markers landed 2026-04-16 when x-posting-executor
+  // (commit 97c85cf) started bounding composer calls with per-tool
+  // timeouts. A dead Chrome or wedged CDP session now surfaces as a
+  // tool-level TimeoutError, whose message the agent faithfully echoes
+  // in its narration ("The x_compose_tweet tool timed out after
+  // 90000ms..."). Without these entries the sentinel would miss an
+  // entire class of failure — infra wedges that never reached the
+  // auth-refusal layer the older canaries were built for.
+  'timed out after',
+  'cdp detach',
+  'cdp disconnect',
+  'chrome crash',
+  'chrome died',
+  'chrome closed',
+  'browser closed',
+  'selector hang',
+  'selector timed out',
 ] as const;
 
 interface CandidateTask {
