@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.0] — 2026-04-16
+
+### Added
+- **Showcase**: `ohwow showcase <target>` Phase 1 MVP
+- **Showcase**: Parallel probe scanner for epic first impression
+- **Funnel surgeon**: Attribution rollup view (migration 128)
+- **Funnel surgeon**: Public attribution hit endpoint
+- **Funnel surgeon**: Stripe webhook for `plan:paid` attribution
+- **Funnel surgeon**: Attribution observer experiment (advisory)
+- **Outreach**: Thermostat experiment (proposal-only, off by default)
+- **Outreach**: Cross-channel cooldown policy (`src/lib/outreach-policy.ts`)
+
+### Changed
+- **Sales loop**: Capture live-run-1 observations in `TUNING-NOTES` (handles redacted)
+
 ## [0.8.2] — 2026-04-13
 
 ### Added
