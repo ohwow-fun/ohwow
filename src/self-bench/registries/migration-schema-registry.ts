@@ -61,7 +61,9 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '088-meeting-sessions.sql', expectedTables: ['meeting_sessions'] },
   { migrationFile: '087-arena-trajectories.sql', expectedTables: ['arena_trajectories'] },
   { migrationFile: '085-co-evolution.sql', expectedTables: ['agent_workforce_evolution_runs', 'agent_workforce_evolution_attempts'] },
-  { migrationFile: '083-deliverables-enhancements.sql', expectedTables: ['agent_workforce_deliverables_new'] },
+  // 083 is a rename-in-place of agent_workforce_deliverables (already
+  // registered under 007-deliverables.sql). Probing the transient _new
+  // table produced 1,346 identical fails/3h. Drop, don't re-add.
   { migrationFile: '084-recovery-audit-log.sql', expectedTables: ['recovery_audit_log'] },
   { migrationFile: '082-agent-evolution-lifecycle.sql', expectedTables: ['agent_workforce_lifecycle_events', 'agent_workforce_prompt_revisions'] },
   { migrationFile: '080-doc-mount-peer-mirrors.sql', expectedTables: ['doc_mount_peer_mirrors'] },
@@ -91,15 +93,20 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '047-outbound-queue.sql', expectedTables: ['outbound_queue'] },
   { migrationFile: '051-execution-engine-tables.sql', expectedTables: ['agent_workforce_workflow_runs', 'agent_workforce_sessions', 'agent_workforce_action_journal', 'agent_workforce_autonomy_history', 'agent_workforce_prompt_versions', 'agent_workforce_data_store'] },
   { migrationFile: '046-state-changelog.sql', expectedTables: ['agent_workforce_state_changelog'] },
-  { migrationFile: '044-multi-connection-fixes.sql', expectedTables: ['telegram_connections_new', 'connection_locks'] },
+  // 044 renames telegram_connections in place (already registered under
+  // 005-telegram.sql). connection_locks is the one net-new table from
+  // this migration worth probing.
+  { migrationFile: '044-multi-connection-fixes.sql', expectedTables: ['connection_locks'] },
   { migrationFile: '045-task-state.sql', expectedTables: ['agent_workforce_task_state'] },
   { migrationFile: '040-self-improvement-tables.sql', expectedTables: ['agent_workforce_routing_stats', 'agent_workforce_skills', 'agent_workforce_digital_twin_snapshots', 'agent_workforce_practice_sessions', 'agent_workforce_principles', 'agent_workforce_discovered_processes', 'agent_workforce_proactive_runs'] },
-  { migrationFile: '032-nudge-type-update.sql', expectedTables: ['agent_workforce_nudges_new'] },
+  // 032 is a rename-in-place of agent_workforce_nudges (already
+  // registered under 009-nudges.sql). Drop, don't re-add.
   { migrationFile: '033-template-bundles.sql', expectedTables: ['template_bundles', 'template_installs'] },
   { migrationFile: '035-anomaly-alerts.sql', expectedTables: ['agent_workforce_anomaly_alerts'] },
   { migrationFile: '029-goals.sql', expectedTables: ['agent_workforce_goals'] },
   { migrationFile: '030-agent-suggestions.sql', expectedTables: ['agent_workforce_agent_suggestions'] },
-  { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
+  // 027 is a rename-in-place of agent_workforce_attachments (already
+  // registered under 015-file-attachments.sql). Drop, don't re-add.
   { migrationFile: '025-workspace-peers.sql', expectedTables: ['workspace_peers'] },
   { migrationFile: '022-knowledge-base.sql', expectedTables: ['agent_workforce_knowledge_documents', 'agent_workforce_knowledge_chunks', 'agent_workforce_knowledge_agent_config'] },
   { migrationFile: '017-openclaw-call-logs.sql', expectedTables: ['openclaw_call_logs'] },

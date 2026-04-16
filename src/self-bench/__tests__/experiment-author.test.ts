@@ -334,4 +334,35 @@ describe('ExperimentAuthorExperiment — intervene', () => {
 
     _setKillSwitchDisabledPathForTests(null);
   });
+
+  it('claims the brief as terminal duplicate when target already exists', async () => {
+    // Pre-create one of the files the author would try to write. The brief's
+    // slug drives both sourcePath and testPath, so seeding the source file
+    // is enough to trip safeSelfCommit's new-file-only check.
+    const sourcePath = path.join(tempRoot, 'src/self-bench/experiments/author-test-probe.ts');
+    fs.writeFileSync(sourcePath, '// pre-existing content\n');
+    execSync('git add src/self-bench/experiments/author-test-probe.ts', { cwd: tempRoot, stdio: 'pipe' });
+    execSync('git commit -m "seed existing"', { cwd: tempRoot, stdio: 'pipe' });
+
+    const inserted: Array<Record<string, unknown>> = [];
+    const ctx = makeCtx(tempRoot, {
+      'experiment-proposal-generator': [proposalFinding(sampleBrief, false)],
+    }, inserted);
+
+    const result = await exp.probe(ctx);
+    const intervention = await exp.intervene!('warning', result, ctx);
+
+    const details = intervention!.details as { commit_ok: boolean; commit_reason?: string };
+    expect(details.commit_ok).toBe(false);
+    expect(details.commit_reason).toMatch(/target already exists/i);
+
+    // Critical: the brief MUST be marked claimed to break the 15-17×
+    // retry loop observed in the field. Otherwise every 5-min cadence
+    // re-picks the same proposal and hits the same error forever.
+    const markerRow = inserted.find((r) => r.category === 'experiment_proposal');
+    const evidence = JSON.parse(markerRow!.evidence as string);
+    expect(evidence.claimed).toBe(true);
+    expect(evidence.claimed_by).toBe('system:duplicate-target');
+    expect(evidence.commit_ok).toBe(false);
+  });
 });

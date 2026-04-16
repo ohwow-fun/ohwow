@@ -261,8 +261,22 @@ export class ExperimentAuthorExperiment implements Experiment {
 
     // Always mark the claim attempt, even on failure, so operators
     // can see the pipeline activity in the ledger. On success the
-    // brief is claimed and won't be re-tried. On failure we leave
-    // it unclaimed so the next run tries again.
+    // brief is claimed and won't be re-tried. On failure we usually
+    // leave it unclaimed so the next run tries again.
+    //
+    // Exception: "target already exists" means a prior author (or a
+    // human) already landed a file at this path. Retrying will hit
+    // the same error on every cadence forever — one incident saw 17
+    // retries per proposal across 10 slugs. Claim these as a terminal
+    // duplicate so the brief stops being re-picked.
+    const isDuplicateTarget = !commitResult.ok
+      && /target already exists/i.test(commitResult.reason ?? '');
+    const treatAsClaimed = commitResult.ok || isDuplicateTarget;
+    const claimedBy = commitResult.ok
+      ? this.id
+      : isDuplicateTarget
+        ? 'system:duplicate-target'
+        : null;
     try {
       await writeFinding(ctx.db, {
         experimentId: this.id,
@@ -276,9 +290,9 @@ export class ExperimentAuthorExperiment implements Experiment {
         evidence: {
           is_authoring_outcome: true,
           brief,
-          claimed: commitResult.ok,
-          claimed_by: commitResult.ok ? this.id : null,
-          claimed_at: commitResult.ok ? new Date().toISOString() : null,
+          claimed: treatAsClaimed,
+          claimed_by: claimedBy,
+          claimed_at: treatAsClaimed ? new Date().toISOString() : null,
           commit_sha: commitResult.commitSha ?? null,
           files_written: commitResult.filesWritten ?? null,
           commit_ok: commitResult.ok,
@@ -446,6 +460,14 @@ export class ExperimentAuthorExperiment implements Experiment {
       }
     }
 
+    const isDuplicateTarget = !commitResult.ok
+      && /target already exists/i.test(commitResult.reason ?? '');
+    const treatAsClaimed = commitResult.ok || isDuplicateTarget;
+    const claimedBy = commitResult.ok
+      ? this.id
+      : isDuplicateTarget
+        ? 'system:duplicate-target'
+        : null;
     try {
       await writeFinding(ctx.db, {
         experimentId: this.id,
@@ -460,9 +482,9 @@ export class ExperimentAuthorExperiment implements Experiment {
           is_authoring_outcome: true,
           materialization: 'llm_authored',
           brief,
-          claimed: commitResult.ok,
-          claimed_by: commitResult.ok ? this.id : null,
-          claimed_at: commitResult.ok ? new Date().toISOString() : null,
+          claimed: treatAsClaimed,
+          claimed_by: claimedBy,
+          claimed_at: treatAsClaimed ? new Date().toISOString() : null,
           commit_sha: commitResult.commitSha ?? null,
           files_written: commitResult.filesWritten ?? null,
           commit_ok: commitResult.ok,
