@@ -13,10 +13,45 @@ interface FakeRow {
   error_message?: string | null;
 }
 
-function makeDb(rows: FakeRow[]) {
+interface FakeDeliverable {
+  id: string;
+  task_id: string;
+  status: string;
+  rejection_reason?: string | null;
+  updated_at?: string | null;
+}
+
+function makeDb(rows: FakeRow[], deliverables: FakeDeliverable[] = []) {
   const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
-  const from = () => {
+  const deliverableUpdates: Array<{ id: string; patch: Record<string, unknown> }> = [];
+  const from = (table: string) => {
     const chain: Record<string, unknown> = {};
+    if (table === 'agent_workforce_deliverables') {
+      let taskId: string | null = null;
+      let statusFilter: string | null = null;
+      chain.select = () => chain;
+      chain.eq = (col: string, val: unknown) => {
+        if (col === 'task_id') taskId = val as string;
+        if (col === 'status') statusFilter = val as string;
+        return chain;
+      };
+      const exec = () => {
+        const matches = deliverables.filter(
+          (d) => (taskId === null || d.task_id === taskId) && (statusFilter === null || d.status === statusFilter),
+        );
+        return Promise.resolve({ data: matches, error: null });
+      };
+      Object.assign(chain, { then: (cb: (v: unknown) => unknown) => exec().then(cb) });
+      chain.update = (patch: Record<string, unknown>) => ({
+        eq: async (_col: string, val: string) => {
+          deliverableUpdates.push({ id: val, patch });
+          const row = deliverables.find((d) => d.id === val);
+          if (row) Object.assign(row, patch);
+          return { error: null };
+        },
+      });
+      return chain;
+    }
     let filteredRows = rows.filter((r) => r.status === 'completed' && r.deferred_action != null);
     chain.select = () => chain;
     chain.eq = (_col: string, _val: unknown) => chain;
@@ -39,7 +74,7 @@ function makeDb(rows: FakeRow[]) {
     });
     return chain;
   };
-  return { db: { from } as never, updates };
+  return { db: { from } as never, updates, deliverableUpdates, deliverables };
 }
 
 function seedRow(overrides: Partial<FakeRow>): FakeRow {
@@ -116,6 +151,35 @@ describe('backfillNarratedFailures', () => {
     expect(result.scanned).toBe(2);
     expect(result.flagged).toEqual([]);
     expect(result.applied).toBe(0);
+  });
+
+  it('reroutes linked approved deliverables to rejected alongside the parent task', async () => {
+    const rows = [
+      seedRow({ id: 't-cap', output: "## Tweet Ready for Manual Posting\n\n..." }),
+    ];
+    const deliverables: FakeDeliverable[] = [
+      { id: 'd-1', task_id: 't-cap', status: 'approved' },
+      { id: 'd-2', task_id: 't-cap', status: 'delivered' }, // already delivered → should NOT be touched
+    ];
+    const { db, deliverableUpdates } = makeDb(rows, deliverables);
+    const result = await backfillNarratedFailures(db, { dryRun: false });
+    expect(result.deliverablesRerouted).toBe(1);
+    expect(deliverableUpdates).toHaveLength(1);
+    expect(deliverableUpdates[0].id).toBe('d-1');
+    expect(deliverableUpdates[0].patch.status).toBe('rejected');
+    expect(String(deliverableUpdates[0].patch.rejection_reason)).toContain('manual posting');
+    // The already-delivered row stays alone — we never touch rows that actually went out.
+    expect(deliverables.find((d) => d.id === 'd-2')!.status).toBe('delivered');
+  });
+
+  it('deliverablesRerouted is 0 when there are no linked approved rows', async () => {
+    const rows = [
+      seedRow({ id: 't-cap', output: 'login page blocked me' }),
+    ];
+    const { db } = makeDb(rows, []);
+    const result = await backfillNarratedFailures(db, { dryRun: false });
+    expect(result.applied).toBe(1);
+    expect(result.deliverablesRerouted).toBe(0);
   });
 
   it('respects the since= window', async () => {

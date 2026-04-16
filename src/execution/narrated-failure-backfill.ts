@@ -54,6 +54,16 @@ export interface BackfillNarratedFailuresResult {
   flagged: NarratedFailureHit[];
   /** Rows that were actually rerouted to failed. 0 when dryRun. */
   applied: number;
+  /**
+   * Linked agent_workforce_deliverables rows that were flipped from
+   * status='approved' to 'rejected' because the parent task is a
+   * narrated failure. These rows are landmines if left 'approved':
+   * their content.text is a capitulation narration like "I don't
+   * have credentials to post", and if DeliverableExecutor fires on
+   * them it will literally post that narration as a tweet. Always
+   * reroute alongside the parent task.
+   */
+  deliverablesRerouted: number;
 }
 
 export interface BackfillNarratedFailuresOptions {
@@ -153,10 +163,11 @@ export async function backfillNarratedFailures(
   }
 
   let applied = 0;
+  let deliverablesRerouted = 0;
   if (!dryRun && flagged.length > 0) {
     const nowIso = new Date().toISOString();
     for (const hit of flagged) {
-      const patch: Record<string, unknown> = {
+      const taskPatch: Record<string, unknown> = {
         status: 'failed',
         failure_category: 'narrated_failure_backfill',
         error_message: `Backfilled to failed: narration contained canary "${hit.canary}" (action ${hit.action_type}). Task was marked completed before the narrated-failure gate covered this window.`,
@@ -164,11 +175,36 @@ export async function backfillNarratedFailures(
       };
       const { error } = await db
         .from('agent_workforce_tasks')
-        .update(patch)
+        .update(taskPatch)
         .eq('id', hit.task_id);
-      if (!error) applied++;
+      if (error) continue;
+      applied++;
+
+      // Linked deliverables: whatever the agent stamped as the action's
+      // content is the capitulation narration itself — not a postable
+      // tweet. Leaving them at 'approved' means DeliverableExecutor
+      // could later post them for real. Flip to 'rejected' with a
+      // reason that matches the parent task's failure_category so
+      // audits cross-reference cleanly.
+      const { data: deliverables } = await db
+        .from('agent_workforce_deliverables')
+        .select('id')
+        .eq('task_id', hit.task_id)
+        .eq('status', 'approved');
+      const ids = ((deliverables ?? []) as Array<{ id: string }>).map((d) => d.id);
+      for (const id of ids) {
+        const { error: dErr } = await db
+          .from('agent_workforce_deliverables')
+          .update({
+            status: 'rejected',
+            rejection_reason: `narrated_failure_backfill: parent task routed to failed; content was a capitulation narration (canary "${hit.canary}"), not a postable tweet.`,
+            updated_at: nowIso,
+          })
+          .eq('id', id);
+        if (!dErr) deliverablesRerouted++;
+      }
     }
   }
 
-  return { scanned: rows.length, flagged, applied };
+  return { scanned: rows.length, flagged, applied, deliverablesRerouted };
 }
