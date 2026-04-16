@@ -292,6 +292,11 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
 
+- attribution-observer
+- mig-smoke-1776367046505
+- outreach-thermostat
+- tmpl-smoke-1776361920501
+- x-dm-signals-rollup
 - browser-profile-guardian
 - daily-surprise-digest
 - deliverable-action-sentinel
