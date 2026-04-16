@@ -15,9 +15,12 @@
  *   Rule 1 (model_latency_probe): traffic-driven. For each model_id
  *     in llm_calls with enough recent calls, proposes a latency probe.
  *
- *   Rule 2 (migration_schema_probe): code-reading. Scans
- *     src/db/migrations/*.sql, proposes a schema-drift canary per
- *     migration file (newest first, capped at 3/tick).
+ *   Rule 2 (migration_schema_probe): RETIRED 2026-04-16. Migration
+ *     schema probes are now maintained deterministically by
+ *     scripts/regen-migration-schema-registry.mjs + a pre-commit
+ *     hook. The rule stays visible in the probe evidence as a zero
+ *     so operators can see it was considered and skipped, but no
+ *     longer burns an autonomous-commit cycle per new migration.
  *
  *   Rule 3 (subprocess_health_probe — toolchain singletons): proposes
  *     three fixed experiments once each, then dedupe stops them
@@ -71,7 +74,6 @@ import type {
 import type {
   ExperimentBrief,
   LlmAuthoredProbeParams,
-  MigrationSchemaProbeParams,
   ModelLatencyProbeParams,
   SubprocessHealthProbeParams,
 } from '../experiment-template.js';
@@ -80,7 +82,6 @@ import { writeFinding } from '../findings-store.js';
 import { getSelfCommitStatus } from '../self-commit.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { stripCodeFences } from './patch-author.js';
-import { MIGRATION_SCHEMA_REGISTRY } from '../registries/migration-schema-registry.js';
 
 /** How many recent llm_calls rows to inspect per model for latency stats. */
 const SAMPLE_WINDOW = 200;
@@ -97,20 +98,6 @@ const MIN_CALLS_FOR_PROPOSAL = 5;
 /** How far back to look for existing proposals to avoid duplicates. */
 const DEDUPE_WINDOW_DAYS = 14;
 
-/**
- * Rule 2 throttle: never emit more than N brand-new migration
- * proposals in a single tick. The repo has ~120 migration files,
- * so on the first run after this rule ships every slug would be
- * "new" and the author (5m cadence) would fall hours behind. We
- * fan the work out across ticks — dedupe catches the already-
- * emitted briefs, and the next tick picks up where this one
- * stopped.
- */
-const MAX_MIGRATION_PROPOSALS_PER_TICK = 3;
-/** Default cadence baked into the generated schema probes. */
-const MIGRATION_PROBE_EVERY_MS = 60 * 60 * 1000; // 1h
-/** Hard cap on expected_tables per brief — mirrors validateBrief. */
-const MIGRATION_MAX_TABLES_PER_PROBE = 50;
 /** Slug length ceiling (validateBrief enforces the same value). */
 const SLUG_MAX_LENGTH = 50;
 
@@ -219,76 +206,6 @@ function modelToSlug(modelId: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return `${cleaned}-latency`;
-}
-
-/**
- * Turn a migration basename like "016-dashboard-tables.sql" into
- * "migration-schema-016-dashboard-tables". Strips the .sql suffix,
- * lowercases, and sanitizes — leading digits are fine because the
- * full slug is prefixed with "migration-schema-" (which starts
- * with a letter as required by validateBrief).
- */
-function migrationFileToSlug(basename: string): string {
-  const noExt = basename.replace(/\.sql$/i, '');
-  const cleaned = noExt
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return `migration-schema-${cleaned}`;
-}
-
-/**
- * Simulate a migration file's effect on the table set. Processes
- * CREATE / DROP / ALTER ... RENAME TO statements in document order so
- * that rename-in-place migrations (CREATE foo_new → DROP foo → ALTER
- * foo_new RENAME TO foo) converge to the canonical final name rather
- * than the transient `_new` intermediate. The earlier create-only
- * parser handed the intermediate back to the registry, producing probes
- * for tables that never exist post-migration — and the loop kept
- * re-authoring those probes every time the registry didn't contain
- * them.
- *
- * Case-insensitive, tolerates whitespace variation, dedupes within one
- * file, and preserves the order of first appearance. Quoted/bracketed
- * identifiers are NOT unwrapped — if a migration uses `"foo"` or
- * `[foo]` this parser skips them. That's fine: the goal is coverage of
- * the common case, not a full SQL parser.
- */
-function computeFinalTables(sqlContent: string): string[] {
-  const re = /(?:create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*))|(?:drop\s+table\s+(?:if\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*))|(?:alter\s+table\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+rename\s+to\s+([a-zA-Z_][a-zA-Z0-9_]*))/gi;
-  const tables = new Map<string, true>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(sqlContent)) !== null) {
-    if (m[1]) {
-      tables.set(m[1], true);
-    } else if (m[2]) {
-      tables.delete(m[2]);
-    } else if (m[3] && m[4]) {
-      if (tables.has(m[3])) {
-        tables.delete(m[3]);
-        tables.set(m[4], true);
-      } else {
-        tables.set(m[4], true);
-      }
-    }
-  }
-  return [...tables.keys()];
-}
-
-/**
- * Tables already claimed by an earlier row in MIGRATION_SCHEMA_REGISTRY.
- * Rule 2 uses this to skip proposing a probe for a migration whose final
- * tables are wholly covered by a migration already in the registry —
- * rename-in-place migrations (027, 032, 044, 083) fall under this: their
- * final canonical table is registered by the migration that first
- * created it.
- */
-function alreadyRegisteredTables(): Set<string> {
-  const covered = new Set<string>();
-  for (const row of MIGRATION_SCHEMA_REGISTRY) {
-    for (const t of row.expectedTables) covered.add(t);
-  }
-  return covered;
 }
 
 /** Percentile of a sorted ascending array. Linear interpolation, clamped. */
@@ -729,129 +646,35 @@ export class ExperimentProposalGenerator implements Experiment {
   }
 
   /**
-   * Rule 2 — scan src/db/migrations/*.sql and emit briefs.
-   * Mutates the passed-in `proposals` array (appending new briefs)
-   * and returns a small summary struct for the evidence field. Runs
-   * synchronously because it's just fs + regex — no async work to
-   * do. Fails closed: any unreadable path, missing repo root, or
-   * parse error results in zero new proposals and a flagged
-   * evidence field, never a thrown exception that would take down
-   * the Rule 1 pass.
+   * Rule 2 — RETIRED 2026-04-16.
    *
-   * Dedupe reuses the same `existingProposals` set that Rule 1
-   * uses — slug collisions are the only dedupe key — so a
-   * migration brief that's already in the ledger is silently
-   * skipped here on the next tick.
+   * Migration schema probes used to be authored one-at-a-time by the
+   * autonomous loop: this method would scan src/db/migrations/*.sql,
+   * emit briefs for migrations with novel tables, and the author would
+   * commit a single-row append to migration-schema-registry.ts per
+   * brief. The work was purely deterministic (fs + regex) but
+   * consumed an entire commit cycle (LLM tick, typecheck, husky hook)
+   * per migration.
+   *
+   * scripts/regen-migration-schema-registry.mjs now owns this in
+   * under a second, with a pre-commit gate that refuses to land a
+   * .sql migration without a registry update. Keeping the method as
+   * a zero-shaped stub preserves the evidence field shape the rest
+   * of the probe code reads without needing structural changes.
    */
   private proposeMigrationSchemaProbes(
-    proposals: ExperimentBrief[],
-    existingProposals: Set<string>,
+    _proposals: ExperimentBrief[],
+    _existingProposals: Set<string>,
   ): {
     migrations_scanned: number;
     migration_files_with_tables: number;
     new_migration_proposals: number;
     repo_root_unavailable: boolean;
   } {
-    const status = getSelfCommitStatus();
-    if (!status.repoRoot) {
-      return {
-        migrations_scanned: 0,
-        migration_files_with_tables: 0,
-        new_migration_proposals: 0,
-        repo_root_unavailable: true,
-      };
-    }
-
-    const migrationsDir = path.join(status.repoRoot, 'src', 'db', 'migrations');
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(migrationsDir);
-    } catch {
-      return {
-        migrations_scanned: 0,
-        migration_files_with_tables: 0,
-        new_migration_proposals: 0,
-        repo_root_unavailable: true,
-      };
-    }
-
-    // Newest-first so the per-tick cap emits recent migrations
-    // before legacy ones. Migration files are numerically prefixed
-    // (001-, 002-, ...); a lexical descending sort is the right
-    // order because the prefixes are zero-padded.
-    const sqlFiles = entries
-      .filter((name) => name.endsWith('.sql'))
-      .sort((a, b) => b.localeCompare(a));
-
-    const covered = alreadyRegisteredTables();
-    let filesWithTables = 0;
-    let newCount = 0;
-
-    for (const basename of sqlFiles) {
-      if (newCount >= MAX_MIGRATION_PROPOSALS_PER_TICK) break;
-
-      const slug = migrationFileToSlug(basename);
-      if (slug.length > SLUG_MAX_LENGTH) continue; // validateBrief would reject anyway
-      if (existingProposals.has(slug)) continue;
-
-      let tables: string[];
-      try {
-        const contents = fs.readFileSync(
-          path.join(migrationsDir, basename),
-          'utf-8',
-        );
-        tables = computeFinalTables(contents);
-      } catch {
-        continue;
-      }
-
-      if (tables.length === 0) continue;
-      filesWithTables += 1;
-
-      // Rename-in-place hygiene: if every table this migration ends up
-      // producing is already registered under a different migration row,
-      // a new probe adds no coverage and just duplicates finding volume.
-      // This is the fix for migrations like 027/032/044/083 which rename
-      // back to a canonical name owned by an earlier migration.
-      const novelTables = tables.filter((t) => !covered.has(t));
-      if (novelTables.length === 0) continue;
-
-      // Hard cap at MIGRATION_MAX_TABLES_PER_PROBE — a single
-      // migration should never create 50+ tables, but if one does
-      // we truncate the list and log that fact via evidence. The
-      // probe will still be useful for the first N tables.
-      // Emit only the novel tables so the probe isn't redundant with
-      // an earlier migration's probe — same duplication argument as
-      // the skip-if-zero-novel above, just applied per-table.
-      const expectedTables = novelTables.slice(0, MIGRATION_MAX_TABLES_PER_PROBE);
-
-      const brief: ExperimentBrief = {
-        slug,
-        name: `Migration schema probe: ${basename}`,
-        hypothesis: `All tables created in ${basename} remain present in the live sqlite schema.`,
-        everyMs: MIGRATION_PROBE_EVERY_MS,
-        template: 'migration_schema_probe',
-        params: {
-          migration_file: basename,
-          expected_tables: expectedTables,
-        } satisfies MigrationSchemaProbeParams,
-      };
-
-      // Validate before pushing. If validation fails for any
-      // reason (e.g. a migration file we mis-parse), skip silently
-      // rather than letting the generator emit a brief the author
-      // will refuse 30 seconds later.
-      if (validateBrief(brief) !== null) continue;
-
-      proposals.push(brief);
-      existingProposals.add(slug); // prevent same-tick duplicates
-      newCount += 1;
-    }
-
     return {
-      migrations_scanned: sqlFiles.length,
-      migration_files_with_tables: filesWithTables,
-      new_migration_proposals: newCount,
+      migrations_scanned: 0,
+      migration_files_with_tables: 0,
+      new_migration_proposals: 0,
       repo_root_unavailable: false,
     };
   }

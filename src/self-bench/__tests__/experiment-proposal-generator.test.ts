@@ -288,14 +288,20 @@ describe('ExperimentProposalGenerator', () => {
 });
 
 /**
- * Rule 2 — migration_schema_probe. Tests use a temp directory as
- * the fake repo root so each case controls its own migration set.
- * setSelfCommitRepoRoot() overrides getSelfCommitStatus().repoRoot,
- * which is what the rule reads. Env var OHWOW_REPO_ROOT is also
- * saved+cleared so it can't leak the real repo root into a case
- * that's testing the "no repo root" branch.
+ * Rule 2 — migration_schema_probe. RETIRED 2026-04-16.
+ *
+ * The rule scanned src/db/migrations/*.sql and emitted one brief per
+ * migration with novel tables; the author would then commit a single-
+ * row registry append per brief. Pure filesystem work that was burning
+ * a commit cycle each time. scripts/regen-migration-schema-registry.mjs
+ * + the pre-commit check now own this path deterministically.
+ *
+ * These tests assert the retirement contract: regardless of repo-root
+ * configuration or migration files present, Rule 2 emits zero briefs
+ * and reports zero migrations scanned. Everything else the probe does
+ * (Rules 1, 3, 4, 5) is unaffected.
  */
-describe('ExperimentProposalGenerator — Rule 2 (migration_schema_probe)', () => {
+describe('ExperimentProposalGenerator — Rule 2 (retired)', () => {
   const exp: Experiment = new ExperimentProposalGenerator();
   let tempRoot: string;
   let savedEnv: string | undefined;
@@ -322,209 +328,44 @@ describe('ExperimentProposalGenerator — Rule 2 (migration_schema_probe)', () =
     );
   }
 
-  it('emits one migration_schema_probe brief per file with CREATE TABLE', async () => {
+  it('emits zero migration briefs even when SQL files with CREATE TABLE exist', async () => {
     writeMigration('001-foo.sql', 'CREATE TABLE IF NOT EXISTS foo_table (id TEXT);');
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
-      migrations_scanned: number;
-      new_migration_proposals: number;
-      proposals: Array<{
-        template: string;
-        slug: string;
-        params: { migration_file: string; expected_tables: string[] };
-      }>;
-    };
-    expect(ev.migrations_scanned).toBe(1);
-    expect(ev.new_migration_proposals).toBe(1);
-    const brief = ev.proposals.find((p) => p.template === 'migration_schema_probe');
-    expect(brief).toBeDefined();
-    expect(brief!.slug).toBe('migration-schema-001-foo');
-    expect(brief!.params.migration_file).toBe('001-foo.sql');
-    expect(brief!.params.expected_tables).toEqual(['foo_table']);
-  });
-
-  it('skips migrations with no CREATE TABLE (ALTER-only)', async () => {
-    writeMigration('002-alter.sql', 'ALTER TABLE foo ADD COLUMN bar TEXT;');
+    writeMigration('002-bar.sql', 'CREATE TABLE IF NOT EXISTS bar_table (id TEXT);');
     const env = buildDb({});
     const result = await exp.probe(makeCtx(env));
     const ev = result.evidence as {
       migrations_scanned: number;
       migration_files_with_tables: number;
       new_migration_proposals: number;
-    };
-    expect(ev.migrations_scanned).toBe(1);
-    expect(ev.migration_files_with_tables).toBe(0);
-    expect(ev.new_migration_proposals).toBe(0);
-  });
-
-  it('parses multiple CREATE TABLE statements and dedupes within a file', async () => {
-    writeMigration(
-      '003-multi.sql',
-      `CREATE TABLE IF NOT EXISTS users (id TEXT);
-       CREATE TABLE sessions (id TEXT);
-       CREATE TABLE IF NOT EXISTS users (id TEXT);`,
-    );
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
-      proposals: Array<{
-        template: string;
-        params: { expected_tables: string[] };
-      }>;
-    };
-    const brief = ev.proposals.find((p) => p.template === 'migration_schema_probe');
-    expect(brief).toBeDefined();
-    expect(brief!.params.expected_tables).toEqual(['users', 'sessions']);
-  });
-
-  it('caps at MAX_MIGRATION_PROPOSALS_PER_TICK (3) per tick', async () => {
-    for (let i = 1; i <= 10; i++) {
-      const n = String(i).padStart(3, '0');
-      writeMigration(`${n}-t.sql`, `CREATE TABLE IF NOT EXISTS t${i} (id TEXT);`);
-    }
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as { new_migration_proposals: number };
-    expect(ev.new_migration_proposals).toBe(3);
-  });
-
-  it('newest-first ordering: highest-numbered migrations picked first when capped', async () => {
-    for (let i = 1; i <= 6; i++) {
-      const n = String(i).padStart(3, '0');
-      writeMigration(`${n}-t.sql`, `CREATE TABLE IF NOT EXISTS t${i} (id TEXT);`);
-    }
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
-      proposals: Array<{
-        template: string;
-        params: { migration_file: string };
-      }>;
-    };
-    const migBriefs = ev.proposals.filter(
-      (p) => p.template === 'migration_schema_probe',
-    );
-    expect(migBriefs).toHaveLength(3);
-    expect(migBriefs[0].params.migration_file).toBe('006-t.sql');
-    expect(migBriefs[1].params.migration_file).toBe('005-t.sql');
-    expect(migBriefs[2].params.migration_file).toBe('004-t.sql');
-  });
-
-  it('dedupes against existing proposal slugs in the ledger', async () => {
-    writeMigration('004-dash.sql', 'CREATE TABLE IF NOT EXISTS dash (id TEXT);');
-    const env = buildDb({
-      existing_proposals: [
-        {
-          id: 'prior',
-          experiment_id: 'experiment-proposal-generator',
-          category: 'experiment_proposal',
-          subject: 'proposal:migration-schema-004-dash',
-          ran_at: new Date().toISOString(),
-        },
-      ],
-    });
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as { new_migration_proposals: number };
-    expect(ev.new_migration_proposals).toBe(0);
-  });
-
-  it('generated migration briefs pass validateBrief', async () => {
-    writeMigration(
-      '005-valid.sql',
-      'CREATE TABLE IF NOT EXISTS valid_table (id TEXT); CREATE TABLE IF NOT EXISTS other_table (id TEXT);',
-    );
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as { proposals: Array<unknown> };
-    for (const brief of ev.proposals) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(validateBrief(brief as any)).toBeNull();
-    }
-  });
-
-  it('flags repo_root_unavailable when no repo root is configured', async () => {
-    setSelfCommitRepoRoot(null);
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
       migration_repo_root_unavailable: boolean;
-      migrations_scanned: number;
-      new_migration_proposals: number;
+      proposals: Array<{ template: string }>;
     };
-    expect(ev.migration_repo_root_unavailable).toBe(true);
-    expect(ev.migrations_scanned).toBe(0);
     expect(ev.new_migration_proposals).toBe(0);
+    expect(ev.migrations_scanned).toBe(0);
+    expect(ev.migration_files_with_tables).toBe(0);
+    expect(ev.migration_repo_root_unavailable).toBe(false);
+    const migBriefs = ev.proposals.filter((p) => p.template === 'migration_schema_probe');
+    expect(migBriefs).toEqual([]);
   });
 
-  it('intervene writes a self_findings row for migration briefs too', async () => {
+  it('intervene writes no migration_schema_probe rows to self_findings', async () => {
     writeMigration('007-int.sql', 'CREATE TABLE IF NOT EXISTS int_table (id TEXT);');
     const env = buildDb({});
     const ctx = makeCtx(env);
     const result = await exp.probe(ctx);
-    const intervention = await exp.intervene!('pass', result, ctx);
-    expect(intervention).not.toBeNull();
+    await exp.intervene!('pass', result, ctx);
     const rows = env.tables.self_findings.filter(
       (r) => r.category === 'experiment_proposal',
     );
-    const migRow = rows.find((r) =>
-      String(r.subject ?? '').includes('migration-schema-007-int'),
-    );
-    expect(migRow).toBeDefined();
-    const evidence = JSON.parse(migRow!.evidence as string);
-    expect(evidence.brief.template).toBe('migration_schema_probe');
-    expect(evidence.brief.params.expected_tables).toEqual(['int_table']);
-  });
-
-  it('rename-in-place migration converges to canonical name', async () => {
-    // Canonical pattern used in 027 / 032 / 044 / 083. The previous
-    // create-only parser emitted `fresh_x_new` here, which never exists
-    // post-migration and tripped a permanent fail loop. computeFinalTables
-    // must strip the intermediate and emit the final `fresh_x` name only.
-    writeMigration(
-      '123-rename-demo.sql',
-      `CREATE TABLE IF NOT EXISTS fresh_x_new (id TEXT, name TEXT);
-       INSERT INTO fresh_x_new SELECT id, name FROM fresh_x;
-       DROP TABLE fresh_x;
-       ALTER TABLE fresh_x_new RENAME TO fresh_x;`,
-    );
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
-      proposals: Array<{
-        template: string;
-        params: { migration_file: string; expected_tables: string[] };
-      }>;
-    };
-    const brief = ev.proposals.find((p) => p.template === 'migration_schema_probe');
-    expect(brief).toBeDefined();
-    expect(brief!.params.expected_tables).toEqual(['fresh_x']);
-  });
-
-  it('skips migrations whose final tables are already in the registry', async () => {
-    // agent_workforce_nudges is registered under 009-nudges.sql. A new
-    // migration that renames back to that canonical name adds no coverage
-    // and must not generate a redundant probe. Regression guard for the
-    // 2026-04-16 autonomous regression where Rule 2 kept re-adding
-    // 032-nudge-type-update with expected=['agent_workforce_nudges_new'].
-    writeMigration(
-      '124-nudge-rename-redux.sql',
-      `CREATE TABLE agent_workforce_nudges_new (id TEXT);
-       DROP TABLE agent_workforce_nudges;
-       ALTER TABLE agent_workforce_nudges_new RENAME TO agent_workforce_nudges;`,
-    );
-    const env = buildDb({});
-    const result = await exp.probe(makeCtx(env));
-    const ev = result.evidence as {
-      new_migration_proposals: number;
-      proposals: Array<{ template: string; slug: string }>;
-    };
-    expect(ev.new_migration_proposals).toBe(0);
-    const mig = ev.proposals.find(
-      (p) => p.template === 'migration_schema_probe'
-        && p.slug === 'migration-schema-124-nudge-rename-redux',
-    );
-    expect(mig).toBeUndefined();
+    const migRows = rows.filter((r) => {
+      try {
+        const ev = JSON.parse(String(r.evidence ?? '{}'));
+        return ev?.brief?.template === 'migration_schema_probe';
+      } catch {
+        return false;
+      }
+    });
+    expect(migRows).toEqual([]);
   });
 });
 
