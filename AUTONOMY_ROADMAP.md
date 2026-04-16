@@ -204,7 +204,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (55 total)
+### Active Experiments (56 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -261,12 +261,12 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 53. throughput-daily
 54. unknown-latency
 55. unknown-latency
+56. browser-profile-guardian
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-### Missing Experiments (12)
+### Missing Experiments (11)
 The following experiment files are not yet listed in the Active Experiments section above:
-- browser-profile-guardian
 - daily-surprise-digest
 - deliverable-action-sentinel
 - git-velocity
