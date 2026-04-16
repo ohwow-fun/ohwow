@@ -47,6 +47,7 @@ import {
   recordProposedPatch,
   hasRecentlyRevertedPatch,
 } from '../../lib/patches-attempted-log.js';
+import { rankCandidates, type EvidencePointer } from '../value-ranker.js';
 import { getAllowedPrefixes, resolvePathTier, resolvePatchMode } from '../path-trust-tiers.js';
 import {
   parseStringLiteralEditsResponse,
@@ -92,6 +93,23 @@ interface CandidatesEvidence extends Record<string, unknown> {
   tier2_prefixes: string[];
   findings_scanned: number;
   candidates: PatchCandidate[];
+  /**
+   * Rank breakdown for the top-scored candidate. Carries the score, per-
+   * component breakdown, and human-readable rationale so operators can
+   * see WHY the loop picked this patch over others — and flag a bad
+   * weighting before it ships N patches in the wrong direction.
+   */
+  top_pick?: {
+    findingId: string;
+    score: number;
+    breakdown: {
+      revenue_proximity: number;
+      evidence_strength: number;
+      blast_radius: number;
+      recency: number;
+    };
+    rationale: string[];
+  } | null;
   reason?: string;
 }
 
@@ -196,18 +214,41 @@ export class PatchAuthorExperiment implements Experiment {
       });
     }
 
+    // Phase 3 — rank candidates highest-value-first so the
+    // one-per-tick intervene budget goes to the most revenue-proximal
+    // well-evidenced candidate rather than whatever happened to sort
+    // first. `otherFindings` is the whole recent-findings set so the
+    // ranker can measure evidence strength (how many other rows
+    // point at the same subject/files).
+    const otherFindings: EvidencePointer[] = findings.map((r) => ({
+      subject: r.subject,
+      affectedFiles: extractAffectedFiles(r.evidence),
+    }));
+    const ranked = rankCandidates({
+      candidates,
+      otherFindings,
+    });
+    const rankedOrdered: PatchCandidate[] = ranked.map((r) => r.candidate);
+    const topBreakdown = ranked[0]
+      ? {
+          findingId: ranked[0].candidate.findingId,
+          score: ranked[0].score,
+          breakdown: ranked[0].breakdown,
+          rationale: ranked[0].rationale,
+        }
+      : null;
+
     const evidence: CandidatesEvidence = {
       repo_root: repoRoot,
       tier2_prefixes: tier2Prefixes,
       findings_scanned: findings.length,
-      candidates,
+      candidates: rankedOrdered,
+      top_pick: topBreakdown,
     };
     const summary =
-      candidates.length === 0
+      rankedOrdered.length === 0
         ? `${findings.length} finding(s) scanned, 0 tier-2 patch candidates`
-        : `${candidates.length} tier-2 patch candidate(s): ${candidates
-            .map((c) => `${c.experimentId}/${c.findingId.slice(0, 8)}`)
-            .join(', ')}`;
+        : `${rankedOrdered.length} tier-2 candidate(s); top=${ranked[0].candidate.experimentId}/${ranked[0].candidate.findingId.slice(0, 8)} score=${ranked[0].score.toFixed(2)}`;
     return { subject: 'meta:patch-author', summary, evidence };
   }
 
