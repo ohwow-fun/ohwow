@@ -12,7 +12,6 @@ import { randomUUID } from 'crypto';
 import { dirname } from 'path';
 import { resolveActiveWorkspace } from '../config.js';
 import { WhatsAppClient } from '../whatsapp/client.js';
-import { TelegramClient } from '../integrations/telegram/client.js';
 import { ExperimentRunner } from '../self-bench/experiment-runner.js';
 import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js';
 import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
@@ -99,6 +98,7 @@ import { setupInference } from './inference.js';
 import { connectCloudAndConsolidate, startCloudPolling } from './cloud.js';
 import { setupOrchestration } from './orchestration.js';
 import { setupHttpServer } from './http.js';
+import { initializeMessagingChannels } from './channels.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -162,100 +162,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const { channelRegistry, connectorRegistry, triggerEvaluator, orchestrator, digitalBody, digitalNS, messageRouter, deviceFetcher } = ctx;
 
   // 11. Start Express server + WebSocket + register daemon status endpoints
-  let waClient: WhatsAppClient | null = null;
   let scheduler: LocalScheduler | null = null;
   let connectorSyncScheduler: ConnectorSyncScheduler | null = null;
+  let proactiveEngine: ProactiveEngine | null = null;
   await setupHttpServer(ctx, inferenceState);
   const { app, server } = ctx;
 
-  // 12. Initialize integrations (all devices — workers relay to primary)
-  let tgClient: TelegramClient | null = null;
-  let proactiveEngine: ProactiveEngine | null = null;
-
-  // Import relay handler for worker devices (messageRouter is null on workers)
-  const { createChannelMessageHandler } = await import('../integrations/relay-handler.js');
-  const waMessageHandler = createChannelMessageHandler('whatsapp', messageRouter, db);
-  const tgMessageHandler = createChannelMessageHandler('telegram', messageRouter, db);
-
-  {
-    // WhatsApp — create one client per connection row (multi-number support)
-    const waConnections = rawDb.prepare(
-      'SELECT id, label, is_default, auth_state FROM whatsapp_connections WHERE workspace_id = ?',
-    ).all(workspaceId) as { id: string; label: string | null; is_default: number; auth_state: string | null }[];
-
-    if (waConnections.length > 0) {
-      for (const conn of waConnections) {
-        const client = WhatsAppClient.forConnection(rawDb, workspaceId, bus, conn.id, {
-          label: conn.label ?? undefined,
-          isDefault: conn.is_default === 1,
-        });
-        channelRegistry.register(client);
-        client.setMessageHandler(waMessageHandler);
-
-        if (conn.auth_state) {
-          client.connect().then(() => {
-            logger.info({ connectionId: conn.id, label: conn.label }, '[daemon] WhatsApp auto-connected');
-          }).catch(err => {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('locked by another device')) {
-              logger.info({ connectionId: conn.id }, '[daemon] WhatsApp connection locked by another device, skipping');
-            } else {
-              logger.warn(`[daemon] WhatsApp auto-connect failed (${conn.label || conn.id}): ${msg}`);
-            }
-          });
-        }
-      }
-      // Keep waClient pointing to the default/first for backward-compat shutdown
-      waClient = channelRegistry.get('whatsapp') as WhatsAppClient | null;
-      ctx.waClient = waClient;
-    } else {
-      // No connections yet — create a single client (legacy single-instance mode)
-      waClient = new WhatsAppClient(rawDb, workspaceId, bus);
-      channelRegistry.register(waClient);
-      waClient.setMessageHandler(waMessageHandler);
-      ctx.waClient = waClient;
-    }
-
-    // Telegram — create one client per connection row (multi-bot support)
-    const tgConnections = rawDb.prepare(
-      'SELECT id, label, is_default FROM telegram_connections WHERE workspace_id = ?',
-    ).all(workspaceId) as { id: string; label: string | null; is_default: number }[];
-
-    if (tgConnections.length > 0) {
-      for (const conn of tgConnections) {
-        const client = TelegramClient.forConnection(rawDb, workspaceId, bus, conn.id, {
-          label: conn.label ?? undefined,
-          isDefault: conn.is_default === 1,
-        });
-        channelRegistry.register(client);
-        client.setMessageHandler((connectionId, chatId, sender, text) => {
-          tgMessageHandler(connectionId ?? '', chatId, sender, text);
-        });
-
-        client.connect().then(() => {
-          logger.info({ connectionId: conn.id, label: conn.label }, '[daemon] Telegram auto-connected');
-        }).catch(err => {
-          logger.warn(`[daemon] Telegram auto-connect failed (${conn.label || conn.id}): ${err instanceof Error ? err.message : err}`);
-        });
-      }
-      tgClient = channelRegistry.get('telegram') as TelegramClient | null;
-    } else {
-      // No connections yet — create a single client (legacy single-instance mode)
-      tgClient = new TelegramClient(rawDb, workspaceId, bus);
-      channelRegistry.register(tgClient);
-      tgClient.setMessageHandler((connectionId, chatId, sender, text) => {
-        tgMessageHandler(connectionId ?? '', chatId, sender, text);
-      });
-
-      if (tgClient.isConfigured()) {
-        tgClient.connect().then(() => {
-          logger.info('[daemon] Telegram auto-connected');
-        }).catch(err => {
-          logger.warn(`[daemon] Telegram auto-connect failed: ${err instanceof Error ? err.message : err}`);
-        });
-      }
-    }
-  }
+  // 12. Initialize messaging channels (WhatsApp + Telegram auto-connect)
+  await initializeMessagingChannels(ctx);
+  const { waClient, tgClient } = ctx;
 
   // Scheduler and proactive engine: primary only (workers skip)
   if (!isWorker) {
@@ -1317,6 +1232,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
       bus.on('peer:failover', async (event: { peerId: string; machineId: string; connectionIds: string[] }) => {
         const { fetchAndImportAuthState } = await import('../whatsapp/auth-state.js');
         const { acquireConnectionLock } = await import('../whatsapp/auth-state.js');
+        const { createChannelMessageHandler } = await import('../integrations/relay-handler.js');
+        const waMessageHandler = createChannelMessageHandler('whatsapp', messageRouter, db);
 
         for (const connId of event.connectionIds) {
           try {
