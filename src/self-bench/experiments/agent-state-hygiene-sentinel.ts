@@ -41,9 +41,11 @@ import type {
   ExperimentCategory,
   ExperimentContext,
   Finding,
+  InterventionApplied,
   ProbeResult,
   Verdict,
 } from '../experiment-types.js';
+import { executeStateTool } from '../../execution/state/index.js';
 import { logger } from '../../lib/logger.js';
 
 const PROBE_EVERY_MS = 5 * 60 * 1000;
@@ -110,6 +112,45 @@ export interface AgentStateHygieneEvidence extends Record<string, unknown> {
   /** Count grouped by (agent_id, key) so repeats are visible. */
   by_agent_key: Array<{ agent_id: string; key: string; count: number }>;
   __tracked_field: 'flagged_rows';
+}
+
+/**
+ * Remove poisoned fields from a state value while preserving the
+ * useful payload (e.g. the `text` field of a tweet draft). Returns
+ * `null` when the value can't be sanitized (primitive, array, or the
+ * whole object consists of poisoned fields) — intervene() writes
+ * `{}` in that case rather than deleting the row, so cloud-sync's
+ * updatedAt-newer-wins compare accepts the local update at next boot.
+ *
+ * Fields are considered "poisoned" when either their KEY name or
+ * their string VALUE matches any entry in STATE_POISON_MARKERS
+ * (case-insensitive substring). We strip the whole field pair rather
+ * than just the value, because state readers check for the presence
+ * of keys like `status` / `reason` to branch — leaving
+ * `status: undefined` would be semantically ambiguous.
+ *
+ * Exported for unit tests.
+ */
+export function sanitizePoisonedValue(raw: unknown): Record<string, unknown> {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { return {}; }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {};
+  }
+  const source = parsed as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    const keyLower = key.toLowerCase();
+    if (STATE_POISON_MARKERS.some((m) => keyLower.includes(m))) continue;
+    if (typeof value === 'string') {
+      const valueLower = value.toLowerCase();
+      if (STATE_POISON_MARKERS.some((m) => valueLower.includes(m))) continue;
+    }
+    cleaned[key] = value;
+  }
+  return cleaned;
 }
 
 /**
@@ -235,5 +276,106 @@ export class AgentStateHygieneSentinelExperiment implements Experiment {
     if (ev.flagged_rows < MIN_SAMPLES) return 'pass';
     if (ev.flagged_rows >= MIN_FAIL_SAMPLES) return 'fail';
     return 'warning';
+  }
+
+  /**
+   * Idempotently clean each flagged row by writing a sanitized value
+   * through `executeStateTool('set_state', ...)`. Routing through the
+   * state adapter (not raw SQL) matters for two reasons:
+   *
+   *   1. The adapter stamps `updated_at = new Date().toISOString()`
+   *      (ISO T-Z format). The cloud-sync compare at boot uses
+   *      `entry.updatedAt > local.updated_at`; with both sides in
+   *      ISO format the comparison reflects actual time, and our
+   *      fresh write beats the stale cloud snapshot.
+   *   2. The adapter writes to `agent_workforce_state_changelog`,
+   *      which `engine.collectStateUpdates` then reports to cloud on
+   *      the next task cycle. That teaches the cloud snapshot the
+   *      new value so the poison doesn't re-sync forever.
+   *
+   * This is the structural complement to the probe: the probe makes
+   * poison visible; intervene makes it disappear. On the next tick
+   * the same (agent_id, key) pair won't match any marker so verdict
+   * naturally returns to `pass` — no separate "validate rollback"
+   * step needed.
+   */
+  async intervene(
+    verdict: Verdict,
+    result: ProbeResult,
+    ctx: ExperimentContext,
+  ): Promise<InterventionApplied | null> {
+    if (verdict !== 'warning' && verdict !== 'fail') return null;
+    const ev = result.evidence as AgentStateHygieneEvidence;
+    if (ev.flagged.length === 0) return null;
+
+    const cleaned: Array<{ agent_id: string; key: string; marker: string; dropped_keys: string[] }> = [];
+    const errors: Array<{ agent_id: string; key: string; error: string }> = [];
+
+    for (const flag of ev.flagged) {
+      try {
+        // Re-read the row so we sanitize the CURRENT value rather
+        // than the snapshot captured in the probe's evidence preview
+        // (which is also truncated to 240 chars).
+        const { data: row } = await ctx.db
+          .from('agent_workforce_task_state')
+          .select('value, value_type, scope, scope_id')
+          .eq('workspace_id', ctx.workspaceId)
+          .eq('agent_id', flag.agent_id)
+          .eq('key', flag.key)
+          .maybeSingle();
+        if (!row) continue;
+        const typed = row as { value: unknown; value_type: string; scope?: string; scope_id?: string | null };
+
+        const before = typed.value;
+        const sanitized = sanitizePoisonedValue(before);
+        const beforeKeys = (before && typeof before === 'object' && !Array.isArray(before))
+          ? Object.keys(before as Record<string, unknown>)
+          : [];
+        const droppedKeys = beforeKeys.filter((k) => !Object.prototype.hasOwnProperty.call(sanitized, k));
+
+        const writeResult = await executeStateTool(
+          'set_state',
+          {
+            key: flag.key,
+            value: sanitized,
+            scope: typed.scope ?? 'agent',
+            scope_id: typed.scope_id ?? null,
+          },
+          {
+            db: ctx.db,
+            workspaceId: ctx.workspaceId,
+            agentId: flag.agent_id,
+          },
+        );
+        if (writeResult.is_error) {
+          errors.push({ agent_id: flag.agent_id, key: flag.key, error: writeResult.content });
+          continue;
+        }
+        cleaned.push({
+          agent_id: flag.agent_id,
+          key: flag.key,
+          marker: flag.marker,
+          dropped_keys: droppedKeys,
+        });
+      } catch (err) {
+        errors.push({
+          agent_id: flag.agent_id,
+          key: flag.key,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    if (cleaned.length === 0 && errors.length === 0) return null;
+
+    logger.info(
+      { cleaned_count: cleaned.length, error_count: errors.length },
+      '[agent-state-hygiene-sentinel] intervention complete',
+    );
+
+    return {
+      description: `Sanitized ${cleaned.length}/${ev.flagged.length} poisoned state row(s) by dropping fallback-decision fields`,
+      details: { cleaned, errors },
+    };
   }
 }
