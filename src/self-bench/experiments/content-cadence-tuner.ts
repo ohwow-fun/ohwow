@@ -73,7 +73,7 @@ export const CONTENT_CADENCE_CONFIG_KEY = 'content_cadence.posts_per_day';
 export const CONTENT_CADENCE_DEFAULT = 1;
 
 /** Hard ceiling on posts/day proposals. */
-export const CONTENT_CADENCE_MAX = 5;
+export const CONTENT_CADENCE_MAX = 24;
 
 /** Goal target_metric this experiment looks for. */
 export const CONTENT_CADENCE_GOAL_METRIC = 'x_posts_per_week';

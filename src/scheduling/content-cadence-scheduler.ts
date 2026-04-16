@@ -45,6 +45,18 @@ import {
   type ApprovedDraft,
 } from './approved-draft-queue.js';
 
+/** Runtime config key for the X post prompt. Operators can override
+ *  `content_cadence.post_prompt` in runtime_config_overrides to steer
+ *  content style without redeploying. */
+const POST_PROMPT_CONFIG_KEY = 'content_cadence.post_prompt';
+
+/** Default prompt when no override is set. */
+const DEFAULT_POST_PROMPT =
+  'Write and post one original tweet. Write a short, witty AI joke ' +
+  'or humorous observation about AI, coding, or tech life. Be genuinely funny. ' +
+  'No product pitches, no CTAs, no hashtags, no links. Under 280 characters. ' +
+  'Do not ask for approval — just post it.';
+
 /** Goal row id used for INSERT OR IGNORE. Stable across restarts. */
 const GOAL_ID = 'goal-x-posts-per-week';
 
@@ -390,9 +402,7 @@ export class ContentCadenceScheduler {
       }
     }
     try {
-      const prompt =
-        'Write and post one original tweet. Keep it concise (under 280 characters), ' +
-        'on-brand, and relevant to our current work or industry. Do not ask for approval — just post it.';
+      const prompt = getRuntimeConfig<string>(POST_PROMPT_CONFIG_KEY, DEFAULT_POST_PROMPT);
 
       // trust_output: tell task-completion.ts we don't want an approval gate on
       // this dispatch; the prompt already says "just post it". This short-circuits

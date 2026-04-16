@@ -38,6 +38,7 @@ import {
 import { recordTriggerOutcome } from '../triggers/trigger-watchdog.js';
 import { NARRATED_FAILURE_CANARIES } from '../self-bench/experiments/deliverable-action-sentinel.js';
 import { logger } from '../lib/logger.js';
+import { withCdpLane } from './browser/cdp-lane.js';
 
 /**
  * Tools that, when invoked successfully inside a ReAct loop, perform the
@@ -423,6 +424,21 @@ export async function finalizeTaskSuccess(
             .eq('id', taskId)
             .single();
           const sourceType = (taskMeta as Record<string, unknown> | null)?.source_type as string | null;
+          // Read deferred_action so auto-deliverables inherit provider
+          // (without this, provider is null and the executor can't find a handler).
+          let autoDeferredAction: { type: string; provider?: string } | null = null;
+          try {
+            const { data: daRow } = await this.db
+              .from('agent_workforce_tasks')
+              .select('deferred_action')
+              .eq('id', taskId)
+              .single();
+            const daRaw = (daRow as Record<string, unknown> | null)?.deferred_action;
+            autoDeferredAction = daRaw
+              ? (typeof daRaw === 'string' ? JSON.parse(daRaw) : daRaw) as { type: string; provider?: string }
+              : null;
+          } catch { /* best-effort */ }
+
           const auto = shouldAutoCreateDeliverable(cleanContent, {
             title: task.title,
             sourceType,
@@ -436,6 +452,7 @@ export async function finalizeTaskSuccess(
               task_id: taskId,
               agent_id: agentId,
               deliverable_type: auto.inferredType,
+              provider: autoDeferredAction?.provider || (autoDeferredAction?.type === 'post_tweet' ? 'x' : null),
               title: task.title,
               content: JSON.stringify({ text: cleanContent }),
               status: finalStatus === 'needs_approval'
@@ -496,7 +513,11 @@ export async function finalizeTaskSuccess(
           try {
             const { DeliverableExecutor } = await import('./deliverable-executor.js');
             const executor = new DeliverableExecutor(this.db);
-            await executor.executeForTask(taskId);
+            await withCdpLane(
+              workspaceId,
+              () => executor.executeForTask(taskId),
+              { label: 'trust-output:post' },
+            );
           } catch (err) {
             logger.warn({ err, taskId }, '[RuntimeEngine] trust-output executor failed');
           }
