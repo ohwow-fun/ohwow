@@ -48,6 +48,17 @@ export interface LlmCallDeps {
   currentAgentId?: string;
   /** The task this call belongs to, when known. Recorded in telemetry. */
   currentTaskId?: string;
+  /**
+   * Self-bench experiment id when the call originates from a probe or
+   * intervene step (patch-author, roadmap-updater, experiment-author,
+   * proposal-generator, ...). Recorded in llm_calls.experiment_id so the
+   * cost-observer can rank top spenders per experiment and flag those
+   * spending without producing non-trivial findings.
+   *
+   * Optional and back-compat: callers that don't pass it write NULL and
+   * show up as "(unattributed)" in rollups.
+   */
+  experimentId?: string;
 }
 
 /**
@@ -112,6 +123,7 @@ export async function recordLlmCallTelemetry(
     workspaceId: string;
     currentAgentId?: string;
     currentTaskId?: string;
+    experimentId?: string;
   },
   row: {
     purpose: Purpose;
@@ -148,6 +160,7 @@ export async function recordLlmCallTelemetry(
       workspace_id: deps.workspaceId,
       agent_id: deps.currentAgentId ?? null,
       task_id: deps.currentTaskId ?? null,
+      experiment_id: deps.experimentId ?? null,
       purpose: row.purpose,
       provider: row.provider,
       model: row.model,
