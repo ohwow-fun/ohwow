@@ -20,7 +20,7 @@ export function ExperienceChoiceStep({ selectedIndex }: ExperienceChoiceStepProp
     },
     {
       label: 'Set up in your browser',
-      description: 'Opens a visual dashboard at localhost:7700',
+      description: 'Opens a visual dashboard in your browser',
       shortcut: '2',
     },
   ];

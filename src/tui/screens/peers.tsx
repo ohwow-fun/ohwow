@@ -299,7 +299,7 @@ export function PeersScreen({ db, onBack }: PeersScreenProps) {
 
       {inputMode === 'add-url' && (
         <Box marginBottom={1} flexDirection="column">
-          <Text>Enter the peer workspace URL (e.g. http://192.168.1.10:7700):</Text>
+          <Text>Enter the peer workspace URL (e.g. http://192.168.1.10:&lt;port&gt;):</Text>
           <Box>
             <Text color="cyan">{'> '}</Text>
             <TextInput
