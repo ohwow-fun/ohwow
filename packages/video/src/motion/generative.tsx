@@ -15,7 +15,7 @@
  */
 
 import React from "react";
-import { useCurrentFrame, interpolate, spring, useVideoConfig } from "remotion";
+import { AbsoluteFill, useCurrentFrame, interpolate, spring, useVideoConfig } from "remotion";
 import { noise2D, noise3D } from "@remotion/noise";
 
 // ─── Noise utilities ──────────────────────────────────────────────────────────
@@ -276,4 +276,87 @@ export const NoiseGrid: React.FC<{
     }
   }
   return <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>{cells}</div>;
+};
+
+// ─── Scene backgrounds ───────────────────────────────────────────────────────
+
+export type SceneMood = 'dark' | 'warm' | 'cool' | 'electric' | 'forest' | 'sunset' | 'midnight';
+
+interface MoodColors {
+  bg: string;
+  bgGradient: string;
+  accent: string;
+  secondary: string;
+  glow: string;
+}
+
+const MOOD_MAP: Record<SceneMood, MoodColors> = {
+  dark:     { bg: '#0a0a0f', bgGradient: 'radial-gradient(ellipse at 50% 40%, #1a1a2e 0%, #0a0a0f 70%)', accent: '#f97316', secondary: '#3b82f6', glow: 'rgba(249,115,22,0.08)' },
+  warm:     { bg: '#1a0f0a', bgGradient: 'radial-gradient(ellipse at 60% 30%, #2d1810 0%, #1a0f0a 70%)', accent: '#fb923c', secondary: '#fbbf24', glow: 'rgba(251,146,60,0.1)' },
+  cool:     { bg: '#0a0f1a', bgGradient: 'radial-gradient(ellipse at 40% 50%, #0f1a2e 0%, #0a0f1a 70%)', accent: '#60a5fa', secondary: '#818cf8', glow: 'rgba(96,165,250,0.08)' },
+  electric: { bg: '#0f0a1a', bgGradient: 'radial-gradient(ellipse at 50% 50%, #1a102e 0%, #0f0a1a 65%)', accent: '#c084fc', secondary: '#f472b6', glow: 'rgba(192,132,252,0.1)' },
+  forest:   { bg: '#0a1a0f', bgGradient: 'radial-gradient(ellipse at 45% 55%, #0f2e1a 0%, #0a1a0f 70%)', accent: '#4ade80', secondary: '#2dd4bf', glow: 'rgba(74,222,128,0.08)' },
+  sunset:   { bg: '#1a0a0f', bgGradient: 'radial-gradient(ellipse at 55% 35%, #2e1018 0%, #1a0a0f 70%)', accent: '#fb7185', secondary: '#f97316', glow: 'rgba(251,113,133,0.1)' },
+  midnight: { bg: '#050510', bgGradient: 'radial-gradient(ellipse at 50% 60%, #0a0a2e 0%, #050510 65%)', accent: '#818cf8', secondary: '#22d3ee', glow: 'rgba(129,140,248,0.08)' },
+};
+
+export function getMoodColors(mood: SceneMood): MoodColors {
+  return MOOD_MAP[mood] ?? MOOD_MAP.dark;
+}
+
+export const MOODS: SceneMood[] = ['dark', 'warm', 'cool', 'electric', 'forest', 'sunset', 'midnight'];
+
+export function moodForIndex(index: number): SceneMood {
+  return MOODS[index % MOODS.length];
+}
+
+export const SceneBackground: React.FC<{
+  mood?: SceneMood;
+  intensity?: number;
+  children?: React.ReactNode;
+}> = ({ mood = 'dark', intensity = 0.5, children }) => {
+  const frame = useCurrentFrame();
+  const m = getMoodColors(mood);
+  const pulseOpacity = 0.03 + Math.sin(frame * 0.02) * 0.02 * intensity;
+
+  return (
+    <AbsoluteFill style={{ background: m.bg }}>
+      <div style={{ position: 'absolute', inset: 0, background: m.bgGradient, opacity: 0.8 + intensity * 0.2 }} />
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: `radial-gradient(circle at ${50 + Math.sin(frame * 0.01) * 10}% ${40 + Math.cos(frame * 0.008) * 8}%, ${m.glow} 0%, transparent 50%)`,
+        opacity: pulseOpacity * 10,
+      }} />
+      {children}
+    </AbsoluteFill>
+  );
+};
+
+export const ScanLine: React.FC<{
+  color?: string;
+  speed?: number;
+  opacity?: number;
+}> = ({ color = '#ffffff', speed = 0.4, opacity = 0.03 }) => {
+  const frame = useCurrentFrame();
+  const y = ((frame * speed) % 120) / 120 * 100;
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none',
+      background: `linear-gradient(transparent ${y - 2}%, ${color}${Math.round(opacity * 255).toString(16).padStart(2, '0')} ${y}%, transparent ${y + 2}%)`,
+    }} />
+  );
+};
+
+export const FilmGrain: React.FC<{ intensity?: number }> = ({ intensity = 0.04 }) => {
+  const frame = useCurrentFrame();
+  const seed = `grain-${frame % 4}`;
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none',
+      opacity: intensity,
+      backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch' seed='${frame % 8}'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E")`,
+      backgroundSize: '256px 256px',
+      mixBlendMode: 'overlay',
+    }} />
+  );
 };

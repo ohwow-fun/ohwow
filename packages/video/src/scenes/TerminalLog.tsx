@@ -5,7 +5,7 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, FlowFieldLayer, breathe } from "../motion/generative";
+import { NoiseGrid, FlowFieldLayer, breathe, SceneBackground, ScanLine, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface LogLine {
   text: string;
@@ -18,6 +18,7 @@ export interface TerminalLogParams {
   prompt?: string;
   accentColor?: string;
   typingSpeed?: number;
+  mood?: SceneMood;
 }
 
 const DEFAULT_LINES: LogLine[] = [
@@ -43,8 +44,10 @@ export const TerminalLog: React.FC<{
 
   const headerFade = interpolate(frame, [0, 12], [0, 1], { extrapolateRight: "clamp" });
 
+  const mood = params?.mood ?? 'midnight';
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.6}>
       <NoiseGrid cols={20} rows={12} cellSize={64} seed="term" color={accent} speed={0.002} />
       <FlowFieldLayer count={12} seed="term-flow" speed={0.3} colors={[accent, colors.blue]} />
 
@@ -118,6 +121,8 @@ export const TerminalLog: React.FC<{
           })()}
         </div>
       </div>
-    </AbsoluteFill>
+      <ScanLine color={accent} speed={0.5} opacity={0.04} />
+      <FilmGrain intensity={0.05} />
+    </SceneBackground>
   );
 };

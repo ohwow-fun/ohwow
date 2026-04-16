@@ -5,7 +5,7 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, GlowOrb, PulseRing, FlowFieldLayer, breathe } from "../motion/generative";
+import { NoiseGrid, GlowOrb, PulseRing, FlowFieldLayer, breathe, SceneBackground, FilmGrain, ScanLine, moodForIndex, getMoodColors, type SceneMood } from "../motion/generative";
 
 export interface QuoteCardParams {
   quote: string;
@@ -13,6 +13,7 @@ export interface QuoteCardParams {
   accentColor?: string;
   fontSize?: number;
   variation?: number;
+  mood?: SceneMood;
 }
 
 export const QuoteCard: React.FC<{
@@ -22,9 +23,11 @@ export const QuoteCard: React.FC<{
   const frame = useCurrentFrame();
   const quote = params?.quote ?? "What would you build if you never had to follow up again?";
   const attribution = params?.attribution;
-  const accent = params?.accentColor ?? colors.accent;
-  const fontSize = params?.fontSize ?? (quote.length > 80 ? 32 : quote.length > 50 ? 38 : 46);
   const variation = params?.variation ?? 0;
+  const mood = params?.mood ?? moodForIndex(variation);
+  const m = getMoodColors(mood);
+  const accent = params?.accentColor ?? m.accent;
+  const fontSize = params?.fontSize ?? (quote.length > 80 ? 32 : quote.length > 50 ? 38 : 46);
   const dur = durationInFrames ?? 180;
 
   const orbPositions = [
@@ -46,11 +49,11 @@ export const QuoteCard: React.FC<{
   const visibleWords = Math.ceil(words.length * textReveal);
 
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.7}>
       <NoiseGrid cols={12} rows={7} cellSize={100} seed={`quote-${variation}`} color={accent} speed={0.002} />
       <GlowOrb cx={orbPos.cx} cy={orbPos.cy} size={300 + variation * 30} color={`${accent}25`} pulseSpeed={0.03} />
       <PulseRing cx="50%" cy="50%" radius={350} color={`${accent}15`} speed={0.025} />
-      <FlowFieldLayer count={10} seed={`quote-flow-${variation}`} speed={0.3} colors={[accent, colors.purple]} />
+      <FlowFieldLayer count={10} seed={`quote-flow-${variation}`} speed={0.3} colors={[accent, m.secondary]} />
 
       {/* Giant quotation mark */}
       <div
@@ -115,6 +118,7 @@ export const QuoteCard: React.FC<{
           </div>
         )}
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };

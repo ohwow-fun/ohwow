@@ -13,7 +13,7 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, GlowOrb, breathe } from "../motion/generative";
+import { NoiseGrid, GlowOrb, breathe, SceneBackground, FilmGrain, ScanLine, moodForIndex, getMoodColors, type SceneMood } from "../motion/generative";
 
 export interface TextTypewriterParams {
   text: string;
@@ -28,6 +28,7 @@ export interface TextTypewriterParams {
   variation?: number;
   /** Intensity 0-1: controls glow size, particle count, grid opacity. */
   intensity?: number;
+  mood?: SceneMood;
 }
 
 export const TextTypewriter: React.FC<{
@@ -38,8 +39,10 @@ export const TextTypewriter: React.FC<{
   const text = params?.text ?? "Conversations die. Knowledge shouldn't.";
   const fontSize = params?.fontSize ?? 42;
   const typingSpeed = params?.typingSpeed ?? 1.5;
+  const mood = params?.mood ?? moodForIndex(variation);
+  const m = getMoodColors(mood);
   const color = params?.color ?? colors.text;
-  const accent = params?.accentColor ?? colors.accent;
+  const accent = params?.accentColor ?? m.accent;
   const subtitle = params?.subtitle;
   const variation = params?.variation ?? 0;
   const intensity = params?.intensity ?? 0.5;
@@ -73,7 +76,7 @@ export const TextTypewriter: React.FC<{
     : 0;
 
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={intensity}>
       <NoiseGrid cols={gridDensity} rows={Math.round(gridDensity * 0.56)} cellSize={64} seed={`tw-${variation}`} color={accent} speed={0.003 + variation * 0.001} />
       <GlowOrb cx={orbPos.cx} cy={orbPos.cy} size={orbSize} color={accent} pulseSpeed={0.04 + variation * 0.005} />
 
@@ -120,6 +123,8 @@ export const TextTypewriter: React.FC<{
           </div>
         )}
       </div>
-    </AbsoluteFill>
+      <ScanLine color={accent} speed={0.3} opacity={0.02} />
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };

@@ -7,7 +7,7 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { FlowFieldLayer, GlowOrb, PulseRing, breathe, shimmer } from "../motion/generative";
+import { FlowFieldLayer, GlowOrb, PulseRing, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface Step {
   label: string;
@@ -20,6 +20,7 @@ export interface WorkflowStepsParams {
   steps: Step[];
   accentColor?: string;
   connectorColor?: string;
+  mood?: SceneMood;
 }
 
 const DEFAULT_STEPS: Step[] = [
@@ -41,8 +42,10 @@ export const WorkflowSteps: React.FC<{
 
   const stepColors = [colors.accent, colors.blue, colors.green, colors.purple, "#e11d48", "#06b6d4"];
 
+  const mood = params?.mood ?? 'warm';
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.5}>
       <FlowFieldLayer count={15} seed="workflow" speed={0.4} colors={[accent, colors.blue, colors.green]} />
       <GlowOrb cx="50%" cy="50%" size={220} color={`${accent}18`} pulseSpeed={0.035} />
       <PulseRing cx="50%" cy="50%" radius={320} color={`${accent}12`} speed={0.025} />
@@ -177,6 +180,7 @@ export const WorkflowSteps: React.FC<{
           );
         })}
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };

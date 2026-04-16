@@ -16,7 +16,7 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { FlowFieldLayer, PulseRing, breathe, shimmer } from "../motion/generative";
+import { FlowFieldLayer, PulseRing, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface CounterItem {
   to: number;
@@ -32,6 +32,7 @@ export interface StatsCounterParams {
   layout?: "row" | "grid";
   accentColor?: string;
   particleCount?: number;
+  mood?: SceneMood;
 }
 
 const DEFAULT_COUNTERS: CounterItem[] = [
@@ -54,8 +55,10 @@ export const StatsCounter: React.FC<{
   const isGrid = layout === "grid" && counters.length > 2;
   const gridCols = isGrid ? Math.min(counters.length, 3) : counters.length;
 
+  const mood = params?.mood ?? 'cool';
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.6}>
       <FlowFieldLayer
         count={particleCount}
         seed="stats"
@@ -132,6 +135,7 @@ export const StatsCounter: React.FC<{
           );
         })}
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };

@@ -7,7 +7,7 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { NoiseGrid, GlowOrb, FlowFieldLayer, breathe, shimmer } from "../motion/generative";
+import { NoiseGrid, GlowOrb, FlowFieldLayer, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface SideItem {
   text: string;
@@ -19,6 +19,7 @@ export interface BeforeAfterParams {
   after: { label?: string; items: SideItem[] };
   splitFrame?: number;
   accentColor?: string;
+  mood?: SceneMood;
 }
 
 const DEFAULT_BEFORE: SideItem[] = [
@@ -57,8 +58,10 @@ export const BeforeAfter: React.FC<{
 
   const afterRevealed = frame >= splitFrame;
 
+  const mood = params?.mood ?? (afterRevealed ? 'forest' : 'sunset');
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.6}>
       <NoiseGrid cols={16} rows={9} cellSize={80} seed="ba" color={afterRevealed ? accent : "#ef4444"} speed={0.003} />
 
       {afterRevealed && (
@@ -190,6 +193,7 @@ export const BeforeAfter: React.FC<{
           )}
         </div>
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.04} />
+    </SceneBackground>
   );
 };

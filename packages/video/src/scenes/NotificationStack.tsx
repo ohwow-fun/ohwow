@@ -7,7 +7,7 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { FlowFieldLayer, PulseRing, GlowOrb, breathe, drift2D } from "../motion/generative";
+import { FlowFieldLayer, PulseRing, GlowOrb, breathe, drift2D, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface Notification {
   text: string;
@@ -20,6 +20,7 @@ export interface NotificationStackParams {
   notifications: Notification[];
   accentColor?: string;
   deviceFrame?: boolean;
+  mood?: SceneMood;
 }
 
 const DEFAULT_NOTIFICATIONS: Notification[] = [
@@ -41,8 +42,10 @@ export const NotificationStack: React.FC<{
   const accent = params?.accentColor ?? colors.accent;
   const showDevice = params?.deviceFrame !== false;
 
+  const mood = params?.mood ?? 'cool';
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.5}>
       <FlowFieldLayer count={18} seed="notif" speed={0.5} colors={[accent, colors.blue, colors.purple]} />
       <PulseRing cx="50%" cy="50%" radius={280} color={`${accent}30`} speed={0.035} />
       <GlowOrb cx="50%" cy="45%" size={180} color={`${accent}20`} pulseSpeed={0.04} />
@@ -164,6 +167,7 @@ export const NotificationStack: React.FC<{
           </div>
         )}
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };

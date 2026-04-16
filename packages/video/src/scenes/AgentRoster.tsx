@@ -7,7 +7,7 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { FlowFieldLayer, PulseRing, GlowOrb, breathe, shimmer, drift2D } from "../motion/generative";
+import { FlowFieldLayer, PulseRing, GlowOrb, breathe, shimmer, drift2D, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
 
 interface AgentCard {
   name: string;
@@ -21,6 +21,7 @@ export interface AgentRosterParams {
   agents: AgentCard[];
   accentColor?: string;
   layout?: "grid" | "stagger";
+  mood?: SceneMood;
 }
 
 const DEFAULT_AGENTS: AgentCard[] = [
@@ -55,8 +56,10 @@ export const AgentRoster: React.FC<{
 
   const cardColors = [colors.accent, colors.blue, colors.green, colors.purple, "#e11d48", "#06b6d4"];
 
+  const mood = params?.mood ?? 'electric';
+
   return (
-    <AbsoluteFill style={{ background: colors.bg }}>
+    <SceneBackground mood={mood} intensity={0.6}>
       <FlowFieldLayer count={20} seed="roster" speed={0.4} colors={[accent, colors.blue, colors.purple]} />
       <PulseRing cx="50%" cy="50%" radius={300} color={`${accent}40`} speed={0.03} />
       <GlowOrb cx="50%" cy="40%" size={200} color={`${accent}30`} pulseSpeed={0.04} />
@@ -152,6 +155,7 @@ export const AgentRoster: React.FC<{
           );
         })}
       </div>
-    </AbsoluteFill>
+      <FilmGrain intensity={0.03} />
+    </SceneBackground>
   );
 };
