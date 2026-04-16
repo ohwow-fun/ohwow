@@ -82,6 +82,7 @@ import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-upda
 import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
 import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
+import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -1663,6 +1664,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // ratio, and x-intel staleness. Observer-only; x-shape-tuner
         // (Layer 5) consumes its findings.
         experimentRunner.register(new XOpsObserverExperiment());
+        // Layer 5 of bench level-up: the first autonomous X operations
+        // intervention. Consumes XOpsObserver findings; when a shape is
+        // over-represented AND dispatch is sub-90%, or a shape is
+        // under-represented, proposes a reweight of x_compose.shape_weights
+        // (persisted to runtime_config + a sidecar JSON file x-compose.mjs
+        // reads each run). 48 h validate window, rollback on regression.
+        experimentRunner.register(new XShapeTunerExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a

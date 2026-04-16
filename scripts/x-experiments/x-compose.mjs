@@ -37,6 +37,30 @@ const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 1);
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
 const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,question,story,humor').split(',').map(s => s.trim()).filter(Boolean));
 
+/**
+ * Optional shape-weight override written by XShapeTunerExperiment. The
+ * sidecar lives at ~/.ohwow/workspaces/<slug>/shape-weights.json. If
+ * present and parseable, shapes with weight <= 0.2 drop out of the
+ * allowed set, and the remaining shapes get a single-line bias summary
+ * injected into the prompt so the LLM favours higher-weight ones.
+ * Absent or malformed sidecar → behaviour unchanged.
+ */
+function loadShapeWeights(ws) {
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'shape-weights.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    const weights = parsed?.weights;
+    if (!weights || typeof weights !== 'object') return null;
+    const clean = {};
+    for (const [k, v] of Object.entries(weights)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) clean[k] = v;
+    }
+    return Object.keys(clean).length === 0 ? null : clean;
+  } catch {
+    return null;
+  }
+}
+
 // Deterministic post-filter shared in spirit with x-reply. Compose
 // drafts occasionally slip product-architecture dumps past the prompt
 // ban list (tactical_tip is the usual culprit). Any match downgrades
@@ -107,7 +131,7 @@ function pickSeed(historyRows, usedPatterns = new Set(), usedBuckets = new Set()
   return candidates[0];
 }
 
-async function draftPost({ brandVoice, workspaceDesc, seed, allowedShapes, priorDrafts = [] }) {
+async function draftPost({ brandVoice, workspaceDesc, seed, allowedShapes, shapeWeights = null, priorDrafts = [] }) {
   const dontDo = (brandVoice?.dont_do || []).map(d => `  - ${d}`).join('\n') || '  (none)';
   const sys = `You draft original X posts for this team (context — DO NOT regurgitate this as post content):
 ${workspaceDesc}
@@ -184,7 +208,7 @@ Skip (shape='skip', post='', confidence=0) when:
   emerging_pattern: ${seed.pattern}
 ${priorBlock}
 Allowed shapes this run: ${[...allowedShapes].join(', ')}
-
+${shapeWeights ? `\nShape preference weights (higher = lean toward this shape when the seed fits): ${[...allowedShapes].map((s) => `${s}=${(shapeWeights[s] ?? 1).toFixed(1)}`).join(', ')}\n` : ''}
 Draft ONE post.`;
   const out = await llm({ purpose: 'reasoning', system: sys, prompt });
   const parsed = extractJson(out.text);
@@ -207,7 +231,20 @@ async function main() {
     console.log(`[x-compose] no history at ${historyPath(workspace)} (need x-intel live run first)`);
     process.exit(0);
   }
-  console.log(`[x-compose] workspace=${workspace} · history=${history.length} rows · target drafts=${MAX_DRAFTS} · dry=${DRY}`);
+
+  // x-shape-tuner writes a sidecar to bias which shapes get drafted.
+  // Shapes with weight <= 0.2 drop out of the allowed set; the
+  // remaining weights get annotated into the prompt so the LLM
+  // prefers higher-weight ones. Absent sidecar → behaviour unchanged.
+  const shapeWeights = loadShapeWeights(workspace);
+  if (shapeWeights) {
+    for (const shape of [...SHAPES]) {
+      const w = shapeWeights[shape];
+      if (typeof w === 'number' && w <= 0.2) SHAPES.delete(shape);
+    }
+    console.log(`[x-compose] shape-weights applied from sidecar: ${JSON.stringify(shapeWeights)}`);
+  }
+  console.log(`[x-compose] workspace=${workspace} · history=${history.length} rows · target drafts=${MAX_DRAFTS} · dry=${DRY} · shapes=${[...SHAPES].join(',')}`);
 
   const briefDir = `/tmp/x-compose-${Date.now()}`;
   fs.mkdirSync(briefDir, { recursive: true });
@@ -251,6 +288,7 @@ async function main() {
           workspaceDesc: cfg.workspace_description,
           seed: { ...seed, pattern: seed.pattern + extraHint },
           allowedShapes: SHAPES,
+          shapeWeights,
           priorDrafts: drafts.map(d => ({ shape: d.draft.shape, post: d.draft.post })).filter(d => d.post),
         });
         llmSpend += 0.001;
