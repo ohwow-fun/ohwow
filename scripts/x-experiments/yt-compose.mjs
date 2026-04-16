@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { execSync, spawn } from 'node:child_process';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
@@ -44,6 +45,100 @@ const BANNED_PHRASES = [
 function detectBanned(text) {
   const t = (text || '').toLowerCase();
   return BANNED_PHRASES.filter(p => t.includes(p));
+}
+
+// ---------------------------------------------------------------------------
+// Voice generation — calls Kokoro directly (free, local) with graceful fallback
+// ---------------------------------------------------------------------------
+const KOKORO_URL = 'http://127.0.0.1:8880';
+const VOICE_NAME = 'af_heart';
+const VOICE_SPEED = 1.0;
+const VOICE_LEAD_FRAMES = 5;
+const VOICE_TAIL_FRAMES = 20;
+const SCENE_MIN_FRAMES = 90;
+
+async function kokoroAvailable() {
+  try {
+    const r = await fetch(`${KOKORO_URL}/v1/audio/voices`, { signal: AbortSignal.timeout(2000) });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function generateVoiceOver(text, voice = VOICE_NAME, speed = VOICE_SPEED) {
+  if (!(await kokoroAvailable())) {
+    console.log('[yt-compose] kokoro not available, skipping voiceover');
+    return null;
+  }
+  try {
+    const resp = await fetch(`${KOKORO_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'kokoro', input: text, voice, speed, response_format: 'mp3' }),
+    });
+    if (!resp.ok) throw new Error(`Kokoro TTS ${resp.status}`);
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+    const audioDir = path.join(os.homedir(), '.ohwow', 'media', 'audio');
+    fs.mkdirSync(audioDir, { recursive: true });
+    const filePath = path.join(audioDir, `voice-${hash.slice(0, 16)}.mp3`);
+    fs.writeFileSync(filePath, buffer);
+    console.log(`[yt-compose] voice generated: ${Math.round(buffer.length / 1024)}KB → ${filePath}`);
+    return filePath;
+  } catch (e) {
+    console.log(`[yt-compose] voice generation failed: ${e.message}`);
+    return null;
+  }
+}
+
+function stageVoiceFile(srcPath) {
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(srcPath)).digest('hex');
+  const voiceDir = path.join(VIDEO_PKG, 'public', 'voice');
+  fs.mkdirSync(voiceDir, { recursive: true });
+  const staged = path.join(voiceDir, `${hash.slice(0, 16)}.mp3`);
+  if (!fs.existsSync(staged)) fs.copyFileSync(srcPath, staged);
+  return `voice/${hash.slice(0, 16)}.mp3`;
+}
+
+function getAudioDurationMs(filePath) {
+  try {
+    const out = execSync(
+      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${filePath}"`,
+      { timeout: 5000, encoding: 'utf8' },
+    );
+    return Math.round(parseFloat(out.trim()) * 1000);
+  } catch {
+    return null;
+  }
+}
+
+function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
+  const totalAudioFrames = Math.ceil((audioDurationMs / 1000) * fps);
+  const words = scenes.map(s => (s.narration || s.params?.text || '').split(/\s+/).filter(Boolean).length);
+  const totalWords = words.reduce((a, b) => a + b, 0) || 1;
+  const padding = VOICE_LEAD_FRAMES + VOICE_TAIL_FRAMES;
+  const usableFrames = totalAudioFrames + padding * scenes.length;
+
+  return scenes.map((s, i) => {
+    const proportion = (words[i] || 1) / totalWords;
+    const rawFrames = Math.round(proportion * totalAudioFrames) + padding;
+    return {
+      ...s,
+      durationInFrames: Math.max(SCENE_MIN_FRAMES, rawFrames),
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Visual self-review — OpenRouter vision API (cheap Gemini Flash Lite)
+// ---------------------------------------------------------------------------
+const REVIEW_MODEL = 'google/gemini-2.5-flash-lite-preview';
+
+function readOpenRouterKey() {
+  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.ohwow', 'config.json'), 'utf8'));
+    return cfg.openRouterApiKey || null;
+  } catch { return null; }
 }
 
 function workspaceConfigPath(ws) {
@@ -133,6 +228,12 @@ For 'composable': params { visualLayers: [{primitive, params}], text: {content, 
   Available primitives: ${VISUAL_PRIMITIVES.join(', ')}
   Text animations: typewriter, fade-in, word-by-word, letter-scatter
   Text positions: center, bottom-center, top-center
+  VISUAL DEPTH: composable scenes MUST have 2-4 visual layers. Single glow-orb backgrounds look cheap. Layer for depth:
+    - Base atmosphere: aurora, flow-field, or constellation (slow, fills the frame)
+    - Mid accent: bokeh, light-rays, or waveform (movement, draws eye)
+    - Top texture: film-grain or scan-line (grounds the image, adds production value)
+    - Optional: vignette or ripple for focus/emphasis
+  Good combos: aurora+bokeh+film-grain, constellation+light-rays+vignette, flow-field+geometric+scan-line
 
 Available moods: ${MOODS.join(', ')}
 
@@ -176,11 +277,37 @@ Create ONE YouTube Short.`;
   return { parsed: extractJson(out.text), model: out.model_used };
 }
 
-function buildFullSpec(draft) {
-  const scenes = draft.spec.scenes.map(s => ({
+function enrichVisualLayers(scene) {
+  if (scene.kind !== 'composable') return scene;
+  const layers = scene.params?.visualLayers || [];
+  if (layers.length >= 2) return scene;
+  const existing = new Set(layers.map(l => l.primitive));
+  const defaults = [
+    { primitive: 'film-grain', params: { opacity: 0.3 } },
+    { primitive: 'vignette', params: { intensity: 0.6 } },
+  ];
+  const toAdd = defaults.filter(d => !existing.has(d.primitive)).slice(0, 2 - layers.length);
+  return {
+    ...scene,
+    params: { ...scene.params, visualLayers: [...layers, ...toAdd] },
+  };
+}
+
+function buildFullSpec(draft, { voiceoverRef = null, audioDurationMs = null } = {}) {
+  let scenes = draft.spec.scenes.map(s => enrichVisualLayers({
     ...s,
     durationInFrames: s.durationInFrames || 240,
   }));
+
+  if (audioDurationMs && audioDurationMs > 0) {
+    scenes = alignSceneDurations(scenes, audioDurationMs);
+    console.log(`[yt-compose] aligned scene durations to ${audioDurationMs}ms audio: ${scenes.map(s => s.durationInFrames).join('+')}`);
+  }
+
+  const voiceovers = voiceoverRef
+    ? [{ src: voiceoverRef, startFrame: VOICE_LEAD_FRAMES, volume: 0.9 }]
+    : [];
+
   return {
     id: `yt-short-${Date.now()}`,
     version: 1,
@@ -205,8 +332,8 @@ function buildFullSpec(draft) {
       },
     },
     palette: draft.spec.palette || undefined,
-    music: null,
-    voiceovers: [],
+    music: { src: 'audio/ambient.mp3', startFrame: 0, volume: 0.15 },
+    voiceovers,
     transitions: draft.spec.transitions || [{ kind: 'fade', durationInFrames: 15 }],
     scenes,
   };
@@ -292,15 +419,27 @@ function captureKeyFrames(videoPath, spec, outputDir) {
 async function visualSelfReview(screenshots, draft) {
   if (!screenshots.length) return { pass: true, notes: 'no keyframes to review' };
 
-  const imageDescriptions = [];
+  const apiKey = readOpenRouterKey();
+  if (!apiKey) {
+    console.log('[yt-compose] no OpenRouter API key, skipping visual review');
+    return { pass: true, notes: 'no API key for vision review' };
+  }
+
+  const content = [];
+  content.push({
+    type: 'text',
+    text: `Review these keyframes from a YouTube Short.\n\nIntended narration: "${draft.narration_full}"\nTitle: "${draft.title}"\nScenes: ${draft.spec?.scenes?.length || 'unknown'}`,
+  });
+
   for (const ss of screenshots) {
     try {
       const buf = fs.readFileSync(ss.path);
-      const b64 = buf.toString('base64');
-      imageDescriptions.push(`[${ss.label} at ${ss.timeSec.toFixed(1)}s]: data:image/jpeg;base64,${b64}`);
-    } catch {
-      imageDescriptions.push(`[${ss.label}]: (failed to read)`);
-    }
+      content.push({ type: 'text', text: `\n[${ss.label} at ${ss.timeSec.toFixed(1)}s]:` });
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:image/jpeg;base64,${buf.toString('base64')}` },
+      });
+    } catch {}
   }
 
   const sys = `You are a video quality reviewer for YouTube Shorts. You're reviewing keyframes extracted from a rendered Short before it's published. The Short shows philosophical text over atmospheric dark backgrounds at 1080x1920 (portrait).
@@ -324,25 +463,40 @@ Output STRICT JSON:
 
 Pass threshold: score >= 6. Be honest but practical — these are auto-generated Shorts, not cinema.`;
 
-  const prompt = `Review these keyframes from a YouTube Short.
-
-Intended narration: "${draft.narration_full}"
-Title: "${draft.title}"
-Number of scenes: ${draft.spec?.scenes?.length || 'unknown'}
-
-Keyframes:
-${imageDescriptions.join('\n')}`;
-
   try {
-    const out = await llm({ purpose: 'critique', system: sys, prompt });
-    const review = extractJson(out.text);
+    const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://ohwow.fun',
+        'X-Title': 'OHWOW',
+      },
+      signal: AbortSignal.timeout(30_000),
+      body: JSON.stringify({
+        model: REVIEW_MODEL,
+        max_tokens: 1024,
+        messages: [
+          { role: 'system', content: sys },
+          { role: 'user', content },
+        ],
+      }),
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(`OpenRouter ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await resp.json();
+    const text = data.choices?.[0]?.message?.content || '';
+    const review = extractJson(text);
     return {
       pass: review.pass !== false && (review.score || 0) >= 6,
       score: review.score,
       notes: review,
-      model: out.model_used,
+      model: REVIEW_MODEL,
     };
   } catch (e) {
+    console.log(`[yt-compose] visual review error: ${e.message}`);
     return { pass: true, notes: `review failed: ${e.message}` };
   }
 }
@@ -391,13 +545,27 @@ async function main() {
     process.exit(0);
   }
 
-  // 3. Build full VideoSpec
-  const spec = buildFullSpec(draft);
+  // 3. Generate voiceover (before spec build so duration informs scene timing)
+  let voiceoverRef = null;
+  let audioDurationMs = null;
+  if (!SKIP_VOICE && draft.narration_full) {
+    const voicePath = await generateVoiceOver(draft.narration_full);
+    if (voicePath) {
+      voiceoverRef = stageVoiceFile(voicePath);
+      audioDurationMs = getAudioDurationMs(voicePath);
+      console.log(`[yt-compose] voiceover: ${voiceoverRef} · ${audioDurationMs}ms`);
+    }
+  } else if (SKIP_VOICE) {
+    console.log('[yt-compose] SKIP_VOICE=1, skipping voiceover');
+  }
+
+  // 4. Build full VideoSpec (scene durations aligned to audio if available)
+  const spec = buildFullSpec(draft, { voiceoverRef, audioDurationMs });
   const specPath = path.join(briefDir, 'spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   console.log(`[yt-compose] spec written: ${specPath} · ${spec.scenes.length} scenes`);
 
-  // 4. Render video
+  // 5. Render video
   const videoDir = path.join(MEDIA_DIR, 'videos');
   fs.mkdirSync(videoDir, { recursive: true });
   const videoPath = path.join(videoDir, `${spec.id}.mp4`);
@@ -414,7 +582,7 @@ async function main() {
       process.exit(1);
     }
 
-    // 4b. Capture key frames for visual self-review
+    // 5b. Capture key frames for visual self-review
     const screenshotDir = path.join(briefDir, 'keyframes');
     const screenshots = captureKeyFrames(videoPath, spec, screenshotDir);
     if (screenshots.length) {
@@ -424,7 +592,7 @@ async function main() {
         JSON.stringify(screenshots, null, 2),
       );
 
-      // 4c. Visual self-review via LLM
+      // 5c. Visual self-review via OpenRouter vision
       console.log(`[yt-compose] running visual self-review...`);
       const review = await visualSelfReview(screenshots, draft);
       fs.writeFileSync(path.join(briefDir, 'visual-review.json'), JSON.stringify(review, null, 2));
@@ -436,7 +604,7 @@ async function main() {
     }
   }
 
-  // 5. Write brief
+  // 6. Write brief
   const record = {
     ts: new Date().toISOString(),
     workspace,
@@ -448,7 +616,7 @@ async function main() {
   };
   fs.writeFileSync(path.join(briefDir, 'brief.json'), JSON.stringify(record, null, 2));
 
-  // 6. Propose to approval queue (only if visual review passed)
+  // 7. Propose to approval queue (only if visual review passed)
   const reviewPath = path.join(briefDir, 'visual-review.json');
   const visualReview = fs.existsSync(reviewPath) ? JSON.parse(fs.readFileSync(reviewPath, 'utf8')) : { pass: true };
   if (!DRY && !SKIP_RENDER && visualReview.pass) {
