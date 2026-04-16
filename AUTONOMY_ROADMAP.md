@@ -3,6 +3,12 @@ AUTONOMY_ROADMAP.md
 Single source of truth for the ohwow autonomous self-improvement loop.
 This is the top-level index. Always read this first.
 
+**Telos**: ohwow must generate revenue. Autonomy is the mechanism, not the goal.
+Every experiment ships either to move money directly (outreach, pricing,
+conversion, retention) or to make money-moving experiments cheaper and
+safer to run. If a change can't be traced to one of those two, it is
+cosmetic and should not compete with money work for author-queue slots.
+
 **Companion files** (kept small on purpose):
 - [roadmap/gaps.md](roadmap/gaps.md) — prioritized Known Gaps (P0…P4).
 - [roadmap/iteration-log.md](roadmap/iteration-log.md) — chronological
@@ -10,20 +16,72 @@ This is the top-level index. Always read this first.
 
 ---
 
-## 1. Current System State (as of 2026-04-16T13:00Z, loop active + roadmap-aware)
+## 1. Current System State (as of 2026-04-16T22:15Z, money-telos foundations landed)
 
 ### Architecture Summary
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  ExperimentRunner (60s tick)                                 │
+│    for each due experiment:                                  │
+│      probe() → judge() → intervene() → writeFinding()       │
+│                  ↓ if intervention applied:                  │
+│              enqueue validation (delay: 5min default)        │
+│                  ↓ when validate_at passes:                  │
+│              validate() → if failed → rollback()            │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  TWO PULSES (hourly, runOnBoot with same-hour dedupe)        │
 │                                                              │
-│  for each due experiment:                                    │
-│    probe() → judge() → intervene() → writeFinding()         │
-│                ↓ if intervention applied:                    │
-│            enqueue validation (delay: 5min default)          │
-│                ↓ when validate_at passes:                    │
-│            validate() → if failed → rollback()              │
+│  RevenuePulse       ─ outcome-side: 24h/7d/MTD revenue,     │
+│                       outreach in/out DMs + reply ratio,    │
+│                       pipeline counts, burn vs revenue,     │
+│                       Next Move naming the highest-leverage  │
+│                       revenue lever for the current shape.  │
+│                                                              │
+│  OpsPulse           ─ process-side: snapshot of every ops    │
+│                       knob in OPS_KNOBS (x-compose target,  │
+│                       weekly deficit, burn cap), + live      │
+│                       dispatch/approval rates, + Next Move  │
+│                       naming the highest-leverage ops lever.│
+│                                                              │
+│  DailySurpriseDigest ─ once/day narrative: top distilled    │
+│                        insights + strategy overrides. Both  │
+│                        pulses feed into it.                 │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  Proposal-Generator Ranker (priority → roadmap → revenue     │
+│                             → fifo)                          │
+│                                                              │
+│  Experiment proposals enter a four-bucket queue:             │
+│    priority — strategy.priority_experiments (operator set)   │
+│    roadmap  — strategy.roadmap_priorities (observer tokens)  │
+│    revenue  — slug/name/template/hypothesis matches any of   │
+│               REVENUE_KEYWORDS (money telos auto-boost)      │
+│    fifo     — everything else (paper-derived observers etc.) │
+│                                                              │
+│  Within a bucket: oldest-first. Across buckets: top wins.    │
+│  The revenue bucket is always on — no per-workspace wiring.  │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│  Research Loop (paper → code, paper-cited autonomous commit) │
+│                                                              │
+│  research-ingest-probe   ─ 15min: arXiv abstracts ingested  │
+│                            into knowledge_documents          │
+│  code-paper-compare-probe─ 30min: grep repo for paper      │
+│                            concepts, emit gap findings       │
+│  experiment-proposal-   ─ inlines abstracts + gaps into LLM │
+│   generator               prompt, emits cites_papers field  │
+│  experiment-author       ─ LLM authors new .ts probe, gate  │
+│                            chain (typecheck/vitest/AST)     │
+│                            passes, safeSelfCommit lands with │
+│                            Cites-Research-Paper trailer      │
+│                                                              │
+│  First close: d875907 on 2026-04-16 — Cites-Research-Paper: │
+│  2409.02228v1 (Unforgettable Generalization in LMs).        │
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
@@ -33,31 +91,24 @@ This is the top-level index. Always read this first.
 │    → scan self_findings for warning|fail                     │
 │    → filter to tier-2 affected_files                         │
 │    → verify violation literals appear in source              │
-│    → surface candidates                                      │
+│       (relaxed to length ≥ 1 for deterministic copy-lint     │
+│       rules that carry a ruleId — prior ≥ 3 floor silently   │
+│       filtered out every em-dash warning)                    │
+│    → skip (finding,file) shapes already reverted in window   │
 │                                                              │
 │  PatchAuthorExperiment.intervene() [if kill switches open]   │
 │    → pick one candidate per tick                             │
 │    → LLM call (whole-file or string-literal edits)           │
 │    → safeSelfCommit() [9-layer gate]:                        │
-│        L1: kill switch (~/.ohwow/self-commit-enabled)        │
-│        L2: Fixes-Finding-Id trailer required for tier-2      │
-│        L3: patch-invariants (vitest passes)                  │
-│        L4: AST bounds (1 symbol for whole-file;              │
-│               only string literals changed for string-lit)   │
-│        L5: cool-off watcher (see below)                      │
-│        L7: daily budget cap (1440/day)                       │
-│        L9: path trust tiers                                  │
+│        L1 kill switch · L2 Fixes-Finding-Id trailer ·        │
+│        L3 patch-invariants (vitest) · L4 AST bounds ·        │
+│        L5 cool-off watcher · L7 daily budget cap ·           │
+│        L9 path trust tiers                                   │
 │    → git commit --only (atomic scope)                        │
-└──────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────┐
-│  Layer 5 Rollback Watcher (every 5min)                       │
 │                                                              │
-│  scan git log for patches within 10min cool-off window       │
-│  for each patch: check if finding re-fired AFTER commit      │
-│    → same experiment_id + same subject                       │
-│    → same violation LITERALS present in refire evidence      │
-│    → if matched: git revert + push                           │
+│  Auto-followup: every patch emits a pre/post verdict row     │
+│   after a brief delay, giving the loop immediate signal on   │
+│   whether the finding's underlying warning actually cleared. │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,107 +118,127 @@ This is the top-level index. Always read this first.
 |------|-------|----------------------------|
 | tier-1 | `src/self-bench/experiments/`, `src/self-bench/__tests__/`, `auto-registry.ts`, migration/toolchain registries | Create NEW files only. Never modify existing. |
 | tier-2 (whole-file) | `src/lib/format-duration.ts`, `src/lib/token-similarity.ts`, `src/lib/stagnation.ts`, `src/lib/error-classification.ts`, `AUTONOMY_ROADMAP.md`, `roadmap/gaps.md`, `roadmap/iteration-log.md` | Replace entire file. 1 top-level symbol changed (L4 gate). |
-| tier-2 (string-literal) | `src/web/src/pages/`, `src/web/src/components/ErrorBoundary.tsx` | Only string literal / JSX text node values may differ. Structure/imports/identifiers frozen (L4 gate). |
-| tier-3 | Everything else | Humans only. |
+| tier-2 (string-literal) | `src/web/src/pages/`, `src/web/src/components/ErrorBoundary.tsx`, `src/self-bench/experiments/outreach-thermostat.ts` | Only string literal / JSX text node values may differ. Structure/imports/identifiers frozen (L4 gate). |
+| tier-3 | Everything else — including nearly all of the sales loop (x-authors-to-crm, classifier, templates, scheduler, CRM ops) | Humans only. |
+
+**Note on tier-2 balance**: the current tier-2 set is heavy on cosmetic surfaces
+(pages/, ErrorBoundary). Only one file (`outreach-thermostat.ts`) is in the
+revenue-adjacent path. Widening tier-2 into the sales loop is a Phase 2 priority —
+without it, the loop can see revenue problems (via RevenuePulse) but cannot act on
+them autonomously.
 
 ### Key Experiments Running
 
-- **PatchAuthorExperiment** — LLM patch authoring from findings (every 5min). Reads AUTONOMY_ROADMAP.md + roadmap/gaps.md as context.
-- **AutonomousPatchRollbackExperiment** — Layer 5 cool-off watcher (every 5min, 10min cool-off window)
-- **PatchLoopHealthExperiment** — hold_rate + pool delta convergence monitor (every 5min)
-- **RoadmapUpdaterExperiment** — keeps Active Focus + Next Steps in sync with live loop state (every 15min, fingerprint-gated no-op short-circuit)
-- **DashboardSmokeExperiment** — headless browser walk of all routes (every 5min)
-- **DashboardCopyExperiment / SourceCopyLintExperiment** — copy rules violation detection (every 5min)
-- **AdaptiveSchedulerExperiment** — dynamic cadence adjustment
-- **MigrationSchemaProbeExperiment** — per-migration schema validation
-- **ToolchainTestProbeExperiment** — per-tool test execution
-- Multiple latency monitors (Anthropic, DeepSeek, Google, Qwen, Xiaomi)
+Inventory is maintained by `roadmap-updater` in Section 5. The experiments
+that carry the money telos most directly:
+
+- **RevenuePulseExperiment** — hourly money outcomes + Next Move
+- **OpsPulseExperiment** — hourly ops-knob snapshot + Next Move
+- **DailySurpriseDigestExperiment** — daily narrative, reads both pulses
+- **revenue-pipeline-observer, attribution-observer, burn-rate** — the underlying measurements the pulses aggregate
+- **outreach-thermostat** — the one tier-2 revenue-adjacent file the loop can patch today
 
 See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 
 ---
 
 ## 2. Active Focus
-**Loop is converging. Violation pool is shrinking; hold_rate is recovering.**
 
-As of 2026-04-16T13:00Z:
-- 6 patches landed in the 24h window, 4 reverted (hold_rate=33%), but the 4
-  reverts are ALL pre-session (oscillation era). The 2 patches from this session
-  (Agents.tsx, Dashboard.tsx) have both held. A third patch (FlowBuilder.tsx) is
-  expected on the next cycle.
-- The old 4 reverts will age out of the 24h window by ~2026-04-16T09-13. After
-  that, hold_rate should jump to 100% (all current-era patches holding).
-- Violation pool: 3 remaining open violations (FlowBuilder.tsx "Something went
-  wrong", ErrorBoundary.tsx was fixed manually and promoted to tier-2).
-- PatchAuthorExperiment now reads this roadmap as LLM context; the model is
-  strategically aware of the loop goal.
+**Honest read of 2026-04-16T22:15Z:**
 
-**Roadmap in the loop — phased design:**
+- 24h autonomous commits: 51. 24h reverts: 1 (hand-done, for a cosmetic
+  regression the loop would have left standing).
+- Paper-cited autonomous commits in 24h: 6. The research→code loop is
+  real and recurrent.
+- **24h revenue: $0. 7d revenue: $0. Active customers: 0. Daily LLM burn: ~$34.**
 
-Layer A (done): Read-only roadmap context injected into PatchAuthor LLM prompt.
-  The model sees Known Gaps + Active Focus before generating each patch.
-  Makes patches more likely to hold because the model understands the
-  auto-revert mechanism and the convergence goal.
+The self-modification loop works. It landed ~50 autonomous commits in a day
+and they held. But almost all of that work is cosmetic (em-dash rewrites,
+roadmap self-maintenance, new research-cited observer probes that don't
+change ohwow's behavior). Meanwhile ohwow made no money. That mismatch is
+the thing to fix — not the autonomy machinery, which is sound.
 
-Layer B (next): RoadmapObserverExperiment (tier-1). Reads PatchLoopHealth
-  findings + recent interventions, writes a proposed iteration log entry to
-  AUTONOMY_LOOP_NOTES.md (a new tier-1 file). The system accumulates its own
-  loop observations in its own voice. A human or future upgrade merges them
-  into this roadmap.
+This session landed the first three foundations of the money-telos phase:
 
-Layer C (now in progress): Promote the roadmap suite to tier-2 whole-file mode
-  (done for AUTONOMY_ROADMAP.md, roadmap/gaps.md, roadmap/iteration-log.md)
-  with a roadmap-shape-probe guarding structural invariants and auto-reverting
-  any RoadmapUpdaterExperiment patch that breaks the shape.
+1. **RevenuePulseExperiment** (hourly) — one row per hour showing realized
+   revenue, outreach volume, pipeline, burn, and a heuristic-picked Next
+   Move naming the highest-leverage revenue lever. Verdict is load-bearing
+   (fails when revenue = $0 and burn > $0 and outreach is under-dispatching).
 
-**Recent Signals & Missing Experiments:**
-The roadmap-updater experiment flagged 13 experiments present in the codebase but
-missing from this inventory (see live-loop-state `experiment_files_missing_from_roadmap`).
-These should be audited and classified:
-- If active and running, add to Section 5.
-- If deprecated or paused, archive or remove their files.
-- If new and not yet integrated, add to Section 6 (Missing Experiments) with a
-  brief note on their purpose and current status.
+2. **Revenue bucket in the proposal ranker** (experiment-author). Proposals
+   whose slug/name/template/hypothesis contain any REVENUE_KEYWORDS token
+   (revenue, sales, outreach, classifier, thermostat, attribution, …)
+   jump ahead of FIFO but still sit behind explicit priority/roadmap
+   overrides. Paper-derived observer probes no longer compete on equal
+   footing with "why did reply rate drop?".
+
+3. **ops-knobs registry + OpsPulseExperiment** (hourly) — process-side
+   complement to RevenuePulse. Declares operational levers as structured
+   knobs (x_compose weekly target, weekly deficit, burn cap placeholder)
+   so a future mutation experiment has a named, stable contract to target.
+   No mutation yet — visibility first.
+
+**What this session did NOT do (yet):**
+
+- The sales loop (x-authors-to-crm classifier, outbound templates, CRM
+  handoff) is all tier-3 still. The loop can see it but cannot heal it.
+- There is no enforced burn cap. `experiment-cost-observer` ranks spend;
+  nothing throttles it. Paper probes can still outspend the revenue loop.
+- There is no real-revenue ingest (webhook/manual ledger). RevenuePulse
+  reads `agent_workforce_revenue_entries` which is empty, so every row
+  currently says "Result: $0.00 in last 24h" and points at outreach
+  volume as the first lever. That's correct for where we are, but the
+  loop needs to see actual dollars for its Next Move logic to sharpen.
 
 ## 3. Next Steps
-### Immediate (next session)
 
-1. **Implement RoadmapObserverExperiment** (Layer B, tier-1)
-   - probe(): read PatchLoopHealth findings + recent autonomous commits
-   - Generate proposed iteration log entry for AUTONOMY_LOOP_NOTES.md
-   - No intervene; human decides what to merge into the roadmap
-   - This is the system's first "own voice" contribution to its goals
+### Phase 2 (next session) — give the loop something to act on
 
-2. **Observe hold_rate recovery overnight**
-   - The 4 old reverts age out of the 24h window by ~09:00-13:00 on 2026-04-16
-   - Expected jump: hold_rate goes from 33% to ~100% as new-era patches all hold
-   - If hold_rate does NOT recover, diagnose: is FlowBuilder.tsx patch oscillating?
+1. **Widen tier-2 to cover the sales-loop copy surface.**
+   Target, one at a time, each paired with a fuzz/invariant probe:
+   - x-authors-to-crm prompt templates (string-literal mode)
+   - outreach-thermostat.ts message templates (already tier-2; add a
+     property fuzz that emits affected_files on regressions)
+   - classifier thresholds and their exported constants
+   Each expansion adds a named REVENUE_KEYWORDS-matching slug for the
+   fuzz probe, so the revenue bucket immediately has fuel.
 
-3. **Add P1 post-patch verification gate**
-   - After safeSelfCommit returns ok, immediately run copy-lint on the patched file
-   - If violations remain that WERE in the original finding, log a warning finding
-   - This is a pure observability addition; no blocking behavior yet
+2. **Budget guard experiment.**
+   Wire `burn.daily_cap_cents` as a real knob (env var + runtime-config
+   override). OpsPulse already names it as the foundation gap. Route
+   experiment-cost-observer's ranked non-revenue spenders into an
+   automatic throttle when the cap is breached. Paper probes and other
+   high-cost low-revenue-adjacency experiments become opt-in above the cap.
 
-### Medium-term
+3. **Proposal-generator revenue focus.**
+   Extend the proposal generator to consume RevenuePulse's `next_move`
+   string as context in its LLM prompt. Today the generator inlines
+   arXiv abstracts and code-paper gaps; add the current revenue Next
+   Move as a first-class input so new proposals are shaped by "what
+   would move the needle" rather than paper concepts alone.
 
-4. **Close the browser→patch gap (P2)**
-   - DashboardSmokeExperiment currently emits `issues[]` not `violations[]`
-   - Add a step that maps console errors / ErrorBoundary triggers to their source
-     file + a synthetic violation literal
-   - This lets PatchAuthorExperiment pick up browser-discovered issues and
-     attempt string-literal fixes on the matching page component
+### Phase 3 — close the outcome loop
 
-5. **Widen tier-2 surface carefully**
-   - The current tier-2 includes 4 lib files (whole-file mode), the roadmap suite, and all pages/ (string-literal)
-   - Next candidates: `src/lib/` utility files with full test coverage
-   - Each expansion should be preceded by a fuzz experiment under
-     `src/self-bench/experiments/` that property-tests the target file
+4. **Real-revenue ingest.** A webhook or a one-keystroke CLI
+   (`ohwow revenue add 5000 --contact X --note "..."`) so the system
+   can see actual dollars move. Without this, RevenuePulse is
+   optimizing proxies. With it, the full outcome feedback closes:
+   outreach change → reply-rate shift → qualified event → revenue row
+   → next-hour pulse sees the delta → next author tick reasons over it.
+
+5. **Ops-knob mutator experiment.** A Phase-2-depedent step. Once
+   tier-2 covers the sales copy and the budget guard is in place,
+   add an experiment that reads ops-pulse warnings and proposes knob
+   deltas (with a Fixes-Finding-Id receipt against the specific
+   warning). Same safety envelope as patch-author; new tier-2
+   surface = OPS_KNOBS entries.
 
 ### Long-term (do not rush)
 
-6. Deterministic patch replay / pre-commit simulation (P3)
-7. Business metric integration; UX impact measurement (P4)
-8. Multi-file patch coordination; patches that span > 1 tier-2 file atomically
+6. Deterministic patch replay / pre-commit simulation (P3).
+7. Multi-file patch coordination across the sales loop.
+8. User-impact metrics (session duration, feature adoption) once
+   revenue signal is established.
 
 ---
 
@@ -175,135 +246,61 @@ _Iteration history lives in [roadmap/iteration-log.md](roadmap/iteration-log.md)
 
 ## 4. Known Gaps
 
-### P0 — Loop Convergence is Unobservable
-The system is generating patches and reverting them, but there is no aggregate
-metric for "is the violation pool shrinking?" or "what % of patches are holding?"
-Without this, we cannot tell if the system is making progress or thrashing.
+### P0 — Telos Blindness (NEW, this session)
 
-**Symptoms**: 8 revert commits in 3 days; Layer 5 required 4 bugfixes in same window.
-**Risk**: The latest Layer 5 fix (`ae52755`, literal-level intersection) may resolve
-the oscillation, but we have no way to confirm convergence without a health metric.
+The loop was optimizing cosmetic surfaces while ohwow earned $0. The
+machinery is sound; the targeting was misaligned. **Partially closed
+this session** by RevenuePulse + revenue bucket + OpsPulse. Remaining:
+sales-loop tier-2 surface, budget guard, real-revenue ingest (see
+Phase 2/3 above). Until those land, the loop can see the money problem
+but cannot act on it autonomously.
 
-### P1 — No Post-Patch Immediate Verification
-After landing a string-literal patch on a `pages/` file, the system waits up to
-10min for the next copy-lint run to tell it whether the violation is gone. This
-creates a lag window where Layer 5 could fire on a partially-effective patch
-even though most violations were fixed. A synchronous post-patch re-scan of the
-patched file would give immediate signal and prevent unnecessary reverts.
+### P0 — No Enforced Budget (NEW)
 
-### P2 — Browser Testing Is Observe-Only
-DashboardSmokeExperiment exists and walks all routes, but its findings never
-flow into the patch pipeline. Tier-2 pages/ promotion was intended to bridge
-this, but the DashboardSmoke findings don't carry `violations[]` arrays with
-literal text. They carry `issues[]` with runtime error messages. The
-PatchAuthorExperiment's literal-in-source filter correctly skips these.
-Result: browser bugs are logged but never self-healed.
+Daily LLM burn runs ~$34 with $0 revenue. `experiment-cost-observer`
+ranks spend; `burn-rate` summarizes it; nothing caps it. A paper-derived
+observer probe can outspend the outreach loop with no gate. Phase 2
+step #2 wires the cap.
 
-### P3 — Deterministic Experiment Execution (Replayability)
-There is no way to replay a single experiment run against a specific commit and
-get deterministic output. Non-determinism comes from: (a) LLM temperature > 0
-(currently 0, so OK), (b) live DB state at probe time, (c) file system state.
-Replayability would enable: validating that a patch actually fixes its finding
-before committing it, regression testing the patch pipeline.
+### P1 — Sales-Loop is Tier-3
 
-### P4 — Business Metric Integration
-The system can fix copy violations and tool reliability issues. It has no
-visibility into: user-facing conversion rates, session durations, feature
-adoption, or any real-world impact metric. This is intentionally deferred.
+Every lever that could move conversion (classifier, templates,
+scheduler, CRM handoff) is humans-only. The revenue bucket can prefer
+revenue-keyword proposals all day; if the one tier-2 revenue file is
+outreach-thermostat, the author is still mostly writing new observers.
+Phase 2 step #1 fixes this one file at a time.
+
+### P1 — No Post-Patch Immediate Verification (REDUCED)
+
+Originally P1. The auto-followup pre/post verdict rows now land within
+~30s of each patch (visible in every patch-author tick), giving immediate
+signal on whether the warning cleared. Synchronous in-commit reverify
+is still missing; the reduced version of this gap is "the loop sees the
+verdict, but can't block a commit on it before Layer 5 cool-off runs".
+
+### P2 — Browser Testing Is Observe-Only (UNCHANGED)
+
+`dashboard-smoke` walks all routes and emits `issues[]` with runtime
+error messages. Not `violations[]` with literal text. PatchAuthor's
+literal-in-source filter correctly skips them. Browser bugs are logged
+but never self-healed.
+
+### P3 — Deterministic Experiment Execution (UNCHANGED)
+
+No way to replay a single experiment run against a specific commit.
+Non-determinism from live DB + FS state. Replayability would let us
+validate that a patch actually fixes its finding before committing.
+
+### P4 — Real-World Impact Metrics (now = Phase 3 step #4)
+
+Moved up from "intentionally deferred" to Phase 3 as a concrete
+work item (real-revenue ingest). Without it, every money-telos
+signal above is running on proxies.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (73 total)
+_Maintained by RoadmapUpdaterExperiment from live loop state._
 
-1. adaptive-scheduler
-2. agent-cost-watcher
-3. agent-coverage-gap
-4. agent-lock-contention
-5. agent-outcomes
-6. anthropic-claude-sonnet-4-6-latency
-7. autonomous-author-quality
-8. autonomous-patch-rollback
-9. attribution-observer
-10. browser-profile-guardian
-11. canaries
-12. canary-experiment
-13. content-cadence-loop-health
-14. content-cadence-tuner
-15. dashboard-copy
-16. dashboard-smoke
-17. daily-surprise-digest
-18. deliverable-action-sentinel
-19. deepseek-deepseek-v3-2-latency
-20. error-classification-fuzz
-21. experiment-author
-22. experiment-proposal-generator
-23. format-duration-fuzz
-24. git-velocity
-25. google-gemini-2-5-flash-latency
-26. google-gemini-3-1-pro-preview-latency
-27. handler-schema-drift
-28. ledger-health
-29. list-completeness-summary
-30. list-handlers-fuzz
-31. loop-cadence-probe
-32. mig-smoke-1776324117308
-33. mig-smoke-1776367046505
-34. migration-drift-sentinel
-35. migration-schema-probe
-36. model-health
-37. outreach-thermostat
-38. patch-author
-39. patch-loop-health
-40. prose-invariant-drift
-41. provider-availability
-42. qwen-qwen3-5-35b-a3b-latency
-43. revenue-pipeline-observer
-44. roadmap-updater
-45. sitemap-drift
-46. source-copy-lint
-47. stagnation-fuzz
-48. stale-task-cleanup
-49. stale-threshold-tuner
-50. string-literal-patch
-51. test-coverage-probe
-52. token-similarity-fuzz
-53. toolchain-test-probe
-54. tmpl-smoke-1776361920501
-55. trigger-stability
-56. vitest-health-probe
-57. x-autonomy-ramp
-58. x-dm-signals-rollup
-59. x-engagement-observer
-60. x-ops-observer
-61. x-shape-tuner
-62. xiaomi-mimo-v2-flash-latency
-63. xiaomi-mimo-v2-pro-latency
-64. roadmap-observer (proposed, Layer B)
-65. burn-rate
-66. unknown-latency
-67. intervention-audit
-68. strategist
-69. subprocess-smoke-1776294162273
-70. throughput-daily
-71. unknown-latency
-72. unknown-latency
-73. unknown-latency
+## 6. Missing Experiments
 
-**Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
-
-## 6. Missing Experiments (as of 2026-04-16T13:00Z)
-
-The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
-
-- agent-state-hygiene-sentinel
-- analogical-reasoning-emergence-signal-v3
-- classifier-stability
-- code-paper-compare-probe
-- experiment-cost-observer
-- findings-gc
-- observation-probe
-- research-ingest-probe
-- subprocess-smoke-1776373235416
-- toolchain-lint
-- toolchain-tests
-- toolchain-typecheck
+_Maintained by RoadmapUpdaterExperiment from live loop state._
