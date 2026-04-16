@@ -76,6 +76,7 @@ import {
   readApprovalRows,
   type ApprovalEntry,
 } from '../../scheduling/approval-queue.js';
+import { isContactInCooldown, resolveCooldownHours } from '../../lib/outreach-policy.js';
 
 const CADENCE: ExperimentCadence = {
   everyMs: 30 * 60 * 1000,
@@ -95,14 +96,12 @@ export const THERMOSTAT_CONFIG_KEYS = {
   paused: 'outreach.thermostat_paused',
   maxProposalsPerTick: 'outreach.max_proposals_per_tick',
   dailyHardCap: 'outreach.daily_hard_cap_touches',
-  perContactCooldownHours: 'outreach.per_contact_cooldown_hours',
   firstTouchDelayHours: 'outreach.first_touch_delay_hours',
 } as const;
 
 const DEFAULTS = {
   maxProposalsPerTick: 3,
   dailyHardCap: 10,
-  perContactCooldownHours: 72,
   firstTouchDelayHours: 24,
   rejectionWarnFraction: 0.3,
   consecutiveBadRunsToPause: 3,
@@ -341,10 +340,11 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       };
     }
 
-    const cooldownHours = Math.max(1, getRuntimeConfig<number>(
-      THERMOSTAT_CONFIG_KEYS.perContactCooldownHours,
-      DEFAULTS.perContactCooldownHours,
-    ));
+    // Cooldown hours come from the shared outreach-policy helper so
+    // the thermostat's pool scan uses the same window any downstream
+    // dispatcher will re-check with. Scan with the default; per-plan
+    // channel-specific overrides get applied at intervene time.
+    const cooldownHours = resolveCooldownHours('any');
     const cooldownMs = cooldownHours * 60 * 60 * 1000;
     const firstTouchDelayHours = Math.max(0, getRuntimeConfig<number>(
       THERMOSTAT_CONFIG_KEYS.firstTouchDelayHours,
@@ -521,6 +521,28 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
     const workspace = ctx.workspaceSlug ?? 'default';
     const proposals: Array<{ contactId: string; approvalId: string; channel: OutreachChannel }> = [];
     for (const plan of plans.slice(0, budgetToday)) {
+      // Per-proposal cooldown re-check against the shared helper.
+      // Probe already filtered with the default window; this second
+      // check catches any contact_event inserted since the probe ran
+      // (e.g. a concurrent x:reached from the attribution endpoint).
+      const cooldown = await isContactInCooldown(
+        ctx.db as DatabaseAdapter,
+        ctx.workspaceId,
+        plan.contact_id,
+        plan.channel === 'x_dm' ? 'x_dm' : 'x_reply',
+      );
+      if (cooldown.inCooldown) {
+        logger.info(
+          {
+            contactId: plan.contact_id,
+            channel: plan.channel,
+            lastEventKind: cooldown.lastEventKind,
+            lastEventAt: cooldown.lastEventAt,
+          },
+          '[outreach-thermostat] dropping proposal; contact now in cooldown',
+        );
+        continue;
+      }
       const draft = buildDraftMessage(plan.channel, plan);
       if (!draft) continue;
       const approvalKind = plan.channel === 'x_dm' ? 'x_dm_outbound' : 'x_outbound_reply';

@@ -47,6 +47,7 @@ import path from 'node:path';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { withCdpLane } from '../execution/browser/cdp-lane.js';
 import { logger } from '../lib/logger.js';
+import { isContactInCooldown } from '../lib/outreach-policy.js';
 import {
   sendDmViaBrowser,
   type ComposeResult,
@@ -186,6 +187,42 @@ export class XDmReplyDispatcher {
         reason: 'payload_missing_target',
       });
       return false;
+    }
+
+    // Cross-channel cooldown re-check. The approval was authored in
+    // one channel's scheduler; meanwhile another channel may have
+    // reached this same contact (operator approved both, or a reply
+    // landed first). Cooldown is resolved against the unified
+    // outreach-policy helper so every channel sees the same answer.
+    const contactId = typeof payload.contact_id === 'string' ? payload.contact_id : null;
+    if (contactId) {
+      const cooldown = await isContactInCooldown(
+        this.db,
+        this.workspaceId,
+        contactId,
+        'x_dm',
+      );
+      if (cooldown.inCooldown) {
+        logger.info(
+          {
+            approvalId: approval.id,
+            contactId,
+            lastEventKind: cooldown.lastEventKind,
+            lastEventAt: cooldown.lastEventAt,
+            windowHours: cooldown.windowHours,
+          },
+          '[XDmReplyDispatcher] contact in cooldown; marking applied without sending',
+        );
+        markApprovalApplied(this.approvalsJsonlPath, approval.id, {
+          posted: false,
+          by: 'x_dm_reply_dispatcher',
+          reason: 'cross_channel_cooldown',
+          last_event_kind: cooldown.lastEventKind,
+          last_event_at: cooldown.lastEventAt,
+          window_hours: cooldown.windowHours,
+        });
+        return false;
+      }
     }
 
     let result: ComposeResult;
