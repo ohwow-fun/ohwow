@@ -475,6 +475,57 @@ describe('ExperimentProposalGenerator — Rule 2 (migration_schema_probe)', () =
     expect(evidence.brief.template).toBe('migration_schema_probe');
     expect(evidence.brief.params.expected_tables).toEqual(['int_table']);
   });
+
+  it('rename-in-place migration converges to canonical name', async () => {
+    // Canonical pattern used in 027 / 032 / 044 / 083. The previous
+    // create-only parser emitted `fresh_x_new` here, which never exists
+    // post-migration and tripped a permanent fail loop. computeFinalTables
+    // must strip the intermediate and emit the final `fresh_x` name only.
+    writeMigration(
+      '123-rename-demo.sql',
+      `CREATE TABLE IF NOT EXISTS fresh_x_new (id TEXT, name TEXT);
+       INSERT INTO fresh_x_new SELECT id, name FROM fresh_x;
+       DROP TABLE fresh_x;
+       ALTER TABLE fresh_x_new RENAME TO fresh_x;`,
+    );
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      proposals: Array<{
+        template: string;
+        params: { migration_file: string; expected_tables: string[] };
+      }>;
+    };
+    const brief = ev.proposals.find((p) => p.template === 'migration_schema_probe');
+    expect(brief).toBeDefined();
+    expect(brief!.params.expected_tables).toEqual(['fresh_x']);
+  });
+
+  it('skips migrations whose final tables are already in the registry', async () => {
+    // agent_workforce_nudges is registered under 009-nudges.sql. A new
+    // migration that renames back to that canonical name adds no coverage
+    // and must not generate a redundant probe. Regression guard for the
+    // 2026-04-16 autonomous regression where Rule 2 kept re-adding
+    // 032-nudge-type-update with expected=['agent_workforce_nudges_new'].
+    writeMigration(
+      '124-nudge-rename-redux.sql',
+      `CREATE TABLE agent_workforce_nudges_new (id TEXT);
+       DROP TABLE agent_workforce_nudges;
+       ALTER TABLE agent_workforce_nudges_new RENAME TO agent_workforce_nudges;`,
+    );
+    const env = buildDb({});
+    const result = await exp.probe(makeCtx(env));
+    const ev = result.evidence as {
+      new_migration_proposals: number;
+      proposals: Array<{ template: string; slug: string }>;
+    };
+    expect(ev.new_migration_proposals).toBe(0);
+    const mig = ev.proposals.find(
+      (p) => p.template === 'migration_schema_probe'
+        && p.slug === 'migration-schema-124-nudge-rename-redux',
+    );
+    expect(mig).toBeUndefined();
+  });
 });
 
 /**

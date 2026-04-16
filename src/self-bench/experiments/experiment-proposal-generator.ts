@@ -80,6 +80,7 @@ import { writeFinding } from '../findings-store.js';
 import { getSelfCommitStatus } from '../self-commit.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { stripCodeFences } from './patch-author.js';
+import { MIGRATION_SCHEMA_REGISTRY } from '../registries/migration-schema-registry.js';
 
 /** How many recent llm_calls rows to inspect per model for latency stats. */
 const SAMPLE_WINDOW = 200;
@@ -237,28 +238,57 @@ function migrationFileToSlug(basename: string): string {
 }
 
 /**
- * Regex-extract every `CREATE TABLE [IF NOT EXISTS] <name>`
- * statement from a .sql file's contents. Case-insensitive, tolerates
- * whitespace variation, dedupes within one file, and preserves the
- * order of first appearance so the emitted brief is deterministic
- * across runs. Quoted/bracketed identifiers are NOT unwrapped —
- * if a migration uses `"foo"` or `[foo]` this parser skips them.
- * That's fine: the goal is coverage of the common case, not a
- * full SQL parser.
+ * Simulate a migration file's effect on the table set. Processes
+ * CREATE / DROP / ALTER ... RENAME TO statements in document order so
+ * that rename-in-place migrations (CREATE foo_new → DROP foo → ALTER
+ * foo_new RENAME TO foo) converge to the canonical final name rather
+ * than the transient `_new` intermediate. The earlier create-only
+ * parser handed the intermediate back to the registry, producing probes
+ * for tables that never exist post-migration — and the loop kept
+ * re-authoring those probes every time the registry didn't contain
+ * them.
+ *
+ * Case-insensitive, tolerates whitespace variation, dedupes within one
+ * file, and preserves the order of first appearance. Quoted/bracketed
+ * identifiers are NOT unwrapped — if a migration uses `"foo"` or
+ * `[foo]` this parser skips them. That's fine: the goal is coverage of
+ * the common case, not a full SQL parser.
  */
-function parseCreateTables(sqlContent: string): string[] {
-  const ident = /create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
-  const seen = new Set<string>();
-  const result: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = ident.exec(sqlContent)) !== null) {
-    const name = match[1];
-    if (!seen.has(name)) {
-      seen.add(name);
-      result.push(name);
+function computeFinalTables(sqlContent: string): string[] {
+  const re = /(?:create\s+table\s+(?:if\s+not\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*))|(?:drop\s+table\s+(?:if\s+exists\s+)?([a-zA-Z_][a-zA-Z0-9_]*))|(?:alter\s+table\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+rename\s+to\s+([a-zA-Z_][a-zA-Z0-9_]*))/gi;
+  const tables = new Map<string, true>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sqlContent)) !== null) {
+    if (m[1]) {
+      tables.set(m[1], true);
+    } else if (m[2]) {
+      tables.delete(m[2]);
+    } else if (m[3] && m[4]) {
+      if (tables.has(m[3])) {
+        tables.delete(m[3]);
+        tables.set(m[4], true);
+      } else {
+        tables.set(m[4], true);
+      }
     }
   }
-  return result;
+  return [...tables.keys()];
+}
+
+/**
+ * Tables already claimed by an earlier row in MIGRATION_SCHEMA_REGISTRY.
+ * Rule 2 uses this to skip proposing a probe for a migration whose final
+ * tables are wholly covered by a migration already in the registry —
+ * rename-in-place migrations (027, 032, 044, 083) fall under this: their
+ * final canonical table is registered by the migration that first
+ * created it.
+ */
+function alreadyRegisteredTables(): Set<string> {
+  const covered = new Set<string>();
+  for (const row of MIGRATION_SCHEMA_REGISTRY) {
+    for (const t of row.expectedTables) covered.add(t);
+  }
+  return covered;
 }
 
 /** Percentile of a sorted ascending array. Linear interpolation, clamped. */
@@ -753,6 +783,7 @@ export class ExperimentProposalGenerator implements Experiment {
       .filter((name) => name.endsWith('.sql'))
       .sort((a, b) => b.localeCompare(a));
 
+    const covered = alreadyRegisteredTables();
     let filesWithTables = 0;
     let newCount = 0;
 
@@ -769,7 +800,7 @@ export class ExperimentProposalGenerator implements Experiment {
           path.join(migrationsDir, basename),
           'utf-8',
         );
-        tables = parseCreateTables(contents);
+        tables = computeFinalTables(contents);
       } catch {
         continue;
       }
@@ -777,11 +808,22 @@ export class ExperimentProposalGenerator implements Experiment {
       if (tables.length === 0) continue;
       filesWithTables += 1;
 
+      // Rename-in-place hygiene: if every table this migration ends up
+      // producing is already registered under a different migration row,
+      // a new probe adds no coverage and just duplicates finding volume.
+      // This is the fix for migrations like 027/032/044/083 which rename
+      // back to a canonical name owned by an earlier migration.
+      const novelTables = tables.filter((t) => !covered.has(t));
+      if (novelTables.length === 0) continue;
+
       // Hard cap at MIGRATION_MAX_TABLES_PER_PROBE — a single
       // migration should never create 50+ tables, but if one does
       // we truncate the list and log that fact via evidence. The
       // probe will still be useful for the first N tables.
-      const expectedTables = tables.slice(0, MIGRATION_MAX_TABLES_PER_PROBE);
+      // Emit only the novel tables so the probe isn't redundant with
+      // an earlier migration's probe — same duplication argument as
+      // the skip-if-zero-novel above, just applied per-table.
+      const expectedTables = novelTables.slice(0, MIGRATION_MAX_TABLES_PER_PROBE);
 
       const brief: ExperimentBrief = {
         slug,
