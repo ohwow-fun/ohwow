@@ -486,7 +486,45 @@ export class ExperimentAuthorExperiment implements Experiment {
       '  7. test file uses vitest (describe/it/expect) and covers at ' +
       'least one pass case and one warning-or-fail case. Mock ctx.db ' +
       'with a chainable object.\n' +
-      '  8. Keep each file under 200 lines.';
+      '  8. Keep each file under 200 lines.\n' +
+      // Strict-mode guardrails — these four errors dominate the typecheck
+      // gate failures in the live ledger; spell them out explicitly so
+      // the model stops tripping them.
+      '  9. Strict TS: annotate every callback parameter. ' +
+      "`(a, b) => a + b` fails; write `(a: number, b: number) => a + b`. " +
+      'Applies to .reduce, .map, .filter, .sort, .forEach, .find.\n' +
+      ' 10. Catch clauses: `catch (err)` makes `err` of type `unknown`. ' +
+      'Narrow before using: `err instanceof Error ? err.message : String(err)`. ' +
+      "Don't access `.message` or `.stack` without the narrow.\n" +
+      ' 11. DatabaseAdapter method is `.from(table)`, NOT `.table(...)`. ' +
+      'The chain is `ctx.db.from<Row>(\'table_name\').select(\'col1,col2\')' +
+      ".eq('col', value).limit(N)` — returns `{ data, error }`.\n" +
+      " 12. `category` MUST be one of the ExperimentCategory literal types " +
+      "('model_health' | 'tool_reliability' | 'data_freshness' | 'other' | " +
+      "'prompt_calibration' | 'canary' | 'handler_audit' | 'trigger_stability' | " +
+      "'validation' | 'experiment_proposal' | 'business_outcome' | 'dm_intel'). " +
+      "Declare as `readonly category: ExperimentCategory = 'other'` — the " +
+      'type annotation is mandatory so a string literal doesn\'t widen.\n' +
+      ' 13. Minimal skeleton (copy the shape, fill in slug/name/hypothesis):\n' +
+      '```ts\n' +
+      "import type { Experiment, ExperimentCategory, ExperimentContext, Finding, ProbeResult, Verdict } from '../experiment-types.js';\n" +
+      'export class ExampleExperiment implements Experiment {\n' +
+      "  readonly id = 'example';\n" +
+      "  readonly name = 'Example';\n" +
+      "  readonly category: ExperimentCategory = 'other';\n" +
+      "  readonly hypothesis = 'stated hypothesis';\n" +
+      '  readonly cadence = { everyMs: 600000, runOnBoot: false };\n' +
+      '  async probe(ctx: ExperimentContext): Promise<ProbeResult> {\n' +
+      '    try {\n' +
+      "      const { data } = await ctx.db.from<{ id: string }>('some_table').select('id').limit(10);\n" +
+      "      return { subject: null, summary: `${(data ?? []).length} rows`, evidence: { count: (data ?? []).length } };\n" +
+      '    } catch (err) {\n' +
+      "      return { subject: null, summary: 'probe error', evidence: { error: err instanceof Error ? err.message : String(err) } };\n" +
+      '    }\n' +
+      '  }\n' +
+      "  judge(_r: ProbeResult, _h: Finding[]): Verdict { return 'pass'; }\n" +
+      '}\n' +
+      '```';
 
     const prompt = [
       `<brief>`,
@@ -851,11 +889,24 @@ export class ExperimentAuthorExperiment implements Experiment {
     sampleReasons: string[];
   }> {
     const THRESHOLD = 3;
+    /**
+     * Time-based auto-release: if the most recent llm_authored failure
+     * is older than this, reset the counter. Without this the gate is
+     * a trap — it only clears on a successful commit, but it doesn't
+     * let the author *attempt* a commit while gated, so no success can
+     * ever happen. The pause becomes permanent until operator action.
+     * 30 minutes lets a short failure burst pause the loop, but a
+     * longer-term pause auto-resumes to give the next proposal cohort
+     * a shot. If the re-attempt also fails 3× consecutively, the gate
+     * re-engages naturally.
+     */
+    const STALE_FAILURE_MS = 30 * 60 * 1000;
     const findings = await ctx
       .recentFindings(this.id, 30)
       .catch(() => [] as Finding[]);
     let consecutive = 0;
     const sampleReasons: string[] = [];
+    let mostRecentFailureAt: number | null = null;
     for (const f of findings) {
       const ev = f.evidence as {
         is_authoring_outcome?: boolean;
@@ -866,13 +917,17 @@ export class ExperimentAuthorExperiment implements Experiment {
       if (!ev.is_authoring_outcome) continue;
       if (ev.materialization !== 'llm_authored') break;
       if (ev.commit_ok === true) break;
+      if (mostRecentFailureAt === null) mostRecentFailureAt = Date.parse(f.ranAt);
       consecutive += 1;
       if (ev.commit_reason && sampleReasons.length < 3) {
         sampleReasons.push(ev.commit_reason.slice(0, 120));
       }
       if (consecutive >= THRESHOLD) break;
     }
-    if (consecutive >= THRESHOLD) {
+    const stale =
+      mostRecentFailureAt !== null &&
+      Date.now() - mostRecentFailureAt >= STALE_FAILURE_MS;
+    if (consecutive >= THRESHOLD && !stale) {
       return {
         shouldPause: true,
         consecutive,
