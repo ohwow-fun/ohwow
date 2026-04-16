@@ -56,6 +56,27 @@ import type { NarrativeEngine } from '../narrative/narrative-engine.js';
 import type { EthicsEngine } from '../ethos/ethics-engine.js';
 import type { HabitEngine } from '../hexis/habit-engine.js';
 
+/**
+ * Returns true when the cloud snapshot entry is strictly newer than
+ * the local state row. Both sides are ISO-like timestamps but the
+ * cloud writes T-Z format (`2026-04-16T05:57:23.000Z`) while SQLite's
+ * `datetime('now')` writes space-separator form (`2026-04-16 12:53:14`).
+ * Lexicographic `>` put `'T'` (0x54) ahead of `' '` (0x20) regardless
+ * of the actual wall-clock time, so cloud always won and any
+ * manually-patched local state got undone at boot. `Date.parse`
+ * normalizes both formats through the same wall-clock comparison. On
+ * parse failure we fall back to the old string compare so malformed
+ * rows don't change semantics. Exported for unit tests.
+ */
+export function cloudIsNewer(cloudUpdatedAt: string, localUpdatedAt: string): boolean {
+  const cloudMs = Date.parse(cloudUpdatedAt);
+  const localMs = Date.parse(localUpdatedAt);
+  if (Number.isFinite(cloudMs) && Number.isFinite(localMs)) {
+    return cloudMs > localMs;
+  }
+  return cloudUpdatedAt > localUpdatedAt;
+}
+
 export interface BppModules {
   affect?: AffectEngine | null;
   endocrine?: EndocrineSystem | null;
@@ -1351,8 +1372,7 @@ export class ControlPlaneClient {
 
           if (existing) {
             const local = existing as { id: string; updated_at: string };
-            // Cloud wins only if its data is newer
-            if (entry.updatedAt > local.updated_at) {
+            if (cloudIsNewer(entry.updatedAt, local.updated_at)) {
               await this.db
                 .from('agent_workforce_task_state')
                 .update({
