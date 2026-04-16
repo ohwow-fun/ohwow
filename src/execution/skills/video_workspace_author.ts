@@ -28,7 +28,9 @@ const require = createRequire(import.meta.url);
 
 const FPS = 30;
 const VOICE_LEAD_FRAMES = 10;    // visual starts 10 frames before voice (matches existing demo)
+const VOICE_LEAD_FRAMES_TEXT_HEAVY = 45; // 1.5s delay for text-heavy animations so visuals establish first
 const VOICE_TAIL_FRAMES = 15;    // let last word breathe
+const TEXT_HEAVY_ANIMATIONS = new Set(['count-up', 'split-reveal', 'letter-scatter']);
 const SCENE_MIN_FRAMES = 90;
 const TRANSITION_FRAMES = 20;
 
@@ -824,9 +826,18 @@ interface ResolvedVoice {
   text?: SceneScript['text'];
 }
 
+function isTextHeavy(v: ResolvedVoice): boolean {
+  const anim = (v.text as { animation?: string } | undefined)?.animation;
+  return TEXT_HEAVY_ANIMATIONS.has(anim ?? '');
+}
+
+function voiceLeadFor(v: ResolvedVoice): number {
+  return isTextHeavy(v) ? VOICE_LEAD_FRAMES_TEXT_HEAVY : VOICE_LEAD_FRAMES;
+}
+
 function framesFor(resolved: ResolvedVoice): number {
-  // scene = lead + voice + tail (but at least SCENE_MIN_FRAMES)
-  return Math.max(SCENE_MIN_FRAMES, VOICE_LEAD_FRAMES + resolved.voiceFrames + VOICE_TAIL_FRAMES);
+  const lead = voiceLeadFor(resolved);
+  return Math.max(SCENE_MIN_FRAMES, lead + resolved.voiceFrames + VOICE_TAIL_FRAMES);
 }
 
 /**
@@ -1095,7 +1106,8 @@ function buildSpec(params: {
   for (let i = 0; i < params.voices.length; i++) {
     const v = params.voices[i];
     const sceneFrames = framesFor(v);
-    voiceovers.push({ src: v.publicRef, startFrame: cursor + VOICE_LEAD_FRAMES, volume: 0.9 });
+    const lead = voiceLeadFor(v);
+    voiceovers.push({ src: v.publicRef, startFrame: cursor + lead, volume: 0.9 });
 
     let sceneParams: Record<string, unknown>;
     if (v.kind === 'composable') {
