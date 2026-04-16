@@ -124,7 +124,7 @@ function seedGoal(
     due_date:
       'due_date' in partial
         ? partial.due_date ?? null
-        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        : new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
     status: partial.status ?? 'active',
   };
   (env.tables.agent_workforce_goals ??= []).push(goal);
