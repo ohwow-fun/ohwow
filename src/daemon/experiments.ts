@@ -68,6 +68,7 @@ import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engag
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
 import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
 import { RevenuePulseExperiment } from '../self-bench/experiments/revenue-pulse.js';
+import { OpsPulseExperiment } from '../self-bench/experiments/ops-pulse.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -211,6 +212,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // doesn't spawn duplicates.
   experimentRunner.register(new DailySurpriseDigestExperiment());
   experimentRunner.register(new RevenuePulseExperiment());
+  experimentRunner.register(new OpsPulseExperiment());
   experimentRunner.register(new RoadmapShapeProbeExperiment());
   experimentRunner.register(new VitestHealthProbeExperiment());
   experimentRunner.register(new LoopCadenceProbeExperiment());
