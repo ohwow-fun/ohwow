@@ -16,9 +16,9 @@ function positionStyles(pos: TextPosition): React.CSSProperties {
     case "center":
       return { justifyContent: "center", alignItems: "center", textAlign: "center" as const };
     case "bottom-center":
-      return { justifyContent: "flex-end", alignItems: "center", textAlign: "center" as const, paddingBottom: 80 };
+      return { justifyContent: "flex-end", alignItems: "center", textAlign: "center" as const, paddingBottom: 140 };
     case "bottom-left":
-      return { justifyContent: "flex-end", alignItems: "flex-start", textAlign: "left" as const, paddingBottom: 80 };
+      return { justifyContent: "flex-end", alignItems: "flex-start", textAlign: "left" as const, paddingBottom: 140 };
     case "top-center":
       return { justifyContent: "flex-start", alignItems: "center", textAlign: "center" as const, paddingTop: 80 };
   }
@@ -175,22 +175,23 @@ const SplitRevealText: React.FC<{
   );
 };
 
-const CountUpText: React.FC<{
-  text: string;
-  style: React.CSSProperties;
+const CountUpLine: React.FC<{
+  line: string;
+  delay: number;
   accentColor: string;
-}> = ({ text, style, accentColor }) => {
+  style: React.CSSProperties;
+}> = ({ line, delay, accentColor, style }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  const match = text.match(/^(\d+(?:[.,]\d+)?)/);
+  const match = line.match(/^(\d+(?:[.,]\d+)?)/);
   const target = match ? parseFloat(match[1].replace(",", "")) : 0;
-  const suffix = match ? text.slice(match[0].length) : text;
+  const suffix = match ? line.slice(match[0].length) : line;
   const isDecimal = match ? match[1].includes(".") : false;
   const decimals = isDecimal ? (match![1].split(".")[1]?.length ?? 0) : 0;
 
   const countDuration = Math.min(fps * 2, 60);
-  const progress = interpolate(frame, [8, 8 + countDuration], [0, 1], {
+  const progress = interpolate(frame, [delay + 8, delay + 8 + countDuration], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -198,7 +199,10 @@ const CountUpText: React.FC<{
   const current = target * eased;
   const display = isDecimal ? current.toFixed(decimals) : Math.round(current).toLocaleString();
 
-  const fadeIn = interpolate(frame, [0, 12], [0, 1], { extrapolateRight: "clamp" });
+  const fadeIn = interpolate(frame, [delay, delay + 12], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <div style={{ ...style, opacity: fadeIn }}>
@@ -206,6 +210,32 @@ const CountUpText: React.FC<{
         {display}
       </span>
       {suffix && <span>{suffix}</span>}
+    </div>
+  );
+};
+
+const CountUpText: React.FC<{
+  text: string;
+  style: React.CSSProperties;
+  accentColor: string;
+}> = ({ text, style, accentColor }) => {
+  const lines = text.split("\n").filter(Boolean);
+
+  if (lines.length <= 1) {
+    return <CountUpLine line={text} delay={0} accentColor={accentColor} style={style} />;
+  }
+
+  return (
+    <div style={{ ...style, display: "flex", flexDirection: "column", gap: 16 }}>
+      {lines.map((line, i) => (
+        <CountUpLine
+          key={i}
+          line={line}
+          delay={i * 12}
+          accentColor={accentColor}
+          style={{ fontSize: style.fontSize, fontFamily: style.fontFamily, fontWeight: style.fontWeight, color: style.color }}
+        />
+      ))}
     </div>
   );
 };
