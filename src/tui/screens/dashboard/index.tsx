@@ -104,7 +104,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   const nav = useNavigation();
   const agents = useAgents(runtime.db);
   const tasks = useTasks(runtime.db);
-  const contacts = useContacts(runtime.db);
+  const contacts = useContacts(runtime.db, runtime.workspaceId);
   const health = useHealth(runtime.db, runtime.cloudConnected);
   const emptyChannels = useMemo(() => new ChannelRegistry(), []);
   const activeModel = config.modelSource === 'cloud'
