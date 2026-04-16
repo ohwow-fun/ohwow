@@ -83,7 +83,13 @@ export const STATE_POISON_MARKERS: readonly string[] = [
 interface CandidateStateRow {
   agent_id: string;
   key: string;
-  value: string | null;
+  /**
+   * SQLite stores `value` as TEXT, but our DB adapter JSON-parses any
+   * row that happens to be valid JSON before handing it back — so the
+   * read surface is `string | object | null | number | boolean`.
+   * Widen the type; `matchMarker` stringifies defensively.
+   */
+  value: unknown;
   updated_at: string | null;
 }
 
@@ -106,9 +112,29 @@ export interface AgentStateHygieneEvidence extends Record<string, unknown> {
   __tracked_field: 'flagged_rows';
 }
 
-function matchMarker(value: string | null): string | null {
-  if (!value) return null;
-  const lower = value.toLowerCase();
+/**
+ * Normalize an arbitrary `value` column read into a lowercase search
+ * haystack. SQLite returns TEXT, but the DB adapter transparently
+ * JSON-parses valid-JSON rows into objects/arrays before they reach
+ * here — so we must JSON.stringify anything non-string before the
+ * substring scan. Primitives coerce with `String()`. Null returns
+ * null so the caller short-circuits.
+ */
+function matchMarker(value: unknown): string | null {
+  if (value == null) return null;
+  let haystack: string;
+  if (typeof value === 'string') {
+    haystack = value;
+  } else if (typeof value === 'object') {
+    try {
+      haystack = JSON.stringify(value);
+    } catch {
+      return null;
+    }
+  } else {
+    haystack = String(value);
+  }
+  const lower = haystack.toLowerCase();
   for (const marker of STATE_POISON_MARKERS) {
     if (lower.includes(marker)) return marker;
   }
@@ -156,11 +182,14 @@ export class AgentStateHygieneSentinelExperiment implements Experiment {
       const pairKey = `${row.agent_id}::${row.key}`;
       pairCounts.set(pairKey, (pairCounts.get(pairKey) ?? 0) + 1);
       if (flagged.length < 10) {
+        const preview = typeof row.value === 'string'
+          ? row.value
+          : (() => { try { return JSON.stringify(row.value); } catch { return String(row.value); } })();
         flagged.push({
           agent_id: row.agent_id,
           key: row.key,
           marker,
-          value_preview: (row.value ?? '').slice(0, 240),
+          value_preview: preview.slice(0, 240),
           updated_at: row.updated_at,
         });
       }

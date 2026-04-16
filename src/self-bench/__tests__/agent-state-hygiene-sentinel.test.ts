@@ -9,7 +9,10 @@ import type { ExperimentContext } from '../experiment-types.js';
 interface FakeStateRow {
   agent_id: string;
   key: string;
-  value: string | null;
+  // `unknown` mirrors the runtime type — our DB adapter surfaces JSONB
+  // columns as plain objects for most reads, so the experiment has to
+  // tolerate both string and object inputs without crashing.
+  value: unknown;
   updated_at: string | null;
 }
 
@@ -103,6 +106,33 @@ describe('AgentStateHygieneSentinelExperiment', () => {
     ]));
     const ev = res.evidence as AgentStateHygieneEvidence;
     expect(ev.flagged[0].key).toBe('new');
+  });
+
+  it('handles an already-parsed object-valued row (JSONB adapter surface)', async () => {
+    // The DB adapter JSON-parses TEXT columns whose content is valid
+    // JSON. A prior version of the sentinel crashed with
+    // "e.toLowerCase is not a function" in production because it
+    // assumed string. Keep an object-valued row in the test fixture so
+    // this regression can't re-land silently.
+    const exp = new AgentStateHygieneSentinelExperiment();
+    const res = await exp.probe(makeCtx([
+      row({
+        value: { text: 'hi', status: 'posting_manually', reason: 'drafted' },
+      }),
+    ]));
+    const ev = res.evidence as AgentStateHygieneEvidence;
+    expect(ev.flagged_rows).toBe(1);
+    expect(ev.flagged[0].marker).toBe('posting_manually');
+    expect(ev.flagged[0].value_preview).toContain('posting_manually');
+  });
+
+  it('ignores primitive-valued rows that happen to be numbers', async () => {
+    const exp = new AgentStateHygieneSentinelExperiment();
+    const res = await exp.probe(makeCtx([
+      row({ key: 'x_posts_count', value: 4 }),
+    ]));
+    const ev = res.evidence as AgentStateHygieneEvidence;
+    expect(ev.flagged_rows).toBe(0);
   });
 
   it('exports a non-empty marker list with the stickiest patterns', () => {
