@@ -112,6 +112,18 @@ export const NARRATED_FAILURE_CANARIES: readonly string[] = [
   'refused to send',
   'could not post',
   'could not send',
+  // "Ready for manual posting" / "for manual posting" — agent
+  // capitulation pattern observed 2026-04-16 07:34: when the post
+  // tool is unavailable the agent produces a markdown draft with a
+  // header instructing the operator to post by hand. The task ends
+  // up status=completed and deliverable=approved, but the action
+  // did not land.
+  'manual posting',
+  'post manually',
+  'manually post',
+  'post it manually',
+  'send manually',
+  'ready for manual',
 ] as const;
 
 interface CandidateTask {
@@ -119,7 +131,13 @@ interface CandidateTask {
   title: string | null;
   status: string;
   output: string | null;
-  deferred_action: string | null;
+  /**
+   * Our SQLite/Supabase adapter surface returns JSONB columns as either
+   * a raw string OR an already-parsed object depending on the backend.
+   * The experiment tolerates both via `parseDeferred`. Widen the type
+   * here so TypeScript doesn't force a cast at every read site.
+   */
+  deferred_action: string | Record<string, unknown> | null;
   completed_at: string | null;
 }
 
@@ -147,8 +165,14 @@ interface DeferredActionShape {
   provider?: unknown;
 }
 
-function parseDeferred(raw: string | null): DeferredActionShape | null {
-  if (!raw) return null;
+function parseDeferred(raw: string | Record<string, unknown> | null): DeferredActionShape | null {
+  if (raw == null) return null;
+  // Already-parsed path: the DB adapter returns JSONB columns as
+  // plain objects for most tables; stringifying them ourselves and
+  // re-parsing would just cost a round-trip.
+  if (typeof raw === 'object') {
+    return raw as DeferredActionShape;
+  }
   try {
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === 'object' ? (parsed as DeferredActionShape) : null;

@@ -141,6 +141,37 @@ describe('DeliverableActionSentinelExperiment', () => {
     expect(ev.flagged[0].action_type).toBe('unknown');
   });
 
+  it('handles an already-parsed deferred_action object from the DB adapter', async () => {
+    // Our DB adapter surfaces JSONB columns as plain objects for most
+    // table reads. Before this contract was pinned down the experiment
+    // did `JSON.parse(object)`, silently threw, and bucketed every row
+    // under `unknown`. Here we pass an object to make the regression
+    // path explicit.
+    const exp = new DeliverableActionSentinelExperiment();
+    const res = await exp.probe(makeCtx([
+      row({
+        deferred_action: { type: 'post_tweet', provider: 'x', params: {} } as unknown as string,
+        output: "I don't have access to the account",
+      }),
+    ]));
+    const ev = res.evidence as DeliverableActionSentinelEvidence;
+    expect(ev.flagged_tasks).toBe(1);
+    expect(ev.flagged[0].action_type).toBe('post_tweet');
+    expect(ev.by_action_type).toEqual({ post_tweet: 1 });
+  });
+
+  it('flags the "ready for manual posting" capitulation pattern', async () => {
+    const exp = new DeliverableActionSentinelExperiment();
+    const res = await exp.probe(makeCtx([
+      row({ output: '## Tweet Ready for Manual Posting\n\n**Tweet Content:** ...' }),
+    ]));
+    const ev = res.evidence as DeliverableActionSentinelEvidence;
+    expect(ev.flagged_tasks).toBe(1);
+    // "manual posting" or "ready for manual" — either is acceptable; the
+    // earliest match in the canary list wins.
+    expect(['manual posting', 'ready for manual']).toContain(ev.flagged[0].canary);
+  });
+
   it('exports a non-empty canary list for downstream consumers', () => {
     expect(NARRATED_FAILURE_CANARIES.length).toBeGreaterThan(10);
     expect(NARRATED_FAILURE_CANARIES).toContain('login page');
