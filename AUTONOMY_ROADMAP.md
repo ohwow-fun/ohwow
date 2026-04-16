@@ -295,4 +295,16 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
 
-- None (all experiments are now listed).
+- agent-state-hygiene-sentinel
+- analogical-reasoning-emergence-signal-v3
+- classifier-stability
+- code-paper-compare-probe
+- experiment-cost-observer
+- findings-gc
+- observation-probe
+- research-ingest-probe
+- subprocess-smoke-1776373235416
+- subprocess-smoke-1776375613543
+- toolchain-lint
+- toolchain-tests
+- toolchain-typecheck
