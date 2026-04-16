@@ -5,6 +5,8 @@ import { Scene2 as Scene2Drop } from "./Scene2_Drop";
 import { Scene3 as Scene3Extraction } from "./Scene3_Extraction";
 import { Scene5_ZoomOut } from "./Scene5_ZoomOut";
 import { Scene6_Cloud } from "./Scene6_Cloud";
+import { StatsCounter } from "./StatsCounter";
+import { TextTypewriter } from "./TextTypewriter";
 
 type SceneComponent = React.FC<{
   params?: Record<string, unknown>;
@@ -17,6 +19,8 @@ const registry = new Map<string, SceneComponent>([
   ["extraction", Scene3Extraction as SceneComponent],
   ["outcome-orbit", Scene5_ZoomOut as SceneComponent],
   ["cta-mesh", Scene6_Cloud as SceneComponent],
+  ["stats-counter", StatsCounter as SceneComponent],
+  ["text-typewriter", TextTypewriter as SceneComponent],
 ]);
 
 export function registerSceneKind(kind: string, component: SceneComponent): void {
