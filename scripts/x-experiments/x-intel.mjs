@@ -244,24 +244,17 @@ appendSeen(workspace, capped.map(p => ({
 })));
 console.log(`[x-intel] recorded ${capped.length} permalinks to x-seen.jsonl`);
 
-if (DRY) {
-  console.log('[x-intel] DRY=1 — stopping before synthesis/upload');
-  browser.close();
-  process.exit(0);
-}
-
-// Accumulated across buckets, flushed once after synthesis. Keyed on
-// permalink downstream to dedup an author who shows up in multiple buckets.
+// Authors sidecar is the cheap, LLM-free output of this run — a flat
+// list of (handle, bucket, score, engagement) rows that x-authors-to-crm
+// consumes downstream. Build it from the classified posts BEFORE the
+// DRY gate so DRY runs still populate the funnel. Synthesis (LLM brief
+// + prediction extraction) stays gated behind DRY because that's where
+// the spend lives.
 const authorCandidates = [];
-
-// 5. SYNTHESIZE + PROPOSE UPLOAD PER BUCKET -----------------------------
-
 for (const bucketDef of cfg.buckets) {
   if (BUCKET_FILTER.size && !BUCKET_FILTER.has(bucketDef.id)) continue;
   const posts = byBucket[bucketDef.id] || [];
-  if (!posts.length) { console.log(`\n[x-intel] bucket ${bucketDef.id}: no posts, skip`); continue; }
   const top = posts.slice(0, cfg.budget?.max_posts_synthesized_per_bucket ?? 25);
-
   for (const p of top) {
     if (!p.author || !p.permalink) continue;
     authorCandidates.push({
@@ -276,6 +269,56 @@ for (const bucketDef of cfg.buckets) {
       first_seen_ts: new Date().toISOString(),
     });
   }
+}
+const sidecarPathDry = writeAuthorsSidecar(workspace, today, authorCandidates);
+if (sidecarPathDry) console.log(`[x-intel] authors sidecar → ${sidecarPathDry} (${authorCandidates.length} rows)`);
+
+// Posts sidecar — full text + permalink for the top N posts per bucket.
+// x-reply consumes this to target replies. Kept separate from the
+// authors sidecar because the row shape is wider (text is the
+// expensive field) and downstream reply scoring wants to avoid a re-
+// scrape.
+const postsSidecar = [];
+for (const bucketDef of cfg.buckets) {
+  if (BUCKET_FILTER.size && !BUCKET_FILTER.has(bucketDef.id)) continue;
+  const posts = byBucket[bucketDef.id] || [];
+  const top = posts.slice(0, cfg.budget?.max_posts_synthesized_per_bucket ?? 25);
+  for (const p of top) {
+    if (!p.permalink) continue;
+    postsSidecar.push({
+      permalink: p.permalink,
+      author: p.author,
+      display_name: p.displayName || null,
+      bucket: bucketDef.id,
+      text: (p.text || '').slice(0, 600),
+      score: p._score ?? null,
+      tags: p._tags || [],
+      likes: p.likes ?? 0,
+      replies: p.replies ?? 0,
+      first_seen_ts: new Date().toISOString(),
+    });
+  }
+}
+if (postsSidecar.length) {
+  const postsPath = path.join(os.homedir(), '.ohwow', 'workspaces', workspace, `x-posts-${today}.jsonl`);
+  fs.mkdirSync(path.dirname(postsPath), { recursive: true });
+  fs.writeFileSync(postsPath, postsSidecar.map(r => JSON.stringify(r)).join('\n') + '\n');
+  console.log(`[x-intel] posts sidecar → ${postsPath} (${postsSidecar.length} rows)`);
+}
+
+if (DRY) {
+  console.log('[x-intel] DRY=1 — stopping before synthesis/upload');
+  browser.close();
+  process.exit(0);
+}
+
+// 5. SYNTHESIZE + PROPOSE UPLOAD PER BUCKET -----------------------------
+
+for (const bucketDef of cfg.buckets) {
+  if (BUCKET_FILTER.size && !BUCKET_FILTER.has(bucketDef.id)) continue;
+  const posts = byBucket[bucketDef.id] || [];
+  if (!posts.length) { console.log(`\n[x-intel] bucket ${bucketDef.id}: no posts, skip`); continue; }
+  const top = posts.slice(0, cfg.budget?.max_posts_synthesized_per_bucket ?? 25);
 
   const history = loadHistory(workspace, bucketDef.id, HISTORY_DAYS);
   const historyBlock = history.length
@@ -387,8 +430,8 @@ Cite permalinks concretely. Concrete over generic. Never invent posts. No corpor
   }
 }
 
-const sidecarPath = writeAuthorsSidecar(workspace, today, authorCandidates);
-if (sidecarPath) console.log(`[x-intel] authors sidecar → ${sidecarPath} (${authorCandidates.length} rows)`);
+// Sidecar was already written above the DRY gate so the author funnel
+// works in both DRY and live runs.
 
 const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
 const accuracy = loadRollingAccuracy(workspace, 30);
