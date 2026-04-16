@@ -51,6 +51,7 @@ export type ExperimentCategory =
   | 'validation'
   | 'experiment_proposal'
   | 'business_outcome'
+  | 'dm_intel'
   | 'other';
 
 /**
