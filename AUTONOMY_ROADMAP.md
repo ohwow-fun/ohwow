@@ -214,7 +214,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (69 total)
+### Active Experiments (73 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -224,67 +224,71 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 6. anthropic-claude-sonnet-4-6-latency
 7. autonomous-author-quality
 8. autonomous-patch-rollback
-9. browser-profile-guardian
-10. canaries
-11. canary-experiment
-12. content-cadence-loop-health
-13. content-cadence-tuner
-14. dashboard-copy
-15. dashboard-smoke
-16. daily-surprise-digest
-17. deliverable-action-sentinel
-18. deepseek-deepseek-v3-2-latency
-19. error-classification-fuzz
-20. experiment-author
-21. experiment-proposal-generator
-22. format-duration-fuzz
-23. git-velocity
-24. google-gemini-2-5-flash-latency
-25. google-gemini-3-1-pro-preview-latency
-26. handler-schema-drift
-27. ledger-health
-28. list-completeness-summary
-29. list-handlers-fuzz
-30. loop-cadence-probe
-31. mig-smoke-1776324117308
-32. migration-drift-sentinel
-33. migration-schema-probe
-34. model-health
-35. patch-author
-36. patch-loop-health
-37. prose-invariant-drift
-38. provider-availability
-39. qwen-qwen3-5-35b-a3b-latency
-40. revenue-pipeline-observer
-41. roadmap-updater
-42. sitemap-drift
-43. source-copy-lint
-44. stagnation-fuzz
-45. stale-task-cleanup
-46. stale-threshold-tuner
-47. string-literal-patch
-48. test-coverage-probe
-49. token-similarity-fuzz
-50. toolchain-test-probe
-51. trigger-stability
-52. vitest-health-probe
-53. x-autonomy-ramp
-54. x-engagement-observer
-55. x-ops-observer
-56. x-shape-tuner
-57. xiaomi-mimo-v2-flash-latency
-58. xiaomi-mimo-v2-pro-latency
-59. roadmap-observer (proposed, Layer B)
-60. burn-rate
-61. unknown-latency
-62. intervention-audit
-63. strategist
-64. subprocess-smoke-1776294162273
-65. throughput-daily
+9. attribution-observer
+10. browser-profile-guardian
+11. canaries
+12. canary-experiment
+13. content-cadence-loop-health
+14. content-cadence-tuner
+15. dashboard-copy
+16. dashboard-smoke
+17. daily-surprise-digest
+18. deliverable-action-sentinel
+19. deepseek-deepseek-v3-2-latency
+20. error-classification-fuzz
+21. experiment-author
+22. experiment-proposal-generator
+23. format-duration-fuzz
+24. git-velocity
+25. google-gemini-2-5-flash-latency
+26. google-gemini-3-1-pro-preview-latency
+27. handler-schema-drift
+28. ledger-health
+29. list-completeness-summary
+30. list-handlers-fuzz
+31. loop-cadence-probe
+32. mig-smoke-1776324117308
+33. mig-smoke-1776367046505
+34. migration-drift-sentinel
+35. migration-schema-probe
+36. model-health
+37. outreach-thermostat
+38. patch-author
+39. patch-loop-health
+40. prose-invariant-drift
+41. provider-availability
+42. qwen-qwen3-5-35b-a3b-latency
+43. revenue-pipeline-observer
+44. roadmap-updater
+45. sitemap-drift
+46. source-copy-lint
+47. stagnation-fuzz
+48. stale-task-cleanup
+49. stale-threshold-tuner
+50. string-literal-patch
+51. test-coverage-probe
+52. token-similarity-fuzz
+53. toolchain-test-probe
+54. tmpl-smoke-1776361920501
+55. trigger-stability
+56. vitest-health-probe
+57. x-autonomy-ramp
+58. x-dm-signals-rollup
+59. x-engagement-observer
+60. x-ops-observer
+61. x-shape-tuner
+62. xiaomi-mimo-v2-flash-latency
+63. xiaomi-mimo-v2-pro-latency
+64. roadmap-observer (proposed, Layer B)
+65. burn-rate
 66. unknown-latency
-67. unknown-latency
-68. unknown-latency
-69. agent-state-hygiene-sentinel
+67. intervention-audit
+68. strategist
+69. subprocess-smoke-1776294162273
+70. throughput-daily
+71. unknown-latency
+72. unknown-latency
+73. unknown-latency
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
@@ -292,8 +296,4 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
 
-- attribution-observer
-- mig-smoke-1776367046505
-- outreach-thermostat
-- tmpl-smoke-1776361920501
-- x-dm-signals-rollup
+- None (all experiments are now listed).
