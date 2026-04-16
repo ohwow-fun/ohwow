@@ -204,7 +204,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (50 total)
+### Active Experiments (51 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -256,12 +256,12 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 48. burn-rate
 49. unknown-latency
 50. intervention-audit
+51. strategist
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-### Missing Experiments (7)
+### Missing Experiments (6)
 The following experiment files are not yet listed in the Active Experiments section above:
-- strategist
 - subprocess-smoke-1776294162273
 - throughput-daily
 - toolchain-lint
