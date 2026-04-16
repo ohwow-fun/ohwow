@@ -44,8 +44,11 @@ if [[ $# -ge 1 && -f "$1" ]]; then
   exit 0
 fi
 
-# Mode B: pre-commit. Scan added lines in the staged diff.
-ADDED=$(git diff --cached -U0 | grep '^+' | grep -v '^+++')
+# Mode B: pre-commit. Scan added lines in the staged diff. The
+# grep pipeline can legitimately exit 1 (no added lines, e.g. a
+# pure deletion commit); `|| true` lets set -euo pipefail fall
+# through to the empty-string guard instead of hard-failing.
+ADDED=$(git diff --cached -U0 | { grep '^+' || true; } | { grep -v '^+++' || true; })
 if [[ -z "$ADDED" ]]; then
   exit 0
 fi
