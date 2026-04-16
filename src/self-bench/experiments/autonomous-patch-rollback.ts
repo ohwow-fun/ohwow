@@ -44,6 +44,7 @@ import {
   revertCommit,
   type AutonomousPatch,
 } from '../patch-rollback.js';
+import { markCommitReverted } from '../../lib/patches-attempted-log.js';
 
 const MIN = 60 * 1000;
 
@@ -143,7 +144,7 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
   async intervene(
     verdict: Verdict,
     result: ProbeResult,
-    _ctx: ExperimentContext,
+    ctx: ExperimentContext,
   ): Promise<InterventionApplied | null> {
     if (verdict !== 'fail') return null;
     const ev = result.evidence as RollbackEvidence;
@@ -160,6 +161,18 @@ export class AutonomousPatchRollbackExperiment implements Experiment {
         reason: r.reason,
         ok: r.ok,
       });
+      // Phase 3 — mark every patches_attempted_log row tied to this
+      // SHA as 'reverted' so the next patch-author tick skips the
+      // (finding, file-shape) shape in pre-flight. Fire only on
+      // successful reverts so a failed revert doesn't misleadingly
+      // flag a still-on-main commit as gone.
+      if (r.ok) {
+        try {
+          await markCommitReverted(ctx.db, ctx.workspaceId, c.sha);
+        } catch {
+          // non-fatal — the revert already landed
+        }
+      }
     }
     const okCount = reverted.filter((r) => r.ok).length;
     return {

@@ -43,6 +43,10 @@ import {
 } from '../self-commit.js';
 import { buildContextPack } from '../context-pack.js';
 import { workspaceLayoutFor } from '../../config.js';
+import {
+  recordProposedPatch,
+  hasRecentlyRevertedPatch,
+} from '../../lib/patches-attempted-log.js';
 import { getAllowedPrefixes, resolvePathTier, resolvePatchMode } from '../path-trust-tiers.js';
 import {
   parseStringLiteralEditsResponse,
@@ -153,6 +157,34 @@ export class PatchAuthorExperiment implements Experiment {
         if (!evidenceLiteralsAppearInSource(repoRoot, tier2Files, row.evidence, anyStringLiteral)) {
           continue;
         }
+      }
+      // Phase 3 — don't re-propose a (finding, file-shape) the author
+      // already tried and Layer 5 reverted inside the lookback window.
+      // Pure-query filter: no LLM, no git work. Fail-soft: the helper
+      // returns alreadyReverted=false on any DB hiccup, so a transient
+      // read problem degrades to permissive (author still tries) rather
+      // than freezing the loop.
+      try {
+        const revertCheck = await hasRecentlyRevertedPatch(
+          ctx.db,
+          ctx.workspaceId,
+          row.id,
+          tier2Files,
+        );
+        if (revertCheck.alreadyReverted) {
+          logger.debug(
+            {
+              findingId: row.id,
+              files: tier2Files,
+              commitSha: revertCheck.commitSha,
+              revertedAt: revertCheck.lastAttemptAt,
+            },
+            '[patch-author] skipping candidate; same shape was reverted recently',
+          );
+          continue;
+        }
+      } catch {
+        // Treat as permissive — same fail-soft policy the helper uses.
       }
       candidates.push({
         findingId: row.id,
@@ -433,6 +465,25 @@ export class PatchAuthorExperiment implements Experiment {
       fixesFindingId: candidate.findingId,
       findingResolver,
     });
+    if (commit.ok) {
+      // Phase 3 — record the attempt so the auto-revert path can flip
+      // its outcome and the next probe tick can skip (finding, file-
+      // shape) shapes that recently reverted. Pure DB write; never
+      // blocks the commit-already-landed result.
+      try {
+        await recordProposedPatch({
+          db: ctx.db,
+          workspaceId: ctx.workspaceId,
+          findingId: candidate.findingId,
+          filePaths: [targetPath],
+          commitSha: commit.commitSha ?? null,
+          patchMode: patchMode,
+          tier: 'tier-2',
+        });
+      } catch (err) {
+        logger.warn({ err, commitSha: commit.commitSha }, '[patch-author] patches-attempted-log record failed');
+      }
+    }
     if (!commit.ok) {
       return {
         description: `safeSelfCommit refused: ${commit.reason}`,

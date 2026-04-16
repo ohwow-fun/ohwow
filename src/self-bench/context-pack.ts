@@ -34,6 +34,7 @@ import { logger } from '../lib/logger.js';
 import { redactForPrompt } from '../lib/prompt-redact.js';
 import { getRuntimeConfig } from './runtime-config.js';
 import { readApprovalRows, type ApprovalEntry } from '../scheduling/approval-queue.js';
+import { recentRevertedAttempts } from '../lib/patches-attempted-log.js';
 
 export interface ContextPackInputs {
   db: DatabaseAdapter;
@@ -87,16 +88,17 @@ export async function buildContextPack(inputs: ContextPackInputs): Promise<Conte
     findings,
     goals,
     rejections,
+    attemptedPatches,
   ] = await Promise.all([
     collectRecentFindings(inputs.db, windowHours, maxFindings),
     collectActiveGoals(inputs.db, inputs.workspaceId),
     collectOperatorRejections(inputs.approvalsJsonlPath, maxRejections),
+    collectPatchesAttempted(inputs.db, inputs.workspaceId),
   ]);
 
   const revenueGap = collectRevenueGapFocus();
   const attribution = collectAttributionFindings();
   const roadmap = collectRoadmapGaps(inputs.repoRoot);
-  const attemptedPatches = collectPatchesAttempted();
 
   const maybeSections: Array<ContextPackSection | null> = [
     findings,
@@ -304,12 +306,34 @@ function collectRoadmapGaps(repoRoot: string | null): ContextPackSection | null 
 }
 
 /**
- * Placeholder for the patches-attempted log (Phase 3). Wired here so
- * Phase 3 can drop in the real source with no call-site change. Until
- * then the pack includes no "already tried" hints.
+ * Summarize the last N reverted autonomous patches so the model can
+ * see "we already tried this shape and Layer 5 pulled it back." Keeps
+ * the pre-flight filter's decision explicit in the prompt, which
+ * nudges the author away from re-trying the same file/finding pair
+ * with cosmetic variation. Returns null when the log has no revert
+ * rows yet — a fresh workspace or a workspace that's never had a
+ * reverted commit.
  */
-function collectPatchesAttempted(): ContextPackSection | null {
-  return null;
+async function collectPatchesAttempted(
+  db: DatabaseAdapter,
+  workspaceId: string,
+): Promise<ContextPackSection | null> {
+  try {
+    const rows = await recentRevertedAttempts(db, workspaceId, 10);
+    if (rows.length === 0) return null;
+    const lines = rows.map((r) => {
+      const sha = r.commitSha ? r.commitSha.slice(0, 12) : '?';
+      const mode = r.patchMode ? ` [${r.patchMode}]` : '';
+      return `  - ${r.proposedAt} sha=${sha}${mode} finding=${r.findingId.slice(0, 8)} file-hash=${r.fileHash.slice(0, 12)}`;
+    });
+    return {
+      name: 'patches-attempted',
+      body: `Recent reverted autonomous patches (newest first). Avoid re-proposing the same (finding, file-shape) tuples — Layer 5 already rolled them back:\n${lines.join('\n')}`,
+    };
+  } catch (err) {
+    logger.debug({ err }, '[context-pack] patches-attempted source failed');
+    return null;
+  }
 }
 
 export function extractAffectedFiles(evidence: unknown): string[] {
