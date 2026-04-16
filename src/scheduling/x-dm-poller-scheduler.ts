@@ -11,15 +11,13 @@
  *
  * Lane contention with ContentCadenceScheduler
  * --------------------------------------------
- * Both schedulers drive the same debug Chrome via raw CDP. Today the
- * contention guard is per-instance (`executing` boolean prevents
- * overlapping ticks within THIS scheduler) — there's no cross-
- * scheduler lock. Risk is small because list_dms navigates
- * https://x.com/i/chat (a different tab from /compose/post) and reads
- * with no clicks, so it shouldn't disturb a posting tick. If we ever
- * see DM-tick interleaving cause a posting failure, the right fix is
- * a workspace-level CDP lane lock in chrome-profile-router; documenting
- * here so the next person sees the trade-off.
+ * Both schedulers drive the same debug Chrome via raw CDP. The
+ * per-instance `executing` boolean only prevents overlap within THIS
+ * scheduler; cross-scheduler coordination is provided by the
+ * workspace-level CDP lane lock (`withCdpLane`). We take the lane
+ * around each individual inbox fetch and per-thread body read — NOT
+ * the whole tick — so content-cadence posts can interleave between
+ * threads rather than waiting up to ~2min for the full tick to drain.
  */
 
 import { createHash } from 'node:crypto';
@@ -27,6 +25,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { withCdpLane } from '../execution/browser/cdp-lane.js';
 import { logger } from '../lib/logger.js';
 import {
   listDmsViaBrowser,
@@ -133,7 +132,11 @@ export class XDmPollerScheduler {
     this.executing = true;
     const startedAt = Date.now();
     try {
-      const result = await this.inboxLister({ limit: FETCH_LIMIT });
+      const result = await withCdpLane(
+        this.workspaceId,
+        () => this.inboxLister({ limit: FETCH_LIMIT }),
+        { label: 'x-dm-poller:inbox' },
+      );
       if (!result.success || !result.threads) {
         logger.warn(
           { message: result.message },
@@ -295,10 +298,14 @@ export class XDmPollerScheduler {
    *   - Appends a JSONL line per new message for greppable history.
    */
   private async ingestThreadBodies(thread: DmThreadSummary): Promise<number | null> {
-    const result = await this.threadReader({
-      conversationPair: thread.pair,
-      limit: THREAD_READ_LIMIT,
-    });
+    const result = await withCdpLane(
+      this.workspaceId,
+      () => this.threadReader({
+        conversationPair: thread.pair,
+        limit: THREAD_READ_LIMIT,
+      }),
+      { label: 'x-dm-poller:thread-read' },
+    );
     if (!result.success || !result.messages) {
       logger.warn(
         { pair: thread.pair, message: result.message },

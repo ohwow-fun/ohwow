@@ -22,6 +22,11 @@ import type Database from 'better-sqlite3';
 
 import { initDatabase } from '../../db/init.js';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
+import {
+  _resetCdpLanesForTests,
+  _inspectCdpLaneForTests,
+  withCdpLane,
+} from '../../execution/browser/cdp-lane.js';
 import { XDmPollerScheduler } from '../x-dm-poller-scheduler.js';
 import type {
   DmMessage,
@@ -83,6 +88,7 @@ describe('XDmPollerScheduler', () => {
 
   afterEach(() => {
     teardownEnv(env);
+    _resetCdpLanesForTests();
   });
 
   it('first tick inserts thread, observation, and JSONL line per pair', async () => {
@@ -480,5 +486,51 @@ describe('XDmPollerScheduler', () => {
     });
     await sched2.tick();
     expect(noopReader).not.toHaveBeenCalled();
+  });
+
+  it('waits on the CDP lane when it is held by another caller', async () => {
+    let sawListerCall = false;
+    const lister = vi.fn(async () => {
+      sawListerCall = true;
+      return {
+        success: true,
+        message: 'ok',
+        threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'Hi', hasUnread: false }],
+      } satisfies ListDmsResult;
+    });
+    const threadReader = vi.fn(async () => ({
+      success: false as const,
+      message: 'stub: do not hit real browser in unit test',
+      conversationName: null,
+    }));
+    const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      dataDir: env.dir,
+      inboxLister: lister,
+      threadReader,
+    });
+
+    let release!: () => void;
+    const holderDone = withCdpLane(
+      WORKSPACE_ID,
+      () => new Promise<void>((resolve) => { release = resolve; }),
+      { label: 'test-holder' },
+    );
+    await Promise.resolve();
+    expect(_inspectCdpLaneForTests(WORKSPACE_ID).held).toBe(true);
+
+    const tickPromise = sched.tick();
+    // yield twice so the poller's withCdpLane call enqueues behind the holder
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sawListerCall).toBe(false);
+    expect(_inspectCdpLaneForTests(WORKSPACE_ID).queueDepth).toBe(1);
+
+    release();
+    await holderDone;
+    await tickPromise;
+
+    expect(sawListerCall).toBe(true);
+    expect(_inspectCdpLaneForTests(WORKSPACE_ID)).toEqual({ held: false, queueDepth: 0 });
   });
 });
