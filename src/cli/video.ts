@@ -14,7 +14,7 @@
 import { isAbsolute, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync } from 'node:fs';
-import { runVideoGeneration, type VideoSkillProgress } from '../execution/skills/video_generation.js';
+import { runVideoGeneration, runVideoPreview, type VideoSkillProgress } from '../execution/skills/video_generation.js';
 import { list as listCache, prune as pruneCache, type CacheModality } from '../media/asset-cache.js';
 import {
   authorWorkspaceVideoSpec,
@@ -105,6 +105,26 @@ async function cmdCachePrune(flags: Record<string, string | true>): Promise<void
   console.log(`Removed ${removed} cache entries older than ${days} day${days === 1 ? '' : 's'}.`);
 }
 
+async function cmdPreview(args: string[]): Promise<void> {
+  const { positional, flags } = parseFlags(args);
+  const specArg = positional[0];
+  if (!specArg) {
+    console.error('Usage: ohwow video preview <spec.json> [--port=<port>]');
+    process.exit(1);
+  }
+  const specPath = resolveSpec(specArg);
+  const port = typeof flags.port === 'string' ? Number(flags.port) : undefined;
+  const packageDir = resolvePackageDir();
+
+  console.log(`Opening Remotion Studio with ${specPath}...`);
+  try {
+    await runVideoPreview({ specPath, packageDir, port });
+  } catch (err) {
+    console.error('Studio exited with error:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+}
+
 async function cmdCache(args: string[]): Promise<void> {
   const sub = args[0];
   const { flags } = parseFlags(args.slice(1));
@@ -159,6 +179,8 @@ async function cmdWorkspace(args: string[]): Promise<void> {
     ? flags.template
     : (extraBrief || scenesFlag ? undefined : 'classic-demo');
   const dryRun = flags['dry-run'] === true;
+  const preview = flags.preview === true;
+  const previewPort = typeof flags.port === 'string' ? Number(flags.port) : undefined;
   const outputPath = typeof flags.out === 'string' ? flags.out : undefined;
 
   let briefs: SceneBrief[] | undefined;
@@ -216,6 +238,12 @@ async function cmdWorkspace(args: string[]): Promise<void> {
     return;
   }
 
+  if (preview) {
+    console.log('\nOpening Remotion Studio...');
+    await runVideoPreview({ specPath: author.specPath, packageDir, port: previewPort });
+    return;
+  }
+
   console.log('\nRendering...');
   const result = await runVideoGeneration({
     specPath: author.specPath,
@@ -232,9 +260,10 @@ function usage(): void {
   console.log('Usage:');
   console.log('  ohwow video render <spec.json> [--out=<path>]');
   console.log('  ohwow video generate <spec.json> [--out=<path>]       (alias of render in v1)');
+  console.log('  ohwow video preview <spec.json> [--port=<port>]       open in Remotion Studio');
   console.log('  ohwow video workspace [--workspace=<name>] [--template=<t>] [--scenes=<k1,k2,...>]');
   console.log('                        [--brief="free-text direction"] [--voice=<v>] [--copy-model=<m>]');
-  console.log('                        [--dry-run] [--out=<path>]');
+  console.log('                        [--dry-run] [--preview] [--port=<port>] [--out=<path>]');
   console.log(`      templates: ${Object.keys(BUILTIN_TEMPLATES).join(', ')}`);
   console.log('  ohwow video cache ls [--modality=<voice|music|image|video>]');
   console.log('  ohwow video cache prune --older-than=<days>');
@@ -248,6 +277,8 @@ export async function runVideoCli(args: string[]): Promise<void> {
   }
   if (sub === 'render' || sub === 'generate') {
     await cmdRender(args.slice(1));
+  } else if (sub === 'preview') {
+    await cmdPreview(args.slice(1));
   } else if (sub === 'workspace') {
     await cmdWorkspace(args.slice(1));
   } else if (sub === 'cache') {

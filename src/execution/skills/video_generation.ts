@@ -59,6 +59,40 @@ export interface VideoGenerationResult {
   specPath: string;
 }
 
+export interface VideoPreviewOptions {
+  specPath: string;
+  packageDir?: string;
+  port?: number;
+}
+
+export async function runVideoPreview(opts: VideoPreviewOptions): Promise<void> {
+  const specPath = isAbsolute(opts.specPath) ? opts.specPath : resolve(opts.specPath);
+  await stat(specPath);
+  const packageDir = opts.packageDir ?? defaultPackageDir();
+
+  const args = [
+    'remotion',
+    'studio',
+    'src/index.ts',
+    `--props=${specPath}`,
+  ];
+  if (opts.port) args.push(`--port=${opts.port}`);
+
+  const child = spawn('npx', args, {
+    cwd: packageDir,
+    stdio: 'inherit',
+    env: { ...process.env },
+  });
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    child.on('error', rejectPromise);
+    child.on('close', code => {
+      if (code === 0 || code === null) resolvePromise();
+      else rejectPromise(new Error(`remotion studio exited ${code}`));
+    });
+  });
+}
+
 function mediaVideosDir(): string {
   return join(homedir(), '.ohwow', 'media', 'videos');
 }
