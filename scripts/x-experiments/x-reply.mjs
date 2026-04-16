@@ -39,7 +39,9 @@ import { replyToPost } from './_x-harvest.mjs';
 import { ensureXReady } from './_x-browser.mjs';
 
 const DRY = process.env.DRY !== '0';
-const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 5);
+// 1-2 replies per run. Rapid-fire replies from the same account look
+// bot-like. The scheduler cadence (every 3h) provides natural spacing.
+const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 2);
 // Reply strategy: the brand shows up in genuinely interesting builder
 // conversations (hacks, advancements, inspiration) — not just in-market
 // complaints about competitors. Audiences discover us by stumbling into

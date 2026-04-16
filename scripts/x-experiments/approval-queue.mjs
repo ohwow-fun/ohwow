@@ -115,8 +115,29 @@ if (cmd === 'list' || !cmd) {
   console.log(JSON.stringify(stats(), null, 2));
 } else if (cmd === 'apply') {
   const approved = loadQueue().filter(e => e.status === 'approved');
-  console.log(`applying ${approved.length} approved entries…`);
-  for (const e of approved) {
+  // Cap outbound posts/replies per apply run to avoid rapid-fire bot
+  // appearance. CRM contacts are not visible externally, so no cap.
+  const X_KINDS = new Set(['x_outbound_post', 'x_outbound_reply', 'reply']);
+  const MAX_X_PER_APPLY = Number(process.env.MAX_X_PER_APPLY || 2);
+  let xApplied = 0;
+  const toApply = approved.filter(e => {
+    if (X_KINDS.has(e.kind)) {
+      if (xApplied >= MAX_X_PER_APPLY) return false;
+      xApplied++;
+    }
+    return true;
+  });
+  console.log(`applying ${toApply.length} of ${approved.length} approved (max ${MAX_X_PER_APPLY} X actions per run)…`);
+  let isFirstX = true;
+  for (const e of toApply) {
+    // Random 3-6 minute delay between X-visible actions so the
+    // posting pattern looks human, not scripted.
+    if (X_KINDS.has(e.kind) && !isFirstX) {
+      const delayMs = (180 + Math.floor(Math.random() * 180)) * 1000;
+      console.log(`  waiting ${Math.round(delayMs/1000)}s before next X action…`);
+      await sleep(delayMs);
+    }
+    if (X_KINDS.has(e.kind)) isFirstX = false;
     try {
       const r = await applyEntry(e);
       rate({ id: e.id, status: 'applied', notes: `applied: ${JSON.stringify(r).slice(0, 200)}` });

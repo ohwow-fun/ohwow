@@ -30,7 +30,10 @@ import { postTweet } from './_x-harvest.mjs';
 import { ensureXReady } from './_x-browser.mjs';
 
 const DRY = process.env.DRY !== '0';
-const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 3);
+// Default 1 post per run. Posting multiple in rapid succession looks
+// automated and kills credibility. The scheduler fires every 3h (chain
+// after x-intel) or hourly (humor); that natural spacing handles cadence.
+const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 1);
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
 const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,question,story,humor').split(',').map(s => s.trim()).filter(Boolean));
 
