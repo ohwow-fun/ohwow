@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { freeGates, acceptsIntent, classifyIntent, loadLeadGenConfig, buildAutoApproveGate } from '../_qualify.mjs';
+import { freeGates, acceptsIntent, classifyIntent, loadLeadGenConfig, buildAutoApproveGate, loadProposedHandles } from '../_qualify.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from '../_author-ledger.mjs';
 
 const rubric = {
@@ -220,6 +220,60 @@ describe('buildAutoApproveGate', () => {
     // intents=['buyer_intent'], dailyCap=5.
     expect(gate('x_contact_create', happyPayload)).toBe(true);
     expect(gate('x_contact_create', { ...happyPayload, confidence: 0.5 })).toBe(false);
+  });
+});
+
+describe('loadProposedHandles', () => {
+  it('returns empty set when loadQueue is not provided', () => {
+    expect(loadProposedHandles('ws')).toEqual(new Set());
+  });
+
+  it('returns empty set when loader throws', () => {
+    const out = loadProposedHandles('ws', {
+      loadQueue: () => { throw new Error('boom'); },
+    });
+    expect(out).toEqual(new Set());
+  });
+
+  it('includes handles from non-rejected x_contact_create entries', () => {
+    const queue = [
+      { kind: 'x_contact_create', status: 'pending',      payload: { handle: 'Alice' } },
+      { kind: 'x_contact_create', status: 'approved',     payload: { handle: 'BOB' } },
+      { kind: 'x_contact_create', status: 'applied',      payload: { handle: 'carol' } },
+      { kind: 'x_contact_create', status: 'auto_applied', payload: { handle: 'Dave' } },
+    ];
+    const out = loadProposedHandles('ws', { loadQueue: () => queue });
+    expect(out).toEqual(new Set(['alice', 'bob', 'carol', 'dave']));
+  });
+
+  it('excludes rejected entries so the caller can reconsider them', () => {
+    const queue = [
+      { kind: 'x_contact_create', status: 'rejected',     payload: { handle: 'eve' } },
+      { kind: 'x_contact_create', status: 'pending',      payload: { handle: 'frank' } },
+    ];
+    const out = loadProposedHandles('ws', { loadQueue: () => queue });
+    expect(out.has('eve')).toBe(false);
+    expect(out.has('frank')).toBe(true);
+  });
+
+  it('ignores entries of other kinds', () => {
+    const queue = [
+      { kind: 'x_outbound_post', status: 'pending',  payload: { handle: 'grace' } },
+      { kind: 'reply',           status: 'approved', payload: { handle: 'heidi' } },
+    ];
+    const out = loadProposedHandles('ws', { loadQueue: () => queue });
+    expect(out.size).toBe(0);
+  });
+
+  it('skips entries with missing or non-string handle', () => {
+    const queue = [
+      { kind: 'x_contact_create', status: 'pending', payload: {} },
+      { kind: 'x_contact_create', status: 'pending', payload: { handle: 42 } },
+      { kind: 'x_contact_create', status: 'pending', payload: { handle: '' } },
+      { kind: 'x_contact_create', status: 'pending', payload: { handle: 'real' } },
+    ];
+    const out = loadProposedHandles('ws', { loadQueue: () => queue });
+    expect(out).toEqual(new Set(['real']));
   });
 });
 

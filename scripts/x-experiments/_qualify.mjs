@@ -130,6 +130,49 @@ export function acceptsIntent(intent, rubric) {
 }
 
 /**
+ * Read the approval queue and return a Set of lowercased handles that
+ * already have an `x_contact_create` entry in a non-rejected state.
+ * These handles should NOT be re-classified on a subsequent run:
+ *
+ *   - pending / approved / applied / auto_applied → the classifier
+ *     already ran for this handle; re-classifying risks the model
+ *     returning a different verdict for identical input (observed
+ *     2026-04-16 with @analogdreamdev flipping buyer_intent→builder_
+ *     curiosity 7 minutes apart). Re-running also burns one simple_
+ *     classification LLM call per handle per hourly pass, which adds
+ *     up across a stable audience.
+ *   - rejected → skip the skip: the operator explicitly said no, so
+ *     don't re-propose, but if their signal improves (bucket flip,
+ *     score bump) the downstream free-gate + CRM-dedup gates are the
+ *     right place to decide whether to reconsider, not this cache.
+ *     Treating rejected as an auto-skip would permanently lock out
+ *     anyone the operator once bounced.
+ *
+ * Asymmetric on purpose: cache positives, not negatives. Returns an
+ * empty set on any read failure — this helper never wedges the loop.
+ */
+export function loadProposedHandles(workspace, { loadQueue } = {}) {
+  if (typeof loadQueue !== 'function') return new Set();
+  let queue;
+  try {
+    queue = loadQueue(workspace);
+  } catch {
+    return new Set();
+  }
+  const skipStatuses = new Set(['pending', 'approved', 'applied', 'auto_applied']);
+  const out = new Set();
+  for (const entry of queue || []) {
+    if (!entry || entry.kind !== 'x_contact_create') continue;
+    if (!skipStatuses.has(entry.status)) continue;
+    const handle = entry.payload?.handle;
+    if (typeof handle === 'string' && handle.length > 0) {
+      out.add(handle.toLowerCase());
+    }
+  }
+  return out;
+}
+
+/**
  * Auto-approve gate for x_contact_create proposals. Returns a function
  * that propose() invokes (only when its trust check passes) to decide
  * whether a candidate skips the human queue.

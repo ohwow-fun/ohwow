@@ -34,7 +34,7 @@ import crypto from 'node:crypto';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose, loadQueue } from './_approvals.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from './_author-ledger.mjs';
-import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent, buildAutoApproveGate } from './_qualify.mjs';
+import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent, buildAutoApproveGate, loadProposedHandles } from './_qualify.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_AUTHORS_PER_RUN = Number(process.env.X_AUTHORS_MAX_PER_RUN || 50);
@@ -221,8 +221,24 @@ async function main() {
     try { existingHandles = await fetchExistingHandles(url, token); }
     catch (e) { console.warn('[x-authors-to-crm] could not fetch existing handles:', e.message); }
   }
+  // Sticky-accept dedup. Handles already proposed through the approval
+  // queue (pending/approved/applied/auto_applied) shouldn't be
+  // re-classified: that wastes a simple_classification LLM call and, more
+  // importantly, risks the model returning a different verdict for
+  // identical input and silently dropping a qualified lead. Rejected
+  // entries intentionally pass through — operator override should not be
+  // re-invented by this cache.
+  const proposedHandles = DRY ? new Set() : loadProposedHandles(workspace, { loadQueue });
+  const cachedSkips = [];
   const fresh = sortByBucketPriority(cfg, passed)
-    .filter(({ row }) => !existingHandles.has(row.handle))
+    .filter(({ row }) => {
+      if (existingHandles.has(row.handle)) return false;
+      if (proposedHandles.has(row.handle.toLowerCase())) {
+        cachedSkips.push(row.handle);
+        return false;
+      }
+      return true;
+    })
     .slice(0, MAX_AUTHORS_PER_RUN);
 
   // Intent classification — one LLM call per fresh author.
@@ -386,6 +402,7 @@ async function main() {
     freeGatePassed: passed.length,
     freeGateRejected: rejected,
     existingCrm: existingHandles.size,
+    alreadyProposed: cachedSkips.length,
     fresh: fresh.length,
     llmCalls,
     intentRejected,
