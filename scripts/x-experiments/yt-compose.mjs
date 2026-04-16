@@ -78,11 +78,17 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const TTS_MODEL = 'openai/gpt-audio-mini';
 
 // Strict system prompt that turns the conversational gpt-audio model into a
-// verbatim TTS engine. Without this the model answers the input as dialog.
+// verbatim TTS engine AND pins the delivery to the observer/philosophical
+// tone we want for Shorts. Without the verbatim clause the model answers
+// the input as dialog; without the noir+contemplative cue the delivery is
+// flat and uninteresting. Prompt chosen from prosody A/B rounds 1 and 2
+// (see _test-voice-prosody.mjs and _test-voice-prosody-r2.mjs).
 const TTS_SYSTEM_PROMPT =
-  'You are a TTS engine. The user will send text in quotes. You must speak ' +
-  'exactly the quoted text, verbatim, with natural prosody. Never respond, ' +
-  'never acknowledge, never add words. Just read what is between the quotes.';
+  'You are a TTS engine reading for a short-form video. Speak exactly the ' +
+  'quoted text, verbatim. Take your time. Let each sentence breathe. ' +
+  'Deliver it deadpan, understated, slightly ominous. Like a noir narrator ' +
+  'observing something everyone missed. Slight pause before the punchline. ' +
+  'Quiet, grounded, confident. Never respond, never add words.';
 
 async function kokoroAvailable() {
   try {
