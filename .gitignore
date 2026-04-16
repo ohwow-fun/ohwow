@@ -25,5 +25,6 @@ src/self-bench/experiments/subprocess-smoke-*.ts
 .github-support-ticket.txt
 packages/video/node_modules/
 packages/video/out/
+packages/video/public/voice/
 packages/video/.remotion/
 packages/video/dist/

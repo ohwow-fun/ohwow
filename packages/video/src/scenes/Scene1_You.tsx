@@ -1,7 +1,9 @@
 /**
- * Scene 1: You (frames 0-310)
- * Voice: "You use AI for everything. Dozens of chats. Across five different apps.
- *         Every single day. But none of it remembers you." (9.3s)
+ * Scene: Prompts grid — rolling, glowing list of AI prompts the user sends across apps.
+ *
+ * Parametrized: `params.prompts[]` overrides the baked prompts (pass real task
+ * titles from the workspace), `params.appColors` customises per-app accents,
+ * `params.stagger` and `params.scrollRange` tune the reveal motion.
  */
 
 import React from "react";
@@ -14,9 +16,9 @@ import {
 } from "remotion";
 import { noise2D } from "@remotion/noise";
 import { colors, fonts, glass } from "../components/design";
-import { Caption } from "../components/Caption";
+import type { PromptsGridParams } from "../spec/kinds";
 
-const prompts = [
+const DEFAULT_PROMPTS: NonNullable<PromptsGridParams['prompts']> = [
   { text: "Write me a cold email for enterprise leads", time: "8:12 AM", app: "ChatGPT" },
   { text: "Compare Stripe vs Paddle for SaaS billing", time: "9:03 AM", app: "Perplexity" },
   { text: "Refactor this auth middleware to use JWT", time: "9:47 AM", app: "Claude" },
@@ -32,20 +34,30 @@ const prompts = [
   { text: "Wait... didn't I already figure this out?", time: "9:47 PM", app: "..." },
 ];
 
-const appColors: Record<string, string> = {
-  ChatGPT: colors.chatgpt, Claude: colors.claude, Gemini: colors.gemini,
-  Perplexity: colors.perplexity, "...": colors.accent,
+const DEFAULT_APP_COLORS: Record<string, string> = {
+  ChatGPT: colors.chatgpt,
+  Claude: colors.claude,
+  Gemini: colors.gemini,
+  Perplexity: colors.perplexity,
+  "...": colors.accent,
 };
 
-// Spread prompts across the full 380 frames
-const STAGGER = 22; // frames between each prompt appearing
+const DEFAULT_STAGGER = 22;
 
-export const Scene1_You: React.FC = () => {
+export const Scene1_You: React.FC<{
+  params?: Partial<PromptsGridParams>;
+  durationInFrames?: number;
+}> = ({ params, durationInFrames }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Scroll speed matched to stagger — prompts fill the scene evenly
-  const scrollY = interpolate(frame, [0, 370], [200, -280], { extrapolateRight: "clamp" });
+  const prompts = params?.prompts?.length ? params.prompts : DEFAULT_PROMPTS;
+  const STAGGER = params?.stagger ?? DEFAULT_STAGGER;
+  const appColors = { ...DEFAULT_APP_COLORS, ...(params?.appColors ?? {}) };
+  const scrollRange = params?.scrollRange ?? [200, -280];
+
+  const scrollEnd = durationInFrames ? Math.max(60, durationInFrames - 10) : 370;
+  const scrollY = interpolate(frame, [0, scrollEnd], scrollRange, { extrapolateRight: "clamp" });
 
   return (
     <AbsoluteFill style={{ background: colors.bg, overflow: "hidden" }}>
@@ -129,11 +141,6 @@ export const Scene1_You: React.FC = () => {
           </div>
         );
       })()}
-
-      {/* Captions synced to voice: 9.3s total */}
-      <Caption text="You use AI for everything." highlight={["everything."]} startFrame={0} durationFrames={75} />
-      <Caption text="Dozens of chats. Across five different apps. Every single day." highlight={["Dozens", "five", "Every"]} startFrame={80} durationFrames={120} />
-      <Caption text="Each one knows a piece. None sees the whole picture." highlight={["None", "whole", "picture."]} startFrame={240} durationFrames={130} />
     </AbsoluteFill>
   );
 };

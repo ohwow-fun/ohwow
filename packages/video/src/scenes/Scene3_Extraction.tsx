@@ -16,17 +16,17 @@ import { noise2D } from "@remotion/noise";
 import { colors, fonts } from "../components/design";
 import { GlassCard } from "../components/GlassCard";
 import { Counter } from "../components/Counter";
-import { Caption } from "../components/Caption";
+import { ExtractionParams } from "../spec/kinds";
 
-const cards = [
+const DEFAULT_CARDS = [
   { type: "Decision", text: "Postgres over MongoDB for transactional data", delay: 100 },
   { type: "Fact", text: "Users churn when onboarding exceeds 3 steps", delay: 140 },
   { type: "Procedure", text: "Always run migrations before deploy", delay: 180 },
   { type: "Insight", text: "The pricing page converts better without a free tier", delay: 220 },
 ];
 
-const Particles: React.FC<{ frame: number }> = ({ frame }) => {
-  const particles = Array.from({ length: 20 }, (_, i) => i);
+const Particles: React.FC<{ frame: number; count: number }> = ({ frame, count }) => {
+  const particles = Array.from({ length: count }, (_, i) => i);
   return (
     <>
       {particles.map((i) => {
@@ -50,16 +50,20 @@ const Particles: React.FC<{ frame: number }> = ({ frame }) => {
   );
 };
 
-export const Scene3: React.FC = () => {
+export const Scene3: React.FC<{ params?: Partial<ExtractionParams> }> = ({ params }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+
+  const cards = params?.cards?.length ? params.cards : DEFAULT_CARDS;
+  const particleCount = params?.particleCount ?? 20;
+  const counterData = params?.counter ?? { to: 127, label: "memories extracted", startFrame: 220, durationFrames: 60 };
 
   const orbPulse = 1 + Math.sin(frame * 0.08) * 0.1;
   const orbOpacity = interpolate(frame, [0, 20], [0, 1], { extrapolateRight: "clamp" });
 
   return (
     <AbsoluteFill style={{ background: colors.bg }}>
-      <Particles frame={frame} />
+      <Particles frame={frame} count={particleCount} />
 
       {/* Processing orb */}
       <div style={{
@@ -79,13 +83,8 @@ export const Scene3: React.FC = () => {
 
       {/* Counter */}
       <div style={{ position: "absolute", left: 60, bottom: 120 }}>
-        <Counter from={0} to={127} startFrame={220} durationFrames={60} label="memories extracted" />
+        <Counter from={0} to={counterData.to} startFrame={counterData.startFrame} durationFrames={counterData.durationFrames} label={counterData.label} />
       </div>
-
-      {/* Captions synced to voice: 10s total */}
-      <Caption text="Every decision you made. Every pattern you noticed." highlight={["decision", "pattern"]} startFrame={0} durationFrames={120} />
-      <Caption text="Every lesson you learned the hard way." highlight={["lesson"]} startFrame={125} durationFrames={90} />
-      <Caption text="Extracted. Structured. Yours." highlight={["Yours."]} startFrame={230} durationFrames={90} />
     </AbsoluteFill>
   );
 };

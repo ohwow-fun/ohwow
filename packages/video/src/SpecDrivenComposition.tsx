@@ -8,9 +8,10 @@ import {
 } from "@remotion/transitions";
 import { fade } from "@remotion/transitions/fade";
 import { slide } from "@remotion/transitions/slide";
-import type { VideoSpec, TransitionSpec, AudioRef } from "./spec/types";
+import type { VideoSpec, TransitionSpec, AudioRef, CaptionSpec } from "./spec/types";
 import { totalDurationFrames } from "./spec/totalDuration";
 import { renderScene } from "./scenes/registry";
+import { Caption } from "./components/Caption";
 import { loadBrandFonts } from "./fonts";
 
 loadBrandFonts();
@@ -65,6 +66,99 @@ const AudioLayer: React.FC<{ refs: AudioRef[]; totalFrames: number }> = ({
   </>
 );
 
+/**
+ * Compute the composition-time frame offset where each scene visually begins,
+ * accounting for transition overlap. Used to place captions at absolute time.
+ */
+function sceneStartFrames(spec: VideoSpec): number[] {
+  const starts: number[] = [];
+  let cursor = 0;
+  for (let i = 0; i < spec.scenes.length; i++) {
+    starts.push(cursor);
+    cursor += spec.scenes[i].durationInFrames;
+    const t = spec.transitions[i];
+    if (i < spec.scenes.length - 1 && t && t.kind !== "none") {
+      cursor -= t.durationInFrames;
+    }
+  }
+  return starts;
+}
+
+/**
+ * Auto-generate captions from scene narrations when scene.captions is absent
+ * but the workspace author stored a narration string. Splits the narration into
+ * 1-3 beats, distributed evenly across the scene duration.
+ */
+function autoCaptions(narration: string, durationFrames: number): CaptionSpec[] {
+  if (!narration || durationFrames < 30) return [];
+  const sentences = narration
+    .replace(/([.!?])\s+/g, "$1|")
+    .split("|")
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  if (sentences.length === 0) return [];
+
+  const totalChars = sentences.reduce((a, s) => a + s.length, 0);
+  const captions: CaptionSpec[] = [];
+  let frameOffset = 5;
+  const GAP = 5;
+
+  for (const sentence of sentences) {
+    const proportion = sentence.length / totalChars;
+    const dur = Math.max(30, Math.round((durationFrames - 10) * proportion) - GAP);
+    const words = sentence.split(/\s+/);
+    const highlight = words.length >= 4
+      ? [words[words.length - 1].replace(/[.,!?]$/, "")]
+      : undefined;
+    captions.push({
+      text: sentence,
+      highlight,
+      startFrame: frameOffset,
+      durationFrames: dur,
+    });
+    frameOffset += dur + GAP;
+  }
+  return captions;
+}
+
+const CaptionLayer: React.FC<{ spec: VideoSpec; totalFrames: number }> = ({
+  spec,
+  totalFrames,
+}) => {
+  const starts = sceneStartFrames(spec);
+  const allCaptions: Array<CaptionSpec & { globalStart: number }> = [];
+
+  spec.scenes.forEach((scene, i) => {
+    const sceneStart = starts[i];
+    const caps = scene.captions?.length
+      ? scene.captions
+      : autoCaptions(
+          (scene as { narration?: string }).narration ?? "",
+          scene.durationInFrames,
+        );
+    for (const c of caps) {
+      allCaptions.push({
+        ...c,
+        globalStart: sceneStart + c.startFrame,
+      });
+    }
+  });
+
+  return (
+    <>
+      {allCaptions.map((c, i) => (
+        <Caption
+          key={i}
+          text={c.text}
+          highlight={c.highlight}
+          startFrame={c.globalStart}
+          durationFrames={c.durationFrames}
+        />
+      ))}
+    </>
+  );
+};
+
 export const SpecDrivenComposition: React.FC<VideoSpec> = (spec) => {
   const totalFrames = totalDurationFrames(spec);
   const { scenes, transitions, voiceovers, music } = spec;
@@ -102,6 +196,8 @@ export const SpecDrivenComposition: React.FC<VideoSpec> = (spec) => {
           return parts;
         })}
       </TransitionSeries>
+
+      <CaptionLayer spec={spec} totalFrames={totalFrames} />
     </AbsoluteFill>
   );
 };

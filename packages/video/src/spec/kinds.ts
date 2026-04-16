@@ -12,6 +12,15 @@ export interface FloatingIcon {
   scale?: number;
 }
 
+export interface OrbitingIcon {
+  emoji: string;
+  size: number;
+  orbit: number;
+  speed: number;
+  radius: number;
+  yRatio: number;
+}
+
 export interface PromptsGridParams {
   prompts: PromptItem[];
   stagger: number;
@@ -32,8 +41,8 @@ export interface ExtractionParams {
 
 export interface OutcomeOrbitParams {
   outcomes: { text: string; color: string; icon: string; delay: number }[];
-  floatingIcons: FloatingIcon[];
-  connectionDots: number;
+  floatingIcons: OrbitingIcon[];
+  connectionDots: { seed: string; speed: number; size: number }[];
   orbitalRings: number;
 }
 

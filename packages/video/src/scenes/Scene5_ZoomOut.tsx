@@ -17,10 +17,10 @@ import {
 } from "remotion";
 import { noise2D } from "@remotion/noise";
 import { colors, fonts, glass } from "../components/design";
-import { Caption } from "../components/Caption";
+import { OutcomeOrbitParams } from "../spec/kinds";
 
 // Floating automation icons that orbit around the cards
-const floatingIcons = [
+const DEFAULT_FLOATING_ICONS = [
   { emoji: "🤖", size: 22, orbit: 0, speed: 0.008, radius: 340, yRatio: 0.4 },
   { emoji: "📧", size: 18, orbit: 0.5, speed: 0.012, radius: 380, yRatio: 0.35 },
   { emoji: "📊", size: 20, orbit: 1.2, speed: 0.01, radius: 350, yRatio: 0.45 },
@@ -38,13 +38,13 @@ const floatingIcons = [
 ];
 
 // Connection particles that flow between cards
-const connectionDots = Array.from({ length: 30 }, (_, i) => ({
+const DEFAULT_CONNECTION_DOTS = Array.from({ length: 30 }, (_, i) => ({
   seed: `conn-${i}`,
   speed: 0.5 + (i % 5) * 0.3,
   size: 2 + (i % 3),
 }));
 
-const outcomes = [
+const DEFAULT_OUTCOMES = [
   { text: "You wake up. Your agents already handled overnight leads.", color: colors.accent, icon: "☀️", delay: 10 },
   { text: "A client messages on WhatsApp. Your AI responds in your voice.", color: colors.green, icon: "💬", delay: 30 },
   { text: "Competitor changes pricing. You know before they announce it.", color: colors.blue, icon: "🔍", delay: 50 },
@@ -56,9 +56,13 @@ const outcomes = [
   { text: "You focus on the work only you can do. Everything else is handled.", color: colors.accent, icon: "🎯", delay: 205 },
 ];
 
-export const Scene5_ZoomOut: React.FC = () => {
+export const Scene5_ZoomOut: React.FC<{ params?: Partial<OutcomeOrbitParams> }> = ({ params }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+
+  const outcomes = params?.outcomes?.length ? params.outcomes : DEFAULT_OUTCOMES;
+  const floatingIcons = params?.floatingIcons?.length ? params.floatingIcons : DEFAULT_FLOATING_ICONS;
+  const connectionDots = params?.connectionDots?.length ? params.connectionDots : DEFAULT_CONNECTION_DOTS;
 
   const globalEnter = spring({ fps, frame, config: { damping: 200 }, durationInFrames: 20 });
 
@@ -196,11 +200,6 @@ export const Scene5_ZoomOut: React.FC = () => {
         position: "absolute", bottom: 0, left: 0, right: 0, height: 100,
         background: `linear-gradient(transparent, ${colors.bg})`, pointerEvents: "none", zIndex: 6,
       }} />
-
-      {/* Captions */}
-      <Caption text="This is what your week looks like." highlight={["your"]} startFrame={0} durationFrames={80} />
-      <Caption text="Not automation. A team that thinks for itself." highlight={["thinks"]} startFrame={85} durationFrames={90} />
-      <Caption text="You do the work only you can do. Everything else is handled." highlight={["only", "you", "handled."]} startFrame={190} durationFrames={110} />
     </AbsoluteFill>
   );
 };

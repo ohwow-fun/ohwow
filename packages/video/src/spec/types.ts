@@ -27,12 +27,19 @@ export type TransitionSpec =
   | { kind: "slide"; direction: "from-left" | "from-right"; durationInFrames: number }
   | { kind: "none" };
 
-export type SceneKind =
+/**
+ * Built-in scene kinds shipped with @ohwow/video. The type is a plain string
+ * so consumers can register custom kinds via registerSceneKind() without
+ * touching this file.
+ */
+export type BuiltinSceneKind =
   | "prompts-grid"
   | "drop"
   | "extraction"
   | "outcome-orbit"
   | "cta-mesh";
+
+export type SceneKind = BuiltinSceneKind | (string & {});
 
 export interface CaptionSpec {
   text: string;
@@ -41,24 +48,24 @@ export interface CaptionSpec {
   durationFrames: number;
 }
 
-export interface Scene<K extends SceneKind = SceneKind> {
+export interface Scene<K extends string = SceneKind> {
   id: string;
   kind: K;
   durationInFrames: number;
-  /**
-   * v1: optional — scene components use baked-in defaults when omitted.
-   * v2 will thread params through to override scene content for variants.
-   */
-  params?: Partial<ScenePayload[K]>;
+  /** Visual params — shape depends on kind. Scenes fall back to baked-in defaults when omitted. */
+  params?: Record<string, unknown>;
+  /** If provided, composition renders these as subtitle overlays at global time = scene start + caption.startFrame. */
   captions?: CaptionSpec[];
+  /** Raw narration text. Used by the composition to auto-generate captions when captions[] is absent. */
+  narration?: string;
 }
 
 export interface VideoSpec {
   id: string;
   version: 1;
-  fps: 30;
-  width: 1280;
-  height: 720;
+  fps: number;
+  width: number;
+  height: number;
   brand: BrandTokens;
   music?: AudioRef;
   voiceovers: AudioRef[];

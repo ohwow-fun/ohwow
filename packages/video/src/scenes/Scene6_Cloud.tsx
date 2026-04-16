@@ -16,15 +16,24 @@ import {
 } from "remotion";
 import { noise2D } from "@remotion/noise";
 import { colors, fonts, glass } from "../components/design";
-import { Caption } from "../components/Caption";
 import { OhwowWordmark } from "../components/logos";
+import { CtaMeshParams } from "../spec/kinds";
 
-const notifications = [
+const DEFAULT_NOTIFICATIONS = [
   { text: "Growth Agent finished your X thread draft", icon: "✍️", color: colors.accent, delay: 40 },
   { text: "New lead: sarah@acme.co replied to cold email", icon: "🔥", color: colors.green, delay: 60 },
   { text: "Blog post scheduled for Thursday 9AM", icon: "📅", color: colors.blue, delay: 78 },
   { text: "Competitor raised prices 20%. Analysis ready.", icon: "📊", color: colors.purple, delay: 96 },
   { text: "3 tasks completed while you were at lunch", icon: "✓", color: colors.green, delay: 114 },
+];
+
+const DEFAULT_TERMINAL_LINES = [
+  { t: "▶ 3 agents active", c: colors.green, d: 10 },
+  { t: "▶ Growth: drafting X thread...", c: colors.accent, d: 22 },
+  { t: "▶ Research: monitoring competitors...", c: colors.blue, d: 34 },
+  { t: "▶ Sales: following up leads...", c: colors.green, d: 46 },
+  { t: "  127 memories | 214 conversations", c: colors.textMuted, d: 58 },
+  { t: "  ✓ synced to cloud 4s ago", c: colors.textDim, d: 70 },
 ];
 
 const DataFlow: React.FC<{ frame: number; count: number }> = ({ frame, count }) => {
@@ -56,18 +65,30 @@ const DataFlow: React.FC<{ frame: number; count: number }> = ({ frame, count }) 
   );
 };
 
-export const Scene6_Cloud: React.FC = () => {
+export const Scene6_Cloud: React.FC<{ params?: Partial<CtaMeshParams> }> = ({ params }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+
+  const notifications = params?.notifications?.length ? params.notifications : DEFAULT_NOTIFICATIONS;
+  const terminalLines = params?.terminalLines?.length ? params.terminalLines : DEFAULT_TERMINAL_LINES;
+  const cta = {
+    tagline: "Conversations die. Knowledge shouldn\u2019t.",
+    subline: "Free and open source.",
+    logoSrc: "ohwow-logo.png",
+    wordmark: "ohwow",
+    showDotFun: true,
+    ...params?.cta,
+  };
+  const ctaStartFrame = params?.ctaStartFrame ?? 160;
 
   const laptopEnter = spring({ fps, frame: frame - 5, config: { damping: 30, stiffness: 70 }, durationInFrames: 20 });
   const phoneEnter = spring({ fps, frame: frame - 20, config: { damping: 30, stiffness: 70 }, durationInFrames: 20 });
   const flowStart = spring({ fps, frame: frame - 35, config: { damping: 200 }, durationInFrames: 15 });
 
-  // CTA starts at frame 160 — voice says "Conversations die..." around 5.5s in
-  const ctaPhase = frame >= 160;
-  const ctaFade = ctaPhase ? spring({ fps, frame: frame - 160, config: { damping: 200 }, durationInFrames: 25 }) : 0;
-  const contentFade = ctaPhase ? interpolate(frame, [155, 175], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 1;
+  // CTA starts at ctaStartFrame
+  const ctaPhase = frame >= ctaStartFrame;
+  const ctaFade = ctaPhase ? spring({ fps, frame: frame - ctaStartFrame, config: { damping: 200 }, durationInFrames: 25 }) : 0;
+  const contentFade = ctaPhase ? interpolate(frame, [ctaStartFrame - 5, ctaStartFrame + 15], [1, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }) : 1;
 
   return (
     <AbsoluteFill style={{ background: colors.bg }}>
@@ -95,14 +116,7 @@ export const Scene6_Cloud: React.FC = () => {
               </span>
             </div>
             <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 5 }}>
-              {[
-                { t: "▶ 3 agents active", c: colors.green, d: 10 },
-                { t: "▶ Growth: drafting X thread...", c: colors.accent, d: 22 },
-                { t: "▶ Research: monitoring competitors...", c: colors.blue, d: 34 },
-                { t: "▶ Sales: following up leads...", c: colors.green, d: 46 },
-                { t: "  127 memories | 214 conversations", c: colors.textMuted, d: 58 },
-                { t: "  ✓ synced to cloud 4s ago", c: colors.textDim, d: 70 },
-              ].map((line, i) => {
+              {terminalLines.map((line, i) => {
                 const enter = spring({ fps, frame: frame - line.d, config: { damping: 200 }, durationInFrames: 10 });
                 if (frame < line.d) return <div key={i} style={{ height: 16 }} />;
                 return (
@@ -134,7 +148,7 @@ export const Scene6_Cloud: React.FC = () => {
           }}>
             <div style={{ padding: "4px 20px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted }}>9:41</span>
-              <Img src={staticFile("ohwow-logo.png")} style={{ width: 14, height: 14, borderRadius: 3 }} />
+              <Img src={staticFile(cta.logoSrc)} style={{ width: 14, height: 14, borderRadius: 3 }} />
             </div>
             <div style={{ padding: "0 12px", display: "flex", flexDirection: "column", gap: 6 }}>
               {notifications.map((notif, i) => {
@@ -167,31 +181,26 @@ export const Scene6_Cloud: React.FC = () => {
       {ctaPhase && (
         <AbsoluteFill style={{ justifyContent: "center", alignItems: "center", opacity: ctaFade }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-            <Img src={staticFile("ohwow-logo.png")} style={{
+            <Img src={staticFile(cta.logoSrc)} style={{
               width: 90, height: 90, borderRadius: 22,
               transform: `scale(${interpolate(ctaFade, [0, 1], [0.8, 1])})`,
             }} />
-            <OhwowWordmark fontSize={56} showDotFun={true} />
+            <OhwowWordmark fontSize={56} showDotFun={cta.showDotFun} />
             <div style={{
               fontFamily: fonts.sans, fontSize: 22, fontWeight: 400, color: colors.textMuted,
-              opacity: interpolate(frame - 180, [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+              opacity: interpolate(frame - (ctaStartFrame + 20), [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
             }}>
-              Conversations die. Knowledge shouldn&apos;t.
+              {cta.tagline}
             </div>
             <div style={{
               fontFamily: fonts.sans, fontSize: 14, color: colors.textDim,
-              opacity: interpolate(frame - 205, [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
+              opacity: interpolate(frame - (ctaStartFrame + 45), [0, 15], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" }),
             }}>
-              Free and open source.
+              {cta.subline}
             </div>
           </div>
         </AbsoluteFill>
       )}
-
-      {/* Captions synced to voice: 8.3s total */}
-      <Caption text="Runs on your laptop. Lives in your pocket." highlight={["your"]} startFrame={5} durationFrames={75} />
-      <Caption text="Your agents report in from anywhere." highlight={["anywhere."]} startFrame={82} durationFrames={70} />
-      {/* No caption for CTA — the text on screen IS the message */}
     </AbsoluteFill>
   );
 };
