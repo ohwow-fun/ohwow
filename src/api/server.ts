@@ -54,6 +54,7 @@ import { createPermissionRequestsRouter } from './routes/permission-requests.js'
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createPulseRouter } from './routes/pulse.js';
+import { createConversationsRouter } from './routes/conversations.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createWhatsAppRouter } from './routes/whatsapp.js';
@@ -63,6 +64,7 @@ import { createRagPublicRouter } from './routes/rag.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createOrgRouter } from './routes/org.js';
+import { createMarketingRouter } from './routes/marketing.js';
 import { createAttributionRouter } from './routes/attribution.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createStripeWebhookRouter } from '../webhooks/stripe-subscription.js';
@@ -555,6 +557,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createActivityRouter(db));
   app.use(createApprovalsRouter(db));
   app.use(createDeliverablesRouter(db));
+  app.use(createMarketingRouter(db));
   app.use(createSchedulesRouter(db, onScheduleChange));
   app.use(createKnowledgeRouter(db, config.dataDir));
   app.use(createSystemRouter(db, rawDb, startTime));
@@ -589,6 +592,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createFailingTriggersRouter(db));
   app.use(createFindingsRouter(db));
   app.use(createPulseRouter(rawDb, startTime, config.dataDir));
+  app.use(createConversationsRouter(rawDb, config.dataDir));
   if (config.dataDir) {
     app.use(createAttachmentsRouter(db, config.dataDir));
   }

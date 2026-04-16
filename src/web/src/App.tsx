@@ -37,6 +37,8 @@ import { BriefingsPage } from './pages/Briefings';
 import { PodcastPage } from './pages/Podcast';
 import { EyePage } from './pages/Eye';
 import { PulsePage } from './pages/Pulse';
+import { MarketingPage } from './pages/Marketing';
+import { ConversationsPage } from './pages/Conversations';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -79,6 +81,8 @@ export function App() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="conversations" element={<ConversationsPage />} />
+          <Route path="conversations/:pair" element={<ConversationsPage />} />
           <Route path="workflows" element={<WorkflowsHub />} />
           <Route path="webhook-events" element={<WebhookEventsPage />} />
           <Route path="goals" element={<GoalsPage />} />
@@ -90,6 +94,7 @@ export function App() {
           <Route path="briefings" element={<BriefingsPage />} />
           <Route path="podcast" element={<PodcastPage />} />
           <Route path="eye" element={<EyePage />} />
+          <Route path="marketing" element={<MarketingPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
