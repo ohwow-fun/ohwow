@@ -71,14 +71,47 @@ interface AuthorEvidence extends Record<string, unknown> {
     commitSha?: string;
     filesWritten?: string[];
   } | null;
-  /** Which bucket the picked brief came from (priority / roadmap / fifo). */
+  /** Which bucket the picked brief came from (priority / roadmap / revenue / fifo). */
   sorting_rationale?: {
-    bucket: 'priority' | 'roadmap' | 'fifo';
+    bucket: 'priority' | 'roadmap' | 'revenue' | 'fifo';
     matched: string | null;
     priority_count: number;
     roadmap_count: number;
+    revenue_count: number;
     fifo_count: number;
   };
+}
+
+/**
+ * Money-telos keyword set. A proposal whose slug, template, name, or
+ * hypothesis contains any of these substrings (case-insensitive) gets
+ * bucketed above fifo so the author runs it sooner. This is the
+ * automatic layer — `strategy.priority_experiments` still trumps it
+ * when the operator names specific slugs by hand.
+ *
+ * Kept narrow on purpose: only tokens that clearly point at revenue-
+ * adjacent surfaces (sales loop, outreach, pricing, attribution,
+ * burn). Generic words like "user" or "growth" would over-match and
+ * defeat the boost.
+ */
+export const REVENUE_KEYWORDS: readonly string[] = [
+  'revenue', 'sales', 'deal', 'customer', 'conversion',
+  'outreach', 'outbound', 'reply-rate', 'dm-', 'messaging',
+  'classifier', 'qualified', 'attribution', 'thermostat',
+  'pricing', 'billing', 'burn-rate', 'spend',
+];
+
+function matchesRevenueKeyword(p: ProposalCandidate): string | null {
+  const haystack = [
+    p.brief.slug ?? '',
+    p.brief.template ?? '',
+    p.brief.name ?? '',
+    p.brief.hypothesis ?? '',
+  ].join('\n').toLowerCase();
+  for (const kw of REVENUE_KEYWORDS) {
+    if (haystack.includes(kw)) return kw;
+  }
+  return null;
 }
 
 interface ProposalCandidate {
@@ -97,12 +130,13 @@ interface ProposalCandidate {
  *     observer. Substring-match against brief.slug OR brief.template so
  *     a token like "x-ops" pulls both a slug and a template family.
  *
- * Buckets, in order: priority → roadmap → fifo. Within a bucket, oldest
- * wins (FIFO fairness — starvation otherwise). A missing or empty config
- * value degrades cleanly to pure FIFO, preserving the pre-ranker
- * behaviour for any workspace that hasn't wired strategy yet.
+ * Buckets, in order: priority → roadmap → revenue → fifo. Within a
+ * bucket, oldest wins (FIFO fairness — starvation otherwise). A missing
+ * or empty config value degrades cleanly; revenue is the only
+ * automatic layer (keyword match against REVENUE_KEYWORDS) and is
+ * always on — the money telos shouldn't need per-workspace wiring.
  */
-function rankProposals(proposals: ProposalCandidate[]): {
+export function rankProposals(proposals: ProposalCandidate[]): {
   picked: ProposalCandidate;
   rationale: NonNullable<AuthorEvidence['sorting_rationale']>;
 } {
@@ -111,7 +145,9 @@ function rankProposals(proposals: ProposalCandidate[]): {
 
   const priorityBucket: ProposalCandidate[] = [];
   const roadmapBucket: ProposalCandidate[] = [];
+  const revenueBucket: ProposalCandidate[] = [];
   const fifoBucket: ProposalCandidate[] = [];
+  const revenueMatches = new Map<string, string>();
 
   for (const p of proposals) {
     if (Array.isArray(priorityList) && priorityList.includes(p.brief.slug)) {
@@ -125,6 +161,12 @@ function rankProposals(proposals: ProposalCandidate[]): {
       roadmapBucket.push(p);
       continue;
     }
+    const kw = matchesRevenueKeyword(p);
+    if (kw) {
+      revenueBucket.push(p);
+      revenueMatches.set(p.brief.slug, kw);
+      continue;
+    }
     fifoBucket.push(p);
   }
 
@@ -133,18 +175,19 @@ function rankProposals(proposals: ProposalCandidate[]): {
 
   const priority = oldestFirst(priorityBucket);
   const roadmap = oldestFirst(roadmapBucket);
+  const revenue = oldestFirst(revenueBucket);
   const fifo = oldestFirst(fifoBucket);
+  const counts = {
+    priority_count: priority.length,
+    roadmap_count: roadmap.length,
+    revenue_count: revenue.length,
+    fifo_count: fifo.length,
+  };
 
   if (priority.length > 0) {
     return {
       picked: priority[0],
-      rationale: {
-        bucket: 'priority',
-        matched: priority[0].brief.slug,
-        priority_count: priority.length,
-        roadmap_count: roadmap.length,
-        fifo_count: fifo.length,
-      },
+      rationale: { bucket: 'priority', matched: priority[0].brief.slug, ...counts },
     };
   }
   if (roadmap.length > 0) {
@@ -155,24 +198,22 @@ function rankProposals(proposals: ProposalCandidate[]): {
       : null;
     return {
       picked: roadmap[0],
+      rationale: { bucket: 'roadmap', matched, ...counts },
+    };
+  }
+  if (revenue.length > 0) {
+    return {
+      picked: revenue[0],
       rationale: {
-        bucket: 'roadmap',
-        matched,
-        priority_count: priority.length,
-        roadmap_count: roadmap.length,
-        fifo_count: fifo.length,
+        bucket: 'revenue',
+        matched: revenueMatches.get(revenue[0].brief.slug) ?? null,
+        ...counts,
       },
     };
   }
   return {
     picked: fifo[0],
-    rationale: {
-      bucket: 'fifo',
-      matched: null,
-      priority_count: priority.length,
-      roadmap_count: roadmap.length,
-      fifo_count: fifo.length,
-    },
+    rationale: { bucket: 'fifo', matched: null, ...counts },
   };
 }
 

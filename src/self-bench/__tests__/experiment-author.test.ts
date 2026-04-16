@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { ExperimentAuthorExperiment } from '../experiments/experiment-author.js';
+import {
+  ExperimentAuthorExperiment,
+  rankProposals,
+  REVENUE_KEYWORDS,
+} from '../experiments/experiment-author.js';
 import {
   setSelfCommitRepoRoot,
   _resetSelfCommitForTests,
@@ -272,6 +276,92 @@ describe('ExperimentAuthorExperiment — probe', () => {
     expect(ev.sorting_rationale.fifo_count).toBe(1);
 
     _resetRuntimeConfigCacheForTests();
+  });
+});
+
+describe('rankProposals — revenue bucket', () => {
+  const makeCandidate = (slug: string, ranAt: string, overrides: Partial<ExperimentBrief> = {}) => ({
+    findingId: `f-${slug}`,
+    subject: `proposal:${slug}`,
+    ranAt,
+    brief: { ...sampleBrief, slug, ...overrides },
+  });
+
+  beforeEach(() => { _resetRuntimeConfigCacheForTests(); });
+  afterEach(() => { _resetRuntimeConfigCacheForTests(); });
+
+  it('routes a revenue-keyword match above plain FIFO', () => {
+    const plain = makeCandidate('plain-proposal', '2026-04-14T09:00:00Z');
+    const revenue = makeCandidate('outreach-reply-rate-probe', '2026-04-14T12:00:00Z');
+    const { picked, rationale } = rankProposals([plain, revenue]);
+    expect(picked.brief.slug).toBe('outreach-reply-rate-probe');
+    expect(rationale.bucket).toBe('revenue');
+    expect(rationale.matched).toBe('outreach');
+    expect(rationale.revenue_count).toBe(1);
+    expect(rationale.fifo_count).toBe(1);
+  });
+
+  it('priority_experiments still trumps the revenue bucket', () => {
+    _seedRuntimeConfigCacheForTests('strategy.priority_experiments', ['must-ship-first']);
+    const priority = makeCandidate('must-ship-first', '2026-04-14T14:00:00Z');
+    const revenue = makeCandidate('outreach-tuner', '2026-04-14T09:00:00Z');
+    const { picked, rationale } = rankProposals([priority, revenue]);
+    expect(picked.brief.slug).toBe('must-ship-first');
+    expect(rationale.bucket).toBe('priority');
+  });
+
+  it('roadmap_priorities still trumps the revenue bucket', () => {
+    _seedRuntimeConfigCacheForTests('strategy.roadmap_priorities', ['x-ops']);
+    const roadmap = makeCandidate('x-ops-tuner', '2026-04-14T14:00:00Z');
+    const revenue = makeCandidate('outreach-tuner', '2026-04-14T09:00:00Z');
+    const { picked, rationale } = rankProposals([roadmap, revenue]);
+    expect(picked.brief.slug).toBe('x-ops-tuner');
+    expect(rationale.bucket).toBe('roadmap');
+  });
+
+  it('matches revenue keywords in template and hypothesis, not just slug', () => {
+    const byHypothesis = makeCandidate('generic-probe', '2026-04-14T09:00:00Z', {
+      hypothesis: 'measures reply-rate on inbound DMs from qualified leads',
+    });
+    const plain = makeCandidate('plain-proposal', '2026-04-14T08:00:00Z');
+    const { picked, rationale } = rankProposals([byHypothesis, plain]);
+    expect(picked.brief.slug).toBe('generic-probe');
+    expect(rationale.bucket).toBe('revenue');
+  });
+
+  it('keyword set stays narrow (regression guard against over-matching)', () => {
+    // Words in sampleBrief.hypothesis ("the author pipeline produces
+    // committable code") must NOT trigger the bucket. If this test
+    // fails, a recently-added keyword is too generic.
+    const plain = makeCandidate('plain-proposal', '2026-04-14T09:00:00Z');
+    const { rationale } = rankProposals([plain]);
+    expect(rationale.bucket).toBe('fifo');
+  });
+
+  it('REVENUE_KEYWORDS stay money-adjacent (snapshot)', () => {
+    // If you add/remove a keyword, update the snapshot intentionally.
+    expect([...REVENUE_KEYWORDS].sort()).toMatchInlineSnapshot(`
+      [
+        "attribution",
+        "billing",
+        "burn-rate",
+        "classifier",
+        "conversion",
+        "customer",
+        "deal",
+        "dm-",
+        "messaging",
+        "outbound",
+        "outreach",
+        "pricing",
+        "qualified",
+        "reply-rate",
+        "revenue",
+        "sales",
+        "spend",
+        "thermostat",
+      ]
+    `);
   });
 });
 
