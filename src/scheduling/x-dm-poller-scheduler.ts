@@ -26,7 +26,7 @@ import path from 'node:path';
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { withCdpLane } from '../execution/browser/cdp-lane.js';
-import { findContactByXUserId, type ContactRow } from '../lib/contacts.js';
+import { findContactByXUserId, upsertContactFromDm, type ContactRow } from '../lib/contacts.js';
 import { logger } from '../lib/logger.js';
 import {
   listDmsViaBrowser,
@@ -108,6 +108,13 @@ interface ExistingThreadRow {
   observation_count: number | null;
 }
 
+interface ExistingUnlinkedThread {
+  id: string;
+  conversation_pair: string;
+  primary_name: string | null;
+  counterparty_user_id: string | null;
+}
+
 /** Cached identity resolution for a thread during one tick. */
 interface CounterpartyResolution {
   counterpartyUserId: string | null;
@@ -139,9 +146,52 @@ export class XDmPollerScheduler {
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.running) return;
     this.running = true;
+    void this.backfillUnlinkedContacts();
     void this.tick();
     this.timer = setInterval(() => void this.tick(), intervalMs);
     logger.info({ intervalMs }, '[XDmPollerScheduler] started');
+  }
+
+  /**
+   * One-shot backfill on boot: any x_dm_threads row without a contact_id
+   * gets a fresh contact created from its cached primary_name +
+   * conversation_pair. Runs off the browser path so it works even when
+   * Chrome is unavailable. Idempotent — upsertContactFromDm keys on
+   * conversation_pair, so re-running is a no-op once threads are
+   * linked.
+   */
+  private async backfillUnlinkedContacts(): Promise<void> {
+    try {
+      const { data } = await this.db
+        .from<ExistingUnlinkedThread>('x_dm_threads')
+        .select('id, conversation_pair, primary_name, counterparty_user_id')
+        .eq('workspace_id', this.workspaceId)
+        .is('contact_id', null)
+        .limit(200);
+      const rows = (data as ExistingUnlinkedThread[] | null) ?? [];
+      if (rows.length === 0) return;
+      let linked = 0;
+      for (const row of rows) {
+        const contactId = await upsertContactFromDm(this.db, this.workspaceId, {
+          conversationPair: row.conversation_pair,
+          primaryName: row.primary_name,
+          counterpartyUserId: row.counterparty_user_id,
+        });
+        if (!contactId) continue;
+        try {
+          await this.db
+            .from('x_dm_threads')
+            .update({ contact_id: contactId })
+            .eq('id', row.id);
+          linked++;
+        } catch { /* next tick tries again */ }
+      }
+      if (linked > 0) {
+        logger.info({ linked, scanned: rows.length }, '[XDmPollerScheduler] backfilled DM contact links');
+      }
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : err }, '[XDmPollerScheduler] backfill failed');
+    }
   }
 
   stop(): void {
@@ -192,7 +242,7 @@ export class XDmPollerScheduler {
       let inserted = 0;
       let unchanged = 0;
       for (const thread of result.threads) {
-        const resolution = await this.resolveCounterparty(thread.pair, selfUserId);
+        const resolution = await this.resolveCounterparty(thread.pair, selfUserId, thread.primaryName);
         resolutionByPair.set(thread.pair, resolution);
         const { previewChanged } = await this.ingestThread(thread, resolution);
         if (previewChanged) inserted++;
@@ -602,14 +652,32 @@ export class XDmPollerScheduler {
   private async resolveCounterparty(
     pair: string,
     selfUserId: string | null,
+    primaryName: string | null,
   ): Promise<CounterpartyResolution> {
-    if (!selfUserId) return { counterpartyUserId: null, contactId: null };
-    const counterpartyUserId = pickCounterpartyId(pair, selfUserId);
-    if (!counterpartyUserId) return { counterpartyUserId: null, contactId: null };
-    const contact: ContactRow | null = await findContactByXUserId(
-      this.db, this.workspaceId, counterpartyUserId,
-    );
-    return { counterpartyUserId, contactId: contact?.id ?? null };
+    const counterpartyUserId = selfUserId ? pickCounterpartyId(pair, selfUserId) : null;
+
+    // Idempotent upsert — every DM thread becomes a CRM contact. Falls
+    // back to conversation_pair keying when the operator's self user id
+    // isn't configured yet. If creation fails (DB error), we still
+    // proceed: the thread ingests without a contact_id and we try again
+    // next tick.
+    const contactId = await upsertContactFromDm(this.db, this.workspaceId, {
+      conversationPair: pair,
+      primaryName,
+      counterpartyUserId,
+    });
+
+    // Also try the legacy direct lookup so callers that only care about
+    // x_user_id → contact still get a consistent result when the row
+    // was created outside this helper (e.g. by the operator manually).
+    if (!contactId && counterpartyUserId) {
+      const contact: ContactRow | null = await findContactByXUserId(
+        this.db, this.workspaceId, counterpartyUserId,
+      );
+      return { counterpartyUserId, contactId: contact?.id ?? null };
+    }
+
+    return { counterpartyUserId, contactId };
   }
 
   private appendJsonl(entry: Record<string, unknown>): void {

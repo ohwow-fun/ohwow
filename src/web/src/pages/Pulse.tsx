@@ -125,6 +125,26 @@ interface PulseData {
     };
     approvalsPending: number;
     crmMilestones: CrmMilestone[];
+    unlinkedThreads: Array<{
+      id: string;
+      primary_name: string | null;
+      last_preview: string | null;
+      last_seen_at: string;
+      conversation_pair: string;
+      counterparty_user_id: string | null;
+    }>;
+    eventsByKind: Array<{ kind: string; c: number }>;
+    efficiency: {
+      totalBurnCents: number;
+      costPerLeadCents: number;
+      costPerQualifiedCents: number;
+      costPerPaidCents: number;
+    };
+    dmHealth: {
+      threadsTotal: number;
+      threadsLinked: number;
+      threadsUnlinked: number;
+    };
   };
   activity: ActivityRow[];
 }
@@ -561,6 +581,90 @@ export function PulsePage() {
           </p>
         </div>
       </div>
+
+      {/* ====== Pipeline efficiency ====== */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <Tile
+          label="Cost per lead"
+          value={fmtCents(pipeline.efficiency.costPerLeadCents)}
+          sub={`${pipeline.funnel.leads.total} leads · ${fmtCents(pipeline.efficiency.totalBurnCents)} total burn`}
+          hint="All-time LLM burn ÷ all-time CRM leads. The loop's cost of discovering one human."
+        />
+        <Tile
+          label="Cost per qualified"
+          value={pipeline.funnel.qualified.total > 0 ? fmtCents(pipeline.efficiency.costPerQualifiedCents) : '.'}
+          sub={`${pipeline.funnel.qualified.total} qualified`}
+          accent={pipeline.funnel.qualified.total > 0 ? 'text-info' : 'text-neutral-500'}
+          hint="Cost to produce a buyer-intent-qualified lead."
+        />
+        <Tile
+          label="Cost per paid"
+          value={pipeline.funnel.paid.total > 0 ? fmtCents(pipeline.efficiency.costPerPaidCents) : '.'}
+          sub={pipeline.funnel.paid.total > 0 ? `${pipeline.funnel.paid.total} paid` : 'no paid conversions yet'}
+          accent={pipeline.funnel.paid.total > 0 ? 'text-success' : 'text-neutral-500'}
+          hint="Total burn ÷ paid conversions. This is the number that has to shrink."
+        />
+        <Tile
+          label="DM threads unlinked"
+          value={pipeline.dmHealth.threadsUnlinked}
+          sub={`${pipeline.dmHealth.threadsLinked} of ${pipeline.dmHealth.threadsTotal} linked to a contact`}
+          accent={pipeline.dmHealth.threadsUnlinked > 0 ? 'text-warning' : 'text-success'}
+          hint="Every unlinked DM thread is a lead the loop is talking to but can't route revenue events back to."
+        />
+      </div>
+
+      {/* ====== Unlinked DM threads — actionable ====== */}
+      {pipeline.unlinkedThreads.length > 0 && (
+        <div className="border border-warning/20 bg-warning/[0.02] rounded-lg p-5 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] text-warning uppercase tracking-wider">Unlinked DM threads · leak</p>
+              <p className="text-[10px] text-neutral-500 mt-0.5">
+                These conversations aren't bound to a CRM contact. Without a contact row, the funnel doesn't count them and revenue can't attribute.
+              </p>
+            </div>
+          </div>
+          <ul className="divide-y divide-white/[0.04]">
+            {pipeline.unlinkedThreads.map(t => (
+              <li key={t.id} className="flex items-start gap-3 py-2 text-xs">
+                <span className="inline-block w-1.5 h-1.5 rounded-full mt-1.5 bg-warning flex-none" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-neutral-200 truncate font-medium">
+                    {t.primary_name ?? 'Unknown sender'}
+                    {t.counterparty_user_id
+                      ? <span className="text-[10px] text-neutral-500 ml-2">uid {t.counterparty_user_id}</span>
+                      : <span className="text-[10px] text-critical ml-2">no user id</span>}
+                  </p>
+                  {t.last_preview && (
+                    <p className="text-neutral-500 truncate mt-0.5">"{t.last_preview}"</p>
+                  )}
+                </div>
+                <span className="text-[10px] text-neutral-600 flex-none tabular-nums">{relTime(t.last_seen_at)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ====== Contact event breakdown ====== */}
+      {pipeline.eventsByKind.length > 0 && (
+        <div className="border border-white/[0.08] rounded-lg p-5 mb-6 bg-white/[0.01]">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] text-neutral-500 uppercase tracking-wider">Contact events · last 30 days</p>
+              <p className="text-[10px] text-neutral-600 mt-0.5">Every meaningful pipeline interaction, whether or not it maps to a funnel stage.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            {pipeline.eventsByKind.map(e => (
+              <div key={e.kind} className="border border-white/[0.06] rounded px-3 py-2 bg-white/[0.01]">
+                <p className="text-[10px] text-neutral-500 uppercase tracking-wider truncate">{e.kind}</p>
+                <p className="text-lg font-semibold tabular-nums mt-0.5">{e.c}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ====== Top revenue contributors ====== */}
       {pipeline.revenueByContact.length > 0 && (

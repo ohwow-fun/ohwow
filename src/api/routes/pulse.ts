@@ -279,6 +279,58 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
         WHERE workspace_id=? AND status='needs_approval'
       `).get(workspaceId) as { c: number };
 
+      // ---- Extended pipeline detail ----
+      // Unlinked DM threads: people we've talked to but the CRM has no
+      // contact row for. Every unlinked thread is a lead leak.
+      const unlinkedThreads = rawDb.prepare(`
+        SELECT id, primary_name, last_preview, last_seen_at, conversation_pair, counterparty_user_id
+        FROM x_dm_threads
+        WHERE workspace_id=? AND contact_id IS NULL
+        ORDER BY last_seen_at DESC
+        LIMIT 8
+      `).all(workspaceId) as Array<{
+        id: string;
+        primary_name: string | null;
+        last_preview: string | null;
+        last_seen_at: string;
+        conversation_pair: string;
+        counterparty_user_id: string | null;
+      }>;
+
+      // Contact-event breakdown by kind (all kinds, last 30d) so the
+      // pulse shows what's actually happening in the funnel, not just
+      // the six canonical stages.
+      const eventsByKind = rawDb.prepare(`
+        SELECT COALESCE(kind, 'unspecified') AS kind, COUNT(*) AS c
+        FROM agent_workforce_contact_events
+        WHERE workspace_id=? AND COALESCE(occurred_at, created_at) > datetime('now','-30 days')
+        GROUP BY kind
+        ORDER BY c DESC
+        LIMIT 10
+      `).all(workspaceId) as Array<{ kind: string; c: number }>;
+
+      // Efficiency: cost per CRM lead and cost per qualified / paid.
+      const totalBurnRow = rawDb.prepare(`
+        SELECT COALESCE(SUM(cost_cents),0) AS c FROM llm_calls WHERE workspace_id=?
+      `).get(workspaceId) as { c: number };
+      const contactTotalRow = rawDb.prepare(`
+        SELECT COUNT(*) AS c FROM agent_workforce_contacts WHERE workspace_id=?
+      `).get(workspaceId) as { c: number };
+
+      const efficiency = {
+        totalBurnCents: totalBurnRow.c,
+        costPerLeadCents: contactTotalRow.c > 0 ? Math.round(totalBurnRow.c / contactTotalRow.c) : 0,
+        costPerQualifiedCents: funnel.qualified.total > 0 ? Math.round(totalBurnRow.c / funnel.qualified.total) : 0,
+        costPerPaidCents: funnel.paid.total > 0 ? Math.round(totalBurnRow.c / funnel.paid.total) : 0,
+      };
+
+      // DM thread health: linked vs unlinked rollup.
+      const dmHealth = {
+        threadsTotal: dmThreads.c,
+        threadsLinked: dmThreadsWithContact.c,
+        threadsUnlinked: dmThreads.c - dmThreadsWithContact.c,
+      };
+
       // ---- Heartbeat: is the loop alive? ----
       const lastLlmCallAt = rawDb.prepare(`
         SELECT created_at FROM llm_calls
@@ -341,6 +393,10 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
             },
             approvalsPending: needsApproval.c,
             crmMilestones,
+            unlinkedThreads,
+            eventsByKind,
+            efficiency,
+            dmHealth,
           },
           activity: recentActivity,
         },
