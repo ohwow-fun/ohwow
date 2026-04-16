@@ -31,7 +31,7 @@ import path from 'node:path';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.ts';
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
-import { scrollAndHarvest, loadSeen, appendSeen, filterPosts } from './_x-harvest.mjs';
+import { scrollAndHarvest, scrapeRepliers, loadSeen, appendSeen, filterPosts } from './_x-harvest.mjs';
 import { propose } from './_approvals.mjs';
 import crypto from 'node:crypto';
 
@@ -154,6 +154,44 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('profile')) {
   }
 }
 
+// Engager surface: for each configured competitor profile, take their
+// top recent posts and scrape the replier pool. Repliers to
+// "n8n is too expensive" style threads are very often in-market — the
+// rubric's engager boost is tuned precisely for these rows.
+// Config lives in x-config.json under sources.profiles[].harvest_engagers.
+// We write them to a separate x-engagers-<date>.jsonl sidecar so the
+// funnel can read them without re-scraping.
+const engagerRows = [];
+if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
+  for (const p of cfg.sources.profiles || []) {
+    if (!p.harvest_engagers) continue;
+    const parentPosts = Array.from(allPosts.values())
+      .filter(x => x.author === p.handle)
+      .slice(0, p.engager_parent_posts ?? 3);
+    if (!parentPosts.length) continue;
+    console.log(`\n[x-intel] engagers for @${p.handle} over ${parentPosts.length} recent posts`);
+    for (const parent of parentPosts) {
+      try {
+        const repliers = await scrapeRepliers(page, parent.permalink, p.engager_max_scrolls ?? 3);
+        console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
+        for (const r of repliers) {
+          if (!r.author || r.author === p.handle) continue;
+          engagerRows.push({
+            ...r,
+            _bucketHint: 'market_signal',
+            _engagerSource: `engager:competitor:${p.handle}`,
+            _parentAuthor: p.handle,
+          });
+        }
+      } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
+    }
+  }
+}
+if (engagerRows.length) {
+  addPosts(engagerRows, 'engagers');
+  console.log(`[x-intel] +${engagerRows.length} engager rows queued for classification`);
+}
+
 console.log(`\n[x-intel] collected ${allPosts.size} unique posts across sources`);
 
 // 2. FILTER + DEDUP AGAINST PRIOR RUNS ----------------------------------
@@ -266,6 +304,11 @@ for (const bucketDef of cfg.buckets) {
       likes: p.likes ?? 0,
       replies: p.replies ?? 0,
       tags: p._tags || [],
+      // Propagate the engager source so x-authors-to-crm tags the
+      // ledger row with 'engager:competitor:<handle>' (or 'engager:
+      // own-post' once own-post harvest is wired), which triggers the
+      // rubric's engager boost.
+      __source: p._engagerSource || 'sidecar',
       first_seen_ts: new Date().toISOString(),
     });
   }

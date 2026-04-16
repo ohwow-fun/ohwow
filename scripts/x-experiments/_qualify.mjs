@@ -35,7 +35,7 @@ export function freeGates(rubric, row) {
   const engagerBoost = gates.engagerBoost || {};
   const sources = row.sources || [];
   const isEngager = sources.some(s =>
-    s === 'engager:own-post' || s === 'engager:competitor' || s === 'dm'
+    s === 'dm' || (typeof s === 'string' && s.startsWith('engager:'))
   );
 
   const baseMinScore = typeof gates.minScore === 'number' ? gates.minScore : 0;

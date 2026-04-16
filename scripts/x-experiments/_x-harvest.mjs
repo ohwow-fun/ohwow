@@ -107,6 +107,49 @@ export function appendSeen(workspace, newRecords) {
   fs.appendFileSync(p, lines);
 }
 
+/**
+ * Navigate to a post's permalink and harvest the repliers. Returns an
+ * array of reply rows shaped like harvested posts but flagged with
+ * replyingTo=true and a sourcePermalink pointing at the parent thread.
+ * The first article on a permalink page is the parent tweet itself;
+ * we skip it and collect only the replies below.
+ *
+ * Used by x-intel's engager surface to build sidecar rows tagged
+ * source='engager:competitor' (or 'engager:own-post'). Downstream,
+ * _qualify's engagerBoost reduces the score floor for these rows so
+ * low-score repliers who are nevertheless in-market get through.
+ */
+export async function scrapeRepliers(page, permalink, maxScrolls = 4) {
+  const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
+  await page.goto(url);
+  await sleep(3200);
+  const seen = new Map();
+  let stagnant = 0;
+  for (let i = 0; i < maxScrolls; i++) {
+    const batch = await page.evaluate(HARVEST_JS);
+    const before = seen.size;
+    // Skip the first article (the parent post itself) on the first pass.
+    for (let j = 0; j < batch.length; j++) {
+      if (i === 0 && j === 0) continue;
+      const p = batch[j];
+      if (p.permalink && !seen.has(p.permalink)) seen.set(p.permalink, p);
+    }
+    const gained = seen.size - before;
+    if (gained === 0) stagnant++; else stagnant = 0;
+    if (stagnant >= 3) break;
+    await page.pressKey('End');
+    await page.evaluate('window.scrollBy(0, window.innerHeight * 1.8)');
+    await sleep(1200);
+    await page.evaluate('window.scrollBy(0, window.innerHeight * 0.4)');
+    await sleep(800);
+  }
+  return Array.from(seen.values()).map(r => ({
+    ...r,
+    replyingTo: true,
+    sourcePermalink: permalink,
+  }));
+}
+
 export function filterPosts(posts, filters) {
   return posts.filter(p => {
     if (filters.drop_retweets && p.isRetweet) return false;

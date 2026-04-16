@@ -52,10 +52,12 @@ function readSidecar(workspace, date) {
 }
 
 /**
- * Engager harvest stub. Once _x-harvest grows replier/quoter primitives,
- * this returns rows shaped like sidecar rows but tagged with the source
- * (engager:own-post, engager:competitor) so the ledger tracks where the
- * signal came from and the rubric's engager boost can fire.
+ * Engager harvest. x-intel now scrapes replier pools on configured
+ * competitor posts (profiles[].harvest_engagers in x-config.json) and
+ * writes their rows into the same authors sidecar, tagged with
+ * __source='engager:competitor:<handle>' so the freeGate boost fires.
+ * Nothing separate to read here yet — kept as a hook for future own-
+ * post + quoter surfaces that may land in their own sidecar.
  */
 async function harvestEngagers(/* cfg */) {
   return [];
