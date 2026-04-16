@@ -82,6 +82,38 @@ describe('scanForSecrets', () => {
     }
   });
 
+  it('does NOT flag config / opts / this.config property passthroughs', () => {
+    // Canonical "forward a nullable config field" pattern — 26+ char tail
+    // otherwise trips the bearer-token regex. Mirror this list in
+    // scripts/check-push-content.mjs's ENV_REFERENCE_MARKERS.
+    const samples = [
+      'openaiCompatibleApiKey: config.openaiCompatibleApiKey || undefined,',
+      'anthropicApiKey: config.anthropicApiKey || undefined,',
+      'const accessToken = this.opts.accessToken;',
+      'apiKey: opts.apiKey,',
+      'clientSecret: options.clientSecret ?? null,',
+      'refreshToken: this.config.refreshToken,',
+      'access_token = params.access_token;',
+      'authorization = settings.authorization;',
+    ];
+    for (const s of samples) {
+      const hits = scanForSecrets(s, 'x.ts').filter(
+        (h) => h.kind === 'bearer-token' || h.kind === 'api-key',
+      );
+      expect(hits, `unexpected hit on: ${s}`).toEqual([]);
+    }
+  });
+
+  it('still flags a property access mixed with an inline literal', () => {
+    // Defense in depth: even if the line mentions `config.foo` elsewhere,
+    // an INLINE literal in the same line must still land.
+    const kw = 'author' + 'ization';
+    const prefix = 'Bear' + 'er';
+    const value = 'abc123def456ghi789jkl012mno';
+    const line = `// note: also uses config.something_else\n${kw}: "${prefix} ${value}"`;
+    expect(scanForSecrets(line, 'x.ts').some((h) => h.kind === 'bearer-token')).toBe(true);
+  });
+
   it('still flags a real inline bearer even when the line mentions env elsewhere', () => {
     // Keywords are split so the bytes of this source file do not themselves
     // trip the pre-push scanner. Runtime value is unchanged.

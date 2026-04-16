@@ -56,16 +56,22 @@ function isTrailerLine(line) {
   return /^(?:Signed-off-by|Co-Authored-By):/i.test(line.trim());
 }
 
-// Suppress env-var references on the generic bearer-token / api-key patterns.
-// `apiKey: process.env.OPENAI_API_KEY` is a reference, not a secret; the
-// 26-char tail `process.env.OPENAI_API_KEY` otherwise trips bearer-token.
-// Mirrors src/lib/secret-patterns.ts.
+// Suppress env-var / config-property references on the generic
+// bearer-token / api-key patterns. Mirrors ENV_REFERENCE_MARKERS in
+// src/lib/secret-patterns.ts. When you change one, change both.
+//
+// Covers:
+//   apiKey: process.env.OPENAI_API_KEY          (env ref)
+//   openaiApiKey: config.openaiApiKey           (config passthrough)
+//   accessToken: this.opts.accessToken          (this-bound property)
+//   apiKey: opts.apiKey || undefined            (plain arg access)
 const ENV_REFERENCE_MARKERS = [
   /process\.env\b/i,
   /import\.meta\.env\b/i,
   /os\.environ\b/i,
   /Deno\.env\b/i,
   /\$\{?[A-Z_][A-Z0-9_]*\}?/,
+  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input)\.[A-Za-z_][A-Za-z0-9_]*/i,
 ];
 function isEnvReference(match) {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));

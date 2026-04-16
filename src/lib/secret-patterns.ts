@@ -119,12 +119,21 @@ function isTrailerLine(line: string): boolean {
 }
 
 /**
- * True when the generic bearer-token / api-key match is a reference to an
- * env var rather than an inline secret. The tail `process.env.OPENAI_API_KEY`
- * is 26 `[A-Za-z0-9_]` chars, so `apiKey: process.env.OPENAI_API_KEY` trips
- * the bearer-token regex — but no secret has actually landed in source.
- * Scoped to the already-matched substring so unrelated `$VAR` usages don't
- * get silently suppressed elsewhere.
+ * True when the generic bearer-token / api-key match is a reference to a
+ * variable / property / env var rather than an inline secret. Prevents
+ * false positives like:
+ *
+ *   apiKey: process.env.OPENAI_API_KEY,          // env ref
+ *   openaiApiKey: config.openaiApiKey || undefined,  // config passthrough
+ *   accessToken: this.opts.accessToken,          // this-bound property
+ *   apiKey: opts.apiKey,                         // plain arg destructure
+ *
+ * All of these trip `bearer-token` because the tail (26+ chars of
+ * identifier / dotted access / `|| undefined`) matches
+ * `[A-Za-z0-9_\-.=]{24,}`. None of them actually embed a secret.
+ *
+ * Scoped to the already-matched substring so unrelated `$VAR` usages or
+ * dotted identifiers elsewhere don't get silently suppressed.
  */
 const ENV_REFERENCE_MARKERS: readonly RegExp[] = [
   /process\.env\b/i,
@@ -132,6 +141,14 @@ const ENV_REFERENCE_MARKERS: readonly RegExp[] = [
   /os\.environ\b/i,
   /Deno\.env\b/i,
   /\$\{?[A-Z_][A-Z0-9_]*\}?/,
+  // Property-access passthrough: `apiKey: config.apiKey`,
+  // `this.opts.accessToken`, `opts.secret`. The right-hand side is a
+  // dotted identifier ending in the same kind of name — classic
+  // config-forwarding pattern, not an inline literal. The keyword on
+  // the left of the match is already constrained by the bearer/api-key
+  // regex, so only matches that LOOK like a real assignment-of-variable
+  // get suppressed here.
+  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input)\.[A-Za-z_][A-Za-z0-9_]*/i,
 ];
 function isEnvReference(match: string): boolean {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));
