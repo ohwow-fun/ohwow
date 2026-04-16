@@ -10,6 +10,10 @@ import {
   _setAuditLogPathForTests,
   _setKillSwitchDisabledPathForTests,
 } from '../self-commit.js';
+import {
+  _resetRuntimeConfigCacheForTests,
+  _seedRuntimeConfigCacheForTests,
+} from '../runtime-config.js';
 import type {
   Experiment,
   ExperimentContext,
@@ -194,8 +198,80 @@ describe('ExperimentAuthorExperiment — probe', () => {
       'experiment-proposal-generator': [newer, older],
     });
     const result = await exp.probe(ctx);
-    const ev = result.evidence as { selected_brief: { slug: string } };
+    const ev = result.evidence as {
+      selected_brief: { slug: string };
+      sorting_rationale: { bucket: string };
+    };
     expect(ev.selected_brief.slug).toBe('older-proposal');
+    expect(ev.sorting_rationale.bucket).toBe('fifo');
+  });
+
+  it('strategy.priority_experiments beats FIFO', async () => {
+    _resetRuntimeConfigCacheForTests();
+    const older = proposalFinding(
+      { ...sampleBrief, slug: 'older-proposal' },
+      false,
+      '2026-04-14T09:00:00Z',
+    );
+    const newerPrio = proposalFinding(
+      { ...sampleBrief, slug: 'priority-proposal' },
+      false,
+      '2026-04-14T12:00:00Z',
+    );
+    const ctx = makeCtx(tempRoot, {
+      'experiment-proposal-generator': [newerPrio, older],
+    });
+    // Seed the cache directly — setRuntimeConfig with the mock db works
+    // too but adds async coupling. The ranker only reads the cache.
+    _seedRuntimeConfigCacheForTests('strategy.priority_experiments', ['priority-proposal']);
+
+    const result = await exp.probe(ctx);
+    const ev = result.evidence as {
+      selected_brief: { slug: string };
+      sorting_rationale: { bucket: string; matched: string | null };
+    };
+    expect(ev.selected_brief.slug).toBe('priority-proposal');
+    expect(ev.sorting_rationale.bucket).toBe('priority');
+    expect(ev.sorting_rationale.matched).toBe('priority-proposal');
+
+    _resetRuntimeConfigCacheForTests();
+  });
+
+  it('strategy.roadmap_priorities beats FIFO but loses to priority_experiments', async () => {
+    _resetRuntimeConfigCacheForTests();
+    const fifoOnly = proposalFinding(
+      { ...sampleBrief, slug: 'plain-proposal' },
+      false,
+      '2026-04-14T08:00:00Z',
+    );
+    const roadmapMatch = proposalFinding(
+      { ...sampleBrief, slug: 'x-ops-shape-tuner' },
+      false,
+      '2026-04-14T10:00:00Z',
+    );
+    const priorityMatch = proposalFinding(
+      { ...sampleBrief, slug: 'must-ship-first' },
+      false,
+      '2026-04-14T14:00:00Z',
+    );
+    const ctx = makeCtx(tempRoot, {
+      'experiment-proposal-generator': [priorityMatch, roadmapMatch, fifoOnly],
+    });
+    _seedRuntimeConfigCacheForTests('strategy.priority_experiments', ['must-ship-first']);
+    _seedRuntimeConfigCacheForTests('strategy.roadmap_priorities', ['x-ops']);
+
+    const result = await exp.probe(ctx);
+    const ev = result.evidence as {
+      selected_brief: { slug: string };
+      sorting_rationale: { bucket: string; priority_count: number; roadmap_count: number; fifo_count: number };
+    };
+    expect(ev.selected_brief.slug).toBe('must-ship-first');
+    expect(ev.sorting_rationale.bucket).toBe('priority');
+    expect(ev.sorting_rationale.priority_count).toBe(1);
+    expect(ev.sorting_rationale.roadmap_count).toBe(1);
+    expect(ev.sorting_rationale.fifo_count).toBe(1);
+
+    _resetRuntimeConfigCacheForTests();
   });
 });
 

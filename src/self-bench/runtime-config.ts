@@ -53,6 +53,21 @@ export function _resetRuntimeConfigCacheForTests(): void {
   lastRefreshAt = 0;
 }
 
+/**
+ * Test hook — seeds a value directly into the in-memory cache without
+ * going through setRuntimeConfig's DB write. Lets tests exercise
+ * consumers (e.g. the experiment-author ranker) without wiring a mock
+ * adapter that supports `.delete().eq()` chaining.
+ */
+export function _seedRuntimeConfigCacheForTests(key: string, value: unknown): void {
+  cache.set(key, {
+    value,
+    setBy: 'test',
+    findingId: null,
+    setAt: new Date().toISOString(),
+  });
+}
+
 /** Direct cache read for tests/diagnostics. */
 export function getRuntimeConfigCacheSnapshot(): Array<{
   key: string;

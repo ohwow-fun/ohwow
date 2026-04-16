@@ -53,6 +53,7 @@ import path from 'node:path';
 import type { ExperimentBrief, LlmAuthoredProbeParams } from '../experiment-template.js';
 import { fillExperimentTemplate, validateBrief } from '../experiment-template.js';
 import { safeSelfCommit, getSelfCommitStatus } from '../self-commit.js';
+import { getRuntimeConfig } from '../runtime-config.js';
 import { writeFinding, readRecentFindings } from '../findings-store.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { stripCodeFences } from './patch-author.js';
@@ -70,6 +71,14 @@ interface AuthorEvidence extends Record<string, unknown> {
     commitSha?: string;
     filesWritten?: string[];
   } | null;
+  /** Which bucket the picked brief came from (priority / roadmap / fifo). */
+  sorting_rationale?: {
+    bucket: 'priority' | 'roadmap' | 'fifo';
+    matched: string | null;
+    priority_count: number;
+    roadmap_count: number;
+    fifo_count: number;
+  };
 }
 
 interface ProposalCandidate {
@@ -77,6 +86,94 @@ interface ProposalCandidate {
   subject: string;
   brief: ExperimentBrief;
   ranAt: string;
+}
+
+/**
+ * Strategist-driven proposal ranker. Reads two runtime_config keys:
+ *
+ *   strategy.priority_experiments  - string[] of slugs the strategist /
+ *     operator wants authored next. Exact-match on brief.slug.
+ *   strategy.roadmap_priorities    - string[] of tokens from the roadmap
+ *     observer. Substring-match against brief.slug OR brief.template so
+ *     a token like "x-ops" pulls both a slug and a template family.
+ *
+ * Buckets, in order: priority → roadmap → fifo. Within a bucket, oldest
+ * wins (FIFO fairness — starvation otherwise). A missing or empty config
+ * value degrades cleanly to pure FIFO, preserving the pre-ranker
+ * behaviour for any workspace that hasn't wired strategy yet.
+ */
+function rankProposals(proposals: ProposalCandidate[]): {
+  picked: ProposalCandidate;
+  rationale: NonNullable<AuthorEvidence['sorting_rationale']>;
+} {
+  const priorityList = getRuntimeConfig<string[]>('strategy.priority_experiments', []);
+  const roadmapList = getRuntimeConfig<string[]>('strategy.roadmap_priorities', []);
+
+  const priorityBucket: ProposalCandidate[] = [];
+  const roadmapBucket: ProposalCandidate[] = [];
+  const fifoBucket: ProposalCandidate[] = [];
+
+  for (const p of proposals) {
+    if (Array.isArray(priorityList) && priorityList.includes(p.brief.slug)) {
+      priorityBucket.push(p);
+      continue;
+    }
+    if (Array.isArray(roadmapList) && roadmapList.some((tok) => {
+      if (typeof tok !== 'string' || tok.length === 0) return false;
+      return p.brief.slug.includes(tok) || p.brief.template.includes(tok);
+    })) {
+      roadmapBucket.push(p);
+      continue;
+    }
+    fifoBucket.push(p);
+  }
+
+  const oldestFirst = (arr: ProposalCandidate[]): ProposalCandidate[] =>
+    [...arr].sort((a, b) => a.ranAt.localeCompare(b.ranAt));
+
+  const priority = oldestFirst(priorityBucket);
+  const roadmap = oldestFirst(roadmapBucket);
+  const fifo = oldestFirst(fifoBucket);
+
+  if (priority.length > 0) {
+    return {
+      picked: priority[0],
+      rationale: {
+        bucket: 'priority',
+        matched: priority[0].brief.slug,
+        priority_count: priority.length,
+        roadmap_count: roadmap.length,
+        fifo_count: fifo.length,
+      },
+    };
+  }
+  if (roadmap.length > 0) {
+    const matched = Array.isArray(roadmapList)
+      ? roadmapList.find((tok) =>
+          roadmap[0].brief.slug.includes(tok) || roadmap[0].brief.template.includes(tok),
+        ) ?? null
+      : null;
+    return {
+      picked: roadmap[0],
+      rationale: {
+        bucket: 'roadmap',
+        matched,
+        priority_count: priority.length,
+        roadmap_count: roadmap.length,
+        fifo_count: fifo.length,
+      },
+    };
+  }
+  return {
+    picked: fifo[0],
+    rationale: {
+      bucket: 'fifo',
+      matched: null,
+      priority_count: priority.length,
+      roadmap_count: roadmap.length,
+      fifo_count: fifo.length,
+    },
+  };
 }
 
 export class ExperimentAuthorExperiment implements Experiment {
@@ -115,16 +212,17 @@ export class ExperimentAuthorExperiment implements Experiment {
       };
     }
 
-    // Pick the oldest unclaimed proposal (FIFO fairness). Proposals
-    // are already sorted newest-first by readRecentFindings, so
-    // reverse to pick the oldest.
-    const oldest = proposals[proposals.length - 1];
+    // Rank by strategist + roadmap signals, falling back to FIFO.
+    // See rankProposals() above — a workspace with no strategy wired
+    // degrades cleanly to the pre-ranker FIFO behaviour.
+    const { picked, rationale } = rankProposals(proposals);
 
     const evidence: AuthorEvidence = {
       scanned_proposals: proposals.length,
       unclaimed_count: proposals.length,
-      selected_brief: oldest.brief,
+      selected_brief: picked.brief,
       commit_result: null,
+      sorting_rationale: rationale,
     };
 
     // subject: null — we deliberately do NOT write the proposal:<slug>
@@ -138,7 +236,7 @@ export class ExperimentAuthorExperiment implements Experiment {
     // namespace.
     return {
       subject: null,
-      summary: `selected proposal ${oldest.brief.slug} for authoring`,
+      summary: `selected proposal ${picked.brief.slug} for authoring [${rationale.bucket}${rationale.matched ? `:${rationale.matched}` : ''}]`,
       evidence,
     };
   }
