@@ -57,6 +57,7 @@ import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.j
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
 import { DeliverableActionSentinelExperiment } from '../self-bench/experiments/deliverable-action-sentinel.js';
+import { AgentStateHygieneSentinelExperiment } from '../self-bench/experiments/agent-state-hygiene-sentinel.js';
 import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
 import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
@@ -153,6 +154,13 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // content-cadence was marking every dispatch completed even when the
   // agent plainly wrote "I cannot log in".
   experimentRunner.register(new DeliverableActionSentinelExperiment());
+  // Agent state hygiene sentinel: scans agent_workforce_task_state for
+  // fallback-decision markers (status=posting_manually, cannot_automate,
+  // etc.) that become self-reinforcing — the agent reads the poison,
+  // treats it as authoritative, and never re-attempts the action.
+  // Companion to the deliverable-action sentinel; that one sees task
+  // output, this one sees persistent state.
+  experimentRunner.register(new AgentStateHygieneSentinelExperiment());
   // Piece 5: revenue pipeline observer (advisory).
   experimentRunner.register(new RevenuePipelineObserverExperiment());
   // Piece 4b: X per-shape engagement observer.
