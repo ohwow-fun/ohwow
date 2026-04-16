@@ -1171,10 +1171,24 @@ export interface DmMessage {
   direction: 'outbound' | 'inbound' | 'unknown';
   /**
    * True when the message appears to be a non-text payload (audio,
-   * video, attachment) rather than typed prose. Detected by the
-   * Seek aria-label that X attaches to media controls.
+   * video, attachment, image) rather than typed prose. Detected by
+   * Seek / audio / video aria-labels OR by the presence of an <img>
+   * element inside the message bubble.
    */
   isMedia: boolean;
+  /**
+   * Coarse media category when isMedia is true. 'image' covers
+   * screenshots and photos the user shared, which the conversation
+   * analyst feeds to a vision LLM. Null when there's no media.
+   */
+  mediaKind?: 'image' | 'audio' | 'video' | 'other' | null;
+  /**
+   * Absolute URLs for any media attachments on the message. Captured
+   * from <img src>. Note: X image URLs (pbs.twimg.com/dm/...) often
+   * require the user's session cookies to fetch, so downstream
+   * consumers may need to proxy through the authenticated browser.
+   */
+  mediaUrls?: string[];
 }
 
 export interface ReadDmThreadResult {
@@ -1244,7 +1258,24 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
       const timeRe = /(\\d{1,2}:\\d{2}\\s?(?:AM|PM))(\\1)?$/i;
       const text = rawText ? rawText.replace(timeRe, '').trim().slice(0, 1000) : null;
 
-      const isMedia = !!root.querySelector('[aria-label="Seek"], [aria-label*="audio" i], [aria-label*="video" i]');
+      const hasAv = !!root.querySelector('[aria-label="Seek"], [aria-label*="audio" i], [aria-label*="video" i]');
+      // Screenshots: look for <img> children that are clearly the
+      // message payload (skip emoji/status icons by requiring size).
+      const imgEls = Array.from(root.querySelectorAll('img'));
+      const mediaUrls = imgEls
+        .map((el) => {
+          const e = el as HTMLImageElement;
+          const src = e.currentSrc || e.src || '';
+          const w = e.naturalWidth || e.width || 0;
+          const h = e.naturalHeight || e.height || 0;
+          // pbs.twimg.com dm URLs are the real payloads; emoji svgs are on twimg CDN too but under /emoji/.
+          const looksLikeDmMedia = src.includes('/dm/') || src.includes('ton.twitter.com') || (w * h) >= 64 * 64;
+          return src && looksLikeDmMedia && !src.includes('/emoji/') ? src : null;
+        })
+        .filter((s) => typeof s === 'string' && s.length > 0) as string[];
+      const hasImage = mediaUrls.length > 0;
+      const isMedia = hasAv || hasImage;
+      const mediaKind = hasImage ? 'image' : hasAv ? 'other' : null;
 
       // Direction: the message bubble's class list carries either
       // bg-primary (we sent) or bg-gray-50 (they sent). Fall back to
@@ -1255,7 +1286,7 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
       if (cls.includes('bg-primary')) direction = 'outbound';
       else if (cls.includes('bg-gray-50')) direction = 'inbound';
 
-      return { id, text, direction, isMedia };
+      return { id, text, direction, isMedia, mediaKind, mediaUrls };
     });
 
     return { conversationName, messages };

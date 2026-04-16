@@ -145,6 +145,26 @@ interface PulseData {
       threadsLinked: number;
       threadsUnlinked: number;
     };
+    nextSteps: Array<{
+      id: string;
+      contactId: string;
+      contactName: string | null;
+      createdAt: string;
+      stepType: string;
+      urgency: string;
+      status: string;
+      text: string;
+      suggestedAction: string;
+      dispatchedKind?: string;
+      findingId?: string;
+      taskId?: string;
+    }>;
+    nextStepsRollup: {
+      open: number;
+      dispatched: number;
+      shipped: number;
+      ignored: number;
+    };
   };
   activity: ActivityRow[];
 }
@@ -358,7 +378,7 @@ function SourceShare({ rows }: { rows: Array<{ source: string; c: number }> }) {
 
 interface StreamItem {
   ts: string;
-  kind: 'milestone' | 'finding' | 'patch' | 'reflex' | 'activity';
+  kind: 'milestone' | 'finding' | 'patch' | 'reflex' | 'activity' | 'next_step';
   color: string;
   label: string;
   title: string;
@@ -367,6 +387,26 @@ interface StreamItem {
 
 function buildStream(data: PulseData): StreamItem[] {
   const items: StreamItem[] = [];
+
+  // Next-step events: the analyst → dispatcher pipeline output.
+  // Highest-signal stream entries — show them first with strong colors.
+  for (const s of data.pipeline.nextSteps.slice(0, 6)) {
+    const color = s.stepType === 'bug_report' ? 'bg-critical'
+      : s.stepType === 'feature_request' ? 'bg-violet-400'
+      : s.stepType === 'question' || s.stepType === 'follow_up' ? 'bg-info'
+      : 'bg-neutral-500';
+    const statusLabel = s.status === 'dispatched' && s.dispatchedKind
+      ? `${s.status} → ${s.dispatchedKind}`
+      : s.status;
+    items.push({
+      ts: s.createdAt,
+      kind: 'next_step',
+      color,
+      label: `next_step · ${s.stepType.replace(/_/g, ' ')}`,
+      title: `${s.contactName ?? 'contact'} · ${statusLabel}`,
+      body: s.text,
+    });
+  }
 
   // Revenue milestones lead the stream.
   for (const m of data.pipeline.crmMilestones) {
@@ -645,6 +685,69 @@ export function PulsePage() {
           </ul>
         </div>
       )}
+
+      {/* ====== Next steps per contact ====== */}
+      <div className="border border-info/20 bg-info/[0.03] rounded-lg p-5 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-[11px] text-info uppercase tracking-wider">Next steps · conversation → loop</p>
+            <p className="text-[10px] text-neutral-500 mt-0.5">
+              The analyst reads each contact's DM thread (with screenshots via vision) and extracts
+              actionable items. The dispatcher routes them — bugs → proposal findings, follow-ups/questions → approval tasks.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-[11px]">
+            <span className="text-warning">open {pipeline.nextStepsRollup.open}</span>
+            <span className="text-info">dispatched {pipeline.nextStepsRollup.dispatched}</span>
+            <span className="text-success">shipped {pipeline.nextStepsRollup.shipped}</span>
+            <span className="text-neutral-500">ignored {pipeline.nextStepsRollup.ignored}</span>
+          </div>
+        </div>
+        {pipeline.nextSteps.length === 0 ? (
+          <p className="text-xs text-neutral-600">No next-steps extracted yet. Waiting for the analyst's first tick.</p>
+        ) : (
+          <ul className="divide-y divide-white/[0.04]">
+            {pipeline.nextSteps.slice(0, 12).map(s => {
+              const statusColor =
+                s.status === 'open' ? 'bg-warning'
+                : s.status === 'dispatched' ? 'bg-info'
+                : s.status === 'shipped' ? 'bg-success'
+                : 'bg-neutral-600';
+              const urgencyPrefix =
+                s.urgency === 'high' ? '!' : s.urgency === 'medium' ? '·' : ' ';
+              return (
+                <li key={s.id} className="flex items-start gap-3 py-2.5 text-xs">
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 flex-none ${statusColor}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] uppercase tracking-wider text-neutral-500">
+                        {urgencyPrefix} {s.stepType.replace(/_/g, ' ')}
+                      </span>
+                      <span className="text-neutral-300 font-medium truncate">{s.contactName ?? 'Unknown'}</span>
+                      <span className={`text-[10px] uppercase tracking-wider ${
+                        s.status === 'open' ? 'text-warning'
+                        : s.status === 'dispatched' ? 'text-info'
+                        : s.status === 'shipped' ? 'text-success'
+                        : 'text-neutral-500'
+                      }`}>{s.status}</span>
+                      {s.dispatchedKind && (
+                        <span className="text-[10px] text-neutral-500">→ {s.dispatchedKind.replace(/_/g, ' ')}</span>
+                      )}
+                    </div>
+                    <p className="text-neutral-400 mt-0.5 line-clamp-2">{s.text}</p>
+                    {s.suggestedAction && (
+                      <p className="text-neutral-500 mt-0.5 italic line-clamp-1">
+                        → {s.suggestedAction}
+                      </p>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-neutral-600 flex-none tabular-nums">{relTime(s.createdAt)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
 
       {/* ====== Contact event breakdown ====== */}
       {pipeline.eventsByKind.length > 0 && (

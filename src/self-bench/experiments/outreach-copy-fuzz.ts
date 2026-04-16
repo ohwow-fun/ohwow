@@ -23,9 +23,13 @@
  *   dm-length         — DM must be ≤ 280 chars (X DM hard limit)
  *   reply-length      — reply must be ≤ 280 chars (X reply limit)
  *   email-subject-len — email subject ≤ 78 chars (practical RFC 5322)
- *   brand-mention     — drafts must mention "ohwow" (brand discipline)
+ *   brand-mention     — drafts must mention "ohwow" (honest sender id,
+ *                       not a pitch — sign with it, don't sell it)
  *   no-em-dash        — drafts must not contain `—` (copywriting rule)
  *   no-please         — drafts must not use "please" (direct tone)
+ *   no-pitch-cta      — drafts must not contain pitch CTAs (Loom, demo,
+ *                       book/schedule a call, calendar link). Outreach is
+ *                       conversational and offers help, not a sales ask.
  */
 
 import type {
@@ -61,6 +65,16 @@ export interface OutreachCopyFuzzEvidence extends Record<string, unknown> {
   checks_run: number;
   samples: Array<{ channel: string; length: number; preview: string }>;
 }
+
+const PITCH_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\bloom\b/i, label: 'loom' },
+  { pattern: /\bdemo\b/i, label: 'demo' },
+  { pattern: /\bbook\s+(?:a\s+)?(?:short\s+)?(?:call|meeting|chat|time)/i, label: 'book a call' },
+  { pattern: /\bschedule\s+(?:a\s+)?(?:call|meeting|chat|time)/i, label: 'schedule a call' },
+  { pattern: /\bjump\s+on\s+(?:a\s+)?(?:call|chat)/i, label: 'jump on a call' },
+  { pattern: /\bcalendar\s+link\b/i, label: 'calendar link' },
+  { pattern: /\bquick\s+(?:call|chat)\b/i, label: 'quick call' },
+];
 
 const MOCK_PLAN: ChannelPlan = {
   contact_id: 'c1',
@@ -136,6 +150,20 @@ export class OutreachCopyFuzzExperiment implements Experiment {
           channel,
           field: 'text',
         });
+      }
+      for (const { pattern, label } of PITCH_PATTERNS) {
+        const m = pattern.exec(text);
+        if (m) {
+          violations.push({
+            ruleId: 'no-pitch-cta',
+            severity: 'warning',
+            match: m[0],
+            message: `${channel} draft contains pitch CTA "${label}" — outreach is conversational, not a pitch`,
+            channel,
+            field: 'text',
+          });
+          break;
+        }
       }
       if (subject) {
         checks += 1;

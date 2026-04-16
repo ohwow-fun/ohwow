@@ -430,13 +430,22 @@ export class XDmPollerScheduler {
     for (const msg of result.messages) {
       newest = msg;
       let inserted = false;
+      // Preserve media attachment URLs inside the text column so the
+      // analyst (which reads x_dm_messages.text) can find screenshots
+      // without a schema change. Format: "<body>\n[media: url1, url2]".
+      const mediaMarkers = (msg.mediaUrls && msg.mediaUrls.length > 0)
+        ? `[${msg.mediaKind ?? 'media'}: ${msg.mediaUrls.join(', ')}]`
+        : '';
+      const textForDb = msg.text
+        ? (mediaMarkers ? `${msg.text}\n${mediaMarkers}` : msg.text)
+        : (mediaMarkers || null);
       try {
         await this.db.from('x_dm_messages').insert({
           workspace_id: this.workspaceId,
           conversation_pair: thread.pair,
           message_id: msg.id,
           direction: msg.direction,
-          text: msg.text,
+          text: textForDb,
           is_media: msg.isMedia ? 1 : 0,
           observed_at: nowIso,
         });
@@ -448,8 +457,10 @@ export class XDmPollerScheduler {
           pair: thread.pair,
           message_id: msg.id,
           direction: msg.direction,
-          text: msg.text,
+          text: textForDb,
           is_media: msg.isMedia,
+          media_kind: msg.mediaKind ?? null,
+          media_urls: msg.mediaUrls ?? [],
         });
       } catch (err) {
         // UNIQUE(workspace_id, message_id) collision = already stored

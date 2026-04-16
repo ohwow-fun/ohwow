@@ -38,6 +38,13 @@ describe('OutreachCopyFuzzExperiment', () => {
     expect(verdict).toBe('pass');
   });
 
+  it('templates contain no pitch CTAs (outreach is conversational, not sales)', async () => {
+    const r = await exp.probe(stubCtx);
+    const ev = r.evidence as OutreachCopyFuzzEvidence;
+    const pitchHit = ev.violations.find((v) => v.ruleId === 'no-pitch-cta');
+    expect(pitchHit).toBeUndefined();
+  });
+
   it('every violation carries a ruleId (so evidenceLiteralsAppearInSource accepts the short em-dash)', async () => {
     const r = await exp.probe(stubCtx);
     const ev = r.evidence as OutreachCopyFuzzEvidence;

@@ -331,6 +331,74 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
         threadsUnlinked: dmThreads.c - dmThreadsWithContact.c,
       };
 
+      // Next-steps pipeline: the conversation analyst → dispatcher loop.
+      // Surfaces the end-to-end "what did the human need / what is the
+      // loop doing about it" view.
+      interface NextStepEventRow {
+        id: string;
+        contact_id: string;
+        payload: string | null;
+        created_at: string;
+      }
+      const rawNextSteps = rawDb.prepare(`
+        SELECT e.id, e.contact_id, e.payload, e.created_at, c.name AS contact_name
+        FROM agent_workforce_contact_events e
+        LEFT JOIN agent_workforce_contacts c ON c.id = e.contact_id
+        WHERE e.workspace_id=? AND e.kind='next_step'
+        ORDER BY e.created_at DESC
+        LIMIT 25
+      `).all(workspaceId) as Array<NextStepEventRow & { contact_name: string | null }>;
+
+      interface NextStepItem {
+        id: string;
+        contactId: string;
+        contactName: string | null;
+        createdAt: string;
+        stepType: string;
+        urgency: string;
+        status: string;
+        text: string;
+        suggestedAction: string;
+        dispatchedKind?: string;
+        findingId?: string;
+        taskId?: string;
+      }
+      const nextSteps: NextStepItem[] = [];
+      for (const row of rawNextSteps) {
+        if (!row.payload) continue;
+        let obj: Record<string, unknown>;
+        try { obj = JSON.parse(row.payload) as Record<string, unknown>; } catch { continue; }
+        const stepType = typeof obj.step_type === 'string' ? obj.step_type : 'unknown';
+        const urgency = typeof obj.urgency === 'string' ? obj.urgency : 'low';
+        const status = typeof obj.status === 'string' ? obj.status : 'open';
+        const text = typeof obj.text === 'string' ? obj.text : '';
+        const suggestedAction = typeof obj.suggested_action === 'string' ? obj.suggested_action : '';
+        const dispatchedKind = typeof obj.dispatched_kind === 'string' ? obj.dispatched_kind : undefined;
+        const findingId = typeof obj.finding_id === 'string' ? obj.finding_id : undefined;
+        const taskId = typeof obj.task_id === 'string' ? obj.task_id : undefined;
+        nextSteps.push({
+          id: row.id,
+          contactId: row.contact_id,
+          contactName: row.contact_name,
+          createdAt: row.created_at,
+          stepType,
+          urgency,
+          status,
+          text,
+          suggestedAction,
+          dispatchedKind,
+          findingId,
+          taskId,
+        });
+      }
+
+      const nextStepsRollup = {
+        open:       nextSteps.filter(s => s.status === 'open').length,
+        dispatched: nextSteps.filter(s => s.status === 'dispatched').length,
+        shipped:    nextSteps.filter(s => s.status === 'shipped').length,
+        ignored:    nextSteps.filter(s => s.status === 'ignored').length,
+      };
+
       // ---- Heartbeat: is the loop alive? ----
       const lastLlmCallAt = rawDb.prepare(`
         SELECT created_at FROM llm_calls
@@ -397,6 +465,8 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
             eventsByKind,
             efficiency,
             dmHealth,
+            nextSteps,
+            nextStepsRollup,
           },
           activity: recentActivity,
         },

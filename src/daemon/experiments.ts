@@ -70,6 +70,7 @@ import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-s
 import { RevenuePulseExperiment } from '../self-bench/experiments/revenue-pulse.js';
 import { OpsPulseExperiment } from '../self-bench/experiments/ops-pulse.js';
 import { OutreachCopyFuzzExperiment } from '../self-bench/experiments/outreach-copy-fuzz.js';
+import { BurnGuardExperiment } from '../self-bench/experiments/burn-guard.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -90,6 +91,8 @@ import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
 import { createResendSender } from '../integrations/email/resend.js';
 import { XDmSignalsRollupExperiment } from '../self-bench/experiments/x-dm-signals-rollup.js';
+import { ContactConversationAnalystExperiment } from '../self-bench/experiments/contact-conversation-analyst.js';
+import { NextStepDispatcherExperiment } from '../self-bench/experiments/next-step-dispatcher.js';
 import { readWorkspaceConfig, resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
 import { dirname } from 'path';
@@ -215,6 +218,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new RevenuePulseExperiment());
   experimentRunner.register(new OpsPulseExperiment());
   experimentRunner.register(new OutreachCopyFuzzExperiment());
+  experimentRunner.register(new BurnGuardExperiment());
   experimentRunner.register(new RoadmapShapeProbeExperiment());
   experimentRunner.register(new VitestHealthProbeExperiment());
   experimentRunner.register(new LoopCadenceProbeExperiment());
@@ -350,6 +354,27 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     logger.info(
       { everyMs: dmRollup.cadence.everyMs },
       '[daemon] x-dm-signals-rollup registered',
+    );
+
+    // ContactConversationAnalystExperiment + NextStepDispatcher — the
+    // conversation-to-action pipeline. The analyst reads each CRM
+    // contact's recent DM thread (with vision for screenshots) and
+    // emits structured next_step events. The dispatcher routes those
+    // events: bug reports become experiment-proposal findings so the
+    // patch author can investigate; follow-ups/questions become
+    // needs_approval tasks for the reply agent. Both run frequently
+    // so the system reacts within minutes of a new DM.
+    const conversationAnalyst = new ContactConversationAnalystExperiment();
+    experimentRunner.register(conversationAnalyst);
+    logger.info(
+      { everyMs: conversationAnalyst.cadence.everyMs },
+      '[daemon] contact-conversation-analyst registered',
+    );
+    const nextStepDispatcher = new NextStepDispatcherExperiment();
+    experimentRunner.register(nextStepDispatcher);
+    logger.info(
+      { everyMs: nextStepDispatcher.cadence.everyMs },
+      '[daemon] next-step-dispatcher registered',
     );
 
     // Phase 2 (sales loop): OutreachThermostatExperiment — first

@@ -1,0 +1,448 @@
+/**
+ * NextStepDispatcher — routes open next_step events into loop actions.
+ *
+ * The analyst produces `next_step` events with step_type +
+ * suggested_action. This probe picks up those events while status='open'
+ * and routes each one to the appropriate actuator:
+ *
+ * - bug_report       → emit an experiment-proposal finding so the
+ *                      patch/author loops pick it up as something to
+ *                      investigate; mark 'dispatched'.
+ * - feature_request  → emit an experiment-proposal finding tagged as
+ *                      a feature request; mark 'dispatched'.
+ * - question         → create a needs_approval task titled
+ *                      "Reply to <contact>: <first 40c>" with the
+ *                      LLM-suggested draft as description; mark
+ *                      'dispatched'.
+ * - follow_up        → same as question but the task title reflects
+ *                      a nudge rather than an answer.
+ * - sentiment        → no action; mark 'ignored'.
+ * - nothing          → mark 'ignored'.
+ *
+ * Status tracking lives inside the next_step event's payload JSON.
+ * The dispatcher re-reads it every tick and only acts on status='open'
+ * rows. This keeps the contract between analyst and dispatcher
+ * entirely in the contact_events table — no new schema.
+ *
+ * Verdict
+ * -------
+ * - warning: at least one step dispatched
+ * - pass:    nothing to do OR only ignores
+ * - fail:    errors > half of attempts
+ */
+
+import { randomUUID } from 'crypto';
+
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { logger } from '../../lib/logger.js';
+import {
+  BusinessExperiment,
+  type BusinessExperimentOptions,
+} from '../business-experiment.js';
+import type {
+  ExperimentCadence,
+  ExperimentCategory,
+  ExperimentContext,
+  Finding,
+  ProbeResult,
+  Verdict,
+} from '../experiment-types.js';
+import { writeFinding } from '../findings-store.js';
+import type { NextStepPayload, NextStepStatus, NextStepType } from './contact-conversation-analyst.js';
+
+const MINUTE_MS = 60 * 1000;
+const DEFAULT_INTERVAL_MS = 5 * MINUTE_MS;
+const DEFAULT_MAX_PER_TICK = 10;
+
+interface OpenNextStep {
+  eventId: string;
+  contactId: string;
+  contactName: string;
+  createdAt: string;
+  payload: NextStepPayload;
+}
+
+interface DispatchResult {
+  eventId: string;
+  contactName: string;
+  step_type: NextStepType;
+  outcome: 'dispatched' | 'ignored' | 'error';
+  action?: string;
+  error?: string;
+}
+
+export class NextStepDispatcherExperiment extends BusinessExperiment {
+  id = 'next-step-dispatcher';
+  name = 'Next-step dispatcher';
+  category: ExperimentCategory = 'business_outcome';
+  hypothesis =
+    'next_step events produced by the conversation analyst are only useful if '
+    + 'something in the loop converts them into concrete work. Routing each step '
+    + 'to a proposal (bug/feature) or a needs_approval task (question/follow_up) '
+    + 'closes the conversation → action loop.';
+  cadence: ExperimentCadence = {
+    everyMs: DEFAULT_INTERVAL_MS,
+    runOnBoot: true,
+  };
+
+  private readonly maxPerTick: number;
+
+  constructor(opts: BusinessExperimentOptions & { maxPerTick?: number } = {}) {
+    super(opts);
+    this.maxPerTick = opts.maxPerTick ?? DEFAULT_MAX_PER_TICK;
+  }
+
+  protected async businessProbe(ctx: ExperimentContext): Promise<ProbeResult> {
+    const open = await this.loadOpenSteps(ctx.db, ctx.workspaceId);
+    if (open.length === 0) {
+      return {
+        subject: 'dispatcher',
+        summary: 'no open next_step events',
+        evidence: { open_total: 0, dispatched: 0, ignored: 0, errors: 0, results: [] },
+      };
+    }
+
+    const slice = open.slice(0, this.maxPerTick);
+    const results: DispatchResult[] = [];
+    for (const step of slice) {
+      try {
+        const result = await this.dispatchOne(ctx, step);
+        results.push(result);
+      } catch (err) {
+        results.push({
+          eventId: step.eventId,
+          contactName: step.contactName,
+          step_type: step.payload.step_type,
+          outcome: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const dispatched = results.filter(r => r.outcome === 'dispatched').length;
+    const ignored = results.filter(r => r.outcome === 'ignored').length;
+    const errors = results.filter(r => r.outcome === 'error').length;
+
+    return {
+      subject: 'dispatcher',
+      summary:
+        `dispatched ${dispatched}, ignored ${ignored}, errors ${errors} of ${slice.length} open step${slice.length === 1 ? '' : 's'}`,
+      evidence: {
+        open_total: open.length,
+        processed: slice.length,
+        dispatched,
+        ignored,
+        errors,
+        results,
+      },
+    };
+  }
+
+  protected businessJudge(result: ProbeResult, _history: Finding[]): Verdict {
+    const ev = result.evidence as { processed?: number; dispatched?: number; errors?: number };
+    const processed = ev.processed ?? 0;
+    const errors = ev.errors ?? 0;
+    const dispatched = ev.dispatched ?? 0;
+    if (processed > 0 && errors * 2 >= processed) return 'fail';
+    if (dispatched > 0) return 'warning';
+    return 'pass';
+  }
+
+  private async loadOpenSteps(db: DatabaseAdapter, workspaceId: string): Promise<OpenNextStep[]> {
+    interface Row {
+      id: string;
+      contact_id: string;
+      created_at: string;
+      payload: string | null;
+    }
+    const { data } = await db
+      .from<Row>('agent_workforce_contact_events')
+      .select('id, contact_id, created_at, payload')
+      .eq('workspace_id', workspaceId)
+      .eq('kind', 'next_step')
+      .order('created_at', { ascending: true })
+      .limit(100);
+    const rows = (data as Row[] | null) ?? [];
+    if (rows.length === 0) return [];
+
+    // Hydrate contact names in one batch.
+    const contactIds = Array.from(new Set(rows.map(r => r.contact_id)));
+    const nameByContactId = await this.loadContactNames(db, workspaceId, contactIds);
+
+    const out: OpenNextStep[] = [];
+    for (const row of rows) {
+      const payload = parsePayload(row.payload);
+      if (!payload) continue;
+      if ((payload.status ?? 'open') !== 'open') continue;
+      out.push({
+        eventId: row.id,
+        contactId: row.contact_id,
+        contactName: nameByContactId.get(row.contact_id) ?? 'Unknown contact',
+        createdAt: row.created_at,
+        payload,
+      });
+    }
+    return out;
+  }
+
+  private async loadContactNames(
+    db: DatabaseAdapter,
+    workspaceId: string,
+    ids: string[],
+  ): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (ids.length === 0) return result;
+    const { data } = await db
+      .from<{ id: string; name: string }>('agent_workforce_contacts')
+      .select('id, name')
+      .eq('workspace_id', workspaceId)
+      .in('id', ids);
+    const rows = (data as Array<{ id: string; name: string }> | null) ?? [];
+    for (const row of rows) result.set(row.id, row.name);
+    return result;
+  }
+
+  private async dispatchOne(ctx: ExperimentContext, step: OpenNextStep): Promise<DispatchResult> {
+    const type = step.payload.step_type;
+
+    if (type === 'nothing' || type === 'sentiment') {
+      await this.setStatus(ctx.db, step.eventId, step.payload, 'ignored');
+      return {
+        eventId: step.eventId,
+        contactName: step.contactName,
+        step_type: type,
+        outcome: 'ignored',
+      };
+    }
+
+    if (type === 'bug_report' || type === 'feature_request') {
+      const finding = await this.emitProposalFinding(ctx, step);
+      await this.setStatus(ctx.db, step.eventId, step.payload, 'dispatched', {
+        dispatched_kind: 'proposal',
+        finding_id: finding.id,
+      });
+      return {
+        eventId: step.eventId,
+        contactName: step.contactName,
+        step_type: type,
+        outcome: 'dispatched',
+        action: `proposal finding ${finding.id.slice(0, 8)}`,
+      };
+    }
+
+    if (type === 'question' || type === 'follow_up') {
+      const task = await this.createReplyTask(ctx.db, ctx.workspaceId, step);
+      if (!task) {
+        return {
+          eventId: step.eventId,
+          contactName: step.contactName,
+          step_type: type,
+          outcome: 'error',
+          error: 'reply task creation failed',
+        };
+      }
+      await this.setStatus(ctx.db, step.eventId, step.payload, 'dispatched', {
+        dispatched_kind: 'reply_task',
+        task_id: task.taskId,
+        agent_id: task.agentId,
+      });
+      return {
+        eventId: step.eventId,
+        contactName: step.contactName,
+        step_type: type,
+        outcome: 'dispatched',
+        action: `task ${task.taskId.slice(0, 8)}`,
+      };
+    }
+
+    // Safety net
+    await this.setStatus(ctx.db, step.eventId, step.payload, 'ignored');
+    return {
+      eventId: step.eventId,
+      contactName: step.contactName,
+      step_type: type,
+      outcome: 'ignored',
+    };
+  }
+
+  private async emitProposalFinding(
+    ctx: ExperimentContext,
+    step: OpenNextStep,
+  ): Promise<{ id: string }> {
+    const slugBase = slugify(step.payload.text).slice(0, 48);
+    const slug = `contact-${step.payload.step_type}-${slugBase}-${Date.now().toString(36)}`;
+    const findingId = await writeFinding(ctx.db, {
+      experimentId: this.id,
+      category: 'experiment_proposal',
+      subject: `proposal:${slug}`,
+      hypothesis:
+        `User-reported ${step.payload.step_type.replace('_', ' ')} via DM with `
+        + `${step.contactName}: ${step.payload.text}`,
+      verdict: 'warning',
+      summary: step.payload.suggested_action || step.payload.text,
+      evidence: {
+        brief: {
+          slug,
+          name: titleCase(step.payload.step_type) + ': ' + step.payload.text.slice(0, 80),
+          hypothesis: step.payload.text,
+          everyMs: 60 * 60 * 1000,
+          template: step.payload.step_type === 'bug_report' ? 'investigation_probe' : 'feature_probe',
+          params: {
+            probe_description: step.payload.suggested_action,
+            category: 'other',
+            source: 'contact_conversation',
+            contact_id: step.contactId,
+            contact_name: step.contactName,
+            urgency: step.payload.urgency,
+          },
+        },
+        source: 'next_step_dispatcher',
+        origin_event_id: step.eventId,
+        contact_id: step.contactId,
+        contact_name: step.contactName,
+        step_type: step.payload.step_type,
+        urgency: step.payload.urgency,
+        text: step.payload.text,
+        suggested_action: step.payload.suggested_action,
+      },
+      interventionApplied: null,
+      ranAt: new Date().toISOString(),
+      durationMs: 0,
+    });
+    return { id: findingId };
+  }
+
+  private async createReplyTask(
+    db: DatabaseAdapter,
+    workspaceId: string,
+    step: OpenNextStep,
+  ): Promise<{ taskId: string; agentId: string } | null> {
+    const agentId = await this.resolveReplyAgent(db, workspaceId);
+    if (!agentId) {
+      logger.debug(
+        { contactId: step.contactId, workspaceId },
+        '[next-step-dispatcher] no reply-agent available; skipping task creation',
+      );
+      return null;
+    }
+    const taskId = randomUUID();
+    const now = new Date().toISOString();
+    const titlePrefix = step.payload.step_type === 'question' ? 'Reply to' : 'Nudge';
+    const title = `${titlePrefix} ${step.contactName}: ${step.payload.text.slice(0, 60)}`;
+    const description = [
+      `Contact: ${step.contactName} (id ${step.contactId})`,
+      `Original signal: ${step.payload.text}`,
+      `Suggested reply: ${step.payload.suggested_action}`,
+      `Urgency: ${step.payload.urgency}`,
+      `Source event: ${step.eventId}`,
+    ].join('\n');
+    try {
+      await db.from('agent_workforce_tasks').insert({
+        id: taskId,
+        workspace_id: workspaceId,
+        agent_id: agentId,
+        title,
+        description,
+        input: JSON.stringify({ title, description, contact_id: step.contactId, next_step_event_id: step.eventId }),
+        status: 'needs_approval',
+        priority: step.payload.urgency === 'high' ? 'high' : 'normal',
+        created_at: now,
+        updated_at: now,
+      });
+      return { taskId, agentId };
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : err, contactId: step.contactId },
+        '[next-step-dispatcher] task insert failed',
+      );
+      return null;
+    }
+  }
+
+  private async resolveReplyAgent(db: DatabaseAdapter, workspaceId: string): Promise<string | null> {
+    try {
+      // Prefer The Voice (our X/outreach agent) when present, fall back
+      // to any active agent so the task still lands on an approver.
+      const { data: voiceRows } = await db
+        .from<{ id: string }>('agent_workforce_agents')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .eq('name', 'The Voice')
+        .limit(1);
+      const voiceRowArr = voiceRows as Array<{ id: string }> | null;
+      if (voiceRowArr && voiceRowArr.length > 0) return voiceRowArr[0].id;
+
+      const { data: anyRows } = await db
+        .from<{ id: string }>('agent_workforce_agents')
+        .select('id')
+        .eq('workspace_id', workspaceId)
+        .order('created_at', { ascending: true })
+        .limit(1);
+      const anyArr = anyRows as Array<{ id: string }> | null;
+      if (anyArr && anyArr.length > 0) return anyArr[0].id;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async setStatus(
+    db: DatabaseAdapter,
+    eventId: string,
+    payload: NextStepPayload,
+    newStatus: NextStepStatus,
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
+    const merged: Record<string, unknown> = {
+      ...payload,
+      ...extra,
+      status: newStatus,
+      dispatched_at: new Date().toISOString(),
+    };
+    try {
+      await db
+        .from('agent_workforce_contact_events')
+        .update({ payload: JSON.stringify(merged) })
+        .eq('id', eventId);
+    } catch (err) {
+      logger.debug(
+        { err: err instanceof Error ? err.message : err, eventId, newStatus },
+        '[next-step-dispatcher] status update failed',
+      );
+    }
+  }
+}
+
+function parsePayload(raw: unknown): NextStepPayload | null {
+  if (!raw) return null;
+  // Adapter may hand us either the raw JSON string or an already-parsed
+  // object. Normalize both.
+  let obj: Partial<NextStepPayload> | null = null;
+  if (typeof raw === 'object') {
+    obj = raw as Partial<NextStepPayload>;
+  } else if (typeof raw === 'string') {
+    try { obj = JSON.parse(raw) as Partial<NextStepPayload>; } catch { return null; }
+  }
+  if (!obj || typeof obj !== 'object') return null;
+  if (!obj.step_type || !obj.text || !obj.urgency) return null;
+  return {
+    step_type: obj.step_type,
+    urgency: obj.urgency,
+    text: obj.text,
+    suggested_action: obj.suggested_action ?? '',
+    status: obj.status ?? 'open',
+    source_message_ids: obj.source_message_ids,
+  };
+}
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+function titleCase(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+}
