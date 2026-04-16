@@ -161,6 +161,26 @@ describe('xPostingExecutor', () => {
     expect(String(res.content)).toContain('CDP detach');
   });
 
+  it('converts a hung composer into a TimeoutError ToolCallResult instead of wedging the task', async () => {
+    xPostingMocks.composeTweetViaBrowser.mockImplementation(
+      () => new Promise(() => {}),
+    );
+    vi.useFakeTimers();
+    try {
+      const promise = xPostingExecutor.execute(
+        'x_compose_tweet',
+        { text: 'x' },
+        makeCtx({ xPostingProfile: 'Profile 1' }),
+      );
+      await vi.advanceTimersByTimeAsync(95_000);
+      const res = await promise;
+      expect(res.is_error).toBe(true);
+      expect(String(res.content)).toContain('timed out after 90000ms');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('dispatches x_compose_thread with tweets array + profile pin', async () => {
     xPostingMocks.composeThreadViaBrowser.mockResolvedValue({
       success: true,

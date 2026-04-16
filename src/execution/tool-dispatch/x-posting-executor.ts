@@ -57,6 +57,7 @@ import {
 } from '../browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
+import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
 
 const X_POSTING_TOOL_NAMES = new Set([
   'x_compose_tweet',
@@ -66,6 +67,20 @@ const X_POSTING_TOOL_NAMES = new Set([
   'x_list_dms',
   'x_delete_tweet',
 ]);
+
+// Per-tool deadline. X DOM ops that take longer than this are either
+// Chrome-is-dead or a stuck selector loop. Without this bound a single
+// hung call wedges the task-agent iteration forever (task
+// 8ab9c20fe715bda8dd4e3d6aa49808e8, 2026-04-16).
+const TOOL_TIMEOUT_MS: Record<string, number> = {
+  x_compose_tweet: 90_000,
+  x_compose_thread: 180_000,
+  x_compose_article: 240_000,
+  x_send_dm: 60_000,
+  x_list_dms: 30_000,
+  x_delete_tweet: 60_000,
+};
+const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
 async function readSetting(ctx: ToolExecutionContext, key: string): Promise<string | null> {
   try {
@@ -150,54 +165,70 @@ export const xPostingExecutor: ToolExecutor = {
       landedAt?: string;
       threads?: unknown[];
     };
+    const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
     try {
-      if (toolName === 'x_compose_tweet') {
-        result = await composeTweetViaBrowser({
-          text: String(input.text || ''),
-          dryRun,
-          expectedHandle,
-          expectedBrowserContextId,
-        });
-      } else if (toolName === 'x_compose_thread') {
-        const tweets = Array.isArray(input.tweets) ? (input.tweets as string[]) : [];
-        result = await composeThreadViaBrowser({ tweets, dryRun, expectedBrowserContextId });
-      } else if (toolName === 'x_compose_article') {
-        result = await composeArticleViaBrowser({
-          title: String(input.title || ''),
-          body: String(input.body || ''),
-          dryRun,
-          expectedBrowserContextId,
-        });
-      } else if (toolName === 'x_send_dm') {
-        result = await sendDmViaBrowser({
-          conversationPair: input.conversation_pair as string | undefined,
-          handle: input.handle as string | undefined,
-          text: String(input.text || ''),
-          dryRun,
-          expectedBrowserContextId,
-        });
-      } else if (toolName === 'x_list_dms') {
-        const listed = await listDmsViaBrowser({
-          limit: input.limit as number | undefined,
-          expectedBrowserContextId,
-        });
-        result = {
-          success: listed.success,
-          message: listed.message,
-          screenshotBase64: listed.screenshotBase64,
-          threads: listed.threads as unknown[],
-        };
-      } else {
+      result = await withTimeout(`x-posting:${toolName}`, timeoutMs, async () => {
+        if (toolName === 'x_compose_tweet') {
+          return composeTweetViaBrowser({
+            text: String(input.text || ''),
+            dryRun,
+            expectedHandle,
+            expectedBrowserContextId,
+          });
+        }
+        if (toolName === 'x_compose_thread') {
+          const tweets = Array.isArray(input.tweets) ? (input.tweets as string[]) : [];
+          return composeThreadViaBrowser({ tweets, dryRun, expectedBrowserContextId });
+        }
+        if (toolName === 'x_compose_article') {
+          return composeArticleViaBrowser({
+            title: String(input.title || ''),
+            body: String(input.body || ''),
+            dryRun,
+            expectedBrowserContextId,
+          });
+        }
+        if (toolName === 'x_send_dm') {
+          return sendDmViaBrowser({
+            conversationPair: input.conversation_pair as string | undefined,
+            handle: input.handle as string | undefined,
+            text: String(input.text || ''),
+            dryRun,
+            expectedBrowserContextId,
+          });
+        }
+        if (toolName === 'x_list_dms') {
+          const listed = await listDmsViaBrowser({
+            limit: input.limit as number | undefined,
+            expectedBrowserContextId,
+          });
+          return {
+            success: listed.success,
+            message: listed.message,
+            screenshotBase64: listed.screenshotBase64,
+            threads: listed.threads as unknown[],
+          };
+        }
         // x_delete_tweet
-        result = await deleteLastTweetViaBrowser({
+        return deleteLastTweetViaBrowser({
           handle: String(input.handle || ''),
           marker: String(input.marker || ''),
           dryRun,
           expectedBrowserContextId,
         });
-      }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof TimeoutError) {
+        logger.error(
+          { tool: toolName, timeoutMs, elapsedMs: err.elapsedMs },
+          '[x-posting-executor] composer exceeded timeout — likely Chrome crash, login redirect loop, or selector hang',
+        );
+        return {
+          content: `Error: ${toolName} timed out after ${timeoutMs}ms (likely Chrome crash, login redirect loop, or selector hang). Task should retry or human should check Chrome state.`,
+          is_error: true,
+        };
+      }
       logger.error(
         { err: msg, tool: toolName },
         '[x-posting-executor] composer handler crashed',
