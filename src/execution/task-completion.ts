@@ -36,6 +36,7 @@ import {
   shouldAutoCreateDeliverable,
 } from './response-classifier.js';
 import { recordTriggerOutcome } from '../triggers/trigger-watchdog.js';
+import { NARRATED_FAILURE_CANARIES } from '../self-bench/experiments/deliverable-action-sentinel.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -159,7 +160,9 @@ export async function finalizeTaskSuccess(
       }
 
       // Autonomy-level-based status routing
-      let finalStatus: 'completed' | 'needs_approval' = 'completed';
+      let finalStatus: 'completed' | 'needs_approval' | 'failed' = 'completed';
+      let narratedFailureCanary: string | null = null;
+      let narratedFailureActionType: string | null = null;
 
       // L1 (Observer): All non-informational actions need approval
       if (autonomyLevel === 1 && !trustOutput) {
@@ -177,6 +180,62 @@ export async function finalizeTaskSuccess(
         finalStatus = 'needs_approval';
       }
 
+      // Narrated-failure gate. If the task dispatched a deferred_action
+      // (post_tweet, send_email, etc.) and the agent's final output
+      // contains an auth / permission / execution-wall canary phrase,
+      // the action did NOT happen regardless of what the ReAct loop
+      // reported — every downstream surface that reads status=completed
+      // as "action landed" (content-cadence counters, trust-output
+      // executor, revenue-pipeline observer) would otherwise treat a
+      // silent failure as success. We route to `failed` so task-
+      // failure.ts logic applies, DeliverableActionSentinelExperiment
+      // sees the same canary it would have caught post-hoc, and
+      // content-cadence can re-dispatch or escalate. The sentinel stays
+      // in place as defense-in-depth for upstream paths that bypass
+      // this gate.
+      //
+      // Only fires when:
+      //   - a deferred_action is declared (otherwise the task is not
+      //     expected to "do a thing"; canaries in an informational
+      //     answer are not failures),
+      //   - status would otherwise be `completed` (we do NOT override
+      //     needs_approval — the operator's approval step already
+      //     carries the review responsibility).
+      if (finalStatus === 'completed') {
+        try {
+          const { data: deferRow } = await this.db.from('agent_workforce_tasks')
+            .select('deferred_action')
+            .eq('id', taskId)
+            .maybeSingle();
+          const raw = (deferRow as { deferred_action?: unknown } | null)?.deferred_action;
+          const deferred = typeof raw === 'string'
+            ? (JSON.parse(raw || 'null') as { type?: unknown } | null)
+            : (raw as { type?: unknown } | null);
+          const actionType = deferred && typeof deferred.type === 'string' ? deferred.type : null;
+          if (actionType) {
+            const lower = cleanContent.toLowerCase();
+            const hit = NARRATED_FAILURE_CANARIES.find((phrase) => lower.includes(phrase));
+            if (hit) {
+              narratedFailureCanary = hit;
+              narratedFailureActionType = actionType;
+              finalStatus = 'failed';
+              logger.warn(
+                { taskId, agentId, actionType, canary: hit, contentPreview: cleanContent.slice(0, 200) },
+                '[RuntimeEngine] narrated-failure gate: deferred action canary matched, routing task to failed',
+              );
+            }
+          }
+        } catch (err) {
+          // Gate is best-effort; on DB/JSON errors we fall through to
+          // whatever the prior routing decided. Don't block completion
+          // on the gate itself.
+          logger.debug(
+            { err: err instanceof Error ? err.message : err, taskId },
+            '[RuntimeEngine] narrated-failure gate check failed',
+          );
+        }
+      }
+
       // 7. Save output
       await this.db.from('agent_workforce_tasks').update({
         status: finalStatus,
@@ -190,8 +249,10 @@ export async function finalizeTaskSuccess(
         updated_at: new Date().toISOString(),
       }).eq('id', taskId);
 
-      // Persist ReAct trace in task metadata
-      if (reactTrace.length > 0) {
+      // Persist ReAct trace in task metadata, plus any narrated-failure
+      // gate signal so downstream consumers (sentinel, ops triage UI)
+      // can filter without re-parsing the output.
+      if (reactTrace.length > 0 || narratedFailureCanary) {
         try {
           const { data: existing } = await this.db
             .from('agent_workforce_tasks')
@@ -199,11 +260,17 @@ export async function finalizeTaskSuccess(
             .eq('id', taskId)
             .single();
           const existingMetadata = (existing?.metadata as Record<string, unknown>) || {};
+          const nextMetadata: Record<string, unknown> = { ...existingMetadata };
+          if (reactTrace.length > 0) nextMetadata.react_trace = reactTrace;
+          if (narratedFailureCanary) {
+            nextMetadata.narrated_failure = {
+              canary: narratedFailureCanary,
+              action_type: narratedFailureActionType,
+              detected_at: new Date().toISOString(),
+            };
+          }
           await this.db.from('agent_workforce_tasks').update({
-            metadata: JSON.stringify({
-              ...existingMetadata,
-              react_trace: reactTrace,
-            }),
+            metadata: JSON.stringify(nextMetadata),
           }).eq('id', taskId);
         } catch { /* non-fatal */ }
       }
@@ -292,7 +359,15 @@ export async function finalizeTaskSuccess(
             provider: deferredAction?.provider || (deferredAction?.type === 'post_tweet' ? 'x' : null),
             title: deliverableTitle,
             content: JSON.stringify(contentPayload),
-            status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
+            // finalStatus can be 'completed' (→ approved), 'needs_approval'
+            // (→ pending_review), or 'failed' (narrated-failure gate tripped,
+            // action did not happen — mark the deliverable rejected so the
+            // dispatcher doesn't treat it as a successful post).
+            status: finalStatus === 'needs_approval'
+              ? 'pending_review'
+              : finalStatus === 'failed'
+              ? 'rejected'
+              : 'approved',
             auto_created: 0,
             created_at: deliverableNow,
             updated_at: deliverableNow,
@@ -326,7 +401,11 @@ export async function finalizeTaskSuccess(
               deliverable_type: auto.inferredType,
               title: task.title,
               content: JSON.stringify({ text: cleanContent }),
-              status: finalStatus === 'needs_approval' ? 'pending_review' : 'approved',
+              status: finalStatus === 'needs_approval'
+                ? 'pending_review'
+                : finalStatus === 'failed'
+                ? 'rejected'
+                : 'approved',
               auto_created: 1,
               created_at: autoNow,
               updated_at: autoNow,
