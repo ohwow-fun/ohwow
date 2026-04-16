@@ -821,6 +821,67 @@ describe('safeSelfCommit — Layer 2 fixesFindingId gate', () => {
   });
 });
 
+describe('safeSelfCommit — Phase 5 session-presence gate', () => {
+  let sessionRoot: string;
+  let sessionAuditPath: string;
+  let markerPath: string;
+
+  beforeEach(() => {
+    sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'self-commit-session-'));
+    initGitRepo(sessionRoot);
+    sessionAuditPath = path.join(sessionRoot, 'audit.log');
+    markerPath = path.join(sessionRoot, 'session-marker.tmp');
+    setSelfCommitRepoRoot(sessionRoot);
+    _setAuditLogPathForTests(sessionAuditPath);
+    process.env.OHWOW_SESSION_MARKER_PATH = markerPath;
+  });
+
+  afterEach(() => {
+    _resetSelfCommitForTests();
+    delete process.env.OHWOW_SESSION_MARKER_PATH;
+    try { fs.rmSync(sessionRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  it('defers the commit when a fresh session marker is present', async () => {
+    fs.writeFileSync(markerPath, `${process.pid}`, 'utf-8');
+    const result = await safeSelfCommit({
+      files: [{ path: 'src/self-bench/experiments/session-test.ts', content: 'export const n = 1;' }],
+      commitMessage: 'feat(self-bench): session-presence gate deferral regression guard',
+      experimentId: 'test',
+      extendsExperimentId: null,
+      whyNotEditExisting: 'phase-5 test-only probe',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('human_session_active');
+  });
+
+  it('proceeds when the marker file is stale (older than 5 minutes)', async () => {
+    fs.writeFileSync(markerPath, `${process.pid}`, 'utf-8');
+    const oldMs = Date.now() - 10 * 60 * 1000;
+    fs.utimesSync(markerPath, new Date(oldMs), new Date(oldMs));
+    const result = await safeSelfCommit({
+      files: [{ path: 'src/self-bench/experiments/session-stale.ts', content: 'export const n = 1;' }],
+      commitMessage: 'feat(self-bench): session-gate allows commit when marker is stale',
+      experimentId: 'test',
+      extendsExperimentId: null,
+      whyNotEditExisting: 'phase-5 stale-marker regression guard',
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('proceeds when no marker file is present at all', async () => {
+    // Marker file deliberately absent.
+    const result = await safeSelfCommit({
+      files: [{ path: 'src/self-bench/experiments/session-absent.ts', content: 'export const n = 1;' }],
+      commitMessage: 'feat(self-bench): session-gate is permissive when no marker exists',
+      experimentId: 'test',
+      extendsExperimentId: null,
+      whyNotEditExisting: 'phase-5 absent-marker regression guard',
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('safeSelfCommit — concurrent staging isolation (race condition fix)', () => {
   it('does not bundle a concurrently-staged unrelated file into the commit', async () => {
     // Simulate the failure mode that produced commit 0948ede on

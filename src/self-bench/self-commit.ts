@@ -269,11 +269,51 @@ export const ROADMAP_RESTRUCTURE_DISABLED_PATH = path.join(
   'roadmap-restructure-disabled',
 );
 
+/**
+ * Session-presence marker. Inside the repo under .git so it moves with
+ * the working tree but never lands in a commit. Operators wire a
+ * Claude Code hook (PromptSubmit / Stop) to `touch` this path on every
+ * turn — the autonomous loop reads its mtime in safeSelfCommit and
+ * defers when it's fresh.
+ */
+export const SESSION_PRESENCE_MARKER_REL = '.git/ohwow-session-live';
+/** How fresh the marker must be to count as "a human is here right now." */
+export const SESSION_KEEPALIVE_MAX_AGE_MS = 5 * 60 * 1000;
+
 function isRoadmapRestructureEnabled(): boolean {
   try {
     return !fs.existsSync(ROADMAP_RESTRUCTURE_DISABLED_PATH);
   } catch {
     return true;
+  }
+}
+
+/**
+ * Returns a string reason if a human session is actively touching
+ * the repo, or null if the loop is free to proceed. Reads the
+ * marker's mtime; fresher than SESSION_KEEPALIVE_MAX_AGE_MS = someone
+ * is here, older = stale and the loop can run. Any filesystem error
+ * returns null (fail-open) so a missing .git dir during tests doesn't
+ * pathologically block commits — in practice the dir is always there
+ * when safeSelfCommit runs, since it's about to run git anyway.
+ *
+ * Override via OHWOW_SESSION_MARKER_PATH for test harnesses.
+ */
+function checkHumanSessionPresence(repoRoot: string): string | null {
+  const override = process.env.OHWOW_SESSION_MARKER_PATH;
+  const markerPath = override && override.length > 0
+    ? override
+    : path.join(repoRoot, SESSION_PRESENCE_MARKER_REL);
+  try {
+    const stat = fs.statSync(markerPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    if (ageMs < SESSION_KEEPALIVE_MAX_AGE_MS) {
+      const ageSec = Math.round(ageMs / 1000);
+      return `human_session_active (marker ${path.basename(markerPath)} touched ${ageSec}s ago)`;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -414,6 +454,22 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     return {
       ok: false,
       reason: `self-commit is disabled by default. To re-enable, remove ${SELF_COMMIT_DISABLED_PATH}`,
+    };
+  }
+
+  // Phase 5 — session-presence gate. If a human Claude Code session
+  // (or any other tool) has touched .git/ohwow-session-live within
+  // the last SESSION_KEEPALIVE_MAX_AGE_MS, defer this autonomous
+  // commit so two writers aren't racing the working tree. The marker
+  // is a plain file — operators wire the touch via a Claude Code
+  // PromptSubmit / Stop hook (one line: `touch "$CLAUDE_PROJECT_DIR/.git/ohwow-session-live"`).
+  // Read-only check; never writes the file itself so the loop can't
+  // mask its own presence.
+  const sessionHoldback = checkHumanSessionPresence(repoRoot);
+  if (sessionHoldback) {
+    return {
+      ok: false,
+      reason: `deferring autonomous commit — ${sessionHoldback}. Remove or wait-out .git/ohwow-session-live if the session is gone.`,
     };
   }
 
