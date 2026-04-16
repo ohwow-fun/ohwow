@@ -15,7 +15,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { TypedEventBus } from '../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../tui/types.js';
 import { loadConfig, isFirstRun } from '../config.js';
@@ -37,8 +38,6 @@ import { installDiaryHook } from '../execution/diary-hook.js';
 import type { DaemonContext } from './context.js';
 
 export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
-  ctx.sessionToken = randomUUID();
-
   // 1. Load config
   let config: RuntimeConfig;
   try {
@@ -53,6 +52,19 @@ export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
 
   const dataDir = dirname(config.dbPath);
   const pidPath = getPidPath(dataDir);
+
+  // Reuse the existing session token if one is already on disk so browser
+  // sessions survive a daemon restart. Only mint a new UUID when there's no
+  // token yet (first boot, or someone cleared state).
+  const tokenPath = join(dataDir, 'daemon.token');
+  let sessionToken: string | null = null;
+  if (existsSync(tokenPath)) {
+    try {
+      const existing = readFileSync(tokenPath, 'utf8').trim();
+      if (existing) sessionToken = existing;
+    } catch { /* fall through to regenerate */ }
+  }
+  ctx.sessionToken = sessionToken ?? randomUUID();
 
   // 2. Pre-check: is another daemon running? (before binding port)
   if (!acquireLock(pidPath, config.port, VERSION)) {

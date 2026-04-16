@@ -44,11 +44,12 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   // Primary (unlabeled)
-  { path: '/', label: 'Chat', icon: ChatCircle, group: 'primary' },
+  { path: '/', label: 'Pulse', icon: Pulse, group: 'primary' },
+  { path: '/chat', label: 'Chat', icon: ChatCircle, group: 'primary' },
   { path: '/dashboard', label: 'Overview', icon: SquaresFour, group: 'primary' },
   { path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'primary' },
-  { path: '/activity', label: 'Activity', icon: Pulse, group: 'primary' },
-  { path: '/messages', label: 'Messages', icon: ChatCircle, group: 'primary' },
+  { path: '/activity', label: 'Activity', icon: Lightning, group: 'primary' },
+  { path: '/messages', label: 'Messages', icon: ChatCircleDots, group: 'primary' },
   // Manage
   { path: '/agents', label: 'Agents', icon: Robot, group: 'manage' },
   { path: '/projects', label: 'Projects', icon: Kanban, group: 'manage' },

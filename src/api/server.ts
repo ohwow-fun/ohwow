@@ -53,6 +53,7 @@ import { createFileAccessRouter } from './routes/file-access.js';
 import { createPermissionRequestsRouter } from './routes/permission-requests.js';
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFindingsRouter } from './routes/findings.js';
+import { createPulseRouter } from './routes/pulse.js';
 import { createTemplatesRouter } from './routes/templates.js';
 import { createAttachmentsRouter } from './routes/attachments.js';
 import { createWhatsAppRouter } from './routes/whatsapp.js';
@@ -587,6 +588,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createPermissionRequestsRouter(db, engine));
   app.use(createFailingTriggersRouter(db));
   app.use(createFindingsRouter(db));
+  app.use(createPulseRouter(rawDb, startTime));
   if (config.dataDir) {
     app.use(createAttachmentsRouter(db, config.dataDir));
   }
