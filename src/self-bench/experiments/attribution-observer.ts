@@ -49,7 +49,15 @@ import type {
 } from '../experiment-types.js';
 import { setRuntimeConfig } from '../runtime-config.js';
 
-const CADENCE: ExperimentCadence = { everyMs: 6 * 60 * 60 * 1000, runOnBoot: false };
+// runOnBoot: true so the ranker's `strategy.attribution_findings`
+// config key gets populated within the first tick after a daemon
+// restart instead of leaving a 6h blindspot. The sibling
+// RevenuePipelineObserver already runs on boot for the same reason —
+// the ranker treats both keys as required inputs for the revenue-
+// proximity pick. Observed 2026-04-16: ATTRIBUTION_FINDINGS_MISSING
+// + CITES_SALES_SIGNAL_ABSENT fired in tandem because an autonomous
+// patch landed before this observer had had a chance to tick.
+const CADENCE: ExperimentCadence = { everyMs: 6 * 60 * 60 * 1000, runOnBoot: true };
 /** Minimum rows with a qualified_ts before the observer says anything. */
 const MIN_QUALIFIED_FOR_SIGNAL = 3;
 /** Minimum rows in a bucket before a per-bucket conversion rate is meaningful. */
