@@ -28,7 +28,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type Database from 'better-sqlite3';
@@ -36,6 +36,7 @@ import type Database from 'better-sqlite3';
 import { initDatabase } from '../../db/init.js';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
 import { ContentCadenceScheduler } from '../content-cadence-scheduler.js';
+import type { DeliverableExecutor } from '../../execution/deliverable-executor.js';
 import {
   _resetRuntimeConfigCacheForTests,
   setRuntimeConfig,
@@ -242,6 +243,130 @@ describe('ContentCadenceScheduler — integration', () => {
       .prepare('SELECT current_value FROM agent_workforce_goals WHERE id = ?')
       .get(GOAL_ID) as { current_value: number };
     expect(goal.current_value).toBe(3);
+  });
+
+  it('bypass path: posts an operator-approved draft directly, skipping agent iteration', async () => {
+    seedAgent(env.rawDb, { id: 'a-1', name: 'Social Media Manager', status: 'idle' });
+
+    const approvalsPath = join(env.dir, 'x-approvals.jsonl');
+    const draftText = 'ship it and iterate in public';
+    writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        id: 'approval-1',
+        ts: '2026-04-15T10:00:00Z',
+        kind: 'x_outbound_post',
+        status: 'auto_applied',
+        payload: { post_text: draftText, shape: 'opinion' },
+      }) + '\n',
+    );
+
+    const execMock = vi.fn().mockResolvedValue([{ ok: true, result: { posted: true } }]);
+    const fakeExecutor = { executeForTask: execMock } as unknown as DeliverableExecutor;
+
+    const sched = new ContentCadenceScheduler(env.db, env.engine as unknown as RuntimeEngine, WORKSPACE_ID, {
+      approvalsJsonlPath: approvalsPath,
+      deliverableExecutor: fakeExecutor,
+    });
+    await sched.tick();
+
+    // Agent engine must NOT have been called — bypass skipped the ReAct loop.
+    expect(env.engine.executeTask).not.toHaveBeenCalled();
+
+    // The task row should be inserted as completed with the stamped text.
+    const task = env.rawDb
+      .prepare(`SELECT id, status, deferred_action, metadata FROM agent_workforce_tasks WHERE workspace_id = ?`)
+      .get(WORKSPACE_ID) as { id: string; status: string; deferred_action: string; metadata: string };
+    expect(task.status).toBe('completed');
+    const deferred = JSON.parse(task.deferred_action);
+    expect(deferred.params.text).toBe(draftText);
+    const meta = JSON.parse(task.metadata);
+    expect(meta.bypass).toBe('approved_draft');
+    expect(meta.approved_draft_id).toBe('approval-1');
+
+    // A companion deliverable row in status='approved' carries the text to the executor.
+    const deliverable = env.rawDb
+      .prepare(`SELECT content, status, provider FROM agent_workforce_deliverables WHERE task_id = ?`)
+      .get(task.id) as { content: string; status: string; provider: string };
+    expect(deliverable.status).toBe('approved');
+    expect(deliverable.provider).toBe('x');
+    expect(JSON.parse(deliverable.content).text).toBe(draftText);
+
+    // Executor invoked with the new task id.
+    expect(execMock).toHaveBeenCalledWith(task.id);
+
+    // Consumption event appended so the next tick skips this draft.
+    const lines = readFileSync(approvalsPath, 'utf-8').trim().split('\n');
+    const last = JSON.parse(lines[lines.length - 1]);
+    expect(last.id).toBe('approval-1');
+    expect(last.status).toBe('applied');
+    expect(last.notes).toContain('content_cadence_dispatcher');
+  });
+
+  it('bypass path: falls through to agent authoring when no approved drafts exist', async () => {
+    seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
+
+    const approvalsPath = join(env.dir, 'x-approvals-empty.jsonl');
+    writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        id: 'only-pending',
+        ts: '2026-04-15T10:00:00Z',
+        kind: 'x_outbound_post',
+        status: 'pending',
+        payload: { post_text: 'not yet approved' },
+      }) + '\n',
+    );
+    const execMock = vi.fn();
+    const fakeExecutor = { executeForTask: execMock } as unknown as DeliverableExecutor;
+
+    const sched = new ContentCadenceScheduler(env.db, env.engine as unknown as RuntimeEngine, WORKSPACE_ID, {
+      approvalsJsonlPath: approvalsPath,
+      deliverableExecutor: fakeExecutor,
+    });
+    await sched.tick();
+
+    // Fell through to agent path — engine.executeTask called, executor NOT called.
+    expect(env.engine.executeTask).toHaveBeenCalledTimes(1);
+    expect(execMock).not.toHaveBeenCalled();
+    const row = env.rawDb
+      .prepare(`SELECT status FROM agent_workforce_tasks WHERE workspace_id = ?`)
+      .get(WORKSPACE_ID) as { status: string };
+    expect(row.status).toBe('pending');
+  });
+
+  it('bypass path: routes the task to failed when the executor reports ok=false', async () => {
+    seedAgent(env.rawDb, { id: 'a-1', name: 'Social Media Manager', status: 'idle' });
+    const approvalsPath = join(env.dir, 'x-approvals-fail.jsonl');
+    writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        id: 'approval-failing',
+        ts: '2026-04-15T10:00:00Z',
+        kind: 'x_outbound_post',
+        status: 'approved',
+        payload: { post_text: 'will fail at post time' },
+      }) + '\n',
+    );
+    const execMock = vi.fn().mockResolvedValue([{ ok: false, error: 'cdp detach' }]);
+    const fakeExecutor = { executeForTask: execMock } as unknown as DeliverableExecutor;
+
+    const sched = new ContentCadenceScheduler(env.db, env.engine as unknown as RuntimeEngine, WORKSPACE_ID, {
+      approvalsJsonlPath: approvalsPath,
+      deliverableExecutor: fakeExecutor,
+    });
+    await sched.tick();
+
+    const task = env.rawDb
+      .prepare(`SELECT status, error_message, failure_category FROM agent_workforce_tasks WHERE workspace_id = ?`)
+      .get(WORKSPACE_ID) as { status: string; error_message: string; failure_category: string };
+    expect(task.status).toBe('failed');
+    expect(task.failure_category).toBe('approved_draft_bypass');
+    expect(task.error_message).toContain('cdp detach');
+
+    // Draft should NOT be marked consumed so the operator can retry.
+    const lines = readFileSync(approvalsPath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(1);
   });
 
   it('rolls the due_date forward 7 days when the existing goal is within 1 day of expiry', async () => {

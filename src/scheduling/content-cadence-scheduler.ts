@@ -37,6 +37,12 @@ import {
   CONTENT_CADENCE_CONFIG_KEY,
   CONTENT_CADENCE_DEFAULT,
 } from '../self-bench/experiments/content-cadence-tuner.js';
+import { DeliverableExecutor } from '../execution/deliverable-executor.js';
+import {
+  selectApprovedDraft,
+  markDraftConsumed,
+  type ApprovedDraft,
+} from './approved-draft-queue.js';
 
 /** Goal row id used for INSERT OR IGNORE. Stable across restarts. */
 const GOAL_ID = 'goal-x-posts-per-week';
@@ -50,16 +56,47 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Default tick interval — every hour. */
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 
+export interface ContentCadenceSchedulerOptions {
+  /**
+   * Absolute path to the workspace's `x-approvals.jsonl` ledger. When
+   * provided, the dispatcher checks the ledger for an approved, not-
+   * yet-posted X draft BEFORE asking an agent to author one, and
+   * posts the operator-approved text via the deliverable executor
+   * with zero LLM iterations. This is the bypass path that kills
+   * the "## Tweet Ready for Manual Posting" capitulation class.
+   *
+   * Omitted in tests that don't care about the bypass, and in
+   * workspaces whose data dir doesn't exist yet.
+   */
+  approvalsJsonlPath?: string;
+  /**
+   * Override the deliverable executor. Tests inject a fake; prod
+   * constructs one from the db on first use.
+   */
+  deliverableExecutor?: DeliverableExecutor;
+}
+
 export class ContentCadenceScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private executing = false;
+  private readonly options: ContentCadenceSchedulerOptions;
+  private cachedExecutor: DeliverableExecutor | null = null;
 
   constructor(
     private db: DatabaseAdapter,
     private engine: RuntimeEngine,
     private workspaceId: string,
-  ) {}
+    options: ContentCadenceSchedulerOptions = {},
+  ) {
+    this.options = options;
+  }
+
+  private getExecutor(): DeliverableExecutor {
+    if (this.options.deliverableExecutor) return this.options.deliverableExecutor;
+    if (!this.cachedExecutor) this.cachedExecutor = new DeliverableExecutor(this.db);
+    return this.cachedExecutor;
+  }
 
   get isRunning(): boolean {
     return this.running;
@@ -321,6 +358,28 @@ export class ContentCadenceScheduler {
    * execution via the runtime engine. Mirrors local-scheduler.ts fireSchedule.
    */
   private async dispatchXPostTask(agentId: string): Promise<void> {
+    // Approved-draft bypass: if the operator has approved text sitting
+    // in the workspace's x-approvals.jsonl, post it directly instead of
+    // asking an agent to author one. Historically, agent authoring
+    // produced a steady stream of capitulations ("## Tweet Ready for
+    // Manual Posting") that silently counted as posts; pre-approved
+    // text carries zero drift risk and already passed human review.
+    if (this.options.approvalsJsonlPath) {
+      try {
+        const draft = selectApprovedDraft(this.options.approvalsJsonlPath);
+        if (draft) {
+          await this.dispatchFromApprovedDraft(agentId, draft);
+          return;
+        }
+      } catch (err) {
+        // Bypass is opportunistic — a broken queue must not break the
+        // fallback path. Log and fall through to agent authoring.
+        logger.warn(
+          { err: err instanceof Error ? err.message : err },
+          '[ContentCadenceScheduler] approved-draft bypass failed; falling back to agent authoring',
+        );
+      }
+    }
     try {
       const prompt =
         'Write and post one original tweet. Keep it concise (under 280 characters), ' +
@@ -368,6 +427,117 @@ export class ContentCadenceScheduler {
       );
     } catch (err) {
       logger.error({ err, agentId }, '[ContentCadenceScheduler] dispatchXPostTask failed');
+    }
+  }
+
+  /**
+   * Bypass path: post an operator-approved draft directly via the
+   * deliverable executor, skipping the LLM-author iteration.
+   *
+   * Flow:
+   *   1. Insert a task row that's ALREADY completed (trust_output=true,
+   *      status=completed, deferred_action.params.text = draft text).
+   *      We write the task row so every downstream metric surface
+   *      (posts_today counter, goal current_value, content-cadence-
+   *      loop-health) sees this as one completed tweet, just like
+   *      an agent-authored one.
+   *   2. Insert a companion deliverable row with status=approved and
+   *      content.text = draft text. deliverable-executor reads it by
+   *      task_id and does the real posting (dry-run unless
+   *      runtime_settings.deliverable_executor_live='true').
+   *   3. Invoke deliverableExecutor.executeForTask(taskId). Result
+   *      ok=true → deliverable transitions approved→delivered, mark
+   *      the draft consumed so we don't re-pick it. Result ok=false
+   *      → route the task to status=failed with the handler error
+   *      so the narrated-failure gate + sentinel still see a signal.
+   *
+   * Any throw in this path is caught by the outer dispatchXPostTask
+   * wrapper; the scheduler logs and moves on. We don't fall back to
+   * agent authoring on a bypass error because the draft may have
+   * already been consumed — re-dispatching an agent task here could
+   * double-post.
+   */
+  private async dispatchFromApprovedDraft(
+    agentId: string,
+    draft: ApprovedDraft,
+  ): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const { data: taskData } = await this.db
+      .from('agent_workforce_tasks')
+      .insert({
+        workspace_id: this.workspaceId,
+        agent_id: agentId,
+        title: 'Post one tweet today',
+        input: `Post pre-approved draft ${draft.id} (no LLM authoring).`,
+        output: `Posted via content-cadence bypass using approvals row ${draft.id}.`,
+        status: 'completed',
+        priority: 'normal',
+        started_at: nowIso,
+        completed_at: nowIso,
+        metadata: JSON.stringify({
+          trust_output: true,
+          dispatcher: 'content_cadence',
+          bypass: 'approved_draft',
+          approved_draft_id: draft.id,
+          approved_draft_ts: draft.ts,
+          approved_draft_kind: draft.kind,
+        }),
+        deferred_action: JSON.stringify({
+          type: 'post_tweet',
+          provider: 'x',
+          params: { text: draft.text },
+        }),
+      })
+      .select('id')
+      .single();
+    if (!taskData) {
+      logger.warn({ agentId, draftId: draft.id }, '[ContentCadenceScheduler] bypass task insert returned no id');
+      return;
+    }
+    const taskId = (taskData as { id: string }).id;
+
+    await this.db.from('agent_workforce_deliverables').insert({
+      workspace_id: this.workspaceId,
+      task_id: taskId,
+      agent_id: agentId,
+      deliverable_type: 'post',
+      provider: 'x',
+      title: `Dispatcher-authored post (approvals ${draft.id})`,
+      content: JSON.stringify({
+        text: draft.text,
+        action_spec: { type: 'post_tweet', approved_draft_id: draft.id },
+      }),
+      status: 'approved',
+      auto_created: 1,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+
+    const results = await this.getExecutor().executeForTask(taskId);
+    const allOk = results.length > 0 && results.every((r) => r.ok);
+    if (allOk) {
+      if (this.options.approvalsJsonlPath) {
+        markDraftConsumed(this.options.approvalsJsonlPath, draft.id, taskId);
+      }
+      logger.info(
+        { agentId, taskId, draftId: draft.id, posted: results.length },
+        '[ContentCadenceScheduler] posted via approved-draft bypass',
+      );
+    } else {
+      const firstError = results.find((r) => !r.ok)?.error ?? 'no deliverable matched';
+      await this.db
+        .from('agent_workforce_tasks')
+        .update({
+          status: 'failed',
+          failure_category: 'approved_draft_bypass',
+          error_message: `Approved-draft bypass failed: ${firstError}`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', taskId);
+      logger.warn(
+        { agentId, taskId, draftId: draft.id, err: firstError },
+        '[ContentCadenceScheduler] approved-draft bypass failed; task routed to failed',
+      );
     }
   }
 

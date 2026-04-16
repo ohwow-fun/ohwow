@@ -74,7 +74,8 @@ import {
 } from '../self-bench/runtime-config.js';
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
-import { resolveActiveWorkspace } from '../config.js';
+import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
+import path from 'node:path';
 import { dirname } from 'path';
 import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
@@ -215,9 +216,23 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     // x_posts_per_week goal row on first run, dispatches X post tasks
     // when under the daily budget, and updates goal.current_value with
     // the trailing-7d count so validate() has real signal.
-    const cadenceScheduler = new ContentCadenceScheduler(db, engine, workspaceId);
+    // Thread the approvals-ledger path so the scheduler's approved-
+    // draft bypass can read operator-approved text and post it
+    // directly, skipping the LLM-author iteration (which has been
+    // the source of the "## Tweet Ready for Manual Posting"
+    // capitulation class).
+    const approvalsJsonlPath = path.join(
+      workspaceLayoutFor(workspaceSlug).dataDir,
+      'x-approvals.jsonl',
+    );
+    const cadenceScheduler = new ContentCadenceScheduler(
+      db,
+      engine,
+      workspaceId,
+      { approvalsJsonlPath },
+    );
     cadenceScheduler.start();
-    logger.info('[daemon] content-cadence-scheduler started');
+    logger.info({ approvalsJsonlPath }, '[daemon] content-cadence-scheduler started');
 
     // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
     // that detects silent failures across the closed loop's stages.
