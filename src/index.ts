@@ -841,6 +841,9 @@ if (subcommand === 'logs') {
     process.exit(1);
   }
   process.exit(0);
+} else if (subcommand === 'video') {
+  const { runVideoCli } = await import('./cli/video.js');
+  await runVideoCli(process.argv.slice(3));
 } else if (isDaemon) {
   // Daemon mode: start services + HTTP server, no TUI
   const { startDaemon } = await import('./daemon/start.js');
@@ -862,6 +865,7 @@ if (subcommand === 'logs') {
   console.log('  ohwow logs              Tail daemon logs');
   console.log('  ohwow restart           Restart the daemon');
   console.log('  ohwow improve           Run self-improvement cycle');
+  console.log('  ohwow video <render|cache>  Render a VideoSpec JSON to MP4');
   console.log('  ohwow workspace         Manage workspaces (list|current|create|use)');
   console.log('  ohwow mcp-server        Start MCP server for Claude Code');
   console.log('  ohwow setup-claude-code Enable Claude Code integration');
