@@ -21,6 +21,14 @@ import {
   BUILTIN_TEMPLATES,
   type SceneBrief,
 } from '../execution/skills/video_workspace_author.js';
+import type { VideoClipProviderName } from '../media/video-clip-provider.js';
+
+const CLIP_PROVIDER_NAMES: ReadonlySet<VideoClipProviderName> = new Set([
+  'openrouter-veo',
+  'fal',
+  'replicate',
+  'custom-http',
+]);
 
 function parseFlags(args: string[]): {
   positional: string[];
@@ -183,6 +191,19 @@ async function cmdWorkspace(args: string[]): Promise<void> {
   const previewPort = typeof flags.port === 'string' ? Number(flags.port) : undefined;
   const outputPath = typeof flags.out === 'string' ? flags.out : undefined;
 
+  const clipsEnabled = flags.clips === true || typeof flags.clips === 'string';
+  const clipsProviderRaw = typeof flags['clips-provider'] === 'string' ? flags['clips-provider'] : undefined;
+  if (clipsProviderRaw && !CLIP_PROVIDER_NAMES.has(clipsProviderRaw as VideoClipProviderName)) {
+    console.error(`Unknown --clips-provider "${clipsProviderRaw}". Available: ${Array.from(CLIP_PROVIDER_NAMES).join(', ')}`);
+    process.exit(1);
+  }
+  const clipsMaxCostCents = typeof flags['clips-max-cost'] === 'string' ? Number(flags['clips-max-cost']) : undefined;
+  if (clipsMaxCostCents != null && !Number.isFinite(clipsMaxCostCents)) {
+    console.error('--clips-max-cost must be a number (cents).');
+    process.exit(1);
+  }
+  const clipsDryRun = flags['clips-dry-run'] === true;
+
   let briefs: SceneBrief[] | undefined;
   if (scenesFlag) {
     const tmplKey = template ?? 'classic-demo';
@@ -217,6 +238,14 @@ async function cmdWorkspace(args: string[]): Promise<void> {
       briefs,
       extraBrief,
       scriptsOnly: dryRun,
+      clips: clipsEnabled
+        ? {
+            enabled: true,
+            provider: clipsProviderRaw as VideoClipProviderName | undefined,
+            maxCostCents: clipsMaxCostCents,
+            dryRun: clipsDryRun,
+          }
+        : undefined,
     },
     msg => console.log(`  ${msg}`),
   );
@@ -264,7 +293,9 @@ function usage(): void {
   console.log('  ohwow video workspace [--workspace=<name>] [--template=<t>] [--scenes=<k1,k2,...>]');
   console.log('                        [--brief="free-text direction"] [--voice=<v>] [--copy-model=<m>]');
   console.log('                        [--dry-run] [--preview] [--port=<port>] [--out=<path>]');
+  console.log('                        [--clips] [--clips-provider=<name>] [--clips-max-cost=<cents>] [--clips-dry-run]');
   console.log(`      templates: ${Object.keys(BUILTIN_TEMPLATES).join(', ')}`);
+  console.log(`      clip providers: ${Array.from(CLIP_PROVIDER_NAMES).join(', ')}`);
   console.log('  ohwow video cache ls [--modality=<voice|music|image|video>]');
   console.log('  ohwow video cache prune --older-than=<days>');
 }

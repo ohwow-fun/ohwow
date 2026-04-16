@@ -23,6 +23,15 @@ import { homedir, tmpdir, platform } from 'node:os';
 
 import { logger } from '../../lib/logger.js';
 import { getOrCreate, type CacheModality } from '../../media/asset-cache.js';
+import {
+  generateClip as routeVideoClip,
+  previewRoute as previewClipRoute,
+  type RouterOptions as ClipRouterOptions,
+} from '../../media/video-clip-router.js';
+import type {
+  VideoAspectRatio,
+  VideoClipProviderName,
+} from '../../media/video-clip-provider.js';
 
 const require = createRequire(import.meta.url);
 
@@ -209,6 +218,17 @@ export interface WorkspaceVideoOptions {
   extraBrief?: string;
   /** Stop after script generation (no TTS, no spec write). For previews. */
   scriptsOnly?: boolean;
+  /** Video-clip layer controls (AI-generated b-roll). */
+  clips?: {
+    /** Enable video-clip layers. When false, all video-clip layers are dropped and the LLM prompt omits the primitive entirely. Default: false. */
+    enabled?: boolean;
+    /** Force a specific provider (otherwise cheapest available wins). */
+    provider?: VideoClipProviderName;
+    /** Per-clip spend cap. Providers above this cap are skipped. */
+    maxCostCents?: number;
+    /** Log the router decision but don't call any provider. */
+    dryRun?: boolean;
+  };
 }
 
 export interface WorkspaceVideoAuthorResult {
@@ -373,17 +393,19 @@ const VISUAL_PRIMITIVES = [
   { id: 'particle-burst', name: 'Particle burst', desc: 'Explosion of particles from center. Reveals, energy, impact.', params: 'count, color, seed, speed, size, cx, cy' },
   { id: 'grid-morph', name: 'Grid morph', desc: 'Morphing grid pattern. Data, tech, structure.', params: 'cols, rows, cellSize, color, seed, speed, morphIntensity' },
   { id: 'text-shadow-trail', name: 'Text shadow trail', desc: 'Text with trailing shadow copies. Motion, emphasis.', params: 'text, color, trailColor, trailCount, speed, fontSize' },
+  { id: 'video-clip', name: 'AI video clip', desc: 'Generative mp4 clip from a text prompt. Cinematic, photographic, real-motion footage. Only use when the scene truly benefits from live action (b-roll, atmosphere, concrete imagery) — it costs money and time. Leave it out for stylized/abstract scenes. Prompt MUST include an explicit camera-motion cue (dolly, drone, tracking, push-in) AND a subject-motion cue (mist drifting, light shifting, steam rising) or the clip will come out near-static.', params: 'prompt (required, what the clip should depict), durationSeconds (2-6, default 4), aspectRatio (16:9|9:16|1:1), opacity (0-1), blendMode (normal|screen|overlay|soft-light|multiply), fit (cover|contain)' },
 ] as const;
 
 const TEXT_ANIMATIONS = ['typewriter', 'fade-in', 'word-by-word', 'letter-scatter', 'glow-text', 'split-reveal', 'count-up'] as const;
 const TEXT_POSITIONS = ['center', 'bottom-center', 'bottom-left', 'top-center'] as const;
 
-const primitiveCatalogBlock = (): string =>
-  VISUAL_PRIMITIVES.map(
-    p => `  - "${p.id}" (${p.name}): ${p.desc} Params: ${p.params}`,
-  ).join('\n');
+const primitiveCatalogBlock = (clipsEnabled: boolean): string =>
+  VISUAL_PRIMITIVES
+    .filter(p => clipsEnabled || p.id !== 'video-clip')
+    .map(p => `  - "${p.id}" (${p.name}): ${p.desc} Params: ${p.params}`)
+    .join('\n');
 
-const SCRIPT_SYSTEM = `You are a copywriter and motion-graphics director for ohwow — a local-first AI runtime that gives people an "AI team" that learns, remembers, and works autonomously.
+const buildScriptSystem = (clipsEnabled: boolean): string => `You are a copywriter and motion-graphics director for ohwow — a local-first AI runtime that gives people an "AI team" that learns, remembers, and works autonomously.
 
 Ohwow's voice: direct, warm, confident, zero corporate language, zero marketing buzzwords. Short sentences. Second person ("you"). Sounds like a knowing friend, not a brochure.
 
@@ -396,7 +418,7 @@ You design the visual composition from scratch using visual primitives. Each sce
 - A "mood": one of dark, warm, cool, electric, forest, sunset, midnight
 
 Available visual primitives (composable, stackable):
-${primitiveCatalogBlock()}
+${primitiveCatalogBlock(clipsEnabled)}
 
 Text animation styles:
   - typewriter: char-by-char reveal with cursor (default, good for narration)
@@ -437,7 +459,17 @@ Constraints:
 - Second person. No "we" or "our".
 - Write for a busy founder who has 30 seconds and a skeptical mind. Paint the AFTER picture.
 - Philosophical > promotional.
-- End with a memorable tagline on the last scene.`;
+- End with a memorable tagline on the last scene.${clipsEnabled ? `
+
+VIDEO CLIP LAYERS (use sparingly, each one costs money)
+- At most ONE video-clip layer per scene, and only for scenes that benefit from real-motion footage (atmospheric b-roll, concrete imagery, transitions). Most scenes should stay fully primitive-based.
+- Put the video-clip FIRST in visualLayers (bottom layer). Layer abstract primitives and a vignette on top at low opacity.
+- Prompts MUST pair a CAMERA-MOTION cue with a SUBJECT-MOTION cue. Without both, LTX-Video produces near-static footage that reads as a still photo.
+  - Camera-motion cues: "slow dolly-in", "tracking shot moving left", "aerial drone shot flying steadily forward", "slow push-in", "handheld glide", "crane down through...".
+  - Subject-motion cues: "mist drifting through pines", "sunlight breaking through branches", "steam rising from a cup", "leaves rustling", "curtains billowing", "dust motes floating in a sunbeam", "waves lapping".
+  - Weak prompt (produces a still): "a quiet home office at dawn".
+  - Strong prompt: "slow dolly-in over a quiet home office at dawn, soft window light through drifting dust motes, shallow depth of field, 35mm film grain".
+- Prefer durationSeconds of 4 to 6. Shorter clips (2-3s) give the motion less room to develop.` : ''}`;
 
 function factsBlock(facts: WorkspaceFacts): string {
   const lines: string[] = [];
@@ -535,6 +567,7 @@ export async function generateScripts(
   apiKey: string,
   model = 'anthropic/claude-sonnet-4-5',
   extraBrief?: string,
+  clipsEnabled = false,
 ): Promise<LlmStoryboard> {
   const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -549,7 +582,7 @@ export async function generateScripts(
       model,
       temperature: 0.8,
       messages: [
-        { role: 'system', content: SCRIPT_SYSTEM },
+        { role: 'system', content: buildScriptSystem(clipsEnabled) },
         { role: 'user', content: buildScriptPrompt(facts, briefs, extraBrief) },
       ],
     }),
@@ -813,6 +846,133 @@ async function stageAudioIntoPackage(
     await copyFile(sourcePath, stagedPath);
   }
   return `voice/${hash}.mp3`;
+}
+
+async function stageClipIntoPackage(
+  sourcePath: string,
+  hash: string,
+  packageDir: string,
+): Promise<string> {
+  const stagedDir = join(packageDir, 'public', 'clips');
+  await mkdir(stagedDir, { recursive: true });
+  const stagedPath = join(stagedDir, `${hash}.mp4`);
+  if (!(await fileExists(stagedPath))) {
+    await copyFile(sourcePath, stagedPath);
+  }
+  return `clips/${hash}.mp4`;
+}
+
+type ClipOptions = NonNullable<WorkspaceVideoOptions['clips']>;
+
+interface ClipResolutionSummary {
+  resolved: number;
+  cached: number;
+  dropped: number;
+  dryRunned: number;
+  totalCostCents: number;
+}
+
+function layerIsVideoClip(
+  layer: { primitive: string; [k: string]: unknown },
+): layer is { primitive: 'video-clip'; prompt?: unknown; durationSeconds?: unknown; aspectRatio?: unknown; seed?: unknown; src?: unknown; [k: string]: unknown } {
+  return layer.primitive === 'video-clip';
+}
+
+/**
+ * Walk each script's visualLayers. For every `video-clip` layer with a
+ * `prompt`, call the router, stage the mp4 into public/clips/, and
+ * rewrite the layer to carry `src` instead of `prompt`. If no provider
+ * is available or dry-run is set, drop the layer so rendering falls back
+ * to whatever other primitives the LLM chose.
+ */
+async function resolveClipLayers(
+  scripts: SceneScript[],
+  clips: ClipOptions,
+  packageDir: string,
+  onProgress: (msg: string) => void,
+): Promise<ClipResolutionSummary> {
+  const summary: ClipResolutionSummary = {
+    resolved: 0,
+    cached: 0,
+    dropped: 0,
+    dryRunned: 0,
+    totalCostCents: 0,
+  };
+  const routerOpts: ClipRouterOptions = {
+    forceProvider: clips.provider,
+    maxCostCents: clips.maxCostCents,
+    dryRun: clips.dryRun,
+  };
+
+  for (let s = 0; s < scripts.length; s++) {
+    const script = scripts[s];
+    if (!Array.isArray(script.visualLayers) || script.visualLayers.length === 0) continue;
+
+    const next: typeof script.visualLayers = [];
+    for (const raw of script.visualLayers) {
+      const layer = raw as { primitive: string; [k: string]: unknown };
+      if (!layerIsVideoClip(layer)) {
+        next.push(raw);
+        continue;
+      }
+
+      const prompt = typeof layer.prompt === 'string' ? layer.prompt.trim() : '';
+      const existingSrc = typeof layer.src === 'string' ? layer.src : '';
+      if (!prompt && !existingSrc) {
+        // LLM forgot the prompt and gave us no src — drop the layer.
+        summary.dropped++;
+        continue;
+      }
+      if (!prompt && existingSrc) {
+        // User-authored spec with a hand-picked src. Keep as-is.
+        next.push(layer);
+        continue;
+      }
+
+      const durationSeconds = Math.min(10, Math.max(2, Number(layer.durationSeconds) || 4));
+      const aspectRatio = ((layer.aspectRatio as string) ?? '16:9') as VideoAspectRatio;
+      const seed = Number.isFinite(Number(layer.seed)) ? Number(layer.seed) : 0;
+
+      onProgress(`  clip ${s + 1}: "${prompt.slice(0, 60)}${prompt.length > 60 ? '…' : ''}"`);
+      const routed = await routeVideoClip(
+        { prompt, durationSeconds, aspectRatio, seed },
+        routerOpts,
+      );
+
+      if (routed.skipped === 'no-provider') {
+        onProgress(`  ↳ no video provider available; dropping layer`);
+        summary.dropped++;
+        continue;
+      }
+
+      if (routed.skipped === 'dry-run') {
+        onProgress(`  ↳ [dry-run] would use ${routed.chosen ?? 'none'} (${JSON.stringify(routed.preview)})`);
+        summary.dryRunned++;
+        // Drop the layer so the rendered spec stays valid (no bogus src).
+        continue;
+      }
+
+      const result = routed.result!;
+      const publicRef = await stageClipIntoPackage(result.path, result.hash, packageDir);
+      const rewritten: Record<string, unknown> = { ...layer, src: publicRef };
+      delete rewritten.prompt;
+      delete rewritten.durationSeconds;
+      delete rewritten.aspectRatio;
+      delete rewritten.seed;
+      next.push(rewritten as typeof raw);
+
+      if (result.cached) summary.cached++;
+      else summary.resolved++;
+      if (typeof result.costCents === 'number') summary.totalCostCents += result.costCents;
+      onProgress(
+        `  ↳ ${result.providerName} ${result.cached ? 'cache hit' : `generated in ${(result.generationMs / 1000).toFixed(1)}s`}`,
+      );
+    }
+
+    script.visualLayers = next;
+  }
+
+  return summary;
 }
 
 interface ResolvedVoice {
@@ -1166,15 +1326,33 @@ export async function authorWorkspaceVideoSpec(
     ?? (opts.template ? BUILTIN_TEMPLATES[opts.template] ?? null : null);
   const mode = briefs ? `guided (${briefs.length} scenes)` : 'free-form (LLM decides)';
 
-  progress(`generating scripts — ${mode}, ${facts.agentCount} agents, ${facts.taskCount} tasks`);
+  const clipsEnabled = opts.clips?.enabled === true;
+  progress(`generating scripts — ${mode}, ${facts.agentCount} agents, ${facts.taskCount} tasks${clipsEnabled ? ', clips: on' : ''}`);
   const storyboard = await generateScripts(
     facts,
     briefs,
     opts.openRouterApiKey,
     opts.copyModel ?? 'anthropic/claude-sonnet-4-5',
     opts.extraBrief,
+    clipsEnabled,
   );
   const scripts = storyboard.scenes;
+
+  if (clipsEnabled) {
+    progress('resolving video-clip layers');
+    const summary = await resolveClipLayers(scripts, opts.clips!, opts.packageDir, progress);
+    progress(
+      `clips: ${summary.resolved} generated, ${summary.cached} cached, ${summary.dropped} dropped${summary.dryRunned ? `, ${summary.dryRunned} dry-run` : ''}${summary.totalCostCents ? `, ~${summary.totalCostCents}¢ spent` : ''}`,
+    );
+  } else {
+    // Safety net: if clips are disabled but a spec-hand-written layer slipped
+    // through (or a prior cached storyboard has one), drop them.
+    for (const s of scripts) {
+      if (Array.isArray(s.visualLayers)) {
+        s.visualLayers = s.visualLayers.filter(l => l.primitive !== 'video-clip');
+      }
+    }
+  }
 
   if (opts.scriptsOnly) {
     return {
