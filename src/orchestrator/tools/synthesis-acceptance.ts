@@ -174,9 +174,11 @@ export async function handler(_ctx: unknown, input: Record<string, unknown>) {
   if (text.length > 280) return { success: false, message: 'tweet exceeds 280 chars' };
 
   const browser = await chromium.connectOverCDP('http://localhost:9222');
-  const contexts = browser.contexts();
-  if (contexts.length === 0) return { success: false, message: 'No Chrome context available' };
-  const pages = contexts[0].pages();
+  // Flatten pages across ALL Chrome profile contexts. contexts[0] alone
+  // picks an arbitrary profile and can silently land in an unauthed
+  // window — we want any profile's existing x.com tab, identity-
+  // verified via the sidebar probe below before we type.
+  const pages = browser.contexts().flatMap((c) => c.pages());
   if (pages.length === 0) return { success: false, message: 'No page available' };
   let page = pages.find((p) => p.url().includes('x.com')) || pages[0];
 

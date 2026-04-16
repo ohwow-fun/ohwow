@@ -130,7 +130,8 @@ The file MUST:
 
 4. The handler MUST:
    - Default \`input.dry_run\` to TRUE. Only perform the final submit action when input.dry_run === false.
-   - Connect to Chrome via \`chromium.connectOverCDP('http://localhost:9222')\`.
+   - Connect to Chrome via \`chromium.connectOverCDP('http://localhost:9222')\` and pick a page by FLATTENING all contexts (see skeleton) — NOT \`browser.contexts()[0]\`, which silently picks an arbitrary Chrome profile and can land an unauthed window on the target site.
+   - Prefer a page whose URL already matches the target host; otherwise pick the first non-sensitive existing page. Never call \`context.newPage()\` — that also picks an arbitrary profile.
    - Use ONLY the selectors listed in the provided manifest. Do not invent selectors.
    - Call \`page.keyboard.type()\` to enter text (not execCommand, not element.value =).
    - Call \`page.click(selector)\` — never \`element.click()\` — so React onClick handlers fire.
@@ -166,11 +167,14 @@ export async function handler(_ctx: unknown, input: Record<string, unknown>) {
   // [extract inputs with defaults and type coercion]
 
   const browser = await chromium.connectOverCDP('http://localhost:9222');
-  const ctx = browser.contexts()[0];
-  if (!ctx) return { success: false, message: 'No Chrome context available' };
-  const pages = ctx.pages();
+  // Flatten pages across ALL Chrome contexts. Playwright collapses
+  // each debug-Chrome profile into its own BrowserContext, and
+  // [contexts()[0]] picks whichever profile was enumerated first —
+  // frequently the unauthenticated Default profile. Prefer a page
+  // already on the target host (any profile) before falling back.
+  const pages = browser.contexts().flatMap((c) => c.pages());
+  if (pages.length === 0) return { success: false, message: 'No page available' };
   let page = pages.find((p) => p.url().includes('[host-hint]')) || pages[0];
-  if (!page) return { success: false, message: 'No page available' };
 
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
 
