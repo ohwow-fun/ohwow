@@ -1252,6 +1252,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
           scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
           heartbeatName: 'x-compose-last-run.json',
           logTag: '[XComposeScheduler]',
+          // DRY=0 so proposals hit the approval queue. Whether they
+          // auto-apply (and post live via Chrome) depends on trust
+          // thresholds inside propose() and the outbound gate; the
+          // scheduler doesn't short-circuit those.
+          env: { DRY: '0' },
         });
       }
       if (config.xReplyEnabled) {
@@ -1260,6 +1265,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
           scriptRelPath: 'scripts/x-experiments/x-reply.mjs',
           heartbeatName: 'x-reply-last-run.json',
           logTag: '[XReplyScheduler]',
+          env: { DRY: '0' },
         });
       }
       const xIntel = new XIntelScheduler({
@@ -1314,7 +1320,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
           // SHAPES=humor scopes this instance's spawns to the humor
           // shape only. The x-intel chain step (which also runs
           // x-compose) keeps the default mixed shapes.
-          env: { SHAPES: 'humor', MAX_DRAFTS: '1' },
+          env: { SHAPES: 'humor', MAX_DRAFTS: '1', DRY: '0' },
         });
         xHumor.start(config.xHumorIntervalMinutes * 60 * 1000);
         logger.info(

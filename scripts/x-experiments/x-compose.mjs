@@ -24,8 +24,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
+import { postTweet } from './_x-harvest.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 3);
@@ -38,13 +40,18 @@ const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,
 // the draft to a skip with a logged reason.
 const BANNED_PHRASES = [
   'our daemon',
+  'the daemon',           // story-shape pitch-as-narration
   'a single daemon',
   'single daemon',
   'agent workspaces',
   'our runtime',
+  'the runtime caught',   // story-shape pitch-as-narration
+  'the runtime moved',
+  'the runtime handled',
   'our local runtime',
   'our stack',
-  'on your machine, on your schedule',
+  'on your machine',
+  'on your schedule',
   'with your keys',
   'mcp-first',
   'multi-workspace',
@@ -107,7 +114,7 @@ Tone: ${brandVoice?.tone || 'warm, direct, builder-to-builder'}
 Hard rules:
 ${dontDo}
   - Every post MUST stand alone. A reader who never heard of us should LEARN something or FEEL something — not be told what we are.
-  - Vary openings. If previous drafts in this batch opened with "we keep seeing", "we ran", "we built", "the agent X", or any other repeated frame, pick a DIFFERENT opener. A reader scrolling our feed should see variety, not a formula.
+  - Vary openings. If previous drafts in this batch opened with "we keep seeing", "we ran", "we built", "last week", "the agent X", or any other repeated frame, pick a DIFFERENT opener. A reader scrolling our feed should see variety, not a formula. Story shape is especially prone to "last week..." drift; vary the time cue ("yesterday", "this morning", or just "an agent ...", no time cue at all).
   - Banned filler phrases (instant skip if any appear in the post): "our daemon", "our runtime", "our local runtime", "our stack", "our platform", "our system", "mcp-first", "local-first" as an adjective, "multi-workspace", "keys and machines", "routing through", "on your machine, on your schedule". These read like product spec and kill engagement.
   - It's fine to say "we" when sharing an experience. Not fine when what follows is a feature list.
   - No hype. No "future of X". No "AI will change everything". No em-dashes. No hashtags. Lowercase ok. Plain text only.
@@ -118,7 +125,7 @@ Allowed shapes (pick ONE that fits the seed, or skip):
   - observation: "here's the pattern we keep seeing" — cite one concrete instance, not a category.
   - opinion: a sharp take we'd defend in a thread. Must include the reason it matters in ONE sentence.
   - question: a real question we'd pay for a good answer to. No "what do you think" bait.
-  - story: 1-2 sentences, past tense, something that happened to us last week. Not a metaphor.
+  - story: 1-2 sentences, past tense, something that actually happened. Focus on the OUTCOME or what the AGENT did, not what orchestrated it. Mentioning "the daemon" / "the runtime" / "the workspace" as the hero of a story turns it into architecture marketing. An agent doing a surprising thing in a specific situation is a story; infrastructure catching errors is a feature dump. Not a metaphor. Not "last week...last week...last week".
   - humor: a subtle joke about AI / the state of the art / the agent ecosystem. See humor rules below.
 
 Humor rules (when shape='humor'):
@@ -238,6 +245,12 @@ async function main() {
       extraHint = ` (the previous attempt duplicated an earlier draft — pick a completely different craft-tension)`;
     }
     if (!draft) continue;
+    // If after the retry loop the draft is STILL a duplicate of a
+    // prior draft, drop it entirely rather than publish filler.
+    if (draft.post && dupOf(draft.post)) {
+      console.log(`  [${i+1}] auto-skip: duplicate of prior draft after ${attempts} retries`);
+      draft = { ...draft, shape: 'skip', post: '', confidence: 0, reason: `auto-skip: duplicate after ${attempts} retries` };
+    }
     const offenders = detectBanned(draft.post);
     if (offenders.length) {
       console.log(`  [${i+1}] filtered: banned phrase '${offenders[0]}' — downgraded to skip`);
@@ -268,6 +281,22 @@ async function main() {
       record.approval_status = entry.status;
       record.approval_id = entry.id;
       console.log(`    approval ${entry.status} · id=${entry.id.slice(0, 8)}`);
+      if (entry.status === 'auto_applied') {
+        try {
+          const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
+          const page = await findOrOpenXTab(browser);
+          if (!page) throw new Error('no x.com tab');
+          await page.installUnloadEscapes();
+          await postTweet(page, draft.post);
+          browser.close();
+          record.posted = true;
+          console.log(`    posted live via Chrome`);
+        } catch (e) {
+          console.log(`    post failed: ${e.message}`);
+          record.posted = false;
+          record.post_error = e.message;
+        }
+      }
     }
 
     drafts.push(record);

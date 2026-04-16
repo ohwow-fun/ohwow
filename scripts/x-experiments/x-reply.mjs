@@ -32,9 +32,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
 import { buildOutboundGate } from './_outbound-gate.mjs';
+import { replyToPost } from './_x-harvest.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 5);
@@ -238,6 +240,23 @@ async function main() {
       record.approval_id = entry.id;
       record.approval_status = entry.status;
       console.log(`    approval ${entry.status} (id=${entry.id.slice(0, 8)})`);
+      if (entry.status === 'auto_applied') {
+        try {
+          const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
+          const page = await findOrOpenXTab(browser);
+          if (!page) throw new Error('no x.com tab');
+          await page.installUnloadEscapes();
+          await replyToPost(page, post.permalink, draft.reply);
+          browser.close();
+          record.posted = true;
+          appendReplied(workspace, { permalink: post.permalink, ts: new Date().toISOString() });
+          console.log(`    posted reply live via Chrome`);
+        } catch (e) {
+          console.log(`    reply post failed: ${e.message}`);
+          record.posted = false;
+          record.post_error = e.message;
+        }
+      }
     }
 
     drafted.push(record);

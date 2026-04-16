@@ -150,6 +150,62 @@ export async function scrapeRepliers(page, permalink, maxScrolls = 4) {
   }));
 }
 
+/**
+ * Post a new tweet. Navigates to home, opens the composer, types the
+ * text, and submits. Returns the permalink of the posted tweet if we
+ * can find it in the DOM post-submit, else null (posting succeeded
+ * but we couldn't confirm the url — caller should treat as success
+ * based on approval-queue state, not on this return).
+ *
+ * Selectors are X/Twitter's current testids (Nov 2025). Flaky by
+ * nature; wrap callers in try/catch.
+ */
+export async function postTweet(page, text) {
+  await page.goto('https://x.com/home');
+  await sleep(3000);
+  // Open composer. Inline "What's happening" box is present on home.
+  const focused = await page.focus('[data-testid="tweetTextarea_0"]');
+  if (!focused) {
+    // Fallback: the Post button (side-nav) opens a modal composer.
+    await page.clickSelector('[data-testid="SideNav_NewTweet_Button"]', 5000);
+    await sleep(1500);
+    await page.focus('[data-testid="tweetTextarea_0"]');
+  }
+  await sleep(500);
+  await page.typeText(text);
+  await sleep(800);
+  // The "Post" button: inline uses tweetButtonInline; modal uses tweetButton.
+  let clicked = await page.clickSelector('[data-testid="tweetButtonInline"]', 3000);
+  if (!clicked) clicked = await page.clickSelector('[data-testid="tweetButton"]', 5000);
+  if (!clicked) throw new Error('postTweet: could not click post button');
+  await sleep(3000);
+  return null;
+}
+
+/**
+ * Reply to a specific post by permalink. Navigates to the permalink,
+ * opens the reply composer by clicking the post's reply button, types,
+ * submits. Returns null on success.
+ */
+export async function replyToPost(page, permalink, text) {
+  const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
+  await page.goto(url);
+  await sleep(3500);
+  // Click the parent post's reply button (the first [data-testid="reply"]
+  // on the permalink page is the parent's).
+  const opened = await page.clickSelector('[data-testid="reply"]', 5000);
+  if (!opened) throw new Error('replyToPost: could not open reply composer');
+  await sleep(1500);
+  await page.focus('[data-testid="tweetTextarea_0"]');
+  await sleep(400);
+  await page.typeText(text);
+  await sleep(800);
+  const clicked = await page.clickSelector('[data-testid="tweetButton"]', 5000);
+  if (!clicked) throw new Error('replyToPost: could not click reply button');
+  await sleep(3000);
+  return null;
+}
+
 export function filterPosts(posts, filters) {
   return posts.filter(p => {
     if (filters.drop_retweets && p.isRetweet) return false;

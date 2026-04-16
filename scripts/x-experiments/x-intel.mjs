@@ -154,6 +154,50 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('profile')) {
   }
 }
 
+// Own-post engager surface: scrape repliers on our own recent posts.
+// The handle comes from the workspace config (own_handle) or falls
+// back to the logged-in handle we can read from the AppTabBar link.
+// This is the natural "audience finds us" loop — once we start
+// posting via x-compose, repliers become engager:own-post rows that
+// the rubric's boost promotes aggressively.
+const OWN_POST_ENGAGERS_ENABLED = process.env.OWN_POST_ENGAGERS !== '0';
+if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers'))) {
+  let ownHandle = cfg.own_handle || null;
+  if (!ownHandle) {
+    try {
+      ownHandle = await page.evaluate(`(() => {
+        const link = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
+        return link ? link.getAttribute('href').replace(/^\\//,'') : null;
+      })()`);
+    } catch { ownHandle = null; }
+  }
+  if (ownHandle) {
+    console.log(`\n[x-intel] engagers for own-handle @${ownHandle}`);
+    try {
+      const ownPosts = await scrollAndHarvest(page, `https://x.com/${ownHandle}`, 2);
+      const myPosts = ownPosts.filter(p => p.author === ownHandle && !p.isRetweet).slice(0, 3);
+      console.log(`  found ${myPosts.length} own recent posts to scan for repliers`);
+      for (const parent of myPosts) {
+        try {
+          const repliers = await scrapeRepliers(page, parent.permalink, 2);
+          console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
+          for (const r of repliers) {
+            if (!r.author || r.author === ownHandle) continue;
+            addPosts([{
+              ...r,
+              _bucketHint: 'market_signal',
+              _engagerSource: 'engager:own-post',
+              _parentAuthor: ownHandle,
+            }], 'engagers:own-post');
+          }
+        } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
+      }
+    } catch (e) { console.log(`[x-intel] own-post engager scan failed: ${e.message}`); }
+  } else {
+    console.log('[x-intel] skipping own-post engagers (no own_handle resolvable)');
+  }
+}
+
 // Engager surface: for each configured competitor profile, take their
 // top recent posts and scrape the replier pool. Repliers to
 // "n8n is too expensive" style threads are very often in-market — the
