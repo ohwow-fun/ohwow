@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import type { RuntimeConfig } from '../../config.js';
-import { updateConfigFile, tryLoadConfig, DEFAULT_CLOUD_URL } from '../../config.js';
+import { updateConfigFile, tryLoadConfig, DEFAULT_CLOUD_URL, resolveActiveWorkspace, portForWorkspace } from '../../config.js';
 import { OnboardingService } from '../../lib/onboarding-service.js';
 import type { OnboardingStatus } from '../../lib/onboarding-service.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
@@ -399,9 +399,22 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         // No cloud agents — check local DB for existing agents
         (async () => {
           try {
+            // Resolve the workspace row id positionally. The seed is 'local'
+            // until cloud consolidation rewrites it to the workspace UUID, so
+            // hardcoding 'local' hides agents on cloud-connected workspaces.
+            const wsResult = await db.from<{ id: string }>('agent_workforce_workspaces')
+              .select('id')
+              .limit(1)
+              .maybeSingle();
+            const wsId = wsResult.data?.id;
+            if (!wsId) {
+              setConnectedLocalAgents(null);
+              setConnectedNoAgents(true);
+              return;
+            }
             const result = await db.from('agent_workforce_agents')
               .select('id, name, role, description, status, stats')
-              .eq('workspace_id', 'local');
+              .eq('workspace_id', wsId);
             const rows = (result.data || []) as Array<{
               id: string; name: string; role: string;
               description: string; status: string; stats: string;
@@ -1144,8 +1157,9 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         }
       })();
     } else {
-      // Legacy path: call API server
-      fetch(`http://127.0.0.1:7700/api/onboarding/complete`, {
+      // Legacy path: call API server on the active workspace's port.
+      const activePort = portForWorkspace(resolveActiveWorkspace().name);
+      fetch(`http://127.0.0.1:${activePort}/api/onboarding/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
