@@ -17,10 +17,16 @@
  * click-through from the dashboard (when that surface ships) can jump
  * back to the raw rows.
  *
- * Cadence: once per day. runOnBoot=false so a daemon restart doesn't
- * flood the ledger with re-issued digests. The probe itself gates on
- * "has today's digest already landed?" so even if cadence fires twice
- * in a day for any reason, only one row lands.
+ * Cadence: once per day, runOnBoot=true. The probe's inner guard
+ * (same-day dedupe against the latest prior finding) makes boot-time
+ * re-entry safe — repeated boots within one day emit a lightweight
+ * "already_ran_today" skip row, not a full digest. Previously
+ * runOnBoot was false for flood-safety, but that combined with the
+ * 24h cadence meant a never-run digest waited a full day from daemon
+ * boot before first firing; on a machine where the daemon rarely
+ * survives 24h, that's a permanent zero-digest state. The inner
+ * guard is the real flood-safety; the boot flag just determines
+ * whether today's digest lands promptly or waits out the cadence.
  */
 
 import { logger } from '../../lib/logger.js';
@@ -37,7 +43,7 @@ import { listFindings } from '../findings-store.js';
 import { listDistilledInsights } from '../insight-distiller.js';
 import { getRuntimeConfigCacheSnapshot } from '../runtime-config.js';
 
-const CADENCE: ExperimentCadence = { everyMs: 24 * 60 * 60 * 1000, runOnBoot: false };
+const CADENCE: ExperimentCadence = { everyMs: 24 * 60 * 60 * 1000, runOnBoot: true };
 const TOP_K_INSIGHTS = 10;
 
 function todayKey(): string {
