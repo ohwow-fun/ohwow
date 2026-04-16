@@ -524,7 +524,13 @@ export class ExperimentAuthorExperiment implements Experiment {
       '  }\n' +
       "  judge(_r: ProbeResult, _h: Finding[]): Verdict { return 'pass'; }\n" +
       '}\n' +
-      '```';
+      '```\n' +
+      ' 14. Test imports the source via ' +
+      "`import { <ClassName>Experiment } from '../experiments/<slug>.js'` — " +
+      'tests live in src/self-bench/__tests__/, sources in ' +
+      'src/self-bench/experiments/, so the relative path MUST cross into ' +
+      "`../experiments/`. Never write `'../<slug>.js'` (sibling-path guess) " +
+      '— the typecheck gate will reject it with TS2307.'
 
     const prompt = [
       `<brief>`,
