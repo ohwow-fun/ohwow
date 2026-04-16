@@ -30,7 +30,7 @@ import { propose } from './_approvals.mjs';
 const DRY = process.env.DRY !== '0';
 const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 3);
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
-const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,question,story').split(',').map(s => s.trim()).filter(Boolean));
+const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,question,story,humor').split(',').map(s => s.trim()).filter(Boolean));
 
 function workspaceConfigPath(ws) {
   return path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-config.json');
@@ -96,8 +96,19 @@ Allowed shapes (pick ONE that fits the seed, or skip):
   - opinion: a sharp take we'd defend in a thread. Must include the reason it matters in ONE sentence.
   - question: a real question we'd pay for a good answer to. No "what do you think" bait.
   - story: 1-2 sentences, past tense, something that happened to us last week. Not a metaphor.
+  - humor: a subtle joke about AI / the state of the art / the agent ecosystem. See humor rules below.
 
-Test each draft against: would a builder who doesn't know us read this and learn, agree, disagree, or save it? If none of those, skip.
+Humor rules (when shape='humor'):
+  - Subtle over loud. The reader earns the laugh, not gets punched by it.
+  - Smart over silly. Punchlines come from a real tension you noticed in the craft (agent hallucinations, prompt fiddling, eval theater, vibecoded demos, context-window anxieties). Inside jokes for builders who ship.
+  - NO dad jokes. NO puns on "agent" / "LLM" / "GPT". NO VC-LinkedIn-isms ("plot twist:", "POV:", "nobody: / me:"). NO setup-punchline format. NO emojis.
+  - NO hashtags, NO em-dashes, NO exclamation marks.
+  - Under 200 chars. Most should land 60-140 chars. Brevity IS the joke.
+  - Never at someone's expense. Never about a specific person, company, or model by name. Punch at the genre, not the players.
+  - Think: a short aside a senior builder mumbles while debugging. Not a standup bit.
+  - If you can't write one this good, skip. Mediocre humor is worse than none.
+
+Test each draft against: would a builder who doesn't know us read this and learn, agree, disagree, save it, or (for humor) smile-nod? If none of those, skip.
 
 Output STRICT JSON:
 {

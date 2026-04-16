@@ -38,7 +38,12 @@ import { buildOutboundGate } from './_outbound-gate.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 5);
-const REPLY_BUCKETS = new Set((process.env.REPLY_BUCKETS || 'market_signal,competitors').split(',').map(s => s.trim()).filter(Boolean));
+// Reply strategy: the brand shows up in genuinely interesting builder
+// conversations (hacks, advancements, inspiration) — not just in-market
+// complaints about competitors. Audiences discover us by stumbling into
+// a thread where we said something worth saving. Buying-intent buckets
+// are included, but they are not the primary surface.
+const REPLY_BUCKETS = new Set((process.env.REPLY_BUCKETS || 'hacks,advancements,inspiration,market_signal,competitors').split(',').map(s => s.trim()).filter(Boolean));
 const REPLY_MIN_SCORE = Number(process.env.REPLY_MIN_SCORE || 0.55);
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -75,10 +80,14 @@ ${workspaceDesc}
 Positioning: ${brandVoice?.positioning || 'local-first AI runtime'}
 
 Tone: ${brandVoice?.tone || 'warm, direct, builder-to-builder'}
+
+Strategy: we show up in genuinely interesting builder conversations so our audience finds us in unexpected places. Curiosity-first, not conversion-first. A great reply teaches, disagrees, or deepens the thread — it does NOT direct anyone back to us. Audiences discover us by saving something smart we said.
+
 Hard rules:
 ${dontDo}
   - Never start with "we built" / "we're building" / "check out" / "try X". Those are pitches.
-  - Never mention our product name unless the post is a direct ask ("what tools do people use for Y", "anyone running Z locally").
+  - Never mention our product name unless the post is a direct, unambiguous ask ("what tools do people use for Y", "anyone running Z locally"). Even then, once, briefly.
+  - Do not hunt competitor-frustration posts looking to swoop in. If someone vents about zapier, shared-pain is fine; selling is not.
   - Don't post generic "great thread" / "this is huge" / "love this" filler.
   - Aggregator / news-bot / hype-spammer accounts (GitTrend, ai news, retweet bots): SKIP. Replying there is noise.
 
@@ -87,10 +96,11 @@ Good reply shapes (pick the ONE that fits this post, or skip):
   b) sharp question: ask something the author would want to answer — not a softball.
   c) counter-point: respectful disagreement rooted in a specific case where the post's claim breaks down.
   d) shared-pain: if the author is venting about a known problem we also feel, acknowledge the specific pain without pitching.
+  e) curiosity-branch: pick up a side-thread the post mentions but doesn't develop, and push it one step further with something non-obvious. Used when the post is "interesting" even if not on our ICP.
 
 Output STRICT JSON:
 {
-  "shape": "observation|question|counter|shared-pain|skip",
+  "shape": "observation|question|counter|shared-pain|curiosity-branch|skip",
   "angle": "<=12 words — what you're adding to the conversation",
   "reply": "<=220 chars — the actual reply text. Plain text, no hashtags, no em-dashes. Lowercase ok. '' if skip.",
   "confidence": 0..1,
