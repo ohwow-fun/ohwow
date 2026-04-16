@@ -355,11 +355,13 @@ ${catalogBlock()}
 A kind CAN repeat if the story benefits (e.g., two outcome-orbit scenes for different angles).
 
 Constraints:
-- Use the real numbers from the workspace facts. If they have 33 agents, say 33.
+- DO NOT lead with raw metrics. "33 agents" means nothing to someone who doesn't use ohwow yet. Instead, describe what those agents FEEL like to live with: "You woke up and your week was already in motion."
+- When you do use a number, make it land: tie it to a human outcome. "166 tasks done while you slept" beats "166 completed tasks."
 - Never invent product features. Only describe what the facts support.
 - No em-dashes, no parentheses, no "(s)" pluralization.
 - Second person. No "we" or "our".
-- Concrete over abstract. "Your Content Writer posted 4 tweets" beats "AI-powered content creation".
+- Write for a busy founder who has 30 seconds and a skeptical mind. Don't pitch features. Paint the AFTER picture. Make them feel the gap between where they are and where they could be.
+- Philosophical > promotional. "What would you build if you never had to follow up again?" > "Automated follow-ups for your business."
 - End with a memorable tagline on the last scene (cta-mesh is ideal for closings but not required).`;
 
 function factsBlock(facts: WorkspaceFacts): string {
@@ -697,11 +699,105 @@ function framesFor(resolved: ResolvedVoice): number {
   return Math.max(SCENE_MIN_FRAMES, VOICE_LEAD_FRAMES + resolved.voiceFrames + VOICE_TAIL_FRAMES);
 }
 
+/**
+ * Derive visual params from the narration and workspace facts based on scene kind.
+ * This is the "semantic bridge" — the LLM writes copy, and this function translates
+ * that copy into the params each motion-graphics template needs.
+ */
+function deriveVisualParams(
+  kind: string,
+  narration: string,
+  facts?: WorkspaceFacts,
+  sceneIndex = 0,
+): Record<string, unknown> {
+  switch (kind) {
+    case 'text-typewriter': {
+      const accentOptions = ['#f97316', '#3b82f6', '#22c55e', '#a855f7', '#e11d48'];
+      return {
+        text: narration,
+        fontSize: narration.length > 80 ? 34 : narration.length > 50 ? 38 : 44,
+        accentColor: accentOptions[sceneIndex % accentOptions.length],
+        variation: sceneIndex,
+        intensity: Math.min(1, 0.3 + sceneIndex * 0.15),
+      };
+    }
+    case 'stats-counter': {
+      const counters: Array<{ to: number; label: string; color?: string; startFrame?: number }> = [];
+      if (facts?.agentCount) counters.push({ to: facts.agentCount, label: 'agents', color: '#f97316', startFrame: 15 });
+      if (facts?.completedTaskCount) counters.push({ to: facts.completedTaskCount, label: 'tasks completed', color: '#3b82f6', startFrame: 30 });
+      if (facts?.memories) counters.push({ to: facts.memories, label: 'memories', color: '#22c55e', startFrame: 45 });
+      if (facts?.knowledgeDocs) counters.push({ to: facts.knowledgeDocs, label: 'knowledge docs', color: '#a855f7', startFrame: 60 });
+      return counters.length > 0 ? { counters: counters.slice(0, 4) } : {};
+    }
+    case 'prompts-grid': {
+      if (!facts?.recentTaskTitles?.length) return {};
+      const apps = ['ChatGPT', 'Claude', 'Gemini', 'Perplexity'];
+      const times = ['8:12 AM', '9:33 AM', '10:47 AM', '11:15 AM', '1:22 PM', '2:09 PM', '3:44 PM', '4:18 PM', '5:01 PM', '6:33 PM'];
+      return {
+        prompts: facts.recentTaskTitles.slice(0, 10).map((t, i) => ({
+          text: t.length > 60 ? t.slice(0, 57) + '...' : t,
+          time: times[i % times.length],
+          app: apps[i % apps.length],
+        })),
+      };
+    }
+    case 'outcome-orbit': {
+      if (!facts) return {};
+      const icons = ['🤖', '📧', '📊', '🔍', '💬', '📝', '⚡', '🎯', '🔧'];
+      const outColors = ['#f97316', '#22c55e', '#3b82f6', '#a855f7', '#f97316'];
+      const sentences = narration.replace(/([.!?])\s+/g, '$1|').split('|').filter(s => s.trim().length > 10);
+      return {
+        outcomes: sentences.slice(0, 6).map((text, i) => ({
+          text: text.trim(),
+          color: outColors[i % outColors.length],
+          icon: icons[i % icons.length],
+          delay: 15 + i * 25,
+        })),
+      };
+    }
+    case 'extraction': {
+      if (!facts) return {};
+      const cards: Array<{ type: string; text: string; delay: number }> = [];
+      if (facts.memories) cards.push({ type: 'Memories', text: `${facts.memories} memories extracted and structured`, delay: 80 });
+      if (facts.completedTaskCount) cards.push({ type: 'Tasks', text: `${facts.completedTaskCount} tasks completed autonomously`, delay: 120 });
+      if (facts.agentNames.length) cards.push({ type: 'Agents', text: facts.agentNames.slice(0, 3).join(', '), delay: 160 });
+      if (facts.knowledgeDocs) cards.push({ type: 'Knowledge', text: `${facts.knowledgeDocs} documents indexed`, delay: 200 });
+      return cards.length > 0 ? { cards } : {};
+    }
+    case 'drop': {
+      if (!facts?.topIntegrations?.length && !facts?.agentNames?.length) return {};
+      const sources = facts.topIntegrations.length ? facts.topIntegrations : ['ChatGPT', 'Claude', 'Gemini'];
+      const fileColors = ['#10a37f', '#d97706', '#4285f4', '#20b2aa', '#a855f7'];
+      return {
+        files: sources.slice(0, 4).map((s, i) => ({
+          name: `${s.toLowerCase().replace(/\s+/g, '-')}.json`,
+          source: s,
+          color: fileColors[i % fileColors.length],
+          delay: i * 15,
+        })),
+      };
+    }
+    case 'cta-mesh': {
+      if (!facts) return {};
+      const tagline = narration.split(/[.!]/).filter(s => s.trim().length > 5).pop()?.trim() ?? 'Your AI team that actually remembers.';
+      return {
+        cta: {
+          tagline,
+          subline: facts.businessName !== 'your workspace' ? facts.businessName : 'Free and open source.',
+        },
+      };
+    }
+    default:
+      return {};
+  }
+}
+
 function buildSpec(params: {
   voices: ResolvedVoice[];
   musicSrc: string;
   brand?: BrandDefaults;
   id?: string;
+  facts?: WorkspaceFacts;
 }) {
   const brand = params.brand ?? DEFAULT_BRAND;
   const id = params.id ?? `workspace-${Date.now()}`;
@@ -720,7 +816,7 @@ function buildSpec(params: {
       id: `s${i + 1}`,
       kind: v.kind,
       durationInFrames: sceneFrames,
-      params: {},
+      params: deriveVisualParams(v.kind, v.script, params.facts, i),
       narration: v.script,
     });
     cursor += sceneFrames;
@@ -808,7 +904,7 @@ export async function authorWorkspaceVideoSpec(
   }
 
   const musicSrc = 'audio/ambient.mp3';
-  const spec = buildSpec({ voices, musicSrc });
+  const spec = buildSpec({ voices, musicSrc, facts });
 
   const outDir = opts.outputDir ?? join(homedir(), '.ohwow', 'media', 'specs');
   await mkdir(outDir, { recursive: true });

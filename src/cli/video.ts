@@ -153,24 +153,27 @@ async function cmdWorkspace(args: string[]): Promise<void> {
   const workspace = typeof flags.workspace === 'string' ? flags.workspace : 'default';
   const voice = typeof flags.voice === 'string' ? flags.voice : 'onyx';
   const copyModel = typeof flags['copy-model'] === 'string' ? flags['copy-model'] : undefined;
-  const template = typeof flags.template === 'string' ? flags.template : 'classic-demo';
   const extraBrief = typeof flags.brief === 'string' ? flags.brief : undefined;
   const scenesFlag = typeof flags.scenes === 'string' ? flags.scenes : undefined;
+  const template = typeof flags.template === 'string'
+    ? flags.template
+    : (extraBrief || scenesFlag ? undefined : 'classic-demo');
   const dryRun = flags['dry-run'] === true;
   const outputPath = typeof flags.out === 'string' ? flags.out : undefined;
 
   let briefs: SceneBrief[] | undefined;
   if (scenesFlag) {
-    const sourceTemplate = BUILTIN_TEMPLATES[template] ?? BUILTIN_TEMPLATES['classic-demo'];
+    const tmplKey = template ?? 'classic-demo';
+    const sourceTemplate = BUILTIN_TEMPLATES[tmplKey] ?? BUILTIN_TEMPLATES['classic-demo'];
     const wanted = scenesFlag.split(',').map(s => s.trim()).filter(Boolean);
     briefs = wanted.map(kind => {
-      const match = sourceTemplate.find(b => b.kind === kind);
+      const match = sourceTemplate.find((b: SceneBrief) => b.kind === kind);
       if (match) return match;
-      return { kind: kind as SceneBrief['kind'], theme: `Scene about "${kind}".`, targetSeconds: 6 };
+      return { kind, theme: `Scene about "${kind}".`, targetSeconds: 6 };
     });
   }
 
-  if (!BUILTIN_TEMPLATES[template] && !briefs) {
+  if (template && !BUILTIN_TEMPLATES[template] && !briefs) {
     console.error(`Unknown template "${template}". Available: ${Object.keys(BUILTIN_TEMPLATES).join(', ')}`);
     process.exit(1);
   }

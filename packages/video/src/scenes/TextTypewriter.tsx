@@ -24,6 +24,10 @@ export interface TextTypewriterParams {
   cursorColor?: string;
   subtitle?: string;
   centered?: boolean;
+  /** Visual variation index — shifts noise seed, orb position, grid density. */
+  variation?: number;
+  /** Intensity 0-1: controls glow size, particle count, grid opacity. */
+  intensity?: number;
 }
 
 export const TextTypewriter: React.FC<{
@@ -37,6 +41,19 @@ export const TextTypewriter: React.FC<{
   const color = params?.color ?? colors.text;
   const accent = params?.accentColor ?? colors.accent;
   const subtitle = params?.subtitle;
+  const variation = params?.variation ?? 0;
+  const intensity = params?.intensity ?? 0.5;
+
+  const orbPositions = [
+    { cx: '50%', cy: '45%' },
+    { cx: '30%', cy: '55%' },
+    { cx: '70%', cy: '40%' },
+    { cx: '45%', cy: '60%' },
+    { cx: '55%', cy: '35%' },
+  ];
+  const orbPos = orbPositions[variation % orbPositions.length];
+  const orbSize = 120 + intensity * 160;
+  const gridDensity = Math.round(14 + intensity * 10);
 
   const charsToShow = Math.min(
     text.length,
@@ -57,8 +74,8 @@ export const TextTypewriter: React.FC<{
 
   return (
     <AbsoluteFill style={{ background: colors.bg }}>
-      <NoiseGrid cols={20} rows={12} cellSize={64} seed="typewriter" color={accent} speed={0.003} />
-      <GlowOrb cx="50%" cy="45%" size={200} color={accent} pulseSpeed={0.04} />
+      <NoiseGrid cols={gridDensity} rows={Math.round(gridDensity * 0.56)} cellSize={64} seed={`tw-${variation}`} color={accent} speed={0.003 + variation * 0.001} />
+      <GlowOrb cx={orbPos.cx} cy={orbPos.cy} size={orbSize} color={accent} pulseSpeed={0.04 + variation * 0.005} />
 
       <div
         style={{
