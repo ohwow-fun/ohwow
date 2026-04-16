@@ -175,6 +175,11 @@ export class XIntelScheduler {
   private runScript(scriptRelPath: string, heartbeatName: string, tag: string, extraEnv?: Record<string, string>): Promise<number> {
     return new Promise((resolveRun) => {
       const scriptPath = resolvePath(this.opts.repoRoot, scriptRelPath);
+      // Browser work here runs in a spawned Node process, so the
+      // in-process withCdpLane (src/execution/browser/cdp-lane.ts) used
+      // by XDmPollerScheduler and ContentCadenceScheduler does NOT
+      // serialize against this path. CDP use from these scripts is
+      // currently advisory and treated as outside the workspace lane.
       const child = spawn('npx', ['tsx', scriptPath], {
         cwd: this.opts.repoRoot,
         env: {
