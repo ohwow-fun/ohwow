@@ -75,34 +75,34 @@ export const SCENE_KIND_CATALOG: Array<{
 
   // ── Tier 2: composable from primitives, component TBD ──
   // Until their component ships, the engine falls back to outcome-orbit with the same params.
-  { kind: 'stats-counter', name: 'Big number counters', tier: 2,
+  { kind: 'stats-counter', name: 'Big number counters', tier: 1,
     fits: 'Highlighting 2-4 key metrics: agent count, tasks completed, memories stored. Dramatic number reveals.',
     paramHints: 'counters[]{to,label,startFrame}, layout: "row"|"grid"' },
-  { kind: 'terminal-log', name: 'Terminal / log scroll', tier: 2,
+  { kind: 'terminal-log', name: 'Terminal / log scroll', tier: 1,
     fits: 'Live agent activity: terminal lines appearing in sequence. Shows "behind the scenes" work.',
     paramHints: 'lines[]{text,color,delay}, prompt: string' },
-  { kind: 'before-after', name: 'Before / after split', tier: 2,
+  { kind: 'before-after', name: 'Before / after split', tier: 1,
     fits: 'Split screen: left is "before" (chaos, manual), right is "after" (automated, calm). Transformation story.',
     paramHints: 'before{items[]}, after{items[]}, splitFrame: number' },
-  { kind: 'agent-roster', name: 'Agent team roster', tier: 2,
+  { kind: 'agent-roster', name: 'Agent team roster', tier: 1,
     fits: 'Introduce 3-6 agents by name and role. Each card enters with its icon. "Meet your team."',
     paramHints: 'agents[]{name,role,icon,color,delay}' },
   { kind: 'timeline', name: 'Timeline / history', tier: 2,
     fits: 'Vertical timeline of milestones or tasks completed. Good for "what happened this week."',
     paramHints: 'events[]{text,date,icon,color,delay}' },
-  { kind: 'notification-stack', name: 'Notification stack', tier: 2,
+  { kind: 'notification-stack', name: 'Notification stack', tier: 1,
     fits: 'Phone-like notifications stacking: agent reports, task completions, messages. "While you were away."',
     paramHints: 'notifications[]{text,icon,color,delay}, deviceFrame: boolean' },
   { kind: 'knowledge-web', name: 'Knowledge graph / web', tier: 2,
     fits: 'Nodes and connections representing memories and relationships. "Everything connected."',
     paramHints: 'nodes[]{label,color,x,y}, edges[]{from,to}, pulseSpeed' },
-  { kind: 'quote-card', name: 'Quote / testimonial', tier: 2,
+  { kind: 'quote-card', name: 'Quote / testimonial', tier: 1,
     fits: 'A single powerful statement or customer quote. Large text, centered, minimal.',
     paramHints: 'quote: string, attribution?: string, accent: string' },
   { kind: 'comparison-table', name: 'Comparison table', tier: 2,
     fits: 'Two or three columns comparing approaches: manual vs. automated, or tool A vs. B.',
     paramHints: 'columns[]{header,rows[]}, highlightColumn: number' },
-  { kind: 'workflow-steps', name: 'Workflow steps', tier: 2,
+  { kind: 'workflow-steps', name: 'Workflow steps', tier: 1,
     fits: 'Animated step-by-step process: 1→2→3→done. Good for "how it works."',
     paramHints: 'steps[]{label,icon,description,delay}' },
   { kind: 'logo-reveal', name: 'Logo reveal', tier: 2,
@@ -111,7 +111,7 @@ export const SCENE_KIND_CATALOG: Array<{
   { kind: 'metric-chart', name: 'Animated chart', tier: 2,
     fits: 'Bar or line chart animating upward. Show growth: tasks/week, agents deployed, etc.',
     paramHints: 'bars[]{label,value,color}, yLabel, animationDelay' },
-  { kind: 'text-typewriter', name: 'Typewriter text', tier: 2,
+  { kind: 'text-typewriter', name: 'Typewriter text', tier: 1,
     fits: 'A single sentence typing itself onto a dark screen. Dramatic opening or closing.',
     paramHints: 'text: string, fontSize: number, typingSpeed: number' },
   { kind: 'split-cards', name: 'Card carousel', tier: 2,
@@ -786,6 +786,77 @@ function deriveVisualParams(
           subline: facts.businessName !== 'your workspace' ? facts.businessName : 'Free and open source.',
         },
       };
+    }
+    case 'agent-roster': {
+      if (!facts) return {};
+      const agentColors = ['#f97316', '#3b82f6', '#22c55e', '#a855f7', '#e11d48', '#06b6d4'];
+      const agents = facts.agentNames.slice(0, 6).map((name, i) => ({
+        name,
+        role: facts.topAgentRoles[i] ?? 'Agent',
+        color: agentColors[i % agentColors.length],
+        delay: 15 + i * 18,
+      }));
+      return agents.length > 0 ? { agents } : {};
+    }
+    case 'terminal-log': {
+      if (!facts) return {};
+      const logColors = ['#3b82f6', '#71717a', '#22c55e', '#71717a', '#a855f7', '#71717a', '#f97316', '#71717a'];
+      const lines: Array<{ text: string; color: string; delay: number }> = [];
+      facts.agentNames.slice(0, 4).forEach((name, i) => {
+        const role = facts.topAgentRoles[i] ?? 'working';
+        lines.push({ text: `→ ${name.toLowerCase()}: ${role.toLowerCase()}...`, color: logColors[(i * 2) % logColors.length], delay: 12 + i * 20 });
+        const task = facts.recentTaskTitles[i];
+        if (task) lines.push({ text: `  ${task.toLowerCase()}`, color: '#71717a', delay: 18 + i * 20 });
+      });
+      return lines.length > 0 ? { lines } : {};
+    }
+    case 'before-after': {
+      const beforeItems = [
+        { text: 'Checking 5 apps before coffee', icon: '😫' },
+        { text: 'Copy-pasting between tools', icon: '📋' },
+        { text: 'Forgetting to follow up', icon: '🕳️' },
+        { text: 'Working weekends', icon: '😓' },
+      ];
+      const afterItems: Array<{ text: string; icon: string }> = [];
+      if (facts?.agentCount) afterItems.push({ text: `${facts.agentCount} agents handle it`, icon: '✨' });
+      if (facts?.completedTaskCount) afterItems.push({ text: `${facts.completedTaskCount} tasks done autonomously`, icon: '⚡' });
+      afterItems.push({ text: 'Nothing falls through', icon: '🎯' });
+      afterItems.push({ text: 'Friday off. Nothing breaks.', icon: '🏖️' });
+      return { before: { items: beforeItems }, after: { items: afterItems.slice(0, 4) } };
+    }
+    case 'notification-stack': {
+      if (!facts) return {};
+      const notifications: Array<{ text: string; icon: string; color: string; delay: number }> = [];
+      const notifIcons = ['🔍', '📝', '📧', '🛡️', '🧠', '💰'];
+      const notifColors = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#06b6d4', '#22c55e'];
+      facts.recentTaskTitles.slice(0, 6).forEach((title, i) => {
+        notifications.push({
+          text: title,
+          icon: notifIcons[i % notifIcons.length],
+          color: notifColors[i % notifColors.length],
+          delay: 15 + i * 15,
+        });
+      });
+      return notifications.length > 0 ? { notifications } : {};
+    }
+    case 'quote-card': {
+      const accentOptions = ['#f97316', '#a855f7', '#3b82f6', '#22c55e', '#e11d48'];
+      return {
+        quote: narration,
+        accentColor: accentOptions[sceneIndex % accentOptions.length],
+        variation: sceneIndex,
+      };
+    }
+    case 'workflow-steps': {
+      const sentences = narration.replace(/([.!?])\s+/g, '$1|').split('|').filter(s => s.trim().length > 5);
+      const stepIcons = ['👁️', '🧠', '⚡', '🔄', '🎯', '✨'];
+      const steps = sentences.slice(0, 5).map((text, i) => ({
+        label: text.trim().split(' ').slice(0, 3).join(' '),
+        description: text.trim(),
+        icon: stepIcons[i % stepIcons.length],
+        delay: 15 + i * 25,
+      }));
+      return steps.length > 0 ? { steps } : {};
     }
     default:
       return {};

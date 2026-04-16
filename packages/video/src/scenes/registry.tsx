@@ -7,6 +7,12 @@ import { Scene5_ZoomOut } from "./Scene5_ZoomOut";
 import { Scene6_Cloud } from "./Scene6_Cloud";
 import { StatsCounter } from "./StatsCounter";
 import { TextTypewriter } from "./TextTypewriter";
+import { AgentRoster } from "./AgentRoster";
+import { TerminalLog } from "./TerminalLog";
+import { BeforeAfter } from "./BeforeAfter";
+import { NotificationStack } from "./NotificationStack";
+import { QuoteCard } from "./QuoteCard";
+import { WorkflowSteps } from "./WorkflowSteps";
 
 type SceneComponent = React.FC<{
   params?: Record<string, unknown>;
@@ -21,6 +27,12 @@ const registry = new Map<string, SceneComponent>([
   ["cta-mesh", Scene6_Cloud as SceneComponent],
   ["stats-counter", StatsCounter as SceneComponent],
   ["text-typewriter", TextTypewriter as SceneComponent],
+  ["agent-roster", AgentRoster as SceneComponent],
+  ["terminal-log", TerminalLog as SceneComponent],
+  ["before-after", BeforeAfter as SceneComponent],
+  ["notification-stack", NotificationStack as SceneComponent],
+  ["quote-card", QuoteCard as SceneComponent],
+  ["workflow-steps", WorkflowSteps as SceneComponent],
 ]);
 
 export function registerSceneKind(kind: string, component: SceneComponent): void {
