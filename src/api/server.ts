@@ -64,6 +64,7 @@ import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createOrgRouter } from './routes/org.js';
 import { createAttributionRouter } from './routes/attribution.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
+import { createStripeWebhookRouter } from '../webhooks/stripe-subscription.js';
 import { createBrowserSessionRouter } from './routes/browser-session.js';
 import { createDesktopSessionRouter } from './routes/desktop-session.js';
 import { createMediaRouter } from './routes/media.js';
@@ -150,7 +151,15 @@ export function createServer(deps: ServerDeps): {
     credentials: true,
   }));
 
-  app.use(express.json());
+  // Capture the raw body on JSON parse so webhook handlers that need
+  // the exact bytes a provider signed (Stripe, etc.) can re-hash them
+  // without a serialization round-trip. Adds negligible cost to every
+  // request (one reference assignment).
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      (req as express.Request).rawBody = Buffer.from(buf);
+    },
+  }));
 
   // Global rate limiter. Skips loopback traffic because the daemon is local-
   // first — the only callers on 127.0.0.1 / ::1 are the TUI, the web
@@ -226,6 +235,25 @@ export function createServer(deps: ServerDeps): {
   // redirect URL are runtime_config keys so operators can pause
   // tracking without redeploying.
   app.use(createAttributionRouter(db));
+
+  // Stripe subscription / invoice webhook — closes the plan:paid
+  // attribution loop. Public (pre-auth) because Stripe signs its
+  // own requests with the runtime_settings `stripe_webhook_secret`.
+  // The handler is workspace-scoped — this daemon's bound workspace
+  // is the only one it writes to.
+  if (workspaceId) {
+    app.use(createStripeWebhookRouter({
+      db,
+      workspaceId,
+      getStripeWebhookSecret: async () => {
+        const { data } = await db.from('runtime_settings')
+          .select('value')
+          .eq('key', 'stripe_webhook_secret')
+          .maybeSingle();
+        return (data as { value: string } | null)?.value || undefined;
+      },
+    }));
+  }
 
   // Maintenance: walk every synced row in the workspace and re-fire
   // reportResource for each. Used to bootstrap the cloud mirror after a
