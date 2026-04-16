@@ -90,5 +90,59 @@ describe('x-authors-to-crm DRY path', () => {
     expect(ledgerRows.every(r => r.qualified_ts === null)).toBe(true);
 
     rmSync(report.briefDir, { recursive: true, force: true });
+
+    // DRY mode must NOT write the live-path classifier audit log.
+    const auditPath = join(tmp, '.ohwow', 'workspaces', 'testws', 'x-authors-classifier-log.jsonl');
+    expect(existsSync(auditPath)).toBe(false);
+  });
+});
+
+describe('appendClassifierAudit', () => {
+  let tmp;
+  let prevHome, prevUser;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'x-a2c-audit-'));
+    prevHome = process.env.HOME; prevUser = process.env.USERPROFILE;
+    process.env.HOME = tmp;
+    process.env.USERPROFILE = tmp;
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    if (prevUser === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUser;
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('appends a JSONL row, creating the workspace dir if missing', async () => {
+    const { appendClassifierAudit } = await import('../x-authors-to-crm.mjs');
+    appendClassifierAudit('newws', {
+      ts: '2026-04-16T19:00:00Z',
+      workspace: 'newws',
+      handle: 'alice',
+      bucket: 'market_signal',
+      intent: 'buyer_intent',
+      confidence: 0.82,
+      accepted: true,
+      promoted: true,
+    });
+    appendClassifierAudit('newws', {
+      ts: '2026-04-16T19:01:00Z',
+      workspace: 'newws',
+      handle: 'bob',
+      bucket: 'advancements',
+      intent: 'adjacent_noise',
+      confidence: 0.4,
+      accepted: false,
+      promoted: false,
+    });
+    const p = join(tmp, '.ohwow', 'workspaces', 'newws', 'x-authors-classifier-log.jsonl');
+    expect(existsSync(p)).toBe(true);
+    const rows = readFileSync(p, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+    expect(rows).toHaveLength(2);
+    expect(rows[0].handle).toBe('alice');
+    expect(rows[0].accepted).toBe(true);
+    expect(rows[1].handle).toBe('bob');
+    expect(rows[1].accepted).toBe(false);
   });
 });

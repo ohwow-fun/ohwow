@@ -106,6 +106,28 @@ function writeBrief(dir, entry, extras = {}) {
   fs.writeFileSync(f, JSON.stringify({ entry, ...extras }, null, 2));
 }
 
+/**
+ * Per-author classifier audit row. Appended once per fresh candidate on
+ * the live (DRY=0) path. Captures the full lifecycle of the decision —
+ * classifier verdict, accept-gate result, and downstream promotion
+ * outcome — so future runs aren't opaque about WHICH handle the rubric
+ * rejected and WHY. JSONL at
+ * ~/.ohwow/workspaces/<ws>/x-authors-classifier-log.jsonl.
+ */
+function classifierLogPath(workspace) {
+  return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, 'x-authors-classifier-log.jsonl');
+}
+export function appendClassifierAudit(workspace, audit) {
+  const p = classifierLogPath(workspace);
+  try {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify(audit) + '\n');
+  } catch (e) {
+    // Audit writes must never wedge the live loop.
+    console.warn(`[x-authors-to-crm] classifier audit write failed: ${e.message}`);
+  }
+}
+
 async function main() {
   const t0 = Date.now();
   // In DRY mode the daemon is not required (no HTTP calls happen), so
@@ -192,75 +214,108 @@ async function main() {
       continue;
     }
 
-    let intent;
-    try {
-      intent = await classifyIntent(row, cfg, llmFn, { extractJson });
-    } catch (e) {
-      console.warn(`[x-authors-to-crm] classify failed for @${row.handle}:`, e.message);
-      continue;
-    }
-    if (!acceptsIntent(intent, cfg)) { intentRejected++; continue; }
-
-    const outreachToken = crypto.randomUUID();
-    const proposal = {
-      kind: 'x_contact_create',
-      summary: `@${row.handle} → ${intent.intent} (conf ${intent.confidence.toFixed(2)}, bucket ${row.bucket})`,
-      payload: {
-        handle: row.handle,
-        display_name: row.display_name,
-        permalink: row.permalink,
-        bucket: row.bucket,
-        score: row.score,
-        touches: row.touches,
-        sources: row.sources,
-        intent: intent.intent,
-        confidence: intent.confidence,
-        intent_reason: intent.reason,
-        free_gate_reason: reason,
-        outreach_token: outreachToken,
-      },
-      autoApproveAfter: 3,
+    const audit = {
+      ts: new Date().toISOString(),
+      workspace,
+      handle: row.handle,
+      bucket: row.bucket,
+      score: row.score,
+      touches: row.touches,
+      free_gate_reason: reason,
+      intent: null,
+      confidence: null,
+      intent_reason: null,
+      accepted: false,
+      classify_error: null,
+      proposed: false,
+      auto_applied: false,
+      promoted: false,
+      promote_error: null,
     };
 
-    const entry = propose(proposal);
-    if (entry.status !== 'auto_applied') { pending++; continue; }
-
     try {
-      const contact = await createContact(url, token, {
-        name: row.display_name || row.handle,
-        contact_type: 'lead',
-        status: 'active',
-        tags: ['x', 'qualified', row.bucket, intent.intent].filter(Boolean),
-        custom_fields: {
-          x_handle: row.handle,
-          x_permalink: row.permalink,
-          x_bucket: row.bucket,
-          x_score: row.score,
-          x_intent: intent.intent,
-          x_intent_confidence: intent.confidence,
-          x_touches: row.touches,
-          x_source: 'author-ledger',
-        },
-        never_sync: true,
-        outreach_token: outreachToken,
-      });
-      await createEvent(url, token, contact.id, {
-        kind: 'x:qualified',
-        source: 'x-authors-to-crm',
-        title: `qualified from X (${row.bucket})`,
+      let intent;
+      try {
+        intent = await classifyIntent(row, cfg, llmFn, { extractJson });
+        audit.intent = intent.intent;
+        audit.confidence = intent.confidence;
+        audit.intent_reason = intent.reason;
+      } catch (e) {
+        audit.classify_error = e.message;
+        console.warn(`[x-authors-to-crm] classify failed for @${row.handle}:`, e.message);
+        continue;
+      }
+
+      audit.accepted = acceptsIntent(intent, cfg);
+      if (!audit.accepted) { intentRejected++; continue; }
+
+      const outreachToken = crypto.randomUUID();
+      const proposal = {
+        kind: 'x_contact_create',
+        summary: `@${row.handle} → ${intent.intent} (conf ${intent.confidence.toFixed(2)}, bucket ${row.bucket})`,
         payload: {
+          handle: row.handle,
+          display_name: row.display_name,
+          permalink: row.permalink,
+          bucket: row.bucket,
           score: row.score,
           touches: row.touches,
+          sources: row.sources,
           intent: intent.intent,
           confidence: intent.confidence,
-          reason: intent.reason,
-          permalink: row.permalink,
+          intent_reason: intent.reason,
+          free_gate_reason: reason,
+          outreach_token: outreachToken,
         },
-      });
-      markQualified(ledger, row.handle, contact.id);
-      promoted++;
-    } catch (e) {
-      console.error(`[x-authors-to-crm] promote failed for @${row.handle}:`, e.message);
+        autoApproveAfter: 3,
+      };
+
+      const entry = propose(proposal);
+      audit.proposed = true;
+      audit.auto_applied = entry.status === 'auto_applied';
+      if (!audit.auto_applied) { pending++; continue; }
+
+      try {
+        const contact = await createContact(url, token, {
+          name: row.display_name || row.handle,
+          contact_type: 'lead',
+          status: 'active',
+          tags: ['x', 'qualified', row.bucket, intent.intent].filter(Boolean),
+          custom_fields: {
+            x_handle: row.handle,
+            x_permalink: row.permalink,
+            x_bucket: row.bucket,
+            x_score: row.score,
+            x_intent: intent.intent,
+            x_intent_confidence: intent.confidence,
+            x_touches: row.touches,
+            x_source: 'author-ledger',
+          },
+          never_sync: true,
+          outreach_token: outreachToken,
+        });
+        await createEvent(url, token, contact.id, {
+          kind: 'x:qualified',
+          source: 'x-authors-to-crm',
+          title: `qualified from X (${row.bucket})`,
+          payload: {
+            score: row.score,
+            touches: row.touches,
+            intent: intent.intent,
+            confidence: intent.confidence,
+            reason: intent.reason,
+            permalink: row.permalink,
+          },
+        });
+        markQualified(ledger, row.handle, contact.id);
+        audit.promoted = true;
+        promoted++;
+      } catch (e) {
+        audit.promote_error = e.message;
+        console.error(`[x-authors-to-crm] promote failed for @${row.handle}:`, e.message);
+      }
+    } finally {
+      appendClassifierAudit(workspace, audit);
     }
   }
 
