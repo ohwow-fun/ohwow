@@ -123,9 +123,6 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   // 027 + 032 intentionally omitted. Both are rename-in-place migrations
   // whose canonical tables (agent_workforce_attachments, _nudges) are
   // already probed by 015-file-attachments and 009-nudges respectively.
-  // The autonomous author re-adds them whenever the proposal generator
-  // forgets rename-in-place semantics; Rule 2's computeFinalTables +
-  // alreadyRegisteredTables dedupe is the durable fix.
-  { migrationFile: '032-nudge-type-update.sql', expectedTables: ['agent_workforce_nudges_new'] },
-  { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
+  // Rule 2 (computeFinalTables + alreadyRegisteredTables dedupe) is the
+  // durable fix so the loop stops re-adding them.
 ];
