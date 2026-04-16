@@ -34,6 +34,7 @@
 
 import fs from 'node:fs';
 import { logger } from '../lib/logger.js';
+import { hashPostText } from '../lib/posted-text-log.js';
 
 /** Shape observed in x-approvals.jsonl as written by scripts/x-experiments/_approvals.mjs. */
 interface ApprovalRow {
@@ -127,13 +128,14 @@ export function collectConsumedIds(rows: ApprovalRow[]): Set<string> {
  */
 export function selectApprovedDraft(
   jsonlPath: string,
-  opts: { kinds?: readonly string[] } = {},
+  opts: { kinds?: readonly string[]; deniedTextHashes?: ReadonlySet<string> } = {},
 ): ApprovedDraft | null {
   const rows = readJsonl(jsonlPath);
   if (rows.length === 0) return null;
   const consumed = collectConsumedIds(rows);
   const kinds = opts.kinds ?? ['x_outbound_post'];
   const allowAllKinds = kinds.length === 1 && kinds[0] === '*';
+  const denied = opts.deniedTextHashes;
 
   // Dedup by id — the ledger appends rating events as new rows with
   // the same id; we want each id considered once using the final
@@ -152,6 +154,18 @@ export function selectApprovedDraft(
     if (!allowAllKinds) {
       const k = row.kind ?? '';
       if (!kinds.includes(k)) continue;
+    }
+    // Pre-pick dedup against the persistent posted-text log. Avoids
+    // dispatching approvals whose text already landed on X in the
+    // lookback window — saves a CDP lane slot and a round-trip
+    // through the duplicate-content banner. The caller preloads the
+    // deny set from x_posted_log because this function is sync.
+    if (denied && denied.has(hashPostText(text))) {
+      logger.info(
+        { draftId: row.id },
+        '[approved-draft-queue] skipping draft; text already in posted log',
+      );
+      continue;
     }
     candidates.push(row);
   }

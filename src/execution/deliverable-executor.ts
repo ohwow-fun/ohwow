@@ -21,6 +21,7 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
+import { hasRecentlyPostedText, recordPostedText } from '../lib/posted-text-log.js';
 import { composeTweetViaBrowser } from '../orchestrator/tools/x-posting.js';
 import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
 import { profileByHandleHint } from './browser/chrome-lifecycle.js';
@@ -38,6 +39,12 @@ export interface DeliverableRow {
 export interface ExecutorContext {
   db: DatabaseAdapter;
   liveMode: boolean;
+  /** Scope for durable side-channel logs (x_posted_log, etc.). Not
+   * every call site has a workspace — when absent, handlers that
+   * need it degrade gracefully (skip dedup log, still execute). */
+  workspaceId?: string;
+  /** Originating task row id, for cross-referencing side-channel logs. */
+  taskId?: string | null;
 }
 
 export interface HandlerResult {
@@ -86,7 +93,12 @@ export class DeliverableExecutor {
     }
 
     const liveMode = await readLiveMode(this.db);
-    const ctx: ExecutorContext = { db: this.db, liveMode };
+    const ctx: ExecutorContext = {
+      db: this.db,
+      liveMode,
+      workspaceId: row.workspace_id,
+      taskId: row.task_id ?? null,
+    };
 
     let outcome: HandlerResult;
     try {
@@ -252,6 +264,46 @@ const postTweetHandler: Handler = async (content, ctx) => {
   if (!text) return { ok: false, error: 'post_tweet: content.text missing' };
   const dryRun = !ctx.liveMode;
 
+  // Surface the originating approval id (if any) from the content
+  // payload so the posted-text log row cross-references back to the
+  // approval that drove this publish. content-cadence-scheduler sets
+  // this when dispatching from an approved draft.
+  const spec = (content.action_spec ?? {}) as Record<string, unknown>;
+  const approvalId = typeof spec.approved_draft_id === 'string' ? spec.approved_draft_id : null;
+
+  // Pre-flight dedup: in live mode, if the normalized text was posted
+  // inside the rolling log window, skip the compose modal entirely.
+  // X's duplicate-content gate would reject it; we'd rather not burn
+  // a CDP lane slot and noisy a screenshot for a known-no-op. Returns
+  // ok:true so the caller marks its approved draft consumed and the
+  // queue advances. The `duplicateSkipped` flag in the result lets
+  // downstream observability distinguish "we skipped" from "we posted".
+  if (!dryRun && ctx.workspaceId) {
+    const lookup = await hasRecentlyPostedText(ctx.db, ctx.workspaceId, text);
+    if (lookup.alreadyPosted) {
+      logger.info(
+        {
+          workspaceId: ctx.workspaceId,
+          taskId: ctx.taskId,
+          approvalId,
+          postedAt: lookup.postedAt,
+          priorApprovalId: lookup.approvalId,
+        },
+        '[post_tweet] pre-flight duplicate — skipping compose modal',
+      );
+      return {
+        ok: true,
+        result: {
+          dryRun,
+          duplicateSkipped: true,
+          reason: 'text already posted within window',
+          posted_at: lookup.postedAt,
+          prior_approval_id: lookup.approvalId,
+        },
+      };
+    }
+  }
+
   const prep = await ensureProfileChrome(ctx.db);
   if (!prep.ok) return { ok: false, error: `post_tweet: ${prep.error}` };
 
@@ -267,7 +319,19 @@ const postTweetHandler: Handler = async (content, ctx) => {
     // real failure. Returning ok:true advances the approvals queue
     // (the draft gets marked consumed) and prevents the infinite
     // retry loop that hits X's duplicate-content gate on every tick.
+    // Record in the posted log too: even though WE didn't publish
+    // here, the text IS out there, and the next run must skip it.
     if (!res.success && res.duplicateBlocked === true) {
+      if (ctx.workspaceId) {
+        await recordPostedText({
+          db: ctx.db,
+          workspaceId: ctx.workspaceId,
+          text,
+          approvalId,
+          taskId: ctx.taskId,
+          source: 'duplicate_blocked_backfill',
+        });
+      }
       return {
         ok: true,
         result: { dryRun, expectedHandle, duplicateBlocked: true, ...(res as unknown as Record<string, unknown>) },
@@ -275,6 +339,17 @@ const postTweetHandler: Handler = async (content, ctx) => {
     }
     if (!res.success) {
       return { ok: false, error: res.message || 'compose failed', result: res as unknown as Record<string, unknown> };
+    }
+    // Success — record the bytes so nothing else re-queues them.
+    if (!dryRun && ctx.workspaceId) {
+      await recordPostedText({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        text,
+        approvalId,
+        taskId: ctx.taskId,
+        source: 'post_tweet',
+      });
     }
     return { ok: true, result: { dryRun, expectedHandle, ...(res as unknown as Record<string, unknown>) } };
   } catch (err) {

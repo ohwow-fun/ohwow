@@ -367,7 +367,15 @@ export class ContentCadenceScheduler {
     // text carries zero drift risk and already passed human review.
     if (this.options.approvalsJsonlPath) {
       try {
-        const draft = selectApprovedDraft(this.options.approvalsJsonlPath);
+        // Preload recent posted-text hashes into a deny set so the
+        // selector skips any approved draft whose bytes are already
+        // out there — the pre-flight gate in postTweetHandler would
+        // short-circuit them anyway, but catching it here saves a
+        // CDP lane round-trip and keeps the approvals ledger tidy.
+        const denied = await this.loadDeniedTextHashes();
+        const draft = selectApprovedDraft(this.options.approvalsJsonlPath, {
+          deniedTextHashes: denied,
+        });
         if (draft) {
           await this.dispatchFromApprovedDraft(agentId, draft);
           return;
@@ -429,6 +437,39 @@ export class ContentCadenceScheduler {
     } catch (err) {
       logger.error({ err, agentId }, '[ContentCadenceScheduler] dispatchXPostTask failed');
     }
+  }
+
+  /**
+   * Preload the hashes of recently-posted texts so the draft selector
+   * can refuse duplicates at pick time. Window matches
+   * DEFAULT_POSTED_LOG_WINDOW_MS in posted-text-log.ts — 30d — which
+   * comfortably covers X's observed duplicate-content cooldown.
+   *
+   * Returns an empty set on any error so the bypass path keeps working
+   * when the new table isn't migrated yet (defensive against a stale
+   * daemon binary vs. a fresh schema).
+   */
+  private async loadDeniedTextHashes(): Promise<Set<string>> {
+    const denied = new Set<string>();
+    try {
+      const cutoffIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const { data } = await this.db
+        .from<{ text_hash: string }>('x_posted_log')
+        .select('text_hash')
+        .eq('workspace_id', this.workspaceId)
+        .gte('posted_at', cutoffIso);
+      for (const row of (data ?? []) as Array<{ text_hash: string }>) {
+        if (typeof row.text_hash === 'string' && row.text_hash.length > 0) {
+          denied.add(row.text_hash);
+        }
+      }
+    } catch (err) {
+      logger.debug(
+        { err: err instanceof Error ? err.message : err },
+        '[ContentCadenceScheduler] loadDeniedTextHashes failed; treating as empty',
+      );
+    }
+    return denied;
   }
 
   /**
