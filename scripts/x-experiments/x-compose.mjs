@@ -61,6 +61,58 @@ function loadShapeWeights(ws) {
   }
 }
 
+/**
+ * Piece 4c — read the autonomy allowlist written by
+ * XAutonomyRampExperiment. When a shape is listed with a positive
+ * daily_budget, the per-draft DRY gate drops for that shape (up to
+ * the budget) so a single goal-paced auto-post can ship without
+ * flipping the global DRY env. Returns the parsed file or null.
+ */
+function loadAutonomyAllowlist(ws) {
+  try {
+    const raw = fs.readFileSync(
+      path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-autonomy-allowlist.json'),
+      'utf8',
+    );
+    const parsed = JSON.parse(raw);
+    if (!parsed?.shapes || typeof parsed.shapes !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Count x_outbound_post approvals of a given shape landed today
+ * (status approved / auto_applied / applied, ts >= start of local day).
+ * Reads the same x-approvals.jsonl the allowlist writer reads, so
+ * budget accounting stays consistent.
+ */
+function shapePostedToday(ws, shape) {
+  const filePath = path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-approvals.jsonl');
+  if (!fs.existsSync(filePath)) return 0;
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startMs = startOfDay.getTime();
+  let n = 0;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row.kind !== 'x_outbound_post') continue;
+        if (row.payload?.shape !== shape) continue;
+        const ok = row.status === 'approved' || row.status === 'auto_applied' || row.status === 'applied';
+        if (!ok) continue;
+        const ts = row.ts ? Date.parse(row.ts) : 0;
+        if (ts >= startMs) n += 1;
+      } catch { /* skip malformed */ }
+    }
+  } catch { /* fall through */ }
+  return n;
+}
+
 // Deterministic post-filter shared in spirit with x-reply. Compose
 // drafts occasionally slip product-architecture dumps past the prompt
 // ban list (tactical_tip is the usual culprit). Any match downgrades
@@ -244,6 +296,16 @@ async function main() {
     }
     console.log(`[x-compose] shape-weights applied from sidecar: ${JSON.stringify(shapeWeights)}`);
   }
+  // Piece 4c — read the autonomy allowlist. When a shape is listed
+  // with a daily_budget > 0 AND we've posted fewer than budget of
+  // that shape today, the per-draft DRY check drops for that shape.
+  const autonomyAllowlist = loadAutonomyAllowlist(workspace);
+  if (autonomyAllowlist) {
+    const entries = Object.entries(autonomyAllowlist.shapes ?? {})
+      .map(([k, v]) => `${k}(${v.daily_budget}/d)`)
+      .join(', ');
+    console.log(`[x-compose] autonomy allowlist: ${entries || 'none'} · weekly ${autonomyAllowlist.weekly_actual}/${autonomyAllowlist.weekly_target}`);
+  }
   console.log(`[x-compose] workspace=${workspace} · history=${history.length} rows · target drafts=${MAX_DRAFTS} · dry=${DRY} · shapes=${[...SHAPES].join(',')}`);
 
   const briefDir = `/tmp/x-compose-${Date.now()}`;
@@ -324,7 +386,21 @@ async function main() {
     console.log(`    post: ${draft.post || '(skip)'}`);
     console.log(`    reason: ${draft.reason}`);
 
-    if (!DRY && draft.post && draft.confidence >= 0.5) {
+    // Piece 4c per-draft autonomy gate. A shape in the allowlist
+    // with remaining budget drops DRY for THIS draft only; all other
+    // shapes stay under the global DRY env (default on).
+    let effectiveDry = DRY;
+    if (DRY && autonomyAllowlist && draft?.shape) {
+      const entry = autonomyAllowlist.shapes?.[draft.shape];
+      if (entry && entry.daily_budget > 0) {
+        const alreadyPosted = shapePostedToday(workspace, draft.shape);
+        if (alreadyPosted < entry.daily_budget) {
+          effectiveDry = false;
+          console.log(`    autonomy: shape=${draft.shape} budget=${entry.daily_budget}/d posted_today=${alreadyPosted} → DRY off for this draft`);
+        }
+      }
+    }
+    if (!effectiveDry && draft.post && draft.confidence >= 0.5) {
       const entry = propose({
         kind: 'x_outbound_post',
         summary: `${draft.shape} · ${draft.post.slice(0, 60)}`,

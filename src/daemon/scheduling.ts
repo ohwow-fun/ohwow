@@ -52,6 +52,10 @@ import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
+import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
+import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
+import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
+import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -434,6 +438,26 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
       experimentRunner.register(new XShapeTunerExperiment());
       experimentRunner.register(new MigrationDriftSentinelExperiment());
       experimentRunner.register(new BrowserProfileGuardianExperiment());
+      // Piece 5: revenue pipeline observer (advisory). Reads goals,
+      // contacts, contact_events, revenue_entries, x-authors-ledger;
+      // writes strategy.revenue_gap_focus + priorities when below pace.
+      experimentRunner.register(new RevenuePipelineObserverExperiment());
+      // Piece 4b: X per-shape engagement observer. Piece 4a's
+      // x-own-engagement.mjs populates x-own-posts.jsonl; this
+      // aggregates and emits per-shape findings with
+      // __tracked_field='median_engagement' for Piece 1's distiller.
+      experimentRunner.register(new XEngagementObserverExperiment());
+      // Piece 4c: X autonomy ramp. Reads the x_posts_per_week goal +
+      // per-shape engagement baselines, writes
+      // x-autonomy-allowlist.json + runtime_config
+      // x_compose.autonomy_allowlist so x-compose.mjs can drop DRY
+      // for shape-graduated drafts up to the goal-paced daily budget.
+      experimentRunner.register(new XAutonomyRampExperiment());
+      // Piece 6: daily surprise digest. 24h cadence, runOnBoot=false,
+      // gates internally on "already ran today" so a daemon restart
+      // doesn't spawn duplicates. Narrative finding with subject
+      // digest:YYYY-MM-DD in category 'other' for easy filtering.
+      experimentRunner.register(new DailySurpriseDigestExperiment());
       experimentRunner.register(new RoadmapShapeProbeExperiment());
       experimentRunner.register(new VitestHealthProbeExperiment());
       experimentRunner.register(new LoopCadenceProbeExperiment());

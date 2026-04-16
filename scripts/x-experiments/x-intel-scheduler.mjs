@@ -38,8 +38,13 @@ const heartbeatPath = path.join(os.homedir(), '.ohwow', 'workspaces', workspace,
 // Controlled by env vars (default: off until operator enables).
 const CHAIN_X_COMPOSE = process.env.CHAIN_X_COMPOSE === '1';
 const CHAIN_YT_COMPOSE = process.env.CHAIN_YT_COMPOSE === '1';
+// Piece 4a: own-post engagement harvester. Default ON because it only
+// reads our own profile timeline (no outbound action) and the
+// engagement-observer experiment depends on its output.
+const CHAIN_X_OWN_ENGAGEMENT = process.env.CHAIN_X_OWN_ENGAGEMENT !== '0';
 const X_COMPOSE_SCRIPT = path.resolve('scripts/x-experiments/x-compose.mjs');
 const YT_COMPOSE_SCRIPT = path.resolve('scripts/x-experiments/yt-compose.mjs');
+const X_OWN_ENGAGEMENT_SCRIPT = path.resolve('scripts/x-experiments/x-own-engagement.mjs');
 
 let child = null;
 let stopping = false;
@@ -90,12 +95,21 @@ async function runOnce() {
 
   if (CHAIN_YT_COMPOSE) {
     await runScript(YT_COMPOSE_SCRIPT, 'yt-compose');
+    if (stopping) return 0;
+  }
+
+  if (CHAIN_X_OWN_ENGAGEMENT) {
+    await runScript(X_OWN_ENGAGEMENT_SCRIPT, 'x-own-engagement');
   }
 
   return intelCode;
 }
 
-const chains = [CHAIN_X_COMPOSE && 'x-compose', CHAIN_YT_COMPOSE && 'yt-compose'].filter(Boolean);
+const chains = [
+  CHAIN_X_COMPOSE && 'x-compose',
+  CHAIN_YT_COMPOSE && 'yt-compose',
+  CHAIN_X_OWN_ENGAGEMENT && 'x-own-engagement',
+].filter(Boolean);
 console.log(`[scheduler] workspace=${workspace} · interval=${INTERVAL_MIN}min · chain=[${chains.join(', ') || 'none'}]`);
 console.log(`[scheduler] ^C to stop after the current run`);
 
