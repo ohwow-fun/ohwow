@@ -20,6 +20,10 @@ import type { McpServerConfig } from '../mcp/types.js';
 import { McpClientManager } from '../mcp/index.js';
 import { REQUEST_BROWSER_TOOL } from './browser/index.js';
 import { REQUEST_DESKTOP_TOOL } from './desktop/index.js';
+import {
+  X_POSTING_HEAD_TOOL_DEFINITIONS,
+  X_POSTING_DELETE_TOOL_DEFINITIONS,
+} from '../orchestrator/tools/x-posting.js';
 import { DRAFT_TOOL_DEFINITIONS } from './draft-tools.js';
 import { SCRAPLING_TOOL_DEFINITIONS } from './scrapling/index.js';
 import { FILESYSTEM_TOOL_DEFINITIONS } from './filesystem/index.js';
@@ -152,6 +156,22 @@ export async function buildTaskToolList(
 
   if (caps.browserEnabled && !sopExcludesBrowser) tools.push(REQUEST_BROWSER_TOOL);
   if (caps.desktopEnabled) tools.push(REQUEST_DESKTOP_TOOL);
+  // X posting tools (x_compose_tweet, thread, article, list_dms, send_dm,
+  // delete_tweet). These drive the user's real Chrome via CDP and the
+  // tool-executor path pins the right profile via `ensureProfileChrome`
+  // before any type/click — so they're safe to expose alongside the
+  // browser/desktop surface. Previously they only lived in the chat
+  // orchestrator catalog, leaving task agents (content-cadence's
+  // "Post one tweet today", deferred-action dispatches, etc.) without
+  // any posting tool — react_trace would show the agent calling
+  // get_state + producing a markdown fallback because it had no way
+  // to actually post. Gated on browserEnabled OR desktopEnabled
+  // because X posting doesn't care which surface activated (both
+  // flows end at the same debug Chrome on :9222).
+  if (caps.browserEnabled || caps.desktopEnabled) {
+    tools.push(...X_POSTING_HEAD_TOOL_DEFINITIONS);
+    tools.push(...X_POSTING_DELETE_TOOL_DEFINITIONS);
+  }
   // If SOP excludes desktop, still include it — desktop is rarely excluded
   // When real Chrome is available via CDP, skip Scrapling — Chrome handles
   // both public and authenticated pages. Scrapling is only useful as a
