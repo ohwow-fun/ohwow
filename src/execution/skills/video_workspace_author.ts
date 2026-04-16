@@ -1030,6 +1030,37 @@ function buildComposableParams(
   return params;
 }
 
+type TransitionSpec =
+  | { kind: 'fade'; durationInFrames: number; spring: { damping: number; durationRestThreshold: number } }
+  | { kind: 'slide'; direction: 'from-right' | 'from-left'; durationInFrames: number }
+  | { kind: 'none' };
+
+const CALM_MOODS = new Set(['warm', 'forest', 'sunset', 'cool']);
+const INTENSE_MOODS = new Set(['electric', 'dark', 'midnight']);
+
+function pickTransition(
+  from: { kind: string; params?: Record<string, unknown> },
+  to: { kind: string; params?: Record<string, unknown> },
+  index = 0,
+): TransitionSpec {
+  const fromMood = (from.params as { mood?: string } | undefined)?.mood;
+  const toMood = (to.params as { mood?: string } | undefined)?.mood;
+  const sameMood = fromMood === toMood;
+  const calmToCalm = CALM_MOODS.has(fromMood ?? '') && CALM_MOODS.has(toMood ?? '');
+  const intensityShift =
+    (CALM_MOODS.has(fromMood ?? '') && INTENSE_MOODS.has(toMood ?? '')) ||
+    (INTENSE_MOODS.has(fromMood ?? '') && CALM_MOODS.has(toMood ?? ''));
+
+  if (sameMood || calmToCalm) {
+    return { kind: 'fade', durationInFrames: Math.round(TRANSITION_FRAMES * 1.5), spring: { damping: 200, durationRestThreshold: 0.001 } };
+  }
+  if (intensityShift) {
+    return { kind: 'none' };
+  }
+  const direction = index % 2 === 0 ? 'from-right' as const : 'from-left' as const;
+  return { kind: 'slide', direction, durationInFrames: TRANSITION_FRAMES };
+}
+
 function buildSpec(params: {
   voices: ResolvedVoice[];
   musicSrc: string;
@@ -1078,16 +1109,9 @@ function buildSpec(params: {
     ...(params.palette ? { palette: params.palette } : {}),
     music: { src: params.musicSrc, startFrame: 0, volume: 0.22 },
     voiceovers,
-    transitions: Array.from({ length: Math.max(0, params.voices.length - 1) }, (_, i) => {
-      const patterns = [
-        { kind: 'fade' as const, durationInFrames: TRANSITION_FRAMES, spring: { damping: 200, durationRestThreshold: 0.001 } },
-        { kind: 'slide' as const, direction: 'from-right' as const, durationInFrames: TRANSITION_FRAMES },
-        { kind: 'fade' as const, durationInFrames: Math.round(TRANSITION_FRAMES * 1.5), spring: { damping: 120, durationRestThreshold: 0.001 } },
-        { kind: 'slide' as const, direction: 'from-left' as const, durationInFrames: TRANSITION_FRAMES },
-        { kind: 'none' as const },
-      ];
-      return patterns[i % patterns.length];
-    }),
+    transitions: Array.from({ length: Math.max(0, params.voices.length - 1) }, (_, i) =>
+      pickTransition(scenes[i], scenes[i + 1], i),
+    ),
     scenes,
   };
 }
