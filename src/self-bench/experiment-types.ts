@@ -199,6 +199,16 @@ export interface ExperimentContext {
    * short to be meaningful. Absent in tests that build ctx directly.
    */
   runnerStartedAtMs?: number;
+  /**
+   * Piece 2 — surprise primitive. When the runner built the context
+   * it attaches this closure so probe()/judge() can score a
+   * hypothetical observation against the (experiment_id, subject)
+   * baseline before deciding what to write. Returns the same novelty
+   * dimensions Piece 1 injects into evidence.__novelty.
+   *
+   * Optional so test contexts that don't need it can stay minimal.
+   */
+  scoreSurprise?: (input: import('./surprise.js').ScoreSurpriseInput) => Promise<import('./surprise.js').SurpriseResult>;
 }
 
 /**

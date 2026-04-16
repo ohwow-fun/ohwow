@@ -54,6 +54,7 @@ import type {
   ValidationResult,
   Verdict,
 } from './experiment-types.js';
+import { makeScoreSurprise } from './surprise.js';
 import { writeFinding, readRecentFindings } from './findings-store.js';
 import {
   enqueueValidation,
@@ -708,22 +709,26 @@ export class ExperimentRunner implements ExperimentScheduler {
     }
   }
 
-  private buildContext(): ExperimentContext {
-    return {
+  private buildContext(experimentId?: string): ExperimentContext {
+    const ctx: ExperimentContext = {
       db: this.db,
       workspaceId: this.workspaceId,
       workspaceSlug: this.workspaceSlug,
       engine: this.engine,
-      recentFindings: (experimentId: string, limit?: number) =>
-        readRecentFindings(this.db, experimentId, limit),
+      recentFindings: (id: string, limit?: number) =>
+        readRecentFindings(this.db, id, limit),
       scheduler: this,
       runnerStartedAtMs: this.startedAtMs || undefined,
     };
+    if (experimentId) {
+      ctx.scoreSurprise = makeScoreSurprise(this.db, experimentId);
+    }
+    return ctx;
   }
 
   private async runOne(exp: Experiment): Promise<void> {
     const started = this.now();
-    const ctx = this.buildContext();
+    const ctx = this.buildContext(exp.id);
     let probeResult: ProbeResult | null = null;
     let verdict: Verdict = 'error';
     let intervention: InterventionApplied | null = null;

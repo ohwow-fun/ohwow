@@ -84,6 +84,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { logger } from '../../lib/logger.js';
+import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
 import { RawCdpBrowser } from './raw-cdp.js';
 
 // ---------------------------------------------------------------------------
@@ -711,20 +712,38 @@ export async function ensureDebugChrome(opts: {
       }
     }
     const homeProfile = await getDebugChromeHomeProfile();
+    const resolved = homeProfile ?? 'Default';
     logger.info(
-      { port, pid, homeProfile },
+      { port, pid, homeProfile, preferredProfile, mismatch: resolved !== preferredProfile },
       '[chrome-lifecycle] attaching to existing debug Chrome',
     );
+    void appendChromeProfileEvent({
+      source: 'attach',
+      port,
+      pid: pid > 0 ? pid : null,
+      expected_profile: preferredProfile,
+      resolved_profile: resolved,
+    });
     return {
       cdpHttpUrl: `http://localhost:${port}`,
       cdpWsUrl: existing.wsUrl,
       pid,
-      profileDirAtLaunch: homeProfile ?? 'Default',
+      profileDirAtLaunch: resolved,
     };
   }
 
-  // No Chrome on the port. Spawn one.
-  return spawnDebugChrome({ port, preferredProfile });
+  // No Chrome on the port. Spawn one. The spawn path resolves the
+  // profile to whatever --profile-directory ends up sticking, which
+  // we record as the "resolved" identity for the event ledger.
+  const handle = await spawnDebugChrome({ port, preferredProfile });
+  void appendChromeProfileEvent({
+    source: 'spawn',
+    port,
+    pid: handle.pid > 0 ? handle.pid : null,
+    expected_profile: preferredProfile,
+    resolved_profile: handle.profileDirAtLaunch,
+  });
+  return handle;
 }
 
 /**

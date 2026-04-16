@@ -78,13 +78,15 @@ export async function llm({
   constraints,
   prefer_model,
   difficulty,
+  max_tokens,
 }) {
   const full = system ? `${system}\n\n${prompt}` : prompt;
-  // prefer_model + difficulty are flat fields on /api/llm's runLlmCall input
-  // (see src/execution/llm-organ.ts). Pass them through so callers can pin a
-  // specific tier when a purpose-level route is too weak.
+  // prefer_model / difficulty / max_tokens are flat fields on /api/llm's
+  // runLlmCall input (see src/execution/llm-organ.ts). Pass them through so
+  // callers can pin a specific tier and allow for a longer completion when the
+  // purpose-level defaults aren't enough.
   const r = await req('POST', '/api/llm', {
-    purpose, prompt: full, agentId, constraints, prefer_model, difficulty,
+    purpose, prompt: full, agentId, constraints, prefer_model, difficulty, max_tokens,
   });
   return r.data;
 }

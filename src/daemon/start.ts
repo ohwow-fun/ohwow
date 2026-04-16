@@ -53,6 +53,7 @@ import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js
 import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
+import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -636,6 +637,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // and deep evidence — their cadence moved 1 h → 6 h in the same
         // commit to keep them from dominating the ledger.
         experimentRunner.register(new MigrationDriftSentinelExperiment());
+        // Piece 3 of surprise-first bundle: reads
+        // chrome-profile-events.jsonl (appended by chrome-lifecycle on
+        // every attach/spawn) and flags when the resolved profile
+        // diverges from the requested one. Surfaces via the Piece 1
+        // distiller with a tracked_field so sudden mismatch spikes
+        // get z-scored against the rolling baseline.
+        experimentRunner.register(new BrowserProfileGuardianExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a
