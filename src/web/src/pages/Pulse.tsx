@@ -165,6 +165,25 @@ interface PulseData {
       shipped: number;
       ignored: number;
     };
+    replyQueue: {
+      counts: {
+        pending: number;
+        approved: number;
+        autoApplied: number;
+        applied: number;
+        rejected: number;
+      };
+      lastShippedAt: string | null;
+      recent: Array<{
+        approvalId: string;
+        ts: string;
+        status: string;
+        summary: string;
+        contactName: string | null;
+        conversationPair: string | null;
+        textPreview: string;
+      }>;
+    };
   };
   activity: ActivityRow[];
 }
@@ -748,6 +767,78 @@ export function PulsePage() {
           </ul>
         )}
       </div>
+
+      {/* ====== DM reply queue ====== */}
+      {(pipeline.replyQueue.counts.pending + pipeline.replyQueue.counts.approved
+        + pipeline.replyQueue.counts.autoApplied + pipeline.replyQueue.counts.applied) > 0 && (
+        <div className="border border-white/[0.08] rounded-lg p-5 mb-6 bg-white/[0.01]">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="text-[11px] text-neutral-500 uppercase tracking-wider">DM reply queue</p>
+              <p className="text-[10px] text-neutral-600 mt-0.5">
+                Dispatched next-steps land here as x_dm_outbound approvals.
+                The reply dispatcher consumes approved rows and sends the DM via the authenticated browser.
+              </p>
+            </div>
+            {pipeline.replyQueue.lastShippedAt && (
+              <span className="text-[10px] text-success">last shipped {relTime(pipeline.replyQueue.lastShippedAt)}</span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+            <div className="border border-warning/20 bg-warning/[0.04] rounded px-3 py-2">
+              <p className="text-[10px] text-warning uppercase tracking-wider">Pending</p>
+              <p className="text-lg font-semibold tabular-nums mt-0.5">{pipeline.replyQueue.counts.pending}</p>
+            </div>
+            <div className="border border-info/20 bg-info/[0.04] rounded px-3 py-2">
+              <p className="text-[10px] text-info uppercase tracking-wider">Approved</p>
+              <p className="text-lg font-semibold tabular-nums mt-0.5">{pipeline.replyQueue.counts.approved}</p>
+            </div>
+            <div className="border border-info/20 bg-info/[0.04] rounded px-3 py-2">
+              <p className="text-[10px] text-info uppercase tracking-wider">Auto-applied</p>
+              <p className="text-lg font-semibold tabular-nums mt-0.5">{pipeline.replyQueue.counts.autoApplied}</p>
+            </div>
+            <div className="border border-success/20 bg-success/[0.04] rounded px-3 py-2">
+              <p className="text-[10px] text-success uppercase tracking-wider">Shipped</p>
+              <p className="text-lg font-semibold tabular-nums mt-0.5">{pipeline.replyQueue.counts.applied}</p>
+            </div>
+            <div className="border border-critical/20 bg-critical/[0.04] rounded px-3 py-2">
+              <p className="text-[10px] text-critical uppercase tracking-wider">Rejected</p>
+              <p className="text-lg font-semibold tabular-nums mt-0.5">{pipeline.replyQueue.counts.rejected}</p>
+            </div>
+          </div>
+          {pipeline.replyQueue.recent.length > 0 && (
+            <ul className="divide-y divide-white/[0.04]">
+              {pipeline.replyQueue.recent.map(r => {
+                const color =
+                  r.status === 'pending' ? 'bg-warning'
+                  : r.status === 'approved' || r.status === 'auto_applied' ? 'bg-info'
+                  : r.status === 'applied' ? 'bg-success'
+                  : r.status === 'rejected' ? 'bg-critical'
+                  : 'bg-neutral-500';
+                const statusColor =
+                  r.status === 'pending' ? 'text-warning'
+                  : r.status === 'approved' || r.status === 'auto_applied' ? 'text-info'
+                  : r.status === 'applied' ? 'text-success'
+                  : r.status === 'rejected' ? 'text-critical'
+                  : 'text-neutral-500';
+                return (
+                  <li key={r.approvalId} className="flex items-start gap-3 py-2 text-xs">
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 flex-none ${color}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] uppercase tracking-wider ${statusColor}`}>{r.status.replace('_', ' ')}</span>
+                        <span className="text-neutral-300 truncate">{r.contactName ?? 'contact'}</span>
+                      </div>
+                      <p className="text-neutral-500 truncate mt-0.5">"{r.textPreview}"</p>
+                    </div>
+                    <span className="text-[10px] text-neutral-600 flex-none tabular-nums">{relTime(r.ts)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* ====== Contact event breakdown ====== */}
       {pipeline.eventsByKind.length > 0 && (

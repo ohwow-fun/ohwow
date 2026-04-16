@@ -7,8 +7,13 @@
  * homeostasis state, and the latest authoring/revert outcomes.
  */
 
+import path from 'node:path';
+
 import { Router } from 'express';
 import type Database from 'better-sqlite3';
+
+import { DM_OUTBOUND_APPROVAL_KIND } from '../../lib/dm-reply-queue.js';
+import { readApprovalRows, type ApprovalEntry } from '../../scheduling/approval-queue.js';
 
 interface VerdictRow { verdict: string; c: number }
 interface ExpRow { experiment_id: string; c: number }
@@ -36,7 +41,12 @@ interface FindingRow {
 
 const ONE_MIN = 60_000;
 
-export function createPulseRouter(rawDb: Database.Database, startTime: number): Router {
+export function createPulseRouter(
+  rawDb: Database.Database,
+  startTime: number,
+  dataDir?: string,
+): Router {
+  const approvalsJsonlPath = dataDir ? path.join(dataDir, 'x-approvals.jsonl') : null;
   const router = Router();
 
   router.get('/api/pulse', async (req, res) => {
@@ -399,6 +409,80 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
         ignored:    nextSteps.filter(s => s.status === 'ignored').length,
       };
 
+      // ---- DM reply queue health ----
+      // Read the approval JSONL directly so Pulse always reflects the
+      // authoritative queue the XDmReplyDispatcher consumes. No DB cache
+      // layer to go stale.
+      interface ReplyQueueCounts {
+        pending: number;
+        approved: number;
+        autoApplied: number;
+        applied: number;
+        rejected: number;
+      }
+      const replyQueueCounts: ReplyQueueCounts = {
+        pending: 0, approved: 0, autoApplied: 0, applied: 0, rejected: 0,
+      };
+      interface RecentReplyRow {
+        approvalId: string;
+        ts: string;
+        status: string;
+        summary: string;
+        contactName: string | null;
+        conversationPair: string | null;
+        textPreview: string;
+      }
+      const recentReplies: RecentReplyRow[] = [];
+      let lastShippedAt: string | null = null;
+
+      if (approvalsJsonlPath) {
+        const rows = readApprovalRows(approvalsJsonlPath);
+        // Fold rows by id, tracking the latest status line per entry
+        // plus the most-recent applied timestamp across the whole file.
+        const latest = new Map<string, ApprovalEntry>();
+        let lastApplied: string | null = null;
+        for (const row of rows) {
+          if (row.kind !== DM_OUTBOUND_APPROVAL_KIND && row.kind !== undefined) {
+            // Status-update rows (kind undefined) for this id still
+            // need to be folded in.
+            if (!latest.has(row.id)) continue;
+          }
+          latest.set(row.id, { ...(latest.get(row.id) ?? row), ...row });
+          if (row.status === 'applied') {
+            if (!lastApplied || row.ts > lastApplied) lastApplied = row.ts;
+          }
+        }
+        for (const entry of latest.values()) {
+          if (entry.kind !== DM_OUTBOUND_APPROVAL_KIND) continue;
+          if (entry.status === 'pending') replyQueueCounts.pending++;
+          else if (entry.status === 'approved') replyQueueCounts.approved++;
+          else if (entry.status === 'auto_applied') replyQueueCounts.autoApplied++;
+          else if (entry.status === 'applied') replyQueueCounts.applied++;
+          else if (entry.status === 'rejected') replyQueueCounts.rejected++;
+        }
+        lastShippedAt = lastApplied;
+
+        // Recent slice for the UI (newest first, cap 10).
+        const all = Array.from(latest.values())
+          .filter(e => e.kind === DM_OUTBOUND_APPROVAL_KIND)
+          .sort((a, b) => (a.ts < b.ts ? 1 : -1))
+          .slice(0, 10);
+        for (const e of all) {
+          const pair = typeof e.payload?.conversation_pair === 'string' ? e.payload.conversation_pair : null;
+          const name = typeof e.payload?.contact_name === 'string' ? e.payload.contact_name : null;
+          const text = typeof e.payload?.text === 'string' ? e.payload.text : '';
+          recentReplies.push({
+            approvalId: e.id,
+            ts: e.ts,
+            status: e.status,
+            summary: e.summary ?? '',
+            contactName: name,
+            conversationPair: pair,
+            textPreview: text.slice(0, 180),
+          });
+        }
+      }
+
       // ---- Heartbeat: is the loop alive? ----
       const lastLlmCallAt = rawDb.prepare(`
         SELECT created_at FROM llm_calls
@@ -467,6 +551,11 @@ export function createPulseRouter(rawDb: Database.Database, startTime: number): 
             dmHealth,
             nextSteps,
             nextStepsRollup,
+            replyQueue: {
+              counts: replyQueueCounts,
+              lastShippedAt,
+              recent: recentReplies,
+            },
           },
           activity: recentActivity,
         },

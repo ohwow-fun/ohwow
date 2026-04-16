@@ -31,9 +31,11 @@
  * - fail:    errors > half of attempts
  */
 
-import { randomUUID } from 'crypto';
-
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import {
+  proposeReplyFromNextStep,
+  reconcileShippedNextSteps,
+} from '../../lib/dm-reply-queue.js';
 import { logger } from '../../lib/logger.js';
 import {
   BusinessExperiment,
@@ -86,19 +88,46 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
   };
 
   private readonly maxPerTick: number;
+  private readonly approvalsJsonlPath: string | null;
 
-  constructor(opts: BusinessExperimentOptions & { maxPerTick?: number } = {}) {
+  constructor(opts: BusinessExperimentOptions & {
+    maxPerTick?: number;
+    /** Path to x-approvals.jsonl. When absent, reply routing falls back
+     * to a no-op (step stays 'open') instead of producing dangling
+     * approvals that nothing can send. */
+    approvalsJsonlPath?: string;
+  } = {}) {
     super(opts);
     this.maxPerTick = opts.maxPerTick ?? DEFAULT_MAX_PER_TICK;
+    this.approvalsJsonlPath = opts.approvalsJsonlPath ?? null;
   }
 
   protected async businessProbe(ctx: ExperimentContext): Promise<ProbeResult> {
+    // 1. Close the loop on prior ticks: any reply we queued that has
+    //    since been sent by XDmReplyDispatcher should flip to 'shipped'
+    //    here. Runs first so the Pulse UI reflects shipped state even
+    //    on ticks where no new steps are dispatched.
+    let reconciled = { scanned: 0, shipped: 0 };
+    if (this.approvalsJsonlPath) {
+      reconciled = await reconcileShippedNextSteps(
+        ctx.db,
+        ctx.workspaceId,
+        this.approvalsJsonlPath,
+      );
+    }
+
     const open = await this.loadOpenSteps(ctx.db, ctx.workspaceId);
     if (open.length === 0) {
       return {
         subject: 'dispatcher',
-        summary: 'no open next_step events',
-        evidence: { open_total: 0, dispatched: 0, ignored: 0, errors: 0, results: [] },
+        summary: reconciled.shipped > 0
+          ? `no open next_step events; ${reconciled.shipped} shipped via approval reconciliation`
+          : 'no open next_step events',
+        evidence: {
+          open_total: 0, dispatched: 0, ignored: 0, errors: 0, results: [],
+          reconciled_scanned: reconciled.scanned,
+          reconciled_shipped: reconciled.shipped,
+        },
       };
     }
 
@@ -126,7 +155,8 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
     return {
       subject: 'dispatcher',
       summary:
-        `dispatched ${dispatched}, ignored ${ignored}, errors ${errors} of ${slice.length} open step${slice.length === 1 ? '' : 's'}`,
+        `dispatched ${dispatched}, ignored ${ignored}, errors ${errors} of ${slice.length} open step${slice.length === 1 ? '' : 's'}`
+        + (reconciled.shipped > 0 ? ` · ${reconciled.shipped} shipped` : ''),
       evidence: {
         open_total: open.length,
         processed: slice.length,
@@ -134,6 +164,8 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
         ignored,
         errors,
         results,
+        reconciled_scanned: reconciled.scanned,
+        reconciled_shipped: reconciled.shipped,
       },
     };
   }
@@ -231,27 +263,33 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
     }
 
     if (type === 'question' || type === 'follow_up') {
-      const task = await this.createReplyTask(ctx.db, ctx.workspaceId, step);
-      if (!task) {
+      const queued = await this.queueReplyApproval(ctx, step);
+      if (!queued) {
+        // Approvals path unavailable (no jsonl configured, missing
+        // conversation_pair, etc.) — leave the step open so a future
+        // tick with proper wiring can still dispatch. No task
+        // fallback: we don't want dangling agent tasks that nothing
+        // closes.
         return {
           eventId: step.eventId,
           contactName: step.contactName,
           step_type: type,
           outcome: 'error',
-          error: 'reply task creation failed',
+          error: 'reply approval could not be queued',
         };
       }
       await this.setStatus(ctx.db, step.eventId, step.payload, 'dispatched', {
-        dispatched_kind: 'reply_task',
-        task_id: task.taskId,
-        agent_id: task.agentId,
+        dispatched_kind: 'reply_approval',
+        approval_id: queued.approvalId,
+        approval_status: queued.approvalStatus,
+        conversation_pair: queued.conversationPair,
       });
       return {
         eventId: step.eventId,
         contactName: step.contactName,
         step_type: type,
         outcome: 'dispatched',
-        action: `task ${task.taskId.slice(0, 8)}`,
+        action: `approval ${queued.approvalId.slice(0, 8)} (${queued.approvalStatus})`,
       };
     }
 
@@ -312,75 +350,87 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
     return { id: findingId };
   }
 
-  private async createReplyTask(
-    db: DatabaseAdapter,
-    workspaceId: string,
+  /**
+   * Route a question / follow_up next_step to the X DM send queue.
+   * Returns null when the step can't be queued (no approvalsJsonlPath
+   * wired, or the contact has no DM conversation_pair) — the caller
+   * treats null as 'error, leave open'.
+   */
+  private async queueReplyApproval(
+    ctx: ExperimentContext,
     step: OpenNextStep,
-  ): Promise<{ taskId: string; agentId: string } | null> {
-    const agentId = await this.resolveReplyAgent(db, workspaceId);
-    if (!agentId) {
+  ): Promise<{ approvalId: string; approvalStatus: string; conversationPair: string } | null> {
+    if (!this.approvalsJsonlPath) return null;
+
+    const conversationPair = await this.lookupConversationPair(ctx.db, ctx.workspaceId, step.contactId);
+    if (!conversationPair) {
       logger.debug(
-        { contactId: step.contactId, workspaceId },
-        '[next-step-dispatcher] no reply-agent available; skipping task creation',
+        { contactId: step.contactId },
+        '[next-step-dispatcher] no conversation_pair on contact; cannot queue DM reply',
       );
       return null;
     }
-    const taskId = randomUUID();
-    const now = new Date().toISOString();
-    const titlePrefix = step.payload.step_type === 'question' ? 'Reply to' : 'Nudge';
-    const title = `${titlePrefix} ${step.contactName}: ${step.payload.text.slice(0, 60)}`;
-    const description = [
-      `Contact: ${step.contactName} (id ${step.contactId})`,
-      `Original signal: ${step.payload.text}`,
-      `Suggested reply: ${step.payload.suggested_action}`,
-      `Urgency: ${step.payload.urgency}`,
-      `Source event: ${step.eventId}`,
-    ].join('\n');
+
+    const typePrefix = step.payload.step_type === 'question' ? 'Reply' : 'Follow-up';
+    const replyText = step.payload.suggested_action?.trim() || step.payload.text.trim();
+    if (!replyText) return null;
+    const summary = `${typePrefix} to ${step.contactName ?? 'contact'}: ${step.payload.text.slice(0, 80)}`;
+
     try {
-      await db.from('agent_workforce_tasks').insert({
-        id: taskId,
-        workspace_id: workspaceId,
-        agent_id: agentId,
-        title,
-        description,
-        input: JSON.stringify({ title, description, contact_id: step.contactId, next_step_event_id: step.eventId }),
-        status: 'needs_approval',
-        priority: step.payload.urgency === 'high' ? 'high' : 'normal',
-        created_at: now,
-        updated_at: now,
+      const approval = proposeReplyFromNextStep({
+        approvalsJsonlPath: this.approvalsJsonlPath,
+        workspace: ctx.workspaceSlug ?? 'default',
+        contactId: step.contactId,
+        contactName: step.contactName,
+        conversationPair,
+        replyText,
+        summary,
+        nextStepEventId: step.eventId,
+        stepType: step.payload.step_type,
+        urgency: step.payload.urgency,
       });
-      return { taskId, agentId };
+      return {
+        approvalId: approval.id,
+        approvalStatus: approval.status,
+        conversationPair,
+      };
     } catch (err) {
       logger.warn(
         { err: err instanceof Error ? err.message : err, contactId: step.contactId },
-        '[next-step-dispatcher] task insert failed',
+        '[next-step-dispatcher] proposeReplyFromNextStep failed',
       );
       return null;
     }
   }
 
-  private async resolveReplyAgent(db: DatabaseAdapter, workspaceId: string): Promise<string | null> {
+  /**
+   * Pull the X DM conversation_pair for a contact. Analyst-source
+   * contacts store it in custom_fields.x_conversation_pair; other
+   * contacts won't have one and we return null.
+   */
+  private async lookupConversationPair(
+    db: DatabaseAdapter,
+    workspaceId: string,
+    contactId: string,
+  ): Promise<string | null> {
     try {
-      // Prefer The Voice (our X/outreach agent) when present, fall back
-      // to any active agent so the task still lands on an approver.
-      const { data: voiceRows } = await db
-        .from<{ id: string }>('agent_workforce_agents')
-        .select('id')
+      const { data } = await db
+        .from<{ custom_fields: unknown }>('agent_workforce_contacts')
+        .select('custom_fields')
         .eq('workspace_id', workspaceId)
-        .eq('name', 'The Voice')
-        .limit(1);
-      const voiceRowArr = voiceRows as Array<{ id: string }> | null;
-      if (voiceRowArr && voiceRowArr.length > 0) return voiceRowArr[0].id;
-
-      const { data: anyRows } = await db
-        .from<{ id: string }>('agent_workforce_agents')
-        .select('id')
-        .eq('workspace_id', workspaceId)
-        .order('created_at', { ascending: true })
-        .limit(1);
-      const anyArr = anyRows as Array<{ id: string }> | null;
-      if (anyArr && anyArr.length > 0) return anyArr[0].id;
-      return null;
+        .eq('id', contactId)
+        .maybeSingle();
+      if (!data) return null;
+      const customFields = (data as { custom_fields: unknown }).custom_fields;
+      let obj: Record<string, unknown> | null = null;
+      if (typeof customFields === 'object' && customFields !== null) {
+        obj = customFields as Record<string, unknown>;
+      } else if (typeof customFields === 'string') {
+        try { obj = JSON.parse(customFields) as Record<string, unknown>; } catch { obj = null; }
+      }
+      if (!obj) return null;
+      const pair = obj.x_conversation_pair;
+      return typeof pair === 'string' && pair.length > 0 ? pair : null;
     } catch {
       return null;
     }

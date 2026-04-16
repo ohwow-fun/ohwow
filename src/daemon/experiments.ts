@@ -370,7 +370,9 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       { everyMs: conversationAnalyst.cadence.everyMs },
       '[daemon] contact-conversation-analyst registered',
     );
-    const nextStepDispatcher = new NextStepDispatcherExperiment();
+    const nextStepDispatcher = new NextStepDispatcherExperiment({
+      approvalsJsonlPath,
+    });
     experimentRunner.register(nextStepDispatcher);
     logger.info(
       { everyMs: nextStepDispatcher.cadence.everyMs },

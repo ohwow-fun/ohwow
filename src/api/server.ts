@@ -588,7 +588,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createPermissionRequestsRouter(db, engine));
   app.use(createFailingTriggersRouter(db));
   app.use(createFindingsRouter(db));
-  app.use(createPulseRouter(rawDb, startTime));
+  app.use(createPulseRouter(rawDb, startTime, config.dataDir));
   if (config.dataDir) {
     app.use(createAttachmentsRouter(db, config.dataDir));
   }
