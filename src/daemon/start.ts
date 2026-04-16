@@ -18,7 +18,6 @@ import {
   findWorkspaceByCloudId,
 } from '../config.js';
 import { RuntimeEngine } from '../execution/engine.js';
-import { installDiaryHook } from '../execution/diary-hook.js';
 import { createServer } from '../api/server.js';
 import { ControlPlaneClient } from '../control-plane/client.js';
 import type { AgentConfigPayload } from '../control-plane/types.js';
@@ -109,10 +108,6 @@ import { ObservationEngine } from '../hexis/observation-engine.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
-import { ScraplingService } from '../execution/scrapling/index.js';
-import { VoiceboxService } from '../voice/voicebox-service.js';
-import { ensureInternetDeps } from '../lib/internet-installer.js';
-import { findPythonCommand } from '../lib/platform-utils.js';
 import { DigitalBody, type VoiceServiceLike } from '../body/digital-body.js';
 import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { releaseLock } from '../lib/instance-lock.js';
@@ -122,7 +117,7 @@ import { VERSION } from '../version.js';
 import type { TunnelResult } from '../tunnel/tunnel.js';
 import { logger } from '../lib/logger.js';
 import { createEmptyContext, type DaemonContext } from './context.js';
-import { initDaemon } from './init.js';
+import { initDaemon, createServices, createEngine } from './init.js';
 import { setupInference } from './inference.js';
 
 export interface DaemonHandle {
@@ -156,27 +151,8 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const inferenceState = await setupInference(ctx);
   const { modelRouter, mlxManager, llamaCppManager, ollamaMonitor, processMonitor, warmupAbort } = ctx;
 
-  // 6. Create services
-  const scraplingService = new ScraplingService({
-    port: config.scraplingPort,
-    autoStart: config.scraplingAutoStart,
-    proxy: config.scraplingProxy || undefined,
-    proxies: config.scraplingProxies.length > 0 ? config.scraplingProxies : undefined,
-  });
-
-  const voiceboxService = new VoiceboxService();
-
-  // Auto-start Voicebox if Python is available (non-blocking)
-  if (findPythonCommand()) {
-    voiceboxService.start()
-      .then(() => logger.info('[daemon] Voicebox auto-started'))
-      .catch((err) => logger.debug(`[daemon] Voicebox auto-start skipped: ${(err as Error).message}`));
-  }
-
-  // Auto-install internet tool dependencies (non-blocking)
-  ensureInternetDeps()
-    .then(({ ytdlp, gh }) => logger.info(`[daemon] Internet deps: yt-dlp=${ytdlp ? 'ok' : 'unavailable'}, gh=${gh ? 'ok' : 'unavailable'}`))
-    .catch((err) => logger.debug(`[daemon] Internet deps check skipped: ${(err as Error).message}`));
+  createServices(ctx);
+  const { scraplingService, voiceboxService } = ctx;
 
   // 7. Connect to cloud (connected tier only)
   let controlPlane: ControlPlaneClient | null = null;
@@ -295,35 +271,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
     }
   }
 
-  // 8. Create RuntimeEngine
-  const engine = new RuntimeEngine(db, {
-    anthropicApiKey: config.anthropicApiKey,
-    defaultModel: 'claude-sonnet-4-5',
-    maxToolLoopIterations: 25,
-    browserHeadless: config.browserHeadless,
-    browserTarget: config.browserTarget,
-    chromeCdpPort: config.chromeCdpPort,
-    dataDir,
-    mcpServers: config.mcpServers,
-    claudeCodeCliPath: config.claudeCodeCliPath || undefined,
-    claudeCodeCliModel: config.claudeCodeCliModel || undefined,
-    claudeCodeCliMaxTurns: config.claudeCodeCliMaxTurns,
-    claudeCodeCliPermissionMode: config.claudeCodeCliPermissionMode,
-    claudeCodeCliAutodetect: config.claudeCodeCliAutodetect,
-    modelSource: config.modelSource,
-    daemonPort: config.port,
-    daemonToken: sessionToken,
-    desktopToolsEnabled: config.desktopToolsEnabled,
-  }, {
-    reportToCloud: controlPlane ? (report) => controlPlane!.reportTask(report) : () => Promise.resolve(),
-  }, businessContext, bus, modelRouter, scraplingService);
+  createEngine(ctx);
+  const engine = ctx.engine!;
   engineRef.current = engine;
-
-  // Diary hook: append a JSONL entry to <dataDir>/diary.jsonl on every
-  // task completion. Cheap persistent memory for later reflection, and a
-  // readable "what did my agents do today" log for the operator. Subscribe
-  // on the bus the engine emits through.
-  installDiaryHook(bus, rawDb, { dataDir });
 
   // 9. Start polling (connected tier only)
   if (controlPlane) {

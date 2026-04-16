@@ -1,12 +1,17 @@
 /**
- * Daemon init phase
+ * Daemon init-related phases
  *
- * First step of the boot sequence after the legacy-data-dir migration.
- * Loads config, acquires the single-instance lock, opens the SQLite DB,
- * clears orphaned rows from a prior crash, and reads the business
- * context row. Populates ctx.{config, dataDir, pidPath, rawDb, db, bus,
- * sessionToken, startTime, businessContext}. Throws if config is missing,
- * onboarding is incomplete, or another daemon holds the lock.
+ * `initDaemon(ctx)` — the first step of the boot sequence after the
+ * legacy-data-dir migration: config, instance-lock, SQLite, orphan cleanup,
+ * business-context row.
+ *
+ * `createServices(ctx)` — scrapling + voicebox background services and
+ * optional internet-deps installer. Runs after inference so
+ * modelRouter-aware services can read ctx.modelRouter when needed.
+ *
+ * `createEngine(ctx)` — RuntimeEngine construction plus the diary hook.
+ * Runs after the cloud phase because the engine's reportToCloud callback
+ * captures ctx.controlPlane.
  */
 
 import { randomUUID } from 'crypto';
@@ -23,6 +28,12 @@ import { acquireLock } from '../lib/instance-lock.js';
 import { getPidPath } from './lifecycle.js';
 import { VERSION } from '../version.js';
 import { logger } from '../lib/logger.js';
+import { ScraplingService } from '../execution/scrapling/index.js';
+import { VoiceboxService } from '../voice/voicebox-service.js';
+import { ensureInternetDeps } from '../lib/internet-installer.js';
+import { findPythonCommand } from '../lib/platform-utils.js';
+import { RuntimeEngine } from '../execution/engine.js';
+import { installDiaryHook } from '../execution/diary-hook.js';
 import type { DaemonContext } from './context.js';
 
 export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
@@ -114,4 +125,66 @@ export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
   ctx.bus = bus;
   ctx.startTime = startTime;
   ctx.businessContext = businessContext;
+}
+
+export function createServices(ctx: Partial<DaemonContext>): void {
+  const config = ctx.config!;
+
+  const scraplingService = new ScraplingService({
+    port: config.scraplingPort,
+    autoStart: config.scraplingAutoStart,
+    proxy: config.scraplingProxy || undefined,
+    proxies: config.scraplingProxies.length > 0 ? config.scraplingProxies : undefined,
+  });
+
+  const voiceboxService = new VoiceboxService();
+
+  // Auto-start Voicebox if Python is available (non-blocking)
+  if (findPythonCommand()) {
+    voiceboxService.start()
+      .then(() => logger.info('[daemon] Voicebox auto-started'))
+      .catch((err) => logger.debug(`[daemon] Voicebox auto-start skipped: ${(err as Error).message}`));
+  }
+
+  // Auto-install internet tool dependencies (non-blocking)
+  ensureInternetDeps()
+    .then(({ ytdlp, gh }) => logger.info(`[daemon] Internet deps: yt-dlp=${ytdlp ? 'ok' : 'unavailable'}, gh=${gh ? 'ok' : 'unavailable'}`))
+    .catch((err) => logger.debug(`[daemon] Internet deps check skipped: ${(err as Error).message}`));
+
+  ctx.scraplingService = scraplingService;
+  ctx.voiceboxService = voiceboxService;
+}
+
+export function createEngine(ctx: Partial<DaemonContext>): void {
+  const { config, db, rawDb, bus, sessionToken, dataDir, businessContext, modelRouter, scraplingService, controlPlane } = ctx as DaemonContext;
+
+  const engine = new RuntimeEngine(db, {
+    anthropicApiKey: config.anthropicApiKey,
+    defaultModel: 'claude-sonnet-4-5',
+    maxToolLoopIterations: 25,
+    browserHeadless: config.browserHeadless,
+    browserTarget: config.browserTarget,
+    chromeCdpPort: config.chromeCdpPort,
+    dataDir,
+    mcpServers: config.mcpServers,
+    claudeCodeCliPath: config.claudeCodeCliPath || undefined,
+    claudeCodeCliModel: config.claudeCodeCliModel || undefined,
+    claudeCodeCliMaxTurns: config.claudeCodeCliMaxTurns,
+    claudeCodeCliPermissionMode: config.claudeCodeCliPermissionMode,
+    claudeCodeCliAutodetect: config.claudeCodeCliAutodetect,
+    modelSource: config.modelSource,
+    daemonPort: config.port,
+    daemonToken: sessionToken,
+    desktopToolsEnabled: config.desktopToolsEnabled,
+  }, {
+    reportToCloud: controlPlane ? (report) => controlPlane.reportTask(report) : () => Promise.resolve(),
+  }, businessContext, bus, modelRouter, scraplingService);
+
+  // Diary hook: append a JSONL entry to <dataDir>/diary.jsonl on every
+  // task completion. Cheap persistent memory for later reflection, and a
+  // readable "what did my agents do today" log for the operator. Subscribe
+  // on the bus the engine emits through.
+  installDiaryHook(bus, rawDb, { dataDir });
+
+  ctx.engine = engine;
 }
