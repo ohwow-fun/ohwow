@@ -26,6 +26,7 @@ import path from 'node:path';
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { withCdpLane } from '../execution/browser/cdp-lane.js';
+import { findContactByXUserId, type ContactRow } from '../lib/contacts.js';
 import { logger } from '../lib/logger.js';
 import {
   listDmsViaBrowser,
@@ -37,7 +38,33 @@ import {
   type ReadDmThreadInput,
   type ReadDmThreadResult,
 } from '../orchestrator/tools/x-posting.js';
+import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { detectTriggerPhrase } from './x-dm-triggers.js';
+
+/**
+ * Runtime config key for the operator's own numeric X user id. Set via
+ * setRuntimeConfig('x.self_user_id', '1877225919862951937'). When
+ * unset, correspondent extraction is skipped and contact linking
+ * degrades to a no-op (threads still ingest; no contact_id stamped,
+ * no unknown_correspondent signals emitted).
+ */
+export const X_SELF_USER_ID_CONFIG_KEY = 'x.self_user_id';
+
+/**
+ * Split a conversation_pair ('<id1>:<id2>' or '<id1>-<id2>') and return
+ * the half that isn't the caller's own id. Null when the pair is
+ * malformed OR the selfId does not appear in it (the latter means the
+ * operator's configured id doesn't match what X is using — we'd rather
+ * skip linking than guess wrong).
+ */
+export function pickCounterpartyId(pair: string, selfId: string): string | null {
+  if (!pair || !selfId) return null;
+  const parts = pair.split(/[:\-]/).filter((p) => p.length > 0);
+  if (parts.length !== 2) return null;
+  if (parts[0] === selfId) return parts[1];
+  if (parts[1] === selfId) return parts[0];
+  return null;
+}
 
 /** Default tick interval — every hour. */
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
@@ -79,6 +106,12 @@ interface ExistingThreadRow {
   id: string;
   last_preview_hash: string | null;
   observation_count: number | null;
+}
+
+/** Cached identity resolution for a thread during one tick. */
+interface CounterpartyResolution {
+  counterpartyUserId: string | null;
+  contactId: string | null;
 }
 
 export class XDmPollerScheduler {
@@ -144,14 +177,24 @@ export class XDmPollerScheduler {
         );
         return;
       }
+      // Resolve once per tick: the configured self user id is cached
+      // in runtime-config, so this is a synchronous cache read. When
+      // unset, correspondent extraction is skipped for the whole tick.
+      const selfUserId = getRuntimeConfig<string | null>(X_SELF_USER_ID_CONFIG_KEY, null);
+
       // Phase 1: ingest inbox-level summaries (cheap, no per-thread nav).
       // Track which threads look interesting enough to enter for body
       // reads — preview changed since last tick OR thread is unread.
       const candidates: DmThreadSummary[] = [];
+      // Cache the per-thread counterparty resolution so ingestThreadBodies
+      // doesn't repeat the contact lookup a second time.
+      const resolutionByPair = new Map<string, CounterpartyResolution>();
       let inserted = 0;
       let unchanged = 0;
       for (const thread of result.threads) {
-        const { previewChanged } = await this.ingestThread(thread);
+        const resolution = await this.resolveCounterparty(thread.pair, selfUserId);
+        resolutionByPair.set(thread.pair, resolution);
+        const { previewChanged } = await this.ingestThread(thread, resolution);
         if (previewChanged) inserted++;
         else unchanged++;
         if (previewChanged || thread.hasUnread) candidates.push(thread);
@@ -166,7 +209,9 @@ export class XDmPollerScheduler {
       let threadsRead = 0;
       let threadsFailed = 0;
       for (const thread of toRead) {
-        const newMsgs = await this.ingestThreadBodies(thread);
+        const resolution = resolutionByPair.get(thread.pair)
+          ?? { counterpartyUserId: null, contactId: null };
+        const newMsgs = await this.ingestThreadBodies(thread, resolution);
         if (newMsgs === null) threadsFailed++;
         else { threadsRead++; messagesIngested += newMsgs; }
       }
@@ -195,7 +240,10 @@ export class XDmPollerScheduler {
    * Returns whether the preview changed so the caller can decide to
    * enter the thread for a body read.
    */
-  private async ingestThread(thread: DmThreadSummary): Promise<{ previewChanged: boolean }> {
+  private async ingestThread(
+    thread: DmThreadSummary,
+    resolution: CounterpartyResolution,
+  ): Promise<{ previewChanged: boolean }> {
     const previewHash = sha1(thread.preview);
     const nowIso = new Date().toISOString();
 
@@ -215,6 +263,8 @@ export class XDmPollerScheduler {
           observation_count: 1,
           first_seen_at: nowIso,
           last_seen_at: nowIso,
+          counterparty_user_id: resolution.counterpartyUserId,
+          contact_id: resolution.contactId,
           raw_meta: JSON.stringify({ ingested_at: nowIso }),
         });
       } catch (err) {
@@ -235,16 +285,22 @@ export class XDmPollerScheduler {
           has_unread: thread.hasUnread ? 1 : 0,
           observation_count: (existing.observation_count ?? 0) + 1,
           last_seen_at: nowIso,
+          counterparty_user_id: resolution.counterpartyUserId,
+          contact_id: resolution.contactId,
         })
         .eq('id', existing.id);
     } else {
       // Preview unchanged: still bump last_seen_at + has_unread (the
-      // unread flag can flip without the message text changing).
+      // unread flag can flip without the message text changing), and
+      // refresh contact_id — the operator may have created the contact
+      // between ticks.
       await this.db
         .from('x_dm_threads')
         .update({
           has_unread: thread.hasUnread ? 1 : 0,
           last_seen_at: nowIso,
+          counterparty_user_id: resolution.counterpartyUserId,
+          contact_id: resolution.contactId,
         })
         .eq('id', existing.id);
     }
@@ -297,7 +353,10 @@ export class XDmPollerScheduler {
    *     stamps last_message_id/text/direction with the newest message.
    *   - Appends a JSONL line per new message for greppable history.
    */
-  private async ingestThreadBodies(thread: DmThreadSummary): Promise<number | null> {
+  private async ingestThreadBodies(
+    thread: DmThreadSummary,
+    resolution: CounterpartyResolution,
+  ): Promise<number | null> {
     const result = await withCdpLane(
       this.workspaceId,
       () => this.threadReader({
@@ -351,30 +410,43 @@ export class XDmPollerScheduler {
           logger.debug({ err: errMsg, pair: thread.pair, msgId: msg.id }, '[XDmPollerScheduler] message insert failed');
         }
       }
-      // Signal emission: only on freshly-inserted, inbound, text-bearing,
-      // non-media messages. The signal table itself dedups via UNIQUE
-      // on (workspace_id, message_id, signal_type), so re-runs are safe
-      // even if `inserted` were a false positive.
-      if (
-        inserted
-        && msg.direction === 'inbound'
-        && !msg.isMedia
-        && msg.text
-      ) {
-        const wroteSignal = await this.maybeEmitTriggerSignal({
-          pair: thread.pair,
-          message_id: msg.id,
-          text: msg.text,
-          primary_name: result.conversationName ?? thread.primaryName,
-          observed_at: nowIso,
-        });
-        if (wroteSignal) signalCount++;
+      // Signal emission: only on freshly-inserted inbound messages.
+      // The signal table dedups via UNIQUE (workspace_id, message_id,
+      // signal_type), so re-runs are safe even if `inserted` were a
+      // false positive.
+      if (inserted && msg.direction === 'inbound') {
+        if (!msg.isMedia && msg.text) {
+          const wroteSignal = await this.maybeEmitTriggerSignal({
+            pair: thread.pair,
+            message_id: msg.id,
+            text: msg.text,
+            primary_name: result.conversationName ?? thread.primaryName,
+            observed_at: nowIso,
+            contact_id: resolution.contactId,
+          });
+          if (wroteSignal) signalCount++;
+        }
+        // Unknown-correspondent signal: the counterparty is resolvable
+        // (self id configured) but we have no contact row for them.
+        // Operator can create the contact via ohwow_create_contact;
+        // the next tick's ingestThread patches contact_id onto the
+        // thread and this branch stops firing.
+        if (resolution.counterpartyUserId && !resolution.contactId) {
+          const wroteUnknown = await this.maybeEmitUnknownCorrespondent({
+            pair: thread.pair,
+            message_id: msg.id,
+            text: msg.text ?? null,
+            primary_name: result.conversationName ?? thread.primaryName,
+            observed_at: nowIso,
+          });
+          if (wroteUnknown) signalCount++;
+        }
       }
     }
     if (signalCount > 0) {
       logger.info(
         { pair: thread.pair, count: signalCount },
-        '[XDmPollerScheduler] trigger-phrase signals emitted',
+        '[XDmPollerScheduler] signals emitted',
       );
     }
 
@@ -430,6 +502,7 @@ export class XDmPollerScheduler {
     text: string;
     primary_name: string | null;
     observed_at: string;
+    contact_id: string | null;
   }): Promise<boolean> {
     const phrase = detectTriggerPhrase(args.text);
     if (!phrase) return false;
@@ -442,6 +515,7 @@ export class XDmPollerScheduler {
         trigger_phrase: phrase,
         primary_name: args.primary_name,
         text: args.text.slice(0, 500),
+        contact_id: args.contact_id,
         observed_at: args.observed_at,
       });
       this.appendJsonl({
@@ -453,6 +527,7 @@ export class XDmPollerScheduler {
         trigger_phrase: phrase,
         primary_name: args.primary_name,
         text: args.text.slice(0, 500),
+        contact_id: args.contact_id,
       });
       return true;
     } catch (err) {
@@ -465,6 +540,76 @@ export class XDmPollerScheduler {
       }
       return false;
     }
+  }
+
+  /**
+   * Emit one x_dm_signals row with signal_type='unknown_correspondent'
+   * for an inbound message on a thread whose counterparty is known
+   * (numeric user id recoverable) but has no matching contact row.
+   *
+   * The UNIQUE(workspace_id, message_id, signal_type) constraint dedups
+   * across ticks — an unmatched thread emits one signal per new
+   * inbound message until the operator creates the contact, after
+   * which the resolver caches contact_id and this branch stops firing.
+   */
+  private async maybeEmitUnknownCorrespondent(args: {
+    pair: string;
+    message_id: string;
+    text: string | null;
+    primary_name: string | null;
+    observed_at: string;
+  }): Promise<boolean> {
+    try {
+      await this.db.from('x_dm_signals').insert({
+        workspace_id: this.workspaceId,
+        conversation_pair: args.pair,
+        message_id: args.message_id,
+        signal_type: 'unknown_correspondent',
+        trigger_phrase: null,
+        primary_name: args.primary_name,
+        text: args.text ? args.text.slice(0, 500) : null,
+        contact_id: null,
+        observed_at: args.observed_at,
+      });
+      this.appendJsonl({
+        kind: 'signal',
+        ts: args.observed_at,
+        signal_type: 'unknown_correspondent',
+        pair: args.pair,
+        message_id: args.message_id,
+        primary_name: args.primary_name,
+        text: args.text ? args.text.slice(0, 500) : null,
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/UNIQUE|constraint/i.test(msg)) {
+        logger.debug(
+          { err: msg, pair: args.pair, messageId: args.message_id },
+          '[XDmPollerScheduler] unknown_correspondent signal insert failed',
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Given a conversation_pair and the configured self user id, derive
+   * the counterparty user id and look up their contact row. Runs once
+   * per thread per tick; cheap even on 50-thread inboxes because
+   * agent_workforce_contacts is small and indexed by workspace_id.
+   */
+  private async resolveCounterparty(
+    pair: string,
+    selfUserId: string | null,
+  ): Promise<CounterpartyResolution> {
+    if (!selfUserId) return { counterpartyUserId: null, contactId: null };
+    const counterpartyUserId = pickCounterpartyId(pair, selfUserId);
+    if (!counterpartyUserId) return { counterpartyUserId: null, contactId: null };
+    const contact: ContactRow | null = await findContactByXUserId(
+      this.db, this.workspaceId, counterpartyUserId,
+    );
+    return { counterpartyUserId, contactId: contact?.id ?? null };
   }
 
   private appendJsonl(entry: Record<string, unknown>): void {

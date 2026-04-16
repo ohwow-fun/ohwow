@@ -27,7 +27,15 @@ import {
   _inspectCdpLaneForTests,
   withCdpLane,
 } from '../../execution/browser/cdp-lane.js';
-import { XDmPollerScheduler } from '../x-dm-poller-scheduler.js';
+import {
+  _resetRuntimeConfigCacheForTests,
+  _seedRuntimeConfigCacheForTests,
+} from '../../self-bench/runtime-config.js';
+import {
+  pickCounterpartyId,
+  X_SELF_USER_ID_CONFIG_KEY,
+  XDmPollerScheduler,
+} from '../x-dm-poller-scheduler.js';
 import type {
   DmMessage,
   ListDmsResult,
@@ -89,6 +97,7 @@ describe('XDmPollerScheduler', () => {
   afterEach(() => {
     teardownEnv(env);
     _resetCdpLanesForTests();
+    _resetRuntimeConfigCacheForTests();
   });
 
   it('first tick inserts thread, observation, and JSONL line per pair', async () => {
@@ -486,6 +495,204 @@ describe('XDmPollerScheduler', () => {
     });
     await sched2.tick();
     expect(noopReader).not.toHaveBeenCalled();
+  });
+
+  describe('contact linking', () => {
+    const SELF = '1111111111';
+    const ALICE = '2222222222';
+    const BOB = '3333333333';
+
+    function seedContact(name: string, xUserId: string): string {
+      const id = `contact-${name}`;
+      env.rawDb.prepare(
+        `INSERT INTO agent_workforce_contacts (id, workspace_id, name, custom_fields)
+         VALUES (?, ?, ?, ?)`,
+      ).run(id, WORKSPACE_ID, name, JSON.stringify({ x_user_id: xUserId }));
+      return id;
+    }
+
+    it('stamps counterparty_user_id + contact_id on threads when self id is configured', async () => {
+      _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
+      const aliceId = seedContact('Alice', ALICE);
+
+      const lister = listerOf({
+        success: true,
+        message: 'ok',
+        threads: [
+          { pair: `${SELF}:${ALICE}`, primaryName: 'Alice', preview: 'hi', hasUnread: false },
+          { pair: `${SELF}:${BOB}`, primaryName: 'Bob', preview: 'yo', hasUnread: false },
+        ],
+      });
+      const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        inboxLister: lister,
+        threadReader: readerOf({}),
+      });
+      await sched.tick();
+
+      const rows = env.rawDb.prepare(
+        'SELECT conversation_pair, counterparty_user_id, contact_id FROM x_dm_threads ORDER BY conversation_pair',
+      ).all() as Array<{ conversation_pair: string; counterparty_user_id: string; contact_id: string | null }>;
+      expect(rows).toEqual([
+        { conversation_pair: `${SELF}:${ALICE}`, counterparty_user_id: ALICE, contact_id: aliceId },
+        { conversation_pair: `${SELF}:${BOB}`, counterparty_user_id: BOB, contact_id: null },
+      ]);
+    });
+
+    it('degrades to null counterparty_user_id when self id is not configured', async () => {
+      // No _seedRuntimeConfigCacheForTests call — cache is empty.
+      const lister = listerOf({
+        success: true,
+        message: 'ok',
+        threads: [{ pair: `${SELF}:${ALICE}`, primaryName: 'Alice', preview: 'hi', hasUnread: false }],
+      });
+      const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        inboxLister: lister,
+        threadReader: readerOf({}),
+      });
+      await sched.tick();
+
+      const row = env.rawDb.prepare(
+        'SELECT counterparty_user_id, contact_id FROM x_dm_threads',
+      ).get() as { counterparty_user_id: string | null; contact_id: string | null };
+      expect(row).toEqual({ counterparty_user_id: null, contact_id: null });
+    });
+
+    it('refreshes contact_id when the operator creates the contact between ticks', async () => {
+      _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
+      const lister = listerOf({
+        success: true,
+        message: 'ok',
+        threads: [{ pair: `${SELF}:${ALICE}`, primaryName: 'Alice', preview: 'hi', hasUnread: false }],
+      });
+      const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        inboxLister: lister,
+        threadReader: readerOf({}),
+      });
+      await sched.tick();
+
+      const before = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
+      expect(before.contact_id).toBeNull();
+
+      const aliceId = seedContact('Alice', ALICE);
+      await sched.tick();
+
+      const after = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
+      expect(after.contact_id).toBe(aliceId);
+    });
+
+    it('emits unknown_correspondent signal for inbound on unmatched thread, stops after contact created', async () => {
+      _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
+      const pair = `${SELF}:${ALICE}`;
+
+      const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        dataDir: env.dir,
+        inboxLister: listerOf({
+          success: true,
+          message: 'ok',
+          threads: [{ pair, primaryName: 'Alice', preview: 'first', hasUnread: true }],
+        }),
+        threadReader: readerOf({
+          [pair]: {
+            success: true,
+            message: 'ok',
+            conversationName: 'Alice',
+            messages: [msg('m1', 'Hey there')],
+          },
+        }),
+      });
+      await sched.tick();
+
+      const sigs = env.rawDb.prepare(
+        'SELECT message_id, signal_type, contact_id FROM x_dm_signals ORDER BY message_id, signal_type',
+      ).all() as Array<{ message_id: string; signal_type: string; contact_id: string | null }>;
+      expect(sigs).toEqual([
+        { message_id: 'm1', signal_type: 'unknown_correspondent', contact_id: null },
+      ]);
+
+      // Now operator creates the contact; second message arrives.
+      const aliceId = seedContact('Alice', ALICE);
+      const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        dataDir: env.dir,
+        inboxLister: listerOf({
+          success: true,
+          message: 'ok',
+          threads: [{ pair, primaryName: 'Alice', preview: 'second', hasUnread: true }],
+        }),
+        threadReader: readerOf({
+          [pair]: {
+            success: true,
+            message: 'ok',
+            conversationName: 'Alice',
+            messages: [msg('m1', 'Hey there'), msg('m2', 'Still there?')],
+          },
+        }),
+      });
+      await sched2.tick();
+
+      const sigs2 = env.rawDb.prepare(
+        'SELECT message_id, signal_type, contact_id FROM x_dm_signals ORDER BY message_id, signal_type',
+      ).all() as Array<{ message_id: string; signal_type: string; contact_id: string | null }>;
+      // m1's unknown_correspondent stays (not re-emitted because UNIQUE).
+      // m2 gets no unknown_correspondent because contact_id is set now.
+      expect(sigs2.filter((s) => s.signal_type === 'unknown_correspondent').map((s) => s.message_id)).toEqual(['m1']);
+
+      // Thread row now has contact_id populated.
+      const thread = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
+      expect(thread.contact_id).toBe(aliceId);
+    });
+
+    it('includes contact_id on trigger_phrase signals when the counterparty is linked', async () => {
+      _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
+      const aliceId = seedContact('Alice', ALICE);
+      const pair = `${SELF}:${ALICE}`;
+
+      const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+        dataDir: env.dir,
+        inboxLister: listerOf({
+          success: true,
+          message: 'ok',
+          threads: [{ pair, primaryName: 'Alice', preview: 'new', hasUnread: true }],
+        }),
+        threadReader: readerOf({
+          [pair]: {
+            success: true,
+            message: 'ok',
+            conversationName: 'Alice',
+            // Message contains a trigger phrase ("pricing") — the
+            // existing detector will fire.
+            messages: [msg('m1', 'what are your pricing options?')],
+          },
+        }),
+      });
+      await sched.tick();
+
+      const sigs = env.rawDb.prepare(
+        'SELECT signal_type, contact_id FROM x_dm_signals WHERE message_id=? ORDER BY signal_type',
+      ).all('m1') as Array<{ signal_type: string; contact_id: string | null }>;
+      // Linked thread: trigger_phrase emitted with contact_id; no
+      // unknown_correspondent.
+      expect(sigs).toEqual([
+        { signal_type: 'trigger_phrase', contact_id: aliceId },
+      ]);
+    });
+  });
+
+  describe('pickCounterpartyId', () => {
+    it('splits colon-pair and returns the half that isn\'t self', () => {
+      expect(pickCounterpartyId('1:2', '1')).toBe('2');
+      expect(pickCounterpartyId('1:2', '2')).toBe('1');
+    });
+    it('supports hyphen-pair (URL format)', () => {
+      expect(pickCounterpartyId('1-2', '1')).toBe('2');
+    });
+    it('returns null when self id is not in the pair', () => {
+      expect(pickCounterpartyId('1:2', '999')).toBeNull();
+    });
+    it('returns null on malformed pair or empty self id', () => {
+      expect(pickCounterpartyId('solo', '1')).toBeNull();
+      expect(pickCounterpartyId('', '1')).toBeNull();
+      expect(pickCounterpartyId('1:2', '')).toBeNull();
+    });
   });
 
   it('waits on the CDP lane when it is held by another caller', async () => {
