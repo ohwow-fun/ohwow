@@ -30,6 +30,7 @@
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { withCdpLane } from '../execution/browser/cdp-lane.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
@@ -513,7 +514,17 @@ export class ContentCadenceScheduler {
       updated_at: nowIso,
     });
 
-    const results = await this.getExecutor().executeForTask(taskId);
+    // Holds the workspace CDP lane for the duration of the direct-post
+    // path. The DM poller takes the same lane per inbox fetch and per
+    // thread read, so the two schedulers serialize on the shared debug
+    // Chrome rather than racing. Orchestrator-mediated posts via
+    // engine.executeTask are NOT yet inside the lane — that requires
+    // wrapping the x-posting tool dispatch and is tracked separately.
+    const results = await withCdpLane(
+      this.workspaceId,
+      () => this.getExecutor().executeForTask(taskId),
+      { label: 'content-cadence:bypass-post' },
+    );
     const allOk = results.length > 0 && results.every((r) => r.ok);
     if (allOk) {
       if (this.options.approvalsJsonlPath) {
