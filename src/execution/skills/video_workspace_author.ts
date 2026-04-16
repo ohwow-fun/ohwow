@@ -370,6 +370,9 @@ const VISUAL_PRIMITIVES = [
   { id: 'noise-grid', name: 'Noise grid', desc: 'Grid cells with noise opacity. Data, matrix.', params: 'cols, rows, cellSize, seed, color, speed' },
   { id: 'scan-line', name: 'Scan line', desc: 'Moving horizontal line. CRT, tech.', params: 'color, speed, opacity' },
   { id: 'film-grain', name: 'Film grain', desc: 'Subtle noise texture. Analog, cinematic.', params: 'intensity' },
+  { id: 'particle-burst', name: 'Particle burst', desc: 'Explosion of particles from center. Reveals, energy, impact.', params: 'count, color, seed, speed, size, cx, cy' },
+  { id: 'grid-morph', name: 'Grid morph', desc: 'Morphing grid pattern. Data, tech, structure.', params: 'cols, rows, cellSize, color, seed, speed, morphIntensity' },
+  { id: 'text-shadow-trail', name: 'Text shadow trail', desc: 'Text with trailing shadow copies. Motion, emphasis.', params: 'text, color, trailColor, trailCount, speed, fontSize' },
 ] as const;
 
 const TEXT_ANIMATIONS = ['typewriter', 'fade-in', 'word-by-word', 'letter-scatter', 'glow-text', 'split-reveal', 'count-up'] as const;

@@ -723,6 +723,144 @@ export const RippleRings: React.FC<{
   return <>{rings}</>;
 };
 
+export const ParticleBurst: React.FC<{
+  count?: number;
+  color?: string;
+  seed?: string;
+  speed?: number;
+  size?: number;
+  cx?: string;
+  cy?: string;
+}> = ({ count = 40, color = '#f97316', seed = 'burst', speed = 0.02, size = 6, cx = '50%', cy = '50%' }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const entryProgress = interpolate(frame, [0, fps * 0.5], [0, 1], { extrapolateRight: 'clamp' });
+  const particles: React.ReactElement[] = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + noise2D(seed, i, 0) * 0.8;
+    const baseRadius = 40 + noise2D(seed, i, 1) * 200;
+    const radius = baseRadius * entryProgress;
+    const dx = Math.cos(angle) * radius;
+    const dy = Math.sin(angle) * radius;
+    const drift = noise2D(seed, i + frame * speed, 0) * 15;
+    const opacity = interpolate(entryProgress, [0, 0.3, 0.8, 1], [0, 1, 1, 0.3], { extrapolateRight: 'clamp' });
+    const scale = breathe(frame, 0.05 + i * 0.002, 0.15);
+    particles.push(
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: cx,
+          top: cy,
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          background: `radial-gradient(circle, ${color} 0%, transparent 70%)`,
+          transform: `translate(${dx + drift}px, ${dy}px) scale(${scale})`,
+          opacity,
+          pointerEvents: 'none',
+        }}
+      />,
+    );
+  }
+  return <>{particles}</>;
+};
+
+export const GridMorph: React.FC<{
+  cols?: number;
+  rows?: number;
+  cellSize?: number;
+  color?: string;
+  seed?: string;
+  speed?: number;
+  morphIntensity?: number;
+}> = ({ cols = 12, rows = 8, cellSize = 50, color = '#3b82f6', seed = 'morph', speed = 0.01, morphIntensity = 15 }) => {
+  const frame = useCurrentFrame();
+  const cells: React.ReactElement[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const baseX = c * cellSize;
+      const baseY = r * cellSize;
+      const nx = noise2D(seed, c * 0.3 + frame * speed, r * 0.3) * morphIntensity;
+      const ny = noise2D(seed, r * 0.3, c * 0.3 + frame * speed) * morphIntensity;
+      const noiseVal = noise3D(`${seed}-o`, c * 0.2, r * 0.2, frame * speed * 0.5);
+      const opacity = interpolate(noiseVal, [-1, 1], [0.05, 0.35]);
+      const scale = interpolate(noiseVal, [-1, 1], [0.6, 1.1]);
+      cells.push(
+        <div
+          key={`${r}-${c}`}
+          style={{
+            position: 'absolute',
+            left: baseX + nx,
+            top: baseY + ny,
+            width: cellSize - 4,
+            height: cellSize - 4,
+            border: `1px solid ${color}`,
+            borderRadius: 2,
+            opacity,
+            transform: `scale(${scale})`,
+            pointerEvents: 'none',
+          }}
+        />,
+      );
+    }
+  }
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+      <div style={{ position: 'relative', width: cols * cellSize, height: rows * cellSize }}>
+        {cells}
+      </div>
+    </div>
+  );
+};
+
+export const TextShadowTrail: React.FC<{
+  text?: string;
+  color?: string;
+  trailColor?: string;
+  trailCount?: number;
+  speed?: number;
+  fontSize?: number;
+}> = ({ text = 'ohwow', color = '#ffffff', trailColor = '#f97316', trailCount = 5, speed = 0.015, fontSize = 72 }) => {
+  const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const entryOpacity = interpolate(frame, [0, 15], [0, 1], { extrapolateRight: 'clamp' });
+  const baseX = width / 2;
+  const baseY = height / 2;
+  const dx = noise2D('trail-x', frame * speed, 0) * 40;
+  const dy = noise2D('trail-y', 0, frame * speed) * 25;
+
+  const trails: React.ReactElement[] = [];
+  for (let i = trailCount; i >= 0; i--) {
+    const delay = i * 4;
+    const pastDx = noise2D('trail-x', (frame - delay) * speed, 0) * 40;
+    const pastDy = noise2D('trail-y', 0, (frame - delay) * speed) * 25;
+    const opacity = i === 0 ? entryOpacity : (1 - i / (trailCount + 1)) * 0.3 * entryOpacity;
+    const clr = i === 0 ? color : trailColor;
+    trails.push(
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: baseX + (i === 0 ? dx : pastDx),
+          top: baseY + (i === 0 ? dy : pastDy),
+          transform: 'translate(-50%, -50%)',
+          fontSize,
+          fontWeight: 700,
+          color: clr,
+          opacity,
+          whiteSpace: 'nowrap',
+          pointerEvents: 'none',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {text}
+      </div>,
+    );
+  }
+  return <>{trails}</>;
+};
+
 export const GradientWash: React.FC<{
   colors?: string[];
   speed?: number;

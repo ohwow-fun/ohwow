@@ -27,7 +27,10 @@ export type VisualLayerPrimitive =
   | "glow-orb"
   | "noise-grid"
   | "scan-line"
-  | "film-grain";
+  | "film-grain"
+  | "particle-burst"
+  | "grid-morph"
+  | "text-shadow-trail";
 
 export type TextAnimation =
   | "typewriter"
@@ -84,4 +87,7 @@ export const PRIMITIVE_CATALOG: Array<{
   { primitive: "noise-grid", name: "Noise grid", description: "Grid cells with noise-driven opacity. Data, matrix.", keyParams: "cols, rows, cellSize, seed, color, speed" },
   { primitive: "scan-line", name: "Scan line", description: "Moving horizontal line. CRT, retro, tech.", keyParams: "color, speed, opacity" },
   { primitive: "film-grain", name: "Film grain", description: "Subtle noise texture. Analog, cinematic.", keyParams: "intensity" },
+  { primitive: "particle-burst", name: "Particle burst", description: "Explosion of particles from center. Reveals, energy, impact.", keyParams: "count, color, seed, speed, size, cx, cy" },
+  { primitive: "grid-morph", name: "Grid morph", description: "Morphing grid pattern. Data, tech, structure.", keyParams: "cols, rows, cellSize, color, seed, speed, morphIntensity" },
+  { primitive: "text-shadow-trail", name: "Text shadow trail", description: "Text with trailing shadow copies. Motion, emphasis.", keyParams: "text, color, trailColor, trailCount, speed, fontSize" },
 ];

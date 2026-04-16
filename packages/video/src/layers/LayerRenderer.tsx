@@ -16,6 +16,9 @@ import {
   NoiseGrid,
   ScanLine,
   FilmGrain,
+  ParticleBurst,
+  GridMorph,
+  TextShadowTrail,
 } from "../motion/generative";
 
 type PrimitiveComponent = React.FC<Record<string, unknown>>;
@@ -36,6 +39,9 @@ const PRIMITIVE_MAP: Record<VisualLayerPrimitive, PrimitiveComponent> = {
   "noise-grid": NoiseGrid as PrimitiveComponent,
   "scan-line": ScanLine as PrimitiveComponent,
   "film-grain": FilmGrain as PrimitiveComponent,
+  "particle-burst": ParticleBurst as PrimitiveComponent,
+  "grid-morph": GridMorph as PrimitiveComponent,
+  "text-shadow-trail": TextShadowTrail as PrimitiveComponent,
 };
 
 const POSITION_KEYS = new Set(["cx", "cy", "originX", "originY", "y"]);
@@ -56,6 +62,9 @@ const PARAM_WHITELIST: Record<VisualLayerPrimitive, Set<string>> = {
   "noise-grid": new Set(["cols", "rows", "cellSize", "seed", "color", "speed"]),
   "scan-line": new Set(["color", "speed", "opacity"]),
   "film-grain": new Set(["intensity"]),
+  "particle-burst": new Set(["count", "color", "seed", "speed", "size", "cx", "cy"]),
+  "grid-morph": new Set(["cols", "rows", "cellSize", "color", "seed", "speed", "morphIntensity"]),
+  "text-shadow-trail": new Set(["text", "color", "trailColor", "trailCount", "speed", "fontSize"]),
 };
 
 function normalizeParams(
