@@ -30,7 +30,8 @@ export type VisualLayerPrimitive =
   | "film-grain"
   | "particle-burst"
   | "grid-morph"
-  | "text-shadow-trail";
+  | "text-shadow-trail"
+  | "video-clip";
 
 export type TextAnimation =
   | "typewriter"
@@ -90,4 +91,5 @@ export const PRIMITIVE_CATALOG: Array<{
   { primitive: "particle-burst", name: "Particle burst", description: "Explosion of particles from center. Reveals, energy, impact.", keyParams: "count, color, seed, speed, size, cx, cy" },
   { primitive: "grid-morph", name: "Grid morph", description: "Morphing grid pattern. Data, tech, structure.", keyParams: "cols, rows, cellSize, color, seed, speed, morphIntensity" },
   { primitive: "text-shadow-trail", name: "Text shadow trail", description: "Text with trailing shadow copies. Motion, emphasis.", keyParams: "text, color, trailColor, trailCount, speed, fontSize" },
+  { primitive: "video-clip", name: "AI video clip", description: "Generative mp4 clip from a text prompt. Cinematic, photographic, real-motion footage. Resolved at render time by the configured video provider.", keyParams: "prompt, durationSeconds, aspectRatio, opacity, blendMode, fit" },
 ];

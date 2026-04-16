@@ -20,6 +20,7 @@ import {
   GridMorph,
   TextShadowTrail,
 } from "../motion/generative";
+import { VideoClipLayer } from "./VideoClipLayer";
 
 type PrimitiveComponent = React.FC<Record<string, unknown>>;
 
@@ -42,6 +43,7 @@ const PRIMITIVE_MAP: Record<VisualLayerPrimitive, PrimitiveComponent> = {
   "particle-burst": ParticleBurst as PrimitiveComponent,
   "grid-morph": GridMorph as PrimitiveComponent,
   "text-shadow-trail": TextShadowTrail as PrimitiveComponent,
+  "video-clip": VideoClipLayer as PrimitiveComponent,
 };
 
 const POSITION_KEYS = new Set(["cx", "cy", "originX", "originY", "y"]);
@@ -65,6 +67,7 @@ const PARAM_WHITELIST: Record<VisualLayerPrimitive, Set<string>> = {
   "particle-burst": new Set(["count", "color", "seed", "speed", "size", "cx", "cy"]),
   "grid-morph": new Set(["cols", "rows", "cellSize", "color", "seed", "speed", "morphIntensity"]),
   "text-shadow-trail": new Set(["text", "color", "trailColor", "trailCount", "speed", "fontSize"]),
+  "video-clip": new Set(["src", "opacity", "blendMode", "fit", "muted"]),
 };
 
 function normalizeParams(
