@@ -15,5 +15,11 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["node_modules", "src/web"]
+  "exclude": [
+    "node_modules",
+    "src/web",
+    "src/self-bench/experiments/tmpl-smoke-*.ts",
+    "src/self-bench/experiments/subprocess-smoke-*.ts",
+    "src/self-bench/experiments/mig-smoke-*.ts"
+  ]
 }
