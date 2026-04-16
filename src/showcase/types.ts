@@ -13,23 +13,8 @@ export interface ShowcaseTarget {
   email?: string;
 }
 
-export type FindingKind =
-  | 'resolve'
-  | 'fetch'
-  | 'title'
-  | 'description'
-  | 'snippet'
-  | 'note'
-  | 'warning';
-
-export interface ShowcaseFinding {
-  kind: FindingKind;
-  text: string;
-}
-
 export interface ShowcaseResult {
   target: ShowcaseTarget;
-  findings: ShowcaseFinding[];
   /** Primary fetched page, if any. */
   pageTitle?: string;
   pageDescription?: string;

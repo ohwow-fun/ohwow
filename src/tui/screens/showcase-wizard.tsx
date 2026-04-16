@@ -1,24 +1,24 @@
 /**
- * Showcase Wizard
- * The interactive flow behind `ohwow showcase <target>`.
+ * Showcase Wizard — scanner edition.
  *
- * Steps: splash → research (streaming findings) → proposal → executing → done.
- * Renders standalone (no Dashboard shell) because the CLI invokes it as a
- * one-shot terminal experience.
+ * Fast, entertaining first-impression flow for `ohwow showcase <target>`.
+ * Splash is a 400ms reveal (no Enter gate); research is a parallel probe
+ * fleet rendered as a dense "scanner" with in-place glyph flips and a
+ * live stats ticker. Proposal still gates on y/n because we're about to
+ * write to the DB.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type {
-  ShowcaseFinding,
   ShowcaseOutcome,
   ShowcasePlan,
   ShowcaseResult,
   ShowcaseTarget,
 } from '../../showcase/types.js';
-import { runResearch } from '../../showcase/research.js';
+import { runResearch, type ProbeEvent, type ProbeStats } from '../../showcase/research.js';
 import { buildPlan } from '../../showcase/plan.js';
 import { applyShowcase } from '../../showcase/setup.js';
 import { KeyHints } from '../components/key-hints.js';
@@ -34,25 +34,74 @@ interface ShowcaseWizardProps {
   target: ShowcaseTarget;
 }
 
-const findingColor: Record<ShowcaseFinding['kind'], string> = {
-  resolve: 'cyan',
-  fetch: 'gray',
-  title: 'white',
-  description: 'white',
-  snippet: 'gray',
-  note: 'gray',
-  warning: 'yellow',
+// ── Scanner state (reducer) ─────────────────────────────────────────────
+
+interface ProbeRow {
+  id: string;
+  label: string;
+  status: ProbeEvent['status'];
+  detail?: string;
+  elapsedMs?: number;
+  order: number;
+}
+
+interface ScannerState {
+  rows: Map<string, ProbeRow>;
+  order: string[];
+  stats: ProbeStats;
+  summary?: string;
+}
+
+const EMPTY_STATS: ProbeStats = {
+  pagesScanned: 0,
+  charsRead: 0,
+  linksFound: 0,
+  headingsFound: 0,
+  dbHits: 0,
 };
 
-const findingGlyph: Record<ShowcaseFinding['kind'], string> = {
-  resolve: '◆',
-  fetch: '→',
-  title: '•',
-  description: '•',
-  snippet: '•',
-  note: '·',
-  warning: '!',
+function scannerReducer(state: ScannerState, event: ProbeEvent): ScannerState {
+  if (event.id === '__summary__') {
+    return { ...state, summary: event.detail };
+  }
+  const rows = new Map(state.rows);
+  const existing = rows.get(event.id);
+  const order = existing ? state.order : [...state.order, event.id];
+  rows.set(event.id, {
+    id: event.id,
+    label: event.label,
+    status: event.status,
+    detail: event.detail ?? existing?.detail,
+    elapsedMs: event.elapsedMs ?? existing?.elapsedMs,
+    order: existing?.order ?? order.length - 1,
+  });
+  const stats: ProbeStats = { ...state.stats };
+  if (event.stats) {
+    const s = stats as unknown as Record<string, number>;
+    for (const [k, v] of Object.entries(event.stats)) {
+      if (typeof v === 'number') {
+        s[k] = (s[k] ?? 0) + v;
+      }
+    }
+  }
+  return { rows, order, stats, summary: state.summary };
+}
+
+const GLYPH: Record<ProbeEvent['status'], string> = {
+  running: '⧖',
+  ok: '✓',
+  fail: '✗',
+  info: '◆',
 };
+
+const GLYPH_COLOR: Record<ProbeEvent['status'], string> = {
+  running: 'yellow',
+  ok: 'green',
+  fail: 'red',
+  info: 'cyan',
+};
+
+// ── Main component ──────────────────────────────────────────────────────
 
 export function ShowcaseWizard({
   db,
@@ -65,21 +114,28 @@ export function ShowcaseWizard({
   const { exit } = useApp();
 
   const [step, setStep] = useState<Step>('splash');
-  const [findings, setFindings] = useState<ShowcaseFinding[]>([]);
+  const [scanner, dispatchScanner] = useReducer(scannerReducer, {
+    rows: new Map(),
+    order: [],
+    stats: { ...EMPTY_STATS },
+  });
   const [result, setResult] = useState<ShowcaseResult | null>(null);
   const [plan, setPlan] = useState<ShowcasePlan | null>(null);
   const [outcome, setOutcome] = useState<ShowcaseOutcome | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Guard against double-firing from Strict-Mode-ish effect semantics.
   const researchStarted = useRef(false);
   const executionStarted = useRef(false);
 
+  // Auto-advance splash → research after 400ms. No Enter gate: we want the
+  // user to feel ohwow launch *at* them, not wait on input.
+  useEffect(() => {
+    if (step !== 'splash') return;
+    const t = setTimeout(() => setStep('research'), 400);
+    return () => clearTimeout(t);
+  }, [step]);
+
   useInput((input, key) => {
-    if (step === 'splash' && (key.return || input === ' ')) {
-      setStep('research');
-      return;
-    }
     if (step === 'proposal') {
       if (input === 'y' || key.return) {
         setStep('executing');
@@ -100,35 +156,35 @@ export function ShowcaseWizard({
     }
   });
 
-  // ── Research phase ──────────────────────────────────────────────────────
+  // Research — stream probe events into the scanner state.
   useEffect(() => {
     if (step !== 'research' || researchStarted.current) return;
     researchStarted.current = true;
 
     (async () => {
       try {
-        const gen = runResearch(target);
+        const gen = runResearch(target, { db, workspaceId });
         while (true) {
           const next = await gen.next();
           if (next.done) {
             const finalResult = next.value;
             setResult(finalResult);
             setPlan(buildPlan(finalResult));
-            setStep('proposal');
+            // Short beat so the final "research complete · 847ms" line
+            // stays on screen before the proposal card slams in.
+            setTimeout(() => setStep('proposal'), 200);
             return;
           }
-          setFindings(prev => [...prev, next.value]);
-          // Breathe between bullets so the UI feels alive rather than a blob.
-          await new Promise(r => setTimeout(r, 120));
+          dispatchScanner(next.value);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         setStep('error');
       }
     })();
-  }, [step, target]);
+  }, [step, target, db, workspaceId]);
 
-  // ── Execute phase ───────────────────────────────────────────────────────
+  // Execute — 4 DB inserts, near-instant.
   useEffect(() => {
     if (step !== 'executing' || executionStarted.current) return;
     if (!result || !plan) return;
@@ -153,20 +209,22 @@ export function ShowcaseWizard({
   }, [step, db, workspaceId, target, result, plan, ollamaModel]);
 
   const hints = useMemo(() => {
-    if (step === 'splash') return [{ key: 'Enter', label: 'start' }, { key: 'Esc', label: 'cancel' }];
     if (step === 'proposal') return [{ key: 'y', label: 'apply' }, { key: 'n', label: 'cancel' }];
     if (step === 'done' || step === 'error') return [{ key: 'Enter', label: 'close' }];
+    if (step === 'executing') return [];
     return [{ key: 'Esc', label: 'cancel' }];
   }, [step]);
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
-      <Banner workspaceName={workspaceName} />
+      <Header target={target} workspaceName={workspaceName} step={step} />
 
       {step === 'splash' && <SplashBody target={target} />}
-      {step === 'research' && <ResearchBody target={target} findings={findings} />}
-      {step === 'proposal' && plan && result && (
-        <ProposalBody target={target} plan={plan} findings={findings} />
+      {(step === 'research' || step === 'proposal') && (
+        <ScannerBody scanner={scanner} running={step === 'research'} />
+      )}
+      {step === 'proposal' && plan && (
+        <ProposalBody target={target} plan={plan} result={result} />
       )}
       {step === 'executing' && plan && <ExecutingBody plan={plan} />}
       {step === 'done' && plan && outcome && (
@@ -179,20 +237,51 @@ export function ShowcaseWizard({
       )}
       {step === 'error' && <ErrorBody message={error ?? 'Unknown error'} />}
 
-      <Box marginTop={1}>
-        <KeyHints hints={hints} />
-      </Box>
+      {hints.length > 0 && (
+        <Box marginTop={1}>
+          <KeyHints hints={hints} />
+        </Box>
+      )}
     </Box>
   );
 }
 
-// ── Subcomponents ─────────────────────────────────────────────────────────
+// ── Pieces ──────────────────────────────────────────────────────────────
 
-function Banner({ workspaceName }: { workspaceName: string }) {
+function Header({
+  target,
+  workspaceName,
+  step,
+}: {
+  target: ShowcaseTarget;
+  workspaceName: string;
+  step: Step;
+}) {
+  const phase =
+    step === 'splash'
+      ? 'booting'
+      : step === 'research'
+        ? 'scanning'
+        : step === 'proposal'
+          ? 'proposing'
+          : step === 'executing'
+            ? 'writing'
+            : step === 'done'
+              ? 'done'
+              : 'error';
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color="cyan">ohwow showcase</Text>
-      <Text color="gray">workspace: {workspaceName}</Text>
+      <Text>
+        <Text bold color="cyan">ohwow</Text>
+        <Text color="gray">.showcase(</Text>
+        <Text bold color="white">{target.name}</Text>
+        <Text color="gray">) </Text>
+        <Text color="gray">· workspace:{workspaceName}</Text>
+        <Text color="gray">  </Text>
+        <Text color={phase === 'error' ? 'red' : phase === 'done' ? 'green' : 'yellow'}>
+          [{phase}]
+        </Text>
+      </Text>
     </Box>
   );
 }
@@ -200,30 +289,64 @@ function Banner({ workspaceName }: { workspaceName: string }) {
 function SplashBody({ target }: { target: ShowcaseTarget }) {
   return (
     <Box flexDirection="column">
-      <Text>Ready to research <Text bold color="cyan">{target.name}</Text> ({target.kind}) and set up a tailored agent.</Text>
-      {target.url && <Text color="gray">URL: {target.url}</Text>}
-      {target.company && target.kind === 'person' && <Text color="gray">Company: {target.company}</Text>}
-      {target.email && <Text color="gray">Email: {target.email}</Text>}
-      <Box marginTop={1}>
-        <Text color="gray">Press <Text bold color="white">Enter</Text> to begin.</Text>
-      </Box>
+      <Text color="cyan">
+        <Spinner type="dots" />
+        <Text color="gray"> initializing scanner for </Text>
+        <Text bold color="white">{target.name}</Text>
+        <Text color="gray"> ({target.kind})</Text>
+      </Text>
+      {target.url && <Text color="gray">  url: {target.url}</Text>}
+      {target.company && target.kind === 'person' && (
+        <Text color="gray">  company: {target.company}</Text>
+      )}
+      {target.email && <Text color="gray">  email: {target.email}</Text>}
     </Box>
   );
 }
 
-function ResearchBody({ target, findings }: { target: ShowcaseTarget; findings: ShowcaseFinding[] }) {
+function ScannerBody({
+  scanner,
+  running,
+}: {
+  scanner: ScannerState;
+  running: boolean;
+}) {
+  const rows = scanner.order.map(id => scanner.rows.get(id)!).filter(Boolean);
+  const s = scanner.stats;
+  const counters: Array<[string, string | number]> = [
+    ['pages', s.pagesScanned],
+    ['chars', formatThousands(s.charsRead)],
+    ['links', s.linksFound],
+    ['h1-6', s.headingsFound],
+    ['db_hits', s.dbHits],
+  ];
+
   return (
     <Box flexDirection="column">
-      <Box>
-        <Text color="yellow"><Spinner type="dots" /></Text>
-        <Text> Researching <Text bold>{target.name}</Text>…</Text>
+      <Box flexDirection="column">
+        {rows.map(r => (
+          <Box key={r.id}>
+            <Text color={GLYPH_COLOR[r.status]}>{GLYPH[r.status]}</Text>
+            <Text> </Text>
+            <Text color={r.status === 'running' ? 'gray' : 'white'}>
+              {padRight(r.label, 22)}
+            </Text>
+            <Text color="gray">  {r.detail ?? ''}</Text>
+          </Box>
+        ))}
       </Box>
-      <Box flexDirection="column" marginTop={1}>
-        {findings.map((f, i) => (
-          <Text key={i} color={findingColor[f.kind]}>
-            {findingGlyph[f.kind]} {f.text}
+      <Box marginTop={1}>
+        <Text color="gray">{running ? '▸' : '◆'} </Text>
+        {counters.map(([k, v], i) => (
+          <Text key={k}>
+            {i > 0 ? <Text color="gray">  ·  </Text> : null}
+            <Text color="gray">{k}=</Text>
+            <Text bold color="cyan">{v}</Text>
           </Text>
         ))}
+        {scanner.summary && (
+          <Text color="gray">  ·  {scanner.summary}</Text>
+        )}
       </Box>
     </Box>
   );
@@ -232,18 +355,17 @@ function ResearchBody({ target, findings }: { target: ShowcaseTarget; findings: 
 function ProposalBody({
   target,
   plan,
-  findings,
+  result,
 }: {
   target: ShowcaseTarget;
   plan: ShowcasePlan;
-  findings: ShowcaseFinding[];
+  result: ShowcaseResult | null;
 }) {
-  const headline = findings.find(f => f.kind === 'description' || f.kind === 'title');
   return (
-    <Box flexDirection="column">
-      <Text bold color="green">Research complete.</Text>
-      {headline && <Text color="gray">{headline.text}</Text>}
-
+    <Box flexDirection="column" marginTop={1}>
+      {result?.pageDescription && (
+        <Text color="gray">{'“'}{result.pageDescription.slice(0, 160)}{result.pageDescription.length > 160 ? '…' : ''}{'”'}</Text>
+      )}
       <Box
         flexDirection="column"
         marginTop={1}
@@ -253,19 +375,18 @@ function ProposalBody({
       >
         <Text bold color="cyan">Proposed setup</Text>
         <Box marginTop={1} flexDirection="column">
-          <Text><Text color="gray">Agent    </Text>{plan.agentName} <Text color="gray">— {plan.agentRole}</Text></Text>
-          <Text><Text color="gray">Project  </Text>{plan.projectName}</Text>
-          <Text><Text color="gray">Goal     </Text>{plan.goalTitle}</Text>
-          <Text><Text color="gray">Contact  </Text>{plan.contactName} <Text color="gray">({target.kind})</Text></Text>
+          <Row label="agent"   value={plan.agentName}   aux={plan.agentRole} />
+          <Row label="project" value={plan.projectName} />
+          <Row label="goal"    value={plan.goalTitle} />
+          <Row label="contact" value={plan.contactName} aux={target.kind} />
         </Box>
         <Box marginTop={1} flexDirection="column">
-          <Text color="gray">System prompt (preview):</Text>
+          <Text color="gray">system prompt:</Text>
           <Text>{plan.agentSystemPrompt.slice(0, 220)}{plan.agentSystemPrompt.length > 220 ? '…' : ''}</Text>
         </Box>
       </Box>
-
       <Box marginTop={1}>
-        <Text>Apply this setup? <Text bold color="white">y</Text>/<Text bold color="white">n</Text></Text>
+        <Text>Apply? <Text bold color="white">y</Text>/<Text bold color="white">n</Text></Text>
       </Box>
     </Box>
   );
@@ -273,10 +394,10 @@ function ProposalBody({
 
 function ExecutingBody({ plan }: { plan: ShowcasePlan }) {
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" marginTop={1}>
       <Box>
         <Text color="yellow"><Spinner type="dots" /></Text>
-        <Text> Creating {plan.contactName} contact, {plan.projectName} project, goal, and agent…</Text>
+        <Text color="gray"> writing: contact · project · goal · agent ({plan.agentName})</Text>
       </Box>
     </Box>
   );
@@ -294,25 +415,18 @@ function DoneBody({
   workspaceName: string;
 }) {
   return (
-    <Box flexDirection="column">
-      <Text bold color="green">✓ Done.</Text>
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold color="green">✓ live in workspace.</Text>
       <Box flexDirection="column" marginTop={1}>
-        <Text><Text color="gray">agent_id    </Text>{outcome.agentId}</Text>
-        <Text><Text color="gray">project_id  </Text>{outcome.projectId}</Text>
-        <Text><Text color="gray">goal_id     </Text>{outcome.goalId}</Text>
-        <Text><Text color="gray">contact_id  </Text>{outcome.contactId}</Text>
+        <Row label="agent"    value={outcome.agentId}   aux={plan.agentName}  mono />
+        <Row label="project"  value={outcome.projectId} aux={plan.projectName} mono />
+        <Row label="goal"     value={outcome.goalId}                            mono />
+        <Row label="contact"  value={outcome.contactId} aux={plan.contactName} mono />
       </Box>
       <Box marginTop={1} flexDirection="column">
-        <Text color="cyan">Open the dashboard:</Text>
-        <Text>  {dashboardUrl}/agents</Text>
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <Text color="cyan">Use from Claude Code:</Text>
-        <Text color="gray">  ohwow setup-claude-code  <Text dimColor>(once)</Text></Text>
-        <Text color="gray">  then ask: "ohwow_list_agents in workspace {workspaceName}"</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text color="gray">Agent name: <Text color="white">{plan.agentName}</Text></Text>
+        <Text color="cyan">→ dashboard:  <Text color="white">{dashboardUrl}/agents</Text></Text>
+        <Text color="cyan">→ claude:     <Text color="gray">ohwow setup-claude-code</Text></Text>
+        <Text color="gray">              then ask Claude: "list agents in workspace {workspaceName}"</Text>
       </Box>
     </Box>
   );
@@ -320,9 +434,42 @@ function DoneBody({
 
 function ErrorBody({ message }: { message: string }) {
   return (
-    <Box flexDirection="column">
-      <Text bold color="red">Showcase failed.</Text>
+    <Box flexDirection="column" marginTop={1}>
+      <Text bold color="red">✗ showcase failed.</Text>
       <Text color="red">{message}</Text>
     </Box>
   );
+}
+
+function Row({
+  label,
+  value,
+  aux,
+  mono,
+}: {
+  label: string;
+  value: string;
+  aux?: string;
+  mono?: boolean;
+}) {
+  return (
+    <Text>
+      <Text color="gray">{padRight(label, 8)}</Text>
+      <Text color={mono ? 'gray' : 'white'}>{value}</Text>
+      {aux && (
+        <>
+          <Text color="gray">  · </Text>
+          <Text color="gray">{aux}</Text>
+        </>
+      )}
+    </Text>
+  );
+}
+
+function padRight(s: string, n: number): string {
+  return s.length >= n ? s : s + ' '.repeat(n - s.length);
+}
+
+function formatThousands(n: number): string {
+  return n.toLocaleString('en-US');
 }

@@ -1,22 +1,45 @@
 /**
- * Showcase research pipeline.
+ * Showcase research pipeline — parallel probe edition.
  *
- * Given a target (person or company) plus optional URL, yields a stream of
- * `ShowcaseFinding` entries. The TUI wizard consumes the stream and renders
- * bullets as they arrive so the user sees research happening live.
+ * Given a target, fires a fleet of probes concurrently (URL fetches across
+ * common sub-paths, local DB queries against contacts/knowledge/findings)
+ * and streams `ProbeEvent`s as they start and complete. The TUI pins each
+ * probe to a line and flips its glyph from `running` → `ok`/`fail` in
+ * place, giving a dense "scanner" feel without artificial delays.
  *
- * Intentionally LLM-free for the MVP: uses native fetch + a tiny HTML parser.
- * Later phases can plug in deep_research / scrape_search for richer signals.
+ * LLM-free and daemon-free: native fetch + DatabaseAdapter reads.
  */
 
-import type { ShowcaseFinding, ShowcaseResult, ShowcaseTarget } from './types.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type { ShowcaseResult, ShowcaseTarget } from './types.js';
 
-const FETCH_TIMEOUT_MS = 12_000;
-const USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 ohwow-showcase';
+// ── Public types ─────────────────────────────────────────────────────────
 
-/** Guess whether a target looks like a person based on input shape. */
+export type ProbeStatus = 'running' | 'ok' | 'fail' | 'info';
+
+export interface ProbeStats {
+  pagesScanned: number;
+  charsRead: number;
+  linksFound: number;
+  headingsFound: number;
+  dbHits: number;
+}
+
+export interface ProbeEvent {
+  id: string;
+  /** Short human label, shown to the left of the status glyph. */
+  label: string;
+  status: ProbeStatus;
+  /** Trailing metadata like "200 OK · 42ms · 12KB". */
+  detail?: string;
+  /** Elapsed ms for this probe — reported at completion. */
+  elapsedMs?: number;
+  /** Increments to fold into the running counter ticker. */
+  stats?: Partial<ProbeStats>;
+}
+
+// ── Public helpers (kept stable for CLI / tests) ──────────────────────────
+
 export function guessKind(name: string): 'person' | 'company' {
   const trimmed = name.trim();
   const parts = trimmed.split(/\s+/).filter(Boolean);
@@ -25,7 +48,6 @@ export function guessKind(name: string): 'person' | 'company' {
   return capitalized.length >= 2 ? 'person' : 'company';
 }
 
-/** Normalize a raw URL string; prepends https:// when no protocol is given. */
 export function normalizeUrl(raw: string): string {
   const t = raw.trim();
   if (!t) return t;
@@ -33,11 +55,12 @@ export function normalizeUrl(raw: string): string {
   return `https://${t}`;
 }
 
-/**
- * Strip HTML to plain text, collapse whitespace, and trim. Good enough for
- * an "at a glance" snippet of a landing page; not a full readability
- * extractor.
- */
+// ── Internal: tiny HTML extractors ────────────────────────────────────────
+
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 ohwow-showcase';
+
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -55,8 +78,8 @@ function stripHtml(html: string): string {
 }
 
 function extractTitle(html: string): string | undefined {
-  const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  return match ? stripHtml(match[1]).slice(0, 200) : undefined;
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return m ? stripHtml(m[1]).slice(0, 200) : undefined;
 }
 
 function extractMetaDescription(html: string): string | undefined {
@@ -66,100 +89,343 @@ function extractMetaDescription(html: string): string | undefined {
     /<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i,
   ];
   for (const re of patterns) {
-    const m = html.match(re);
-    if (m) return stripHtml(m[1]).slice(0, 300);
+    const match = html.match(re);
+    if (match) return stripHtml(match[1]).slice(0, 300);
   }
   return undefined;
 }
 
-function fetchWithTimeout(url: string, ms: number): Promise<Response> {
+function countMatches(html: string, re: RegExp): number {
+  const m = html.match(re);
+  return m ? m.length : 0;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
+const FETCH_TIMEOUT_MS = 8_000;
+
+async function timedFetch(url: string): Promise<{
+  ok: boolean;
+  status: number;
+  statusText: string;
+  finalUrl: string;
+  body: string;
+  elapsedMs: number;
+}> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  return fetch(url, {
-    redirect: 'follow',
-    headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timer));
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const start = Date.now();
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
+      signal: controller.signal,
+    });
+    const body = res.ok ? await res.text() : '';
+    return {
+      ok: res.ok,
+      status: res.status,
+      statusText: res.statusText,
+      finalUrl: res.url || url,
+      body,
+      elapsedMs: Date.now() - start,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Internal: minimal event channel ──────────────────────────────────────
+
+/**
+ * A tiny async queue so concurrent probes can push events and the outer
+ * generator can await them in FIFO order. No dependency on external
+ * pub/sub; just promise latches.
+ */
+class EventChannel {
+  private queue: ProbeEvent[] = [];
+  private wake: (() => void) | null = null;
+  private closed = false;
+
+  push(event: ProbeEvent): void {
+    this.queue.push(event);
+    this.wake?.();
+    this.wake = null;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.wake?.();
+    this.wake = null;
+  }
+
+  async *drain(): AsyncGenerator<ProbeEvent, void, void> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;
+        continue;
+      }
+      if (this.closed) return;
+      await new Promise<void>(resolve => {
+        this.wake = resolve;
+      });
+    }
+  }
+}
+
+// ── Probe definitions ────────────────────────────────────────────────────
+
+interface ProbePageResult {
+  id: string;
+  url: string;
+  ok: boolean;
+  title?: string;
+  description?: string;
+  bodyText?: string;
+  rawLength: number;
+  links: number;
+  headings: number;
+}
+
+async function probePage(
+  ch: EventChannel,
+  id: string,
+  label: string,
+  url: string,
+): Promise<ProbePageResult> {
+  ch.push({ id, label, status: 'running' });
+  try {
+    const r = await timedFetch(url);
+    if (!r.ok) {
+      ch.push({
+        id,
+        label,
+        status: 'fail',
+        detail: `${r.status} ${r.statusText || ''}`.trim(),
+        elapsedMs: r.elapsedMs,
+      });
+      return { id, url, ok: false, rawLength: 0, links: 0, headings: 0 };
+    }
+    const links = countMatches(r.body, /<a\b/gi);
+    const headings = countMatches(r.body, /<h[1-6]\b/gi);
+    const bodyText = stripHtml(r.body);
+    ch.push({
+      id,
+      label,
+      status: 'ok',
+      detail: `${r.status} · ${r.elapsedMs}ms · ${formatBytes(r.body.length)}`,
+      elapsedMs: r.elapsedMs,
+      stats: {
+        pagesScanned: 1,
+        charsRead: bodyText.length,
+        linksFound: links,
+        headingsFound: headings,
+      },
+    });
+    return {
+      id,
+      url: r.finalUrl,
+      ok: true,
+      title: extractTitle(r.body),
+      description: extractMetaDescription(r.body),
+      bodyText,
+      rawLength: r.body.length,
+      links,
+      headings,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ch.push({ id, label, status: 'fail', detail: msg.slice(0, 60) });
+    return { id, url, ok: false, rawLength: 0, links: 0, headings: 0 };
+  }
+}
+
+async function probeContactMatches(
+  ch: EventChannel,
+  db: DatabaseAdapter,
+  workspaceId: string,
+  target: ShowcaseTarget,
+): Promise<void> {
+  const id = 'db.contacts';
+  const label = 'local contacts';
+  ch.push({ id, label, status: 'running' });
+  const start = Date.now();
+  try {
+    const { data } = await db
+      .from('agent_workforce_contacts')
+      .select('id, name, company')
+      .eq('workspace_id', workspaceId);
+    const rows = (data as Array<{ id: string; name: string; company?: string }> | null) ?? [];
+    const needle = target.name.toLowerCase();
+    const companyNeedle = target.company?.toLowerCase();
+    const hits = rows.filter(r => {
+      const n = r.name?.toLowerCase() ?? '';
+      const c = r.company?.toLowerCase() ?? '';
+      return n.includes(needle) || (companyNeedle && c.includes(companyNeedle));
+    });
+    ch.push({
+      id,
+      label,
+      status: 'ok',
+      detail: `${hits.length} match${hits.length === 1 ? '' : 'es'} in ${rows.length} contacts`,
+      elapsedMs: Date.now() - start,
+      stats: { dbHits: hits.length },
+    });
+  } catch (err) {
+    ch.push({ id, label, status: 'fail', detail: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function probeKnowledge(
+  ch: EventChannel,
+  db: DatabaseAdapter,
+  workspaceId: string,
+  target: ShowcaseTarget,
+): Promise<void> {
+  const id = 'db.knowledge';
+  const label = 'knowledge base';
+  ch.push({ id, label, status: 'running' });
+  const start = Date.now();
+  try {
+    const { data } = await db
+      .from('agent_workforce_knowledge_documents')
+      .select('id, title, description')
+      .eq('workspace_id', workspaceId);
+    const rows = (data as Array<{ title?: string; description?: string }> | null) ?? [];
+    const needle = target.name.toLowerCase();
+    const hits = rows.filter(
+      r =>
+        (r.title?.toLowerCase() ?? '').includes(needle) ||
+        (r.description?.toLowerCase() ?? '').includes(needle),
+    );
+    ch.push({
+      id,
+      label,
+      status: 'ok',
+      detail: `${hits.length} / ${rows.length} docs mention target`,
+      elapsedMs: Date.now() - start,
+      stats: { dbHits: hits.length },
+    });
+  } catch {
+    // Knowledge table may not exist in bare setups; silently skip.
+    ch.push({ id, label, status: 'info', detail: 'not available' });
+  }
+}
+
+async function probeFindings(
+  ch: EventChannel,
+  db: DatabaseAdapter,
+  target: ShowcaseTarget,
+): Promise<void> {
+  const id = 'db.findings';
+  const label = 'prior findings';
+  ch.push({ id, label, status: 'running' });
+  const start = Date.now();
+  try {
+    const { data } = await db
+      .from('self_findings')
+      .select('id, subject, summary')
+      .eq('status', 'active')
+      .limit(500);
+    const rows = (data as Array<{ subject?: string; summary?: string }> | null) ?? [];
+    const needle = target.name.toLowerCase();
+    const hits = rows.filter(
+      r =>
+        (r.subject?.toLowerCase() ?? '').includes(needle) ||
+        (r.summary?.toLowerCase() ?? '').includes(needle),
+    );
+    ch.push({
+      id,
+      label,
+      status: 'ok',
+      detail: `${hits.length} mentions across ${rows.length} findings`,
+      elapsedMs: Date.now() - start,
+      stats: { dbHits: hits.length },
+    });
+  } catch {
+    ch.push({ id, label, status: 'info', detail: 'not available' });
+  }
+}
+
+// ── Public entry: streaming research ─────────────────────────────────────
+
+export interface ResearchContext {
+  db: DatabaseAdapter;
+  workspaceId: string;
 }
 
 /**
- * Async generator that yields research findings one at a time and returns a
- * summarized `ShowcaseResult` at the end. Yields are interleaved with small
- * awaits so the TUI gets time to repaint between bullets.
+ * Run research as a parallel probe fleet. Yields `ProbeEvent`s as they
+ * arrive (interleaved `running`/`ok`/`fail`). Returns a `ShowcaseResult`
+ * with the aggregated primary page data.
  */
 export async function* runResearch(
   target: ShowcaseTarget,
-): AsyncGenerator<ShowcaseFinding, ShowcaseResult, void> {
-  const findings: ShowcaseFinding[] = [];
+  ctx?: ResearchContext,
+): AsyncGenerator<ProbeEvent, ShowcaseResult, void> {
+  const ch = new EventChannel();
+  const started = Date.now();
 
-  const emit = (finding: ShowcaseFinding): ShowcaseFinding => {
-    findings.push(finding);
-    return finding;
-  };
+  // Kick off DB probes immediately (they're local and fast).
+  const dbPromises: Promise<void>[] = [];
+  if (ctx) {
+    dbPromises.push(probeContactMatches(ch, ctx.db, ctx.workspaceId, target));
+    dbPromises.push(probeKnowledge(ch, ctx.db, ctx.workspaceId, target));
+    dbPromises.push(probeFindings(ch, ctx.db, target));
+  }
 
-  yield emit({
-    kind: 'resolve',
-    text: `Target: ${target.name} (${target.kind === 'person' ? 'person' : 'company'})`,
+  // URL probes: main + common sub-paths, all concurrent.
+  const pagePromises: Promise<ProbePageResult>[] = [];
+  if (target.url) {
+    const base = normalizeUrl(target.url).replace(/\/+$/, '');
+    pagePromises.push(probePage(ch, 'url.main', `fetch ${host(base)}`, base));
+    const subPaths = target.kind === 'person'
+      ? ['/about', '/team', '/blog']
+      : ['/about', '/pricing', '/blog'];
+    for (const sub of subPaths) {
+      pagePromises.push(probePage(ch, `url${sub}`, `scan ${sub}`, base + sub));
+    }
+  }
+
+  // Drain + close once everything is done.
+  const closer = Promise.allSettled([...dbPromises, ...pagePromises]).then(() => {
+    ch.push({
+      id: '__summary__',
+      label: 'research complete',
+      status: 'info',
+      detail: `${Date.now() - started}ms`,
+    });
+    ch.close();
   });
 
-  if (target.company && target.kind === 'person') {
-    yield emit({ kind: 'note', text: `Company: ${target.company}` });
+  for await (const event of ch.drain()) {
+    yield event;
   }
-  if (target.email) {
-    yield emit({ kind: 'note', text: `Email: ${target.email}` });
-  }
+  await closer;
 
-  if (!target.url) {
-    yield emit({
-      kind: 'warning',
-      text: 'No URL provided. Pass --url=<homepage> for a deeper read.',
-    });
-    return { target, findings };
-  }
-
-  const url = normalizeUrl(target.url);
-  yield emit({ kind: 'fetch', text: `Fetching ${url}` });
-
-  let html: string;
-  let finalUrl = url;
-  try {
-    const res = await fetchWithTimeout(url, FETCH_TIMEOUT_MS);
-    finalUrl = res.url || url;
-    if (!res.ok) {
-      yield emit({
-        kind: 'warning',
-        text: `HTTP ${res.status} ${res.statusText}. Landing page unreadable.`,
-      });
-      return { target, findings, pageUrl: finalUrl };
-    }
-    html = await res.text();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    yield emit({ kind: 'warning', text: `Fetch failed: ${msg}` });
-    return { target, findings, pageUrl: url };
-  }
-
-  const title = extractTitle(html);
-  const description = extractMetaDescription(html);
-  const bodyText = stripHtml(html);
-  const snippet = bodyText.slice(0, 400);
-
-  if (title) {
-    yield emit({ kind: 'title', text: `Title: ${title}` });
-  }
-  if (description) {
-    yield emit({ kind: 'description', text: `About: ${description}` });
-  }
-  if (!title && !description && snippet) {
-    yield emit({ kind: 'snippet', text: `Snippet: ${snippet.slice(0, 200)}…` });
-  }
+  // Aggregate: prefer the main page's title/description/text.
+  const pages = await Promise.all(pagePromises);
+  const primary = pages.find(p => p.id === 'url.main' && p.ok);
+  const anyOk = pages.find(p => p.ok);
+  const chosen = primary ?? anyOk;
 
   return {
     target,
-    findings,
-    pageUrl: finalUrl,
-    pageTitle: title,
-    pageDescription: description,
-    pageText: bodyText.slice(0, 4000),
+    pageUrl: chosen?.url,
+    pageTitle: chosen?.title,
+    pageDescription: chosen?.description,
+    pageText: chosen?.bodyText?.slice(0, 4000),
   };
+}
+
+function host(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
