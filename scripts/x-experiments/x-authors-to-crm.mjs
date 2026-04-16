@@ -32,9 +32,9 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
-import { propose } from './_approvals.mjs';
+import { propose, loadQueue } from './_approvals.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from './_author-ledger.mjs';
-import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent } from './_qualify.mjs';
+import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent, buildAutoApproveGate } from './_qualify.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_AUTHORS_PER_RUN = Number(process.env.X_AUTHORS_MAX_PER_RUN || 50);
@@ -231,11 +231,17 @@ async function main() {
   let promoted = 0;
   let pending = 0;
   let intentRejected = 0;
+  let autoApproved = 0;
   const llmFn = async (args) => {
     llmCalls++;
     const r = await llm(args);
     return r?.text ?? r;
   };
+  // Auto-approve gate for x_contact_create. Construction snapshots
+  // today's already-auto-applied count from the queue so the daily cap
+  // is enforced cross-run. Empty config → always returns false.
+  const autoApproveRunState = { thisRunAutoApplied: 0 };
+  const autoApproveGate = buildAutoApproveGate(cfg, workspace, autoApproveRunState, { loadQueue });
 
   for (const { row, reason } of fresh) {
     // DRY mode writes a per-candidate brief describing what WOULD happen.
@@ -305,13 +311,21 @@ async function main() {
           free_gate_reason: reason,
           outreach_token: outreachToken,
         },
-        autoApproveAfter: 3,
       };
 
-      const entry = propose(proposal);
+      const entry = propose({
+        ...proposal,
+        autoApproveAfter: 0,
+        bucketBy: 'bucket',
+        maxPriorRejected: 0,
+        gate: autoApproveGate,
+      });
       audit.proposed = true;
       audit.auto_applied = entry.status === 'auto_applied';
-      if (!audit.auto_applied) { pending++; continue; }
+      if (audit.auto_applied) {
+        autoApproveRunState.thisRunAutoApplied++;
+        autoApproved++;
+      } else { pending++; continue; }
 
       try {
         const contact = await createContact(url, token, {
@@ -375,6 +389,7 @@ async function main() {
     fresh: fresh.length,
     llmCalls,
     intentRejected,
+    autoApproved,
     promoted,
     pending,
     briefDir,

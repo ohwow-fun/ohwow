@@ -128,3 +128,74 @@ export function acceptsIntent(intent, rubric) {
   const minConfidence = typeof ic.minConfidence === 'number' ? ic.minConfidence : 0.7;
   return acceptClasses.includes(intent.intent) && intent.confidence >= minConfidence;
 }
+
+/**
+ * Auto-approve gate for x_contact_create proposals. Returns a function
+ * that propose() invokes (only when its trust check passes) to decide
+ * whether a candidate skips the human queue.
+ *
+ * Wired with `autoApproveAfter: 0` + `bucketBy: 'bucket'` +
+ * `maxPriorRejected: 0`, so a single human rejection within a bucket
+ * pauses auto-apply for that bucket until explicitly re-approved.
+ *
+ * Reads `rubric.autoApprove`:
+ *   - enabled (default true if block exists, else gate always returns
+ *     false — opt-in via config)
+ *   - minConfidence (default 0.85)
+ *   - minScore (default 0.7)
+ *   - allowedBuckets (default ['market_signal'])
+ *   - acceptIntents (default ['buyer_intent'])
+ *   - dailyCap (default 5) — counts cross-run via the queue snapshot
+ *
+ * runState: { thisRunAutoApplied: number } — caller increments after
+ * each propose() returns auto_applied. Pure-ish: gate reads but does
+ * not mutate runState, keeping the side-effect at the call site.
+ */
+export function buildAutoApproveGate(rubric, workspace, runState, {
+  loadQueue,
+  now = Date.now,
+} = {}) {
+  const auto = rubric?.autoApprove;
+  if (!auto || auto.enabled === false) {
+    return () => false;
+  }
+
+  const minConfidence = typeof auto.minConfidence === 'number' ? auto.minConfidence : 0.85;
+  const minScore = typeof auto.minScore === 'number' ? auto.minScore : 0.7;
+  const allowedBuckets = Array.isArray(auto.allowedBuckets) && auto.allowedBuckets.length > 0
+    ? auto.allowedBuckets
+    : ['market_signal'];
+  const acceptIntents = Array.isArray(auto.acceptIntents) && auto.acceptIntents.length > 0
+    ? auto.acceptIntents
+    : ['buyer_intent'];
+  const dailyCap = typeof auto.dailyCap === 'number' ? auto.dailyCap : 5;
+
+  // Cross-run baseline: today's already-auto-applied x_contact_create
+  // entries from the queue. Snapshot once at gate construction.
+  const today = new Date(now()).toISOString().slice(0, 10);
+  let todayCount = 0;
+  if (typeof loadQueue === 'function') {
+    try {
+      const queue = loadQueue(workspace);
+      todayCount = queue.filter(e =>
+        e?.kind === 'x_contact_create' &&
+        e?.status === 'auto_applied' &&
+        typeof e?.ts === 'string' &&
+        e.ts.slice(0, 10) === today
+      ).length;
+    } catch {
+      todayCount = 0;
+    }
+  }
+
+  return (_kind, payload) => {
+    if (!payload) return false;
+    if (!acceptIntents.includes(payload.intent)) return false;
+    if (!allowedBuckets.includes(payload.bucket)) return false;
+    if ((payload.confidence ?? 0) < minConfidence) return false;
+    if ((payload.score ?? 0) < minScore) return false;
+    const used = todayCount + (runState?.thisRunAutoApplied ?? 0);
+    if (used >= dailyCap) return false;
+    return true;
+  };
+}

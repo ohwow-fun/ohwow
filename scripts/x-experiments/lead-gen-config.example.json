@@ -29,6 +29,16 @@
     "acceptClasses": ["buyer_intent"]
   },
 
+  "autoApprove": {
+    "_comment": "Opt-in auto-approval for x_contact_create proposals. When present and enabled, qualified candidates skip the human approval queue if they meet ALL of the gate criteria below AND the bucket has zero prior rejections (maxPriorRejected=0). A single human rejection in a bucket pauses auto-apply for that bucket until the rejection is rated otherwise. Auto-applied CRM creation is reversible (DELETE /api/contacts/:id); downstream outreach (DMs/emails/replies) is gated separately by the Outreach Thermostat, so blast radius is bounded to dailyCap CRM rows/day.",
+    "enabled": true,
+    "minConfidence": 0.85,
+    "minScore": 0.7,
+    "allowedBuckets": ["market_signal"],
+    "acceptIntents": ["buyer_intent"],
+    "dailyCap": 5
+  },
+
   "engagerSurfaces": {
     "_comment": "Where to harvest engagers. Own-post replies/quotes are the strongest signal. Competitor-handle threads find people shopping in-category. Keep these lists small so each run finishes fast.",
     "ownPostsWindowDays": 14,

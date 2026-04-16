@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { freeGates, acceptsIntent, classifyIntent, loadLeadGenConfig } from '../_qualify.mjs';
+import { freeGates, acceptsIntent, classifyIntent, loadLeadGenConfig, buildAutoApproveGate } from '../_qualify.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from '../_author-ledger.mjs';
 
 const rubric = {
@@ -135,6 +135,91 @@ describe('author ledger', () => {
       if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
       if (prevUser === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUser;
     }
+  });
+});
+
+describe('buildAutoApproveGate', () => {
+  const baseRubric = {
+    autoApprove: {
+      enabled: true,
+      minConfidence: 0.85,
+      minScore: 0.7,
+      allowedBuckets: ['market_signal'],
+      acceptIntents: ['buyer_intent'],
+      dailyCap: 5,
+    },
+  };
+  const happyPayload = {
+    intent: 'buyer_intent',
+    bucket: 'market_signal',
+    confidence: 0.9,
+    score: 0.8,
+  };
+  const noQueue = { loadQueue: () => [] };
+
+  it('returns false when autoApprove block is missing', () => {
+    const gate = buildAutoApproveGate({}, 'ws', { thisRunAutoApplied: 0 }, noQueue);
+    expect(gate('x_contact_create', happyPayload)).toBe(false);
+  });
+
+  it('returns false when explicitly disabled', () => {
+    const gate = buildAutoApproveGate(
+      { autoApprove: { ...baseRubric.autoApprove, enabled: false } },
+      'ws', { thisRunAutoApplied: 0 }, noQueue,
+    );
+    expect(gate('x_contact_create', happyPayload)).toBe(false);
+  });
+
+  it('passes the happy path', () => {
+    const gate = buildAutoApproveGate(baseRubric, 'ws', { thisRunAutoApplied: 0 }, noQueue);
+    expect(gate('x_contact_create', happyPayload)).toBe(true);
+  });
+
+  it('rejects each criterion individually', () => {
+    const gate = buildAutoApproveGate(baseRubric, 'ws', { thisRunAutoApplied: 0 }, noQueue);
+    expect(gate('x_contact_create', null)).toBe(false);
+    expect(gate('x_contact_create', { ...happyPayload, intent: 'builder_curiosity' })).toBe(false);
+    expect(gate('x_contact_create', { ...happyPayload, bucket: 'advancements' })).toBe(false);
+    expect(gate('x_contact_create', { ...happyPayload, confidence: 0.84 })).toBe(false);
+    expect(gate('x_contact_create', { ...happyPayload, score: 0.69 })).toBe(false);
+  });
+
+  it('enforces daily cap counting both per-run + queue snapshot', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const queue = [
+      { kind: 'x_contact_create', status: 'auto_applied', ts: `${today}T08:00:00Z` },
+      { kind: 'x_contact_create', status: 'auto_applied', ts: `${today}T09:00:00Z` },
+      { kind: 'x_contact_create', status: 'pending',      ts: `${today}T10:00:00Z` }, // not counted
+      { kind: 'x_contact_create', status: 'auto_applied', ts: '2025-01-01T00:00:00Z' }, // wrong day
+      { kind: 'x_outbound_post',  status: 'auto_applied', ts: `${today}T11:00:00Z` }, // wrong kind
+    ];
+    const runState = { thisRunAutoApplied: 0 };
+    const gate = buildAutoApproveGate(baseRubric, 'ws', runState, { loadQueue: () => queue });
+
+    // 2 already today + 0 this run < 5: pass.
+    expect(gate('x_contact_create', happyPayload)).toBe(true);
+    // Caller increments after auto_applied lands.
+    runState.thisRunAutoApplied = 3; // total = 5, at cap.
+    expect(gate('x_contact_create', happyPayload)).toBe(false);
+  });
+
+  it('survives a queue loader that throws', () => {
+    const gate = buildAutoApproveGate(baseRubric, 'ws', { thisRunAutoApplied: 0 }, {
+      loadQueue: () => { throw new Error('disk fail'); },
+    });
+    // Should still gate normally on payload, treating todayCount as 0.
+    expect(gate('x_contact_create', happyPayload)).toBe(true);
+  });
+
+  it('falls back to defaults when individual fields are missing', () => {
+    const gate = buildAutoApproveGate(
+      { autoApprove: { enabled: true } },
+      'ws', { thisRunAutoApplied: 0 }, noQueue,
+    );
+    // Defaults: minConfidence=0.85, minScore=0.7, buckets=['market_signal'],
+    // intents=['buyer_intent'], dailyCap=5.
+    expect(gate('x_contact_create', happyPayload)).toBe(true);
+    expect(gate('x_contact_create', { ...happyPayload, confidence: 0.5 })).toBe(false);
   });
 });
 
