@@ -79,6 +79,7 @@ import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-
 import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
 import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
+import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -1644,6 +1645,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // signal is present (loop fail, violation pool surge, or
         // experiment files missing from the roadmap). Tier-2 modify.
         experimentRunner.register(new RoadmapUpdaterExperiment());
+        // Layer 2 of bench level-up: cross-references §4 Known Gaps
+        // against recent git activity to tag gaps as active/new/stale.
+        // On warning (any P0 stale), writes strategy.roadmap_priorities
+        // tokens that Layer 1's experiment-author ranker reads to
+        // prioritise roadmap-aligned briefs.
+        experimentRunner.register(new RoadmapObserverExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a
