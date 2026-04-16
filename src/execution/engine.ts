@@ -106,6 +106,16 @@ interface TaskRow {
   goal_id: string | null;
   parent_task_id: string | null;
   metadata: string | Record<string, unknown> | null;
+  /**
+   * Dispatchers (content-cadence, trigger watchdog, deferred-executor)
+   * stamp this when the task is expected to culminate in a concrete
+   * real-world action (post_tweet, send_email, etc.). The engine reads
+   * it to surface a `Task Intent` hint in the agent's system prompt so
+   * the LLM picks the matching tool directly instead of drifting into
+   * markdown-draft fallbacks. Column is TEXT storing JSON; the DB
+   * adapter may return an already-parsed object.
+   */
+  deferred_action: string | Record<string, unknown> | null;
 }
 
 interface TaskMessageRow {

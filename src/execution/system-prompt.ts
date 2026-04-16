@@ -42,6 +42,43 @@ export interface BuildSystemPromptOptions {
   desktopEnabled?: boolean;
   approvalRequired?: boolean;
   goalContext?: string;
+  /**
+   * Declared `deferred_action` from the task row — dispatchers stamp
+   * this to signal "this task will culminate in a concrete real-world
+   * action". Surfaced to the LLM as a `Task Intent` section so it
+   * reaches for the matching tool instead of drafting markdown.
+   */
+  deferredAction?: { type: string; provider?: string | null };
+}
+
+/**
+ * Mapping from `deferred_action.type` → preferred tool name. Kept
+ * tiny on purpose — only the pairs the dispatchers actually emit
+ * today. Add entries when new deferred-action types land. The LLM
+ * gets the pair verbatim so it knows which tool to reach for.
+ */
+const DEFERRED_ACTION_TOOL_HINTS: Record<string, string> = {
+  post_tweet: 'x_compose_tweet',
+};
+
+/**
+ * Render the Task Intent section. Exported for unit tests. Returns
+ * empty string when no deferredAction is set.
+ */
+export function renderTaskIntentSection(
+  deferredAction: BuildSystemPromptOptions['deferredAction'] | undefined,
+): string {
+  if (!deferredAction?.type) return '';
+  const providerStr = deferredAction.provider ? ` via **${deferredAction.provider}**` : '';
+  const preferredTool = DEFERRED_ACTION_TOOL_HINTS[deferredAction.type];
+  const toolLine = preferredTool
+    ? `Prefer the \`${preferredTool}\` tool to perform the action directly.`
+    : 'Prefer the matching tool in your tool list to perform the action directly.';
+  return `
+## Task Intent
+This task declared a deferred_action: **${deferredAction.type}**${providerStr}.
+${toolLine} Do NOT produce a markdown draft as a substitute — call the tool. If the tool errors, report the specific error (selector not found, login redirect, profile mismatch, etc.) rather than capitulating to manual posting or pretending the action succeeded.
+`;
 }
 
 export function buildAgentSystemPrompt(
@@ -93,6 +130,8 @@ You have web search capability. Use it whenever you need current or factual info
     ? wrapUserData(biz.businessDescription)
     : `A ${biz.businessType.replace(/_/g, ' ')} business.`;
 
+  const taskIntentSection = renderTaskIntentSection(opts.deferredAction);
+
   return `You are ${opts.agentName}, a ${opts.agentRole} working for ${biz.businessName}.
 
 ## Business Context
@@ -105,7 +144,7 @@ ${COPYWRITING_RULES}
 - Focus on quality and accuracy in your work
 - If you're unsure about something, ask for clarification
 - Provide clear, actionable outputs
-
+${taskIntentSection}
 ## Current Task
 Title: ${wrapUserData(opts.taskTitle)}
 ${opts.taskDescription ? `Description: ${wrapUserData(opts.taskDescription)}` : ''}
@@ -138,6 +177,13 @@ export async function assembleSystemPrompt(
       input: string | unknown;
       parent_task_id: string | null;
       goal_id: string | null;
+      /**
+       * Dispatcher-stamped intent (e.g. `{type:"post_tweet", provider:"x"}`).
+       * Optional on the interface so test helpers that construct tasks
+       * directly don't have to pass it. When present, renders as the
+       * `Task Intent` section of the agent's system prompt.
+       */
+      deferred_action?: string | Record<string, unknown> | null;
     };
     taskId: string;
     agentId: string;
@@ -155,6 +201,30 @@ export async function assembleSystemPrompt(
     { title: task.title, description: task.description, input: typeof task.input === 'string' ? task.input : null },
     { taskId, agentId },
   );
+
+  // Normalize deferred_action to the struct buildAgentSystemPrompt
+  // expects. The DB adapter returns JSONB columns as either a raw
+  // string or an already-parsed object; handle both. Bad JSON is
+  // silently treated as absent — failure to render the Task Intent
+  // section must never block task execution.
+  let deferredAction: BuildSystemPromptOptions['deferredAction'];
+  const rawDeferred = task.deferred_action;
+  if (rawDeferred != null) {
+    try {
+      const parsed: unknown = typeof rawDeferred === 'string' ? JSON.parse(rawDeferred) : rawDeferred;
+      if (parsed && typeof parsed === 'object') {
+        const typed = parsed as { type?: unknown; provider?: unknown };
+        if (typeof typed.type === 'string' && typed.type.length > 0) {
+          deferredAction = {
+            type: typed.type,
+            provider: typeof typed.provider === 'string' ? typed.provider : null,
+          };
+        }
+      }
+    } catch {
+      /* malformed JSON — leave deferredAction undefined */
+    }
+  }
 
   let systemPrompt = buildAgentSystemPrompt(this.businessContext, {
     agentName: agent.name,
@@ -174,6 +244,7 @@ export async function assembleSystemPrompt(
     desktopEnabled: caps.desktopEnabled,
     approvalRequired: caps.approvalRequired,
     goalContext: caps.goalContext,
+    deferredAction,
   });
 
   // 4.1 Inject persistent state context
