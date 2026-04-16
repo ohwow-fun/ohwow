@@ -76,6 +76,7 @@ import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
+import { XDmSignalsRollupExperiment } from '../self-bench/experiments/x-dm-signals-rollup.js';
 import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
 import { dirname } from 'path';
@@ -283,6 +284,17 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
         everyMs: loopHealth.cadence.everyMs,
       },
       '[daemon] content-cadence-loop-health registered',
+    );
+
+    // XDmSignalsRollupExperiment — bridges x_dm_signals to
+    // self_findings so the autonomous loop (which reads findings, not
+    // signals) can see trigger-phrase spikes. Per-phrase subjects give
+    // the novelty scorer stable baselines.
+    const dmRollup = new XDmSignalsRollupExperiment();
+    experimentRunner.register(dmRollup);
+    logger.info(
+      { everyMs: dmRollup.cadence.everyMs },
+      '[daemon] x-dm-signals-rollup registered',
     );
   }
 
