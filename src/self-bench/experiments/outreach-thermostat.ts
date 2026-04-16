@@ -218,20 +218,20 @@ export interface EmailDraft {
 export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string | EmailDraft {
   const name = plan.display_name || plan.handle || 'there';
   const bucketHint = plan.bucket === 'market_signal'
-    ? 'the workflow pain you mentioned'
+    ? 'workflow'
     : plan.bucket === 'competitors'
-      ? 'what you shared about tooling'
-      : 'your recent post';
+      ? 'stack'
+      : 'recent';
   if (channel === 'x_dm') {
-    return `Hey ${name}, caught ${bucketHint}. Happy to DM a few notes on how we\u2019ve handled similar at ohwow if useful.`;
+    return `Hey ${name}. Read your ${bucketHint} post. ohwow runs agents on your machine against your own data, no middleware. Want a 2-min Loom?`;
   }
   if (channel === 'x_reply') {
-    return `This resonates. If you want, I can share what\u2019s worked for us at ohwow. Running everything local, no n8n required.`;
+    return `ohwow is built for this shape. Agents on your machine, your own data, no middleware sitting in between. DM me and I'll send a 2-min Loom.`;
   }
   if (channel === 'email') {
     return {
-      subject: `re: ${bucketHint}`,
-      text: `Hi ${name},\n\nSaw ${bucketHint} and thought ohwow might fit. We run agents locally against your own data, no n8n, no Zapier limits.\n\nIf it sounds useful, you can book a short call here: https://ohwow.fun/\n\nJesus`,
+      subject: `${name}, ohwow thought on your ${bucketHint} post`,
+      text: `Hi ${name},\n\nRead your ${bucketHint} post. ohwow is built for exactly this shape: agents run on your machine, against your own data, with nothing middleware-shaped in between. No per-seat meter, no token ceiling.\n\n2-min Loom if you want the tour: https://ohwow.fun/\n\nJesus Onoro\nfounder, ohwow.fun`,
     };
   }
   return '';
