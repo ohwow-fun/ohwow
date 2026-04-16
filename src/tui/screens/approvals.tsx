@@ -28,6 +28,7 @@ interface DeferredActionData {
 
 interface ApprovalTask {
   id: string;
+  workspace_id: string;
   agent_id: string;
   title: string;
   output: string;
@@ -84,6 +85,7 @@ export function ApprovalsList({ db, controlPlane }: ApprovalsListProps) {
           }
           return {
             id: t.id,
+            workspace_id: t.workspace_id,
             agent_id: t.agent_id,
             title: t.title,
             output: typeof t.output === 'string' ? t.output : JSON.stringify(t.output, null, 2),
@@ -100,7 +102,7 @@ export function ApprovalsList({ db, controlPlane }: ApprovalsListProps) {
     return () => clearInterval(timer);
   }, [db]);
 
-  const handleApproval = useCallback(async (taskId: string, agentId: string, title: string, action: 'approve' | 'reject', reason?: string, deferredAction?: DeferredActionData | null) => {
+  const handleApproval = useCallback(async (taskId: string, workspaceId: string, agentId: string, title: string, action: 'approve' | 'reject', reason?: string, deferredAction?: DeferredActionData | null) => {
     if (!db) return;
 
     const now = new Date().toISOString();
@@ -152,7 +154,7 @@ export function ApprovalsList({ db, controlPlane }: ApprovalsListProps) {
 
     // Log activity
     await db.rpc('create_agent_activity', {
-      p_workspace_id: '',
+      p_workspace_id: workspaceId,
       p_activity_type: action === 'approve' ? 'task_approved' : 'task_rejected',
       p_title: `${title} \u2014 ${newStatus}`,
       p_description: (action === 'reject' && reason ? `Rejected: ${reason}` : `Task ${action}d locally`) + actionResult,
@@ -174,7 +176,7 @@ export function ApprovalsList({ db, controlPlane }: ApprovalsListProps) {
     if (!selectedTask || approvalState.phase !== 'confirm') return;
     const { action, reason } = approvalState;
 
-    await handleApproval(selectedTask.id, selectedTask.agent_id, selectedTask.title, action, reason, selectedTask.deferred_action);
+    await handleApproval(selectedTask.id, selectedTask.workspace_id, selectedTask.agent_id, selectedTask.title, action, reason, selectedTask.deferred_action);
 
     setSelectedTask(null);
     setApprovalState({ phase: 'idle' });
@@ -186,7 +188,7 @@ export function ApprovalsList({ db, controlPlane }: ApprovalsListProps) {
     const { action } = approvalState;
 
     for (const task of tasks) {
-      await handleApproval(task.id, task.agent_id, task.title, action, undefined, task.deferred_action);
+      await handleApproval(task.id, task.workspace_id, task.agent_id, task.title, action, undefined, task.deferred_action);
     }
 
     setTasks([]);
