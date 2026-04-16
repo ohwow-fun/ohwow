@@ -19,17 +19,18 @@ interface ParsedAgent {
   updated_at: string;
 }
 
-export function useAgents(db: DatabaseAdapter | null) {
+export function useAgents(db: DatabaseAdapter | null, workspaceId: string | null | undefined) {
   const [list, setList] = useState<ParsedAgent[]>([]);
   const refresh = useEventRefresh(['task:completed', 'task:failed']);
 
   useEffect(() => {
-    if (!db) return;
+    if (!db || !workspaceId) return;
 
     const fetch = async () => {
       const { data } = await db
         .from<AgentRow>('agent_workforce_agents')
         .select('*')
+        .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: true });
 
       if (data) {
@@ -50,7 +51,7 @@ export function useAgents(db: DatabaseAdapter | null) {
     fetch();
     const timer = setInterval(fetch, 3000);
     return () => clearInterval(timer);
-  }, [db, refresh]);
+  }, [db, workspaceId, refresh]);
 
   return { list };
 }

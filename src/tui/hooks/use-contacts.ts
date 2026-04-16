@@ -19,15 +19,16 @@ interface ParsedContact {
   created_at: string;
 }
 
-export function useContacts(db: DatabaseAdapter | null) {
+export function useContacts(db: DatabaseAdapter | null, workspaceId: string | null | undefined) {
   const [list, setList] = useState<ParsedContact[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
-    if (!db) return;
+    if (!db || !workspaceId) return;
     const { data } = await db
       .from<ContactRow>('agent_workforce_contacts')
       .select('*')
+      .eq('workspace_id', workspaceId)
       .order('created_at', { ascending: false });
 
     if (data) {
@@ -48,13 +49,13 @@ export function useContacts(db: DatabaseAdapter | null) {
   };
 
   useEffect(() => {
-    if (!db) return;
+    if (!db || !workspaceId) return;
 
     refresh();
     const timer = setInterval(refresh, 5000);
     return () => clearInterval(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [db]);
+  }, [db, workspaceId]);
 
   return { list, loading, refresh };
 }

@@ -24,17 +24,22 @@ interface ParsedTask {
   completed_at: string | null;
 }
 
-export function useTasks(db: DatabaseAdapter | null, filter?: { status?: string; agentId?: string }) {
+export function useTasks(
+  db: DatabaseAdapter | null,
+  workspaceId: string | null | undefined,
+  filter?: { status?: string; agentId?: string },
+) {
   const [list, setList] = useState<ParsedTask[]>([]);
   const refresh = useEventRefresh(['task:started', 'task:completed', 'task:failed']);
 
   useEffect(() => {
-    if (!db) return;
+    if (!db || !workspaceId) return;
 
     const fetch = async () => {
       let query = db
         .from<TaskRow>('agent_workforce_tasks')
         .select('*')
+        .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false })
         .limit(100);
 
@@ -70,7 +75,7 @@ export function useTasks(db: DatabaseAdapter | null, filter?: { status?: string;
     fetch();
     const timer = setInterval(fetch, 3000);
     return () => clearInterval(timer);
-  }, [db, refresh, filter?.status, filter?.agentId]);
+  }, [db, workspaceId, refresh, filter?.status, filter?.agentId]);
 
   return { list };
 }

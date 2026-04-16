@@ -102,8 +102,8 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   const workspaceName = useMemo(() => resolveActiveWorkspace().name, []);
   const runtime = useRuntime({ config, db, rawDb });
   const nav = useNavigation();
-  const agents = useAgents(runtime.db);
-  const tasks = useTasks(runtime.db);
+  const agents = useAgents(runtime.db, runtime.workspaceId);
+  const tasks = useTasks(runtime.db, runtime.workspaceId);
   const contacts = useContacts(runtime.db, runtime.workspaceId);
   const health = useHealth(runtime.db, runtime.cloudConnected);
   const emptyChannels = useMemo(() => new ChannelRegistry(), []);
