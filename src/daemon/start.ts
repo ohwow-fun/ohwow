@@ -54,6 +54,7 @@ import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
+import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -644,6 +645,14 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // distiller with a tracked_field so sudden mismatch spikes
         // get z-scored against the rolling baseline.
         experimentRunner.register(new BrowserProfileGuardianExperiment());
+        // Piece 5 of surprise-first bundle: revenue pipeline observer.
+        // Reads goals + contacts + contact_events + revenue_entries +
+        // x-authors-ledger.jsonl, flags goals below pace + flat leads
+        // + pending qualified-but-unpromoted X authors. ADVISORY ONLY:
+        // writes strategy.revenue_gap_focus + .revenue_gap_priorities
+        // for the strategist to surface in active_focus and for
+        // experiment-author to weight; no task creation, no messaging.
+        experimentRunner.register(new RevenuePipelineObserverExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a
