@@ -42,6 +42,15 @@ import type {
 } from '../experiment-types.js';
 
 const HOUR_MS = 60 * 60 * 1000;
+/**
+ * 6 h cadence (up from 1 h). A registered migration's expected-tables
+ * set is effectively static — a table disappearing from live sqlite is
+ * always alarm-worthy, but it doesn't move hour-to-hour. 70+ instances
+ * running hourly were writing ~8k pass-shaped findings/24h with no
+ * new information; quartering the cadence drops that to ~2k without
+ * losing any drift-detection capability that matters.
+ */
+const MIGRATION_PROBE_EVERY_MS = 6 * HOUR_MS;
 
 interface MigrationSchemaEvidence extends Record<string, unknown> {
   migration_file: string;
@@ -66,7 +75,7 @@ export class MigrationSchemaProbeExperiment implements Experiment {
   readonly name: string;
   readonly category: ExperimentCategory = 'other';
   readonly hypothesis: string;
-  readonly cadence = { everyMs: HOUR_MS, runOnBoot: false };
+  readonly cadence = { everyMs: MIGRATION_PROBE_EVERY_MS, runOnBoot: false };
 
   private readonly migrationFile: string;
   private readonly expectedTables: readonly string[];

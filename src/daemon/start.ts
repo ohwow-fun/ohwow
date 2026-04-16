@@ -83,6 +83,7 @@ import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-obs
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
 import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
+import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -1671,6 +1672,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // (persisted to runtime_config + a sidecar JSON file x-compose.mjs
         // reads each run). 48 h validate window, rollback on regression.
         experimentRunner.register(new XShapeTunerExperiment());
+        // Layer 6 of bench level-up: single rolling summary of the
+        // migration-schema registry's live health. Replaces the noise
+        // floor of 70+ per-migration pass findings/hour with one status
+        // row. Per-migration probes still exist for historical continuity
+        // and deep evidence — their cadence moved 1 h → 6 h in the same
+        // commit to keep them from dominating the ledger.
+        experimentRunner.register(new MigrationDriftSentinelExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a
