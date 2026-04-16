@@ -78,6 +78,8 @@ import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
+import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
+import { createResendSender } from '../integrations/email/resend.js';
 import { XDmSignalsRollupExperiment } from '../self-bench/experiments/x-dm-signals-rollup.js';
 import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
@@ -319,6 +321,56 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
         { approvalsJsonlPath, everyMs: thermostat.cadence.everyMs },
         '[daemon] outreach-thermostat registered (proposal-only, human-in-loop)',
       );
+    }
+
+    // Phase 4 (sales loop): EmailDispatcher — drains email_outbound
+    // approvals through Resend. Always registered when a from-address
+    // + API key are resolvable; the dispatcher itself fails-closed on
+    // missing key so registration doesn't imply sends start.
+    const resendApiKeyGetter = async (): Promise<string | undefined> => {
+      if (process.env.RESEND_API_KEY) return process.env.RESEND_API_KEY;
+      try {
+        const { data } = await db
+          .from<{ value: string }>('runtime_settings')
+          .select('value')
+          .eq('key', 'resend_api_key')
+          .maybeSingle();
+        return (data as { value: string } | null)?.value;
+      } catch {
+        return undefined;
+      }
+    };
+    let outreachEmailFrom = process.env.OHWOW_OUTREACH_EMAIL_FROM;
+    if (!outreachEmailFrom) {
+      try {
+        const { data } = await db
+          .from<{ value: string }>('runtime_settings')
+          .select('value')
+          .eq('key', 'outreach_email_from')
+          .maybeSingle();
+        outreachEmailFrom = (data as { value: string } | null)?.value;
+      } catch {
+        outreachEmailFrom = undefined;
+      }
+    }
+    if (outreachEmailFrom) {
+      const emailSender = createResendSender({
+        getApiKey: resendApiKeyGetter,
+        fromAddress: outreachEmailFrom,
+      });
+      const emailDispatcher = new EmailDispatcher(
+        db,
+        workspaceId,
+        {
+          approvalsJsonlPath,
+          dataDir: workspaceLayoutFor(workspaceSlug).dataDir,
+          sender: emailSender,
+        },
+      );
+      emailDispatcher.start();
+      logger.info({ approvalsJsonlPath, from: outreachEmailFrom }, '[daemon] email-dispatcher started');
+    } else {
+      logger.info('[daemon] email-dispatcher NOT started; set OHWOW_OUTREACH_EMAIL_FROM or runtime_settings.outreach_email_from to enable');
     }
   }
 

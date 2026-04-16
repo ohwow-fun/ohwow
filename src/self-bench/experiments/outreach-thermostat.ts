@@ -108,7 +108,7 @@ const DEFAULTS = {
 } as const;
 
 /** Channels the thermostat can schedule. */
-export type OutreachChannel = 'x_dm' | 'x_reply' | 'none';
+export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'none';
 
 interface ContactRow {
   id: string;
@@ -136,6 +136,7 @@ export interface ChannelPlan {
   bucket: string | null;
   x_user_id: string | null;
   conversation_pair: string | null;
+  email: string | null;
 }
 
 export interface ThermostatEvidence extends Record<string, unknown> {
@@ -182,6 +183,7 @@ function parseCustomFields(raw: string | null): Record<string, unknown> {
 
 function pickChannel(
   cf: Record<string, unknown>,
+  email: string | null,
   contactEvents: EventRow[],
   cooldownMs: number,
 ): { channel: OutreachChannel; reason: string } {
@@ -189,12 +191,18 @@ function pickChannel(
   const permalink = typeof cf.x_permalink === 'string' ? cf.x_permalink : null;
   const now = Date.now();
   const recentReach = contactEvents
-    .filter((e) => e.kind === 'x:reached' || e.kind === 'dm:sent')
+    .filter((e) => e.kind === 'x:reached' || e.kind === 'dm:sent' || e.kind === 'email:sent')
     .map((e) => Date.parse(e.occurred_at ?? e.created_at ?? ''))
     .filter((t) => Number.isFinite(t) && now - t < cooldownMs);
 
+  // DM is the most intimate / highest-signal channel — prefer it when
+  // available and fresh. Email second (high reliability, low rate
+  // limits). X reply last (most public, more noise).
   if (xUserId && recentReach.length === 0) {
     return { channel: 'x_dm', reason: 'has_x_user_id' };
+  }
+  if (email && recentReach.length === 0) {
+    return { channel: 'email', reason: xUserId ? 'dm_in_cooldown_fallback_email' : 'has_email' };
   }
   if (permalink) {
     return { channel: 'x_reply', reason: xUserId ? 'dm_in_cooldown_fallback_reply' : 'has_permalink' };
@@ -202,7 +210,12 @@ function pickChannel(
   return { channel: 'none', reason: 'no_reach_channel' };
 }
 
-function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string {
+interface EmailDraft {
+  subject: string;
+  text: string;
+}
+
+function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string | EmailDraft {
   const name = plan.display_name || plan.handle || 'there';
   const bucketHint = plan.bucket === 'market_signal'
     ? 'the workflow pain you mentioned'
@@ -214,6 +227,12 @@ function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string 
   }
   if (channel === 'x_reply') {
     return `This resonates. If you want, I can share what\u2019s worked for us at ohwow\u2014running everything local, no n8n required.`;
+  }
+  if (channel === 'email') {
+    return {
+      subject: `re: ${bucketHint}`,
+      text: `Hi ${name},\n\nSaw ${bucketHint} and thought ohwow might fit. We run agents locally against your own data, no n8n, no Zapier limits.\n\nIf it sounds useful, you can book a short call here: https://ohwow.fun/\n\n\u2014 Jesus`,
+    };
   }
   return '';
 }
@@ -449,7 +468,7 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       const contact = contactById.get(contactId);
       if (!contact) continue;
       const cf = parseCustomFields(contact.custom_fields);
-      const { channel, reason } = pickChannel(cf, eventsByContact.get(contactId) ?? [], cooldownMs);
+      const { channel, reason } = pickChannel(cf, contact.email, eventsByContact.get(contactId) ?? [], cooldownMs);
       if (channel === 'none') continue;
       plans.push({
         contact_id: contactId,
@@ -461,6 +480,7 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
         bucket: typeof cf.x_bucket === 'string' ? cf.x_bucket : null,
         x_user_id: typeof cf.x_user_id === 'string' ? cf.x_user_id : null,
         conversation_pair: typeof cf.x_dm_conversation_pair === 'string' ? cf.x_dm_conversation_pair : null,
+        email: contact.email,
       });
     }
 
@@ -525,11 +545,12 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       // Probe already filtered with the default window; this second
       // check catches any contact_event inserted since the probe ran
       // (e.g. a concurrent x:reached from the attribution endpoint).
+      const policyChannel = plan.channel === 'x_dm' ? 'x_dm' : plan.channel === 'email' ? 'email' : 'x_reply';
       const cooldown = await isContactInCooldown(
         ctx.db as DatabaseAdapter,
         ctx.workspaceId,
         plan.contact_id,
-        plan.channel === 'x_dm' ? 'x_dm' : 'x_reply',
+        policyChannel,
       );
       if (cooldown.inCooldown) {
         logger.info(
@@ -545,19 +566,32 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       }
       const draft = buildDraftMessage(plan.channel, plan);
       if (!draft) continue;
-      const approvalKind = plan.channel === 'x_dm' ? 'x_dm_outbound' : 'x_outbound_reply';
+      const approvalKind = plan.channel === 'x_dm'
+        ? 'x_dm_outbound'
+        : plan.channel === 'email'
+          ? 'email_outbound'
+          : 'x_outbound_reply';
       const approvalPayload: Record<string, unknown> = {
         contact_id: plan.contact_id,
         handle: plan.handle,
         permalink: plan.permalink,
         bucket: plan.bucket,
         channel: plan.channel,
-        text: draft,
         origin: 'outreach-thermostat',
         needs_personalization: true,
       };
+      if (typeof draft === 'string') {
+        approvalPayload.text = draft;
+      } else {
+        approvalPayload.subject = draft.subject;
+        approvalPayload.text = draft.text;
+        approvalPayload.cta_url = 'https://ohwow.fun/';
+      }
       if (plan.channel === 'x_dm' && plan.conversation_pair) {
         approvalPayload.conversation_pair = plan.conversation_pair;
+      }
+      if (plan.channel === 'email' && plan.email) {
+        approvalPayload.to = plan.email;
       }
       let entry: ApprovalEntry;
       try {
