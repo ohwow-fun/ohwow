@@ -198,34 +198,28 @@ export async function postTweet(page, text) {
 export async function replyToPost(page, permalink, text) {
   const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
   await page.goto(url);
-  await sleep(4000);
-  // Click the inline reply composer that's already visible on the
-  // permalink page (X renders a persistent "Post your reply" box
-  // below the parent tweet — no need to click the reply icon first).
-  // Selector is data-testid="tweetTextarea_0" but only appears once
-  // the page fully renders; wait for it.
-  const found = await page.waitForSelector('[data-testid="tweetTextarea_0"]', 8000);
-  if (!found) {
-    // Fallback: click the reply icon to open the modal composer.
-    await page.clickSelector('[data-testid="reply"]', 5000);
-    await sleep(1500);
-    await page.waitForSelector('[data-testid="tweetTextarea_0"]', 5000);
-  }
+  await sleep(5000);
+  // Focus the inline reply textarea (tweetTextarea_0 on permalink pages).
+  await page.waitForSelector('[data-testid="tweetTextarea_0"]', 8000);
   await page.focus('[data-testid="tweetTextarea_0"]');
-  await sleep(600);
-  await page.typeText(text);
-  await sleep(1200);
-  await page.send('Input.dispatchKeyEvent', {
-    type: 'keyDown', key: 'Enter', code: 'Enter',
-    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-    commands: ['insertNewline'],
-    modifiers: 4,
-  });
-  await page.send('Input.dispatchKeyEvent', {
-    type: 'keyUp', key: 'Enter', code: 'Enter',
-    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
-    modifiers: 4,
-  });
+  await sleep(500);
+  // Type via execCommand('insertText') — this fires the input events
+  // that ProseMirror needs to sync React state and enable the button.
+  // CDP's Input.insertText does NOT fire these events on the inline
+  // reply composer (works on home-feed compose, but not here).
+  const escaped = text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+  await page.evaluate(`(() => {
+    const el = document.querySelector('[data-testid="tweetTextarea_0"]');
+    if (el) { el.focus(); document.execCommand('insertText', false, '${escaped}'); }
+  })()`);
+  await sleep(1500);
+  // Click the now-enabled inline Reply button via JS dispatch.
+  const clicked = await page.evaluate(`(() => {
+    const btn = document.querySelector('[data-testid="tweetButtonInline"]');
+    if (btn && !btn.disabled) { btn.click(); return true; }
+    return false;
+  })()`);
+  if (!clicked) throw new Error('replyToPost: button still disabled after typing');
   await sleep(3000);
   return null;
 }
