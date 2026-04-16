@@ -204,7 +204,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (56 total)
+### Active Experiments (68 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -214,67 +214,65 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 6. anthropic-claude-sonnet-4-6-latency
 7. autonomous-author-quality
 8. autonomous-patch-rollback
-9. canaries
-10. canary-experiment
-11. content-cadence-loop-health
-12. content-cadence-tuner
-13. dashboard-copy
-14. dashboard-smoke
-15. deepseek-deepseek-v3-2-latency
-16. error-classification-fuzz
-17. experiment-author
-18. experiment-proposal-generator
-19. format-duration-fuzz
-20. google-gemini-2-5-flash-latency
-21. handler-schema-drift
-22. ledger-health
-23. list-completeness-summary
-24. list-handlers-fuzz
-25. loop-cadence-probe
-26. migration-schema-probe
-27. model-health
-28. patch-author
-29. patch-loop-health
-30. prose-invariant-drift
-31. provider-availability
-32. qwen-qwen3-5-35b-a3b-latency
-33. roadmap-updater
-34. sitemap-drift
-35. source-copy-lint
-36. stagnation-fuzz
-37. stale-task-cleanup
-38. stale-threshold-tuner
-39. string-literal-patch
-40. test-coverage-probe
-41. token-similarity-fuzz
-42. toolchain-test-probe
-43. trigger-stability
-44. vitest-health-probe
-45. xiaomi-mimo-v2-flash-latency
-46. xiaomi-mimo-v2-pro-latency
-47. roadmap-observer (proposed, Layer B)
-48. burn-rate
-49. unknown-latency
-50. intervention-audit
-51. strategist
-52. subprocess-smoke-1776294162273
-53. throughput-daily
-54. unknown-latency
-55. unknown-latency
-56. browser-profile-guardian
+9. browser-profile-guardian
+10. canaries
+11. canary-experiment
+12. content-cadence-loop-health
+13. content-cadence-tuner
+14. dashboard-copy
+15. dashboard-smoke
+16. daily-surprise-digest
+17. deliverable-action-sentinel
+18. deepseek-deepseek-v3-2-latency
+19. error-classification-fuzz
+20. experiment-author
+21. experiment-proposal-generator
+22. format-duration-fuzz
+23. git-velocity
+24. google-gemini-2-5-flash-latency
+25. google-gemini-3-1-pro-preview-latency
+26. handler-schema-drift
+27. ledger-health
+28. list-completeness-summary
+29. list-handlers-fuzz
+30. loop-cadence-probe
+31. mig-smoke-1776324117308
+32. migration-drift-sentinel
+33. migration-schema-probe
+34. model-health
+35. patch-author
+36. patch-loop-health
+37. prose-invariant-drift
+38. provider-availability
+39. qwen-qwen3-5-35b-a3b-latency
+40. revenue-pipeline-observer
+41. roadmap-updater
+42. sitemap-drift
+43. source-copy-lint
+44. stagnation-fuzz
+45. stale-task-cleanup
+46. stale-threshold-tuner
+47. string-literal-patch
+48. test-coverage-probe
+49. token-similarity-fuzz
+50. toolchain-test-probe
+51. trigger-stability
+52. vitest-health-probe
+53. x-autonomy-ramp
+54. x-engagement-observer
+55. x-ops-observer
+56. x-shape-tuner
+57. xiaomi-mimo-v2-flash-latency
+58. xiaomi-mimo-v2-pro-latency
+59. roadmap-observer (proposed, Layer B)
+60. burn-rate
+61. unknown-latency
+62. intervention-audit
+63. strategist
+64. subprocess-smoke-1776294162273
+65. throughput-daily
+66. unknown-latency
+67. unknown-latency
+68. unknown-latency
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
-
-### Missing Experiments (11)
-The following experiment files are not yet listed in the Active Experiments section above:
-- daily-surprise-digest
-- deliverable-action-sentinel
-- git-velocity
-- google-gemini-3-1-pro-preview-latency
-- mig-smoke-1776324117308
-- migration-drift-sentinel
-- revenue-pipeline-observer
-- x-autonomy-ramp
-- x-engagement-observer
-- x-ops-observer
-- x-shape-tuner
