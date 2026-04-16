@@ -20,6 +20,7 @@ import { mcpExecutor } from './mcp-executor.js';
 import { stateExecutor } from './state-executor.js';
 import { docMountExecutor } from '../doc-mounts/doc-mount-executor.js';
 import { llmExecutor } from './llm-executor.js';
+import { xPostingExecutor } from './x-posting-executor.js';
 
 /** Create a registry with all default tool executors */
 export function createDefaultToolRegistry(): ToolExecutorRegistry {
@@ -30,6 +31,11 @@ export function createDefaultToolRegistry(): ToolExecutorRegistry {
   registry.register(desktopExecutor);
   registry.register(requestBrowserExecutor);
   registry.register(browserExecutor);
+  // X posting executor — must come AFTER browserExecutor because
+  // browserExecutor's `isBrowserTool` doesn't match x_* names, but
+  // registering earlier is safe and makes the routing visible next
+  // to the other browser-surface dispatchers.
+  registry.register(xPostingExecutor);
   registry.register(scraplingExecutor);
   registry.register(docMountExecutor);
   registry.register(filesystemExecutor);
