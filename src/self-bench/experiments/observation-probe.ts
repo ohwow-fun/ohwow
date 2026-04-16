@@ -116,11 +116,18 @@ async function readRanker(ctx: ExperimentContext): Promise<RankerReport> {
   return parseRankerEvidence(row?.ran_at ?? null, row?.evidence ?? null);
 }
 
-async function readRuntimeKeys(ctx: ExperimentContext): Promise<Set<string>> {
+async function readRuntimeEntries(
+  ctx: ExperimentContext,
+): Promise<Map<string, { set_by: string | null; set_at: string }>> {
   const { data } = await ctx.db
-    .from<{ key: string }>('runtime_config_overrides')
-    .select('key');
-  return new Set(((data ?? []) as Array<{ key: string }>).map((r) => r.key));
+    .from<{ key: string; set_by: string | null; set_at: string }>('runtime_config_overrides')
+    .select('key, set_by, set_at');
+  const rows = ((data ?? []) as Array<{ key: string; set_by: string | null; set_at: string }>);
+  const out = new Map<string, { set_by: string | null; set_at: string }>();
+  for (const r of rows) {
+    out.set(r.key, { set_by: r.set_by, set_at: r.set_at });
+  }
+  return out;
 }
 
 export class ObservationProbeExperiment implements Experiment {
@@ -166,7 +173,7 @@ export class ObservationProbeExperiment implements Experiment {
     const patches_attempted = await readPatchesAttempted(ctx, sinceIso);
     const findings = await readFindings(ctx, sinceIso);
     const ranker = await readRanker(ctx);
-    const runtime_config_keys = await readRuntimeKeys(ctx);
+    const runtime_config_entries = await readRuntimeEntries(ctx);
     const sessionMarkerExists = fs.existsSync(path.join(repoRoot, '.git', 'ohwow-session-live'));
 
     const observation: Observation = assembleObservation({
@@ -183,7 +190,7 @@ export class ObservationProbeExperiment implements Experiment {
       findings,
       priorities,
       ranker,
-      runtime_config_keys,
+      runtime_config_entries,
       session_marker_exists: sessionMarkerExists,
       skip_daemon_probe: true,
     });

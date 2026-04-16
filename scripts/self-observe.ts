@@ -139,9 +139,17 @@ function readRanker(db: Database.Database): ReturnType<typeof parseRankerEvidenc
   return parseRankerEvidence(row?.ran_at ?? null, row?.evidence ?? null);
 }
 
-function readRuntimeKeys(db: Database.Database): Set<string> {
-  const rows = db.prepare(`SELECT key FROM runtime_config_overrides`).all() as Array<{ key: string }>;
-  return new Set(rows.map((r) => r.key));
+function readRuntimeEntries(
+  db: Database.Database,
+): Map<string, { set_by: string | null; set_at: string }> {
+  const rows = db
+    .prepare(`SELECT key, set_by, set_at FROM runtime_config_overrides`)
+    .all() as Array<{ key: string; set_by: string | null; set_at: string }>;
+  const out = new Map<string, { set_by: string | null; set_at: string }>();
+  for (const r of rows) {
+    out.set(r.key, { set_by: r.set_by, set_at: r.set_at });
+  }
+  return out;
 }
 
 // ---------- Main ----------
@@ -166,7 +174,7 @@ async function main() {
     const findings = probeFindings(db, startIso);
     const priorities = probePriorities(layout.dataDir, startIso);
     const ranker = readRanker(db);
-    const runtimeKeys = readRuntimeKeys(db);
+    const runtimeEntries = readRuntimeEntries(db);
     const sessionMarkerExists = fs.existsSync(path.join(repoRoot, '.git', 'ohwow-session-live'));
 
     const obs: Observation = assembleObservation({
@@ -183,7 +191,7 @@ async function main() {
       findings,
       priorities,
       ranker,
-      runtime_config_keys: runtimeKeys,
+      runtime_config_entries: runtimeEntries,
       session_marker_exists: sessionMarkerExists,
     });
 

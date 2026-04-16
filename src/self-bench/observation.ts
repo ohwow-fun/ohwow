@@ -27,6 +27,7 @@ export const ANOMALY_CODES = [
   'HIGH_REVERT_RATE',
   'CITES_SALES_SIGNAL_ABSENT',
   'ATTRIBUTION_FINDINGS_MISSING',
+  'RUNTIME_CONFIG_PRODUCER_STALE',
   'PATCH_AUTHOR_TOP_PICK_NULL',
   'PATCH_AUTHOR_NOVELTY_REPEAT',
   'EXPERIMENT_FINDING_FLOOD',
@@ -54,6 +55,48 @@ export const THRESHOLDS = {
   PATCH_AUTHOR_NOVELTY_REPEAT: 50,
   EXPERIMENT_FINDING_FLOOD: 1000,
 } as const;
+
+/**
+ * A runtime_config_overrides key the anomaly detector expects to find
+ * populated by a specific producer experiment on a known cadence.
+ * Absent → emits `absence_anomaly_code` (so the historical
+ * ATTRIBUTION_FINDINGS_MISSING code keeps its exact semantics for
+ * external consumers). Present but last set longer ago than
+ * `max_staleness_ms` → emits `RUNTIME_CONFIG_PRODUCER_STALE` with the
+ * key + producer named in the detail so operators don't have to guess
+ * which experiment regressed. Motivation: the 2026-04-16 incident
+ * where attribution-observer was registered with runOnBoot=false and
+ * the ranker's `strategy.attribution_findings` key stayed empty for
+ * up to 6h after every daemon restart — no runtime_config_keys check
+ * alone caught "key is present but the producer died." Fix commit
+ * 0679030 unblocked that specific key; this registry is the general
+ * machinery so the next runOnBoot-false regression isn't a surprise.
+ */
+export interface ConfigProducer {
+  key: string;
+  producer_experiment: string;
+  max_staleness_ms: number;
+  absence_anomaly_code: AnomalyCode;
+}
+
+export const PRODUCER_REGISTRY: readonly ConfigProducer[] = [
+  {
+    key: 'strategy.attribution_findings',
+    producer_experiment: 'attribution-observer',
+    // Producer cadence is 6h; allow a 1h grace window for a tick
+    // that lands inside the sample (the detector itself runs at a
+    // different, faster cadence). 7h without a write = producer is
+    // wedged or unregistered.
+    max_staleness_ms: 7 * 60 * 60 * 1000,
+    absence_anomaly_code: 'ATTRIBUTION_FINDINGS_MISSING',
+  },
+];
+
+/** One row from the runtime_config_overrides table, trimmed to the fields the detector reads. */
+export interface RuntimeConfigEntry {
+  set_by: string | null;
+  set_at: string;
+}
 
 export interface CommitEntry {
   sha: string;
@@ -263,11 +306,20 @@ export interface AnomalyInputs {
   findings: FindingsReport;
   priorities: PrioritiesReport;
   ranker: RankerReport;
-  runtime_config_keys: Set<string>;
+  /**
+   * Every key present in `runtime_config_overrides`, with the producer
+   * experiment that last wrote it and the ISO timestamp of that write.
+   * Callers that don't yet carry the full entry can pass a Set<string>
+   * of keys — the detector treats those as "present but staleness
+   * unknown" which preserves the pre-registry behavior.
+   */
+  runtime_config_entries: Map<string, RuntimeConfigEntry> | Set<string>;
   session_marker_exists: boolean;
   window_duration_s: number;
   /** When observation runs in-daemon, daemon health is trivially true — skip the probe. */
   skip_daemon_probe?: boolean;
+  /** Epoch ms, injected by tests to make staleness deterministic. */
+  now?: number;
 }
 
 export function detectAnomalies(inputs: AnomalyInputs): Anomaly[] {
@@ -294,12 +346,38 @@ export function detectAnomalies(inputs: AnomalyInputs): Anomaly[] {
       detail: `autonomous=${inputs.commits.autonomous} cites=0`,
     });
   }
-  if (!inputs.runtime_config_keys.has('strategy.attribution_findings')) {
-    out.push({
-      code: 'ATTRIBUTION_FINDINGS_MISSING',
-      severity: 'warn',
-      detail: 'strategy.attribution_findings absent; ranker has no revenue signal to cite',
-    });
+  const now = inputs.now ?? Date.now();
+  const entries = inputs.runtime_config_entries;
+  const entryFor = (key: string): RuntimeConfigEntry | 'present-unknown' | null => {
+    if (entries instanceof Map) {
+      return entries.get(key) ?? null;
+    }
+    // Legacy Set<string> callers: key presence only. Treat any hit as
+    // "present but staleness unknown" so we can't falsely flag
+    // RUNTIME_CONFIG_PRODUCER_STALE without real timestamp data.
+    return entries.has(key) ? 'present-unknown' : null;
+  };
+  for (const producer of PRODUCER_REGISTRY) {
+    const entry = entryFor(producer.key);
+    if (entry === null) {
+      out.push({
+        code: producer.absence_anomaly_code,
+        severity: 'warn',
+        detail: `${producer.key} absent; expected producer=${producer.producer_experiment}`,
+      });
+      continue;
+    }
+    if (entry === 'present-unknown') continue;
+    const ageMs = now - Date.parse(entry.set_at);
+    if (Number.isFinite(ageMs) && ageMs > producer.max_staleness_ms) {
+      const ageMin = Math.round(ageMs / 60000);
+      const wroteBy = entry.set_by ?? 'unknown';
+      out.push({
+        code: 'RUNTIME_CONFIG_PRODUCER_STALE',
+        severity: 'warn',
+        detail: `${producer.key} last set ${ageMin}m ago by ${wroteBy}; expected producer=${producer.producer_experiment} every ${Math.round(producer.max_staleness_ms / 60000)}m`,
+      });
+    }
   }
   if (inputs.ranker.last_ran_at && inputs.ranker.top_pick === null) {
     out.push({
@@ -380,9 +458,10 @@ export interface AssembleObservationInput {
   findings: FindingsReport;
   priorities: PrioritiesReport;
   ranker: RankerReport;
-  runtime_config_keys: Set<string>;
+  runtime_config_entries: Map<string, RuntimeConfigEntry> | Set<string>;
   session_marker_exists: boolean;
   skip_daemon_probe?: boolean;
+  now?: number;
 }
 
 export function assembleObservation(inputs: AssembleObservationInput): Observation {
@@ -393,10 +472,11 @@ export function assembleObservation(inputs: AssembleObservationInput): Observati
     findings: inputs.findings,
     priorities: inputs.priorities,
     ranker: inputs.ranker,
-    runtime_config_keys: inputs.runtime_config_keys,
+    runtime_config_entries: inputs.runtime_config_entries,
     session_marker_exists: inputs.session_marker_exists,
     window_duration_s: inputs.window.duration_s,
     skip_daemon_probe: inputs.skip_daemon_probe,
+    now: inputs.now,
   });
   const verdict = computeVerdict({
     daemon: inputs.daemon,

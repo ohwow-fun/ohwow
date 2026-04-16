@@ -183,7 +183,7 @@ function fixtureInputs(overrides: {
   findings?: Partial<FindingsReport>;
   priorities?: Partial<PrioritiesReport>;
   ranker?: Partial<RankerReport>;
-  runtime_keys?: string[];
+  runtime_entries?: Array<[string, { set_by: string | null; set_at: string }]>;
   session_marker?: boolean;
   skip_daemon?: boolean;
 }) {
@@ -233,9 +233,12 @@ function fixtureInputs(overrides: {
     findings,
     priorities,
     ranker,
-    runtime_config_keys: new Set([
-      'strategy.attribution_findings',
-      ...(overrides.runtime_keys ?? []),
+    runtime_config_entries: new Map<string, { set_by: string | null; set_at: string }>([
+      [
+        'strategy.attribution_findings',
+        { set_by: 'attribution-observer', set_at: new Date().toISOString() },
+      ],
+      ...(overrides.runtime_entries ?? []),
     ]),
     session_marker_exists: overrides.session_marker ?? false,
     window_duration_s: 1800,
@@ -273,11 +276,46 @@ describe('detectAnomalies', () => {
   });
 
   it('flags ATTRIBUTION_FINDINGS_MISSING when the runtime-config key is absent', () => {
-    const inputs = fixtureInputs({ runtime_keys: [] }); // also removes the default
-    // Need to override the default — build manually
-    const customInputs = { ...inputs, runtime_config_keys: new Set<string>() };
+    const inputs = fixtureInputs({});
+    const customInputs = {
+      ...inputs,
+      runtime_config_entries: new Map<string, { set_by: string | null; set_at: string }>(),
+    };
     const a = detectAnomalies(customInputs);
-    expect(a.some((x) => x.code === 'ATTRIBUTION_FINDINGS_MISSING')).toBe(true);
+    const hit = a.find((x) => x.code === 'ATTRIBUTION_FINDINGS_MISSING');
+    expect(hit).toBeTruthy();
+    expect(hit!.detail).toContain('attribution-observer');
+  });
+
+  it('flags RUNTIME_CONFIG_PRODUCER_STALE when the producer stopped writing', () => {
+    const inputs = fixtureInputs({});
+    // Entry present but written 10h ago — beyond the 7h staleness budget
+    // for strategy.attribution_findings.
+    const tenHoursAgo = new Date(Date.now() - 10 * 60 * 60 * 1000).toISOString();
+    const customInputs = {
+      ...inputs,
+      runtime_config_entries: new Map<string, { set_by: string | null; set_at: string }>([
+        ['strategy.attribution_findings', { set_by: 'attribution-observer', set_at: tenHoursAgo }],
+      ]),
+    };
+    const a = detectAnomalies(customInputs);
+    const stale = a.find((x) => x.code === 'RUNTIME_CONFIG_PRODUCER_STALE');
+    expect(stale).toBeTruthy();
+    expect(stale!.detail).toContain('strategy.attribution_findings');
+    expect(stale!.detail).toContain('attribution-observer');
+    // The key is still present so the absence anomaly must NOT fire.
+    expect(a.some((x) => x.code === 'ATTRIBUTION_FINDINGS_MISSING')).toBe(false);
+  });
+
+  it('tolerates the legacy Set<string> shape without falsely flagging stale', () => {
+    const inputs = fixtureInputs({});
+    const customInputs = {
+      ...inputs,
+      runtime_config_entries: new Set<string>(['strategy.attribution_findings']),
+    };
+    const a = detectAnomalies(customInputs);
+    expect(a.some((x) => x.code === 'RUNTIME_CONFIG_PRODUCER_STALE')).toBe(false);
+    expect(a.some((x) => x.code === 'ATTRIBUTION_FINDINGS_MISSING')).toBe(false);
   });
 
   it('flags PATCH_AUTHOR_NOVELTY_REPEAT above threshold', () => {
