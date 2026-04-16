@@ -11,6 +11,7 @@
 - **Funnel surgeon**: Attribution observer experiment (advisory)
 - **Outreach**: Thermostat experiment (proposal-only, off by default)
 - **Outreach**: Cross-channel cooldown policy (`src/lib/outreach-policy.ts`)
+- **Outreach**: Email channel via Resend (dispatcher + thermostat wiring)
 
 ### Changed
 - **Sales loop**: Capture live-run-1 observations in `TUNING-NOTES` (handles redacted)
