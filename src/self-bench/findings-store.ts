@@ -233,6 +233,46 @@ export interface ListFindingsFilters {
 }
 
 /**
+ * Hard-delete `self_findings` rows whose status is 'superseded' AND
+ * whose `ran_at` is older than the cutoff. The supersede pointer is a
+ * soft mark (the newer row carrying the same shape replaced this one),
+ * and no reader follows `superseded_by` — readers query active findings
+ * directly. Anything past the longest known reader window (patch-author
+ * uses 7d; observation snapshots use 30min; judges read 20 rows) is
+ * dead weight at fast probe cadences.
+ *
+ * Counts the rows first via a select head, then issues the delete, so
+ * the caller gets back the number it freed (better-sqlite3 returns a
+ * `changes` count on .run() but the adapter swallows it).
+ *
+ * Idempotent: a second call right after returns 0. Fail-soft: any DB
+ * error returns 0 and lets the caller log + continue (the GC must
+ * never block probe execution).
+ */
+export async function pruneOldSuperseded(
+  db: DatabaseAdapter,
+  cutoffIso: string,
+): Promise<number> {
+  try {
+    const { data } = await db
+      .from<{ id: string }>('self_findings')
+      .select('id')
+      .eq('status', 'superseded')
+      .lt('ran_at', cutoffIso);
+    const ids = (data ?? []) as Array<{ id: string }>;
+    if (ids.length === 0) return 0;
+    await db
+      .from('self_findings')
+      .delete()
+      .eq('status', 'superseded')
+      .lt('ran_at', cutoffIso);
+    return ids.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * General-purpose finding list query. Backs the REST endpoint and MCP
  * tool. Defaults to active findings sorted newest first with a cap of
  * 50 rows so an operator hitting the endpoint without filters doesn't

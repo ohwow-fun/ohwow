@@ -157,6 +157,42 @@ export async function markValidationError(
 }
 
 /**
+ * Hard-delete closed validation rows older than the cutoff. "Closed"
+ * is anything that ran to conclusion (completed | skipped | error) —
+ * these rows have already produced their finding row in self_findings,
+ * which carries the live signal. The validation row itself is just
+ * scheduling metadata at that point.
+ *
+ * Pending rows are NEVER deleted regardless of age — a stuck pending
+ * row is a real bug the operator needs to see, not GC noise.
+ *
+ * Counts via select-head then deletes, mirroring pruneOldSuperseded.
+ * Fail-soft: any DB error returns 0 so the GC never blocks probe ticks.
+ */
+export async function pruneClosedValidations(
+  db: DatabaseAdapter,
+  cutoffIso: string,
+): Promise<number> {
+  try {
+    const { data } = await db
+      .from<{ id: string }>('experiment_validations')
+      .select('id')
+      .in('status', ['completed', 'skipped', 'error'])
+      .lt('completed_at', cutoffIso);
+    const ids = (data ?? []) as Array<{ id: string }>;
+    if (ids.length === 0) return 0;
+    await db
+      .from('experiment_validations')
+      .delete()
+      .in('status', ['completed', 'skipped', 'error'])
+      .lt('completed_at', cutoffIso);
+    return ids.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Stamp a validation row with a successful rollback. Called by the
  * runner after rollback() returned a non-null InterventionApplied.
  * The base status stays 'completed' (validate() ran to conclusion),

@@ -70,6 +70,7 @@ import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-s
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
 import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
+import { FindingsGcExperiment } from '../self-bench/experiments/findings-gc.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -191,6 +192,11 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new VitestHealthProbeExperiment());
   experimentRunner.register(new LoopCadenceProbeExperiment());
   experimentRunner.register(new TestCoverageProbeExperiment());
+  // Storage reaper: hard-deletes superseded self_findings + closed
+  // experiment_validations older than 6h. Kill switch:
+  // ~/.ohwow/findings-gc-disabled. Without this, fast-cadence
+  // probes inflate runtime.db unbounded.
+  experimentRunner.register(new FindingsGcExperiment());
   experimentRunner.register(new FormatDurationFuzzExperiment());
   experimentRunner.register(new TokenSimilarityFuzzExperiment());
   experimentRunner.register(new StagnationFuzzExperiment());
