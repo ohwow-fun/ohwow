@@ -12,6 +12,10 @@
  *   HISTORY_DAYS=5           how far back to pull emerging patterns
  *   SKIP_RENDER=0            skip Remotion render (for testing LLM drafts)
  *   SKIP_VOICE=0             skip voice generation (for testing visuals)
+ *   FORMAT=auto              script format: 15s (2-3 scenes), 30s (4 scenes
+ *                            with checkpoint-aligned retention beats), or
+ *                            auto (LLM picks based on whether the idea has
+ *                            enough meat for 30s)
  *   VOICE_PROVIDER=openrouter (default) | kokoro
  *   VOICE_NAME=onyx          voice preset (openrouter: alloy/ash/ballad/coral/
  *                            echo/fable/nova/onyx/sage/shimmer/verse)
@@ -30,6 +34,7 @@ const DRY = process.env.DRY !== '0';
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
 const SKIP_RENDER = process.env.SKIP_RENDER === '1';
 const SKIP_VOICE = process.env.SKIP_VOICE === '1';
+const FORMAT = (process.env.FORMAT || 'auto').toLowerCase();
 const VISIBILITY = process.env.VISIBILITY || 'unlisted';
 const VIDEO_PKG = path.resolve('packages/video');
 const MEDIA_DIR = path.join(os.homedir(), '.ohwow', 'media');
@@ -246,14 +251,25 @@ function getAudioDurationMs(filePath) {
   }
 }
 
-function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
+/**
+ * Format-aware minimum total duration. For declared 30s Shorts we enforce
+ * a 25s floor so that if the narration is shorter than the target, the
+ * final (payoff) scene holds longer — giving the closing line breathing
+ * room over ambient music. For 15s we enforce a 12s floor.
+ */
+function minTotalFramesForFormat(format, fps = 30) {
+  if (format === '30s') return 25 * fps;  // 750 frames
+  if (format === '15s') return 12 * fps;  // 360 frames
+  return 0;
+}
+
+function alignSceneDurations(scenes, audioDurationMs, { format = 'auto', fps = 30 } = {}) {
   const totalAudioFrames = Math.ceil((audioDurationMs / 1000) * fps);
   const words = scenes.map(s => (s.narration || s.params?.text || '').split(/\s+/).filter(Boolean).length);
   const totalWords = words.reduce((a, b) => a + b, 0) || 1;
   const padding = VOICE_LEAD_FRAMES + VOICE_TAIL_FRAMES;
-  const usableFrames = totalAudioFrames + padding * scenes.length;
 
-  return scenes.map((s, i) => {
+  const aligned = scenes.map((s, i) => {
     const proportion = (words[i] || 1) / totalWords;
     const rawFrames = Math.round(proportion * totalAudioFrames) + padding;
     return {
@@ -261,6 +277,19 @@ function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
       durationInFrames: Math.max(SCENE_MIN_FRAMES, rawFrames),
     };
   });
+
+  // Pad the final scene if declared format requires more runway than the
+  // narration filled. This lets the payoff breathe over ambient.
+  const minTotal = minTotalFramesForFormat(format, fps);
+  if (minTotal > 0) {
+    const currentTotal = aligned.reduce((sum, s) => sum + s.durationInFrames, 0);
+    if (currentTotal < minTotal) {
+      const extra = minTotal - currentTotal;
+      aligned[aligned.length - 1].durationInFrames += extra;
+      console.log(`[yt-compose] padded final scene +${Math.round(extra/fps*10)/10}s to hit ${format} minimum`);
+    }
+  }
+  return aligned;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,19 +313,62 @@ function loadHistory(ws, daysBack) {
     .filter(r => r && r.date && new Date(r.date + 'T00:00:00Z').getTime() >= cutoff);
 }
 
+/**
+ * Detects highlights/continuity strings that would leak OHWOW's own product.
+ * The x-intel synthesis pass sometimes includes self-references (e.g.,
+ * "ohwow runs multiple agent workspaces...") because it's monitoring the
+ * space OHWOW operates in. Those lines must never reach the content prompt.
+ */
+function leaksProduct(text) {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  const selfHits = ['ohwow', 'mcp-first', 'multi-workspace daemon', 'our daemon', 'local-first ai runtime'];
+  return selfHits.some(s => t.includes(s));
+}
+
+/**
+ * Strip the permalink suffix "(perma=/handle/status/id)" from a highlight,
+ * returning { text, handle }. The synthesis format appends citations in
+ * this form, which is noise in the prompt but useful for attribution.
+ */
+function parseHighlight(raw) {
+  const m = raw.match(/\(perma=\/([^/]+)\/status\/\d+\)?$/);
+  const handle = m ? m[1] : null;
+  const text = raw.replace(/\s*\(perma=[^)]*\)?\s*$/, '').trim();
+  return { text, handle };
+}
+
 function pickSeed(historyRows) {
-  const candidates = [];
+  const patternRows = [];
   for (const row of historyRows) {
     for (const p of row.emerging_patterns || []) {
-      candidates.push({ bucket: row.bucket, pattern: p, date: row.date, headline: row.headline });
+      if (leaksProduct(p)) continue;
+      patternRows.push({
+        bucket: row.bucket,
+        pattern: p,
+        date: row.date,
+        headline: leaksProduct(row.headline) ? null : row.headline,
+        // Carry through the full row's ancillary context for the prompt.
+        // Filter self-references; cap counts to keep prompt compact.
+        highlights: (row.highlights || [])
+          .filter(h => !leaksProduct(h))
+          .slice(0, 4)
+          .map(parseHighlight),
+        continuity: (row.continuity || [])
+          .filter(c => !leaksProduct(c))
+          .slice(0, 2),
+        predictions: (row.predictions || [])
+          .filter(p => p.what && !leaksProduct(p.what))
+          .slice(0, 3),
+      });
     }
   }
-  if (!candidates.length) return null;
+  if (!patternRows.length) return null;
   // Diversify across buckets: group by bucket, pick a random bucket first,
   // then pick a random pattern from it. Prevents all Shorts from clustering
   // on the most populated bucket.
   const byBucket = {};
-  for (const c of candidates) {
+  for (const c of patternRows) {
     (byBucket[c.bucket] ??= []).push(c);
   }
   const buckets = Object.keys(byBucket);
@@ -313,36 +385,102 @@ const VISUAL_PRIMITIVES = [
   'film-grain', 'scan-line',
 ];
 
-async function draftShort({ brandVoice, workspaceDesc, seed }) {
-  const sys = `You write YouTube Shorts scripts. You are a sharp observer of the AI agent space who NEVER reveals what they build.
+async function draftShort({ brandVoice, workspaceDesc, seed, formatMode = 'auto' }) {
+  // Format directive — either forces a specific length or lets the LLM pick.
+  // Algorithmic checkpoints are based on YouTube Shorts retention research:
+  // intro retention (3s) and swipe-temptation spike (~14-15s).
+  const formatSection = formatMode === '15s'
+    ? `FORMAT: 15-second Short. Exactly 2 scenes, occasionally 3.
+- Scene 1 (hook): 0-4s (0-120 frames). SHORT text, BIG font. Text visible from frame 1 so the video categorizes instantly.
+- Scene 2 (turn): 4-12s (120-360 frames). Mood MUST contrast scene 1.
+- Scene 3 (optional coda/loop-back): 12-15s (90-150 frames). Recontextualizes the hook.
+Total: 12-15 seconds (360-450 frames at 30fps).
+Total narration: 30-45 words. 5-12 words per scene, never more than 15.`
+    : formatMode === '30s'
+    ? `FORMAT: 30-second Short. Exactly 4 scenes.
+Scene durations are aligned to algorithmic retention checkpoints:
+- Scene 1 (hook): 0-3s (0-90 frames). The curiosity gap. Text visible from frame 1. This decides whether they stay past the first gate. Intro retention target: >70%.
+- Scene 2 (setup): 3-10s (90-300 frames). Expand the tension. Specifics, not generalities. The viewer is deciding if this is worth 30 seconds.
+- Scene 3 (second hook): 10-18s (300-540 frames). CRITICAL — this is where swipe temptation spikes. Must re-hook with a harder turn, a specific image, or a counter-claim. "But here's the thing." / "That's not even the weird part." / A concrete detail that raises the stakes.
+- Scene 4 (payoff + loop): 18-30s (540-900 frames). The landing. Must recontextualize the hook so rewatching feels seamless and lands a second joke. See LOOP ENGINEERING below.
+Total: 25-30 seconds (750-900 frames at 30fps).
+Total narration: 55-75 words (the onyx voice paces ~2 words/sec; aim for this band, not below 50). 12-20 words per scene.
 
-Context (DO NOT regurgitate or reference): ${workspaceDesc}
+30s HARD RULE: if you can't genuinely fill 55+ words with non-padding content — specifics, escalation, a real second hook — DOWNGRADE to 15s. An under-filled 30s is worse than a tight 15s. Do NOT stretch thin material.`
+    : `FORMAT: pick 15s or 30s based on the seed's depth. Use 15s if the idea is a tight punchline. Use 30s if the idea has multiple layers that need room to breathe — specifics, escalation, a second beat worth unboxing. When in doubt, pick the format that does NOT require padding. An overstuffed 15s or a padded 30s both swipe.
 
-SHORTS PSYCHOLOGY (non-negotiable):
-1. CURIOSITY GAP in first 1.5 seconds. The hook MUST be incomplete, counterintuitive, or provoke disagreement. The viewer stays because they NEED the resolution. "Everyone assumes X" works. "X is interesting" does not.
-2. PATTERN INTERRUPT between scenes. Each scene shift must feel like a gear change: mood shift, visual contrast, pacing change. Monotone = swipe.
-3. EMOTIONAL VALENCE over information. Shorts that provoke (surprise, recognition, disagreement, dark humor) get shared. Informational ones get scrolled past. You're not teaching. You're making someone feel something.
-4. ESCALATION. Each beat hits harder than the last. Hook → escalate → land. Never plateau.
-5. BREVITY IS THE FORM. 5-12 words per scene. If you need a paragraph, it's not a Short. The constraint is the style. White space is your friend.
-6. REWATCH VALUE. The punchline should recontextualize the hook. A viewer who watches twice catches something they missed.
-7. VISCERAL > CEREBRAL. "The agent deleted its own context window" hits harder than "context management is a challenge." Show the moment, not the analysis.
+If you pick 15s: exactly 2 scenes, occasionally 3.
+- Scene 1 (hook): 0-4s (0-120 frames). Text visible from frame 1.
+- Scene 2 (turn): 4-12s (120-360 frames). Mood MUST contrast.
+- Scene 3 (optional loop-back): 12-15s (90-150 frames). Recontextualizes the hook.
+Total: 12-15s. Narration: 30-45 words. 5-12 per scene.
 
-STRUCTURE: exactly 2 scenes, occasionally 3. Total 12-20 seconds (360-600 frames at 30fps).
-- Scene 1 (hook): the setup, the assumption, the thing everyone believes. 4-7 seconds (120-210 frames). SHORT text, BIG font.
-- Scene 2 (turn): the twist, the reframe, the punchline. 6-10 seconds (180-300 frames). Mood MUST contrast scene 1.
-- Scene 3 (optional coda): only if the joke needs a callback or the thought needs a lingering beat. 3-5 seconds (90-150 frames). One line max.
+If you pick 30s: exactly 4 scenes, checkpoint-aligned:
+- Scene 1 (hook): 0-3s (0-90 frames). Curiosity gap. Text from frame 1.
+- Scene 2 (setup): 3-10s (90-300 frames). Specifics, escalation.
+- Scene 3 (second hook): 10-18s (300-540 frames). Re-hook at the swipe-spike point. Harder turn, concrete image, or counter-claim.
+- Scene 4 (payoff + loop): 18-30s (540-900 frames). Recontextualize the hook; see LOOP ENGINEERING.
+Total: 25-30s. Narration: 55-75 words. 12-20 per scene.
 
-WORD LIMITS PER SCENE (HARD):
-- Scene text: 5-12 words. NEVER more than 15. If you wrote more, you failed.
-- Total narration: under 30 words for 2 scenes, under 40 for 3.
+30s HARD RULE: if the seed can't genuinely fill 55+ words with non-padding content, pick 15s instead. An under-filled 30s is worse than a tight 15s.
 
-VOICE: an insider at a dinner party who has opinions on everything in AI agents. Not pitching, not teaching. Just being interesting. Wry, observational, occasionally dark.
-- NEVER reference your own product, stack, architecture, tools, or infrastructure
-- NEVER use: "local-first", "orchestration", "runtime", "workspaces", "daemon", "our", "we built", "my agent", "my agents", "mine", "I built", "I run"
-- NEVER claim ownership of agents, tools, or infrastructure. You OBSERVE. You don't OWN.
-- Think in universal AI/agent concepts any builder would recognize
-- Humor preferred. If you can land the joke, always land it.
-- No banned phrases: ${BANNED_PHRASES.join(', ')}
+Include a top-level field "format": "15s" or "30s" to declare which you chose.`;
+
+  const sys = `You write viral YouTube Shorts scripts about AI. You are an entertainer first. Funny, specific, current. Not a philosopher. Not an observer. An entertainer.
+
+Context (DO NOT reveal or describe): ${workspaceDesc}
+
+FIRST PRINCIPLES OF VIRAL SHORT-FORM ENTERTAINMENT:
+1. SPECIFICITY BEATS ABSTRACTION. ALWAYS. "Claude opened 47 tabs before finding the one I asked for" > "agents are inefficient". Name real products (ChatGPT, Claude, Gemini, Cursor, Windsurf, Devin, Copilot, Grok). Use real numbers ($200/month, 128k tokens, 3AM). Use real actions (deleted, apologized, lied, forgot, shipped, crashed).
+2. REAL JOKES OR REAL NEWS. Every Short must either (a) land a setup-and-punchline joke or (b) deliver a concrete AI news bit with a twist. NO "philosophical observations." NO vibes without content.
+3. CHARACTER VOICES. AI models are characters with personalities. Use them:
+   - ChatGPT = smooth, confident, occasionally lies with a straight face
+   - Claude = anxious overthinker, apologizes constantly, asks for permission
+   - Gemini = forgetful, easily distracted, means well
+   - Grok = edgy teen, tries too hard
+   - Copilot = the coworker who finishes your sentences wrong
+   - Cursor / Windsurf = the one that actually works
+   - Devin = the overconfident intern
+4. RELATABILITY > INSIGHT. The best Shorts make developers go "OH GOD YES THAT EXACT THING." Write from their actual lived pain: wasted credits, weird hallucinations, the 3AM debugging session, the $400 API bill, the AI that lies about running the test.
+5. RECENCY SIGNALS. Frame with "yesterday", "this week", "just now", "last night". The algorithm rewards it. Viewers stay for it. Even if the content is evergreen, the framing should feel current.
+6. STAKES AND CONSEQUENCES. Don't say "AI makes mistakes." Say "Claude deleted my production database. Then said 'I've made a note to not do that again.'" The specific consequence is the joke.
+7. PATTERN INTERRUPT. Each scene should FEEL different. Mood shift, rhythm shift, punchline shift. Never monotone.
+8. LOOP MANDATORY. Final line must make the opening land differently on rewatch. See LOOP ENGINEERING.
+9. INSTANT CATEGORIZATION. Text on screen from frame 1. If a viewer can't tell within 1 second this is an AI-comedy/news Short, they swipe.
+
+HOOK TEMPLATES (pick one, use it hard):
+- NEWS ANCHOR: "Yesterday, [specific product] [did specific thing]." / "Breaking: [product] just [surprising action]."
+- CONFESSION: "I spent [amount] on [product] last month. Here's what I got." / "I've been [weird AI behavior]. You have too."
+- CHARACTER JOKE: "Claude walks into [situation]. [Punchline]." / "ChatGPT told me [specific lie] today."
+- BOLD CLAIM + PROOF: "[Product] is dead. [Specific product] killed it. Here's how." (needs actual evidence in the body)
+- HYPOTHETICAL FLIP: "If [product] were a coworker, they'd be the one who [specific relatable bad behavior]."
+- CHALLENGE: "I asked [product] to [simple task]. Watch what it did."
+
+WHAT TO AVOID (all of these got shipped before and all of them died):
+- "Everyone assumes agents..." (generic, abstract, no specifics)
+- "The browser is the new server" (sounds deep, says nothing, no named products)
+- "Agents don't need servers" (claim without evidence, no character, no joke)
+- "Context is the new bottleneck" (vague, no specifics, no stakes)
+- Any line that could be a LinkedIn post. Shorts ≠ LinkedIn.
+- Any line with ONLY concept words, no real AI product or behavior named.
+
+${formatSection}
+
+LOOP ENGINEERING (mandatory for every Short):
+The final scene's closing line must tie back to scene 1 so that when the video loops (YouTube auto-loops Shorts), the opening lands differently on second watch. Three valid patterns:
+- CLOSE THE CIRCLE: final line resolves the hook's tension in a way that makes the hook sound different. Hook: "Agents don't need servers anymore." Payoff: "The browser was always the server. We just kept building one on top." → on rewatch, "Agents don't need servers" now sounds obvious instead of counterintuitive, which is its own joke.
+- INVERT THE HOOK: final line makes the opening question itself. Hook: "Everyone thinks agents are getting smarter." Payoff: "They're not. They're just getting faster at forgetting." → rewatch: you hear the first line and already know it's wrong.
+- SET UP A CALLBACK: final line plants a word or image that only means something if you watch scene 1 again. "The dark part isn't the model. It's what comes after." → rewatch: you listen for "the dark part" in scene 1.
+A valid loop means: if you watched the final line then immediately heard scene 1, it would feel like a continuous thought. Verify this mentally before outputting.
+
+VOICE: a sharp AI comedian doing a 15-30s bit. Timing, specificity, confident delivery. Name-drop real products. Land the joke. Don't explain it.
+- You CAN and SHOULD name other AI products by name: ChatGPT, Claude, Gemini, Cursor, Windsurf, Devin, Copilot, Grok, OpenAI, Anthropic, Google AI, Perplexity, etc. Specificity sells.
+- You CAN riff on recent AI news, product launches, funny behaviors, developer pain.
+- The USER PROMPT will include a "highlights" block with real posts from this week — @handle + the post's content. You may paraphrase them, cite the @handle when it adds credibility, or riff on the specific claim. These are your specificity engine. Use them.
+- You MUST NOT reveal or describe OHWOW's product, stack, or architecture. Banned phrases list below. If a highlight mentions OHWOW, ignore that highlight.
+- Humor preferred. If you can land the joke, always land it. If you can't land a joke, deliver a real specific news beat instead.
+- Speak TO the viewer, not ABOUT the space. "You know when..." / "I asked Claude to..." / "Watch Cursor do..." — direct. Not "one observes that..." essays.
+- No banned phrases (these are about OUR product, not other AI products): ${BANNED_PHRASES.join(', ')}
 
 MOOD CONTRAST is mandatory. Scene 1 and Scene 2 must use DIFFERENT moods. Vary across runs.
 Good contrasts: contemplative → electric, warm → noir, cosmic → dawn, ethereal → electric, dawn → noir.
@@ -354,6 +492,7 @@ For 'quote-card': params { quote, fontSize (40-60), mood, variation (0-3) }
 For 'composable': params { visualLayers: [{primitive, params}], text: {content, animation, fontSize (40-52), position, maxWidth (800)}, mood }
   Available primitives: ${VISUAL_PRIMITIVES.join(', ')}
   Text animations: typewriter, fade-in, word-by-word, letter-scatter
+  ANIMATION CONSTRAINT: letter-scatter is LETTER-LEVEL and breaks mid-word when text wraps to multiple lines. Only use letter-scatter for scenes with <=8 words. For longer narration (10+ words, common in 30s format), use typewriter, fade-in, or word-by-word instead.
   Text positions: center, bottom-center, top-center
   VISUAL DEPTH: composable scenes MUST have 2-4 visual layers. Single glow-orb backgrounds look cheap. Layer for depth:
     - Base atmosphere: aurora, flow-field, or constellation (slow, fills the frame)
@@ -372,33 +511,66 @@ YouTube metadata:
 
 Output STRICT JSON:
 {
-  "hook": "the opening line / tension (<=12 words)",
-  "narration_full": "complete narration, all scenes joined (<=40 words total)",
+  "format": "15s" or "30s",
+  "hook": "the opening line / tension",
+  "narration_full": "complete narration, all scenes joined",
   "title": "YouTube title (<=60 chars)",
   "description": "YouTube description",
   "confidence": 0..1,
-  "reason": "<=20 words — what emotion this provokes and why someone rewatches",
+  "reason": "<=25 words — what emotion this provokes, how the loop closes, why someone rewatches",
+  "loop_check": "one sentence explaining how the final line recontextualizes the hook when the Short loops",
   "spec": {
     "scenes": [
-      { "id": "hook", "kind": "...", "durationInFrames": 150, "params": {...}, "narration": "5-12 words" },
-      { "id": "turn", "kind": "...", "durationInFrames": 240, "params": {...}, "narration": "5-12 words" }
+      // For 15s: 2-3 scenes. For 30s: exactly 4 scenes with ids hook/setup/second_hook/payoff.
+      { "id": "hook", "kind": "...", "durationInFrames": 90, "params": {...}, "narration": "..." }
     ],
     "transitions": [{ "kind": "fade", "durationInFrames": 12 }],
     "palette": { "seedHue": 0..360, "harmony": "analogous|complementary|triadic|split", "mood": "..." }
   }
 }
 
-SELF-CHECK before outputting: count words per scene. If any scene > 15 words, rewrite it shorter. If total > 40 words, cut. If both scenes use the same mood, change one.
+SELF-CHECK before outputting:
+1. DID I NAME A REAL AI PRODUCT? (Claude, ChatGPT, Cursor, Gemini, Grok, Devin, Copilot, Windsurf, etc.) If every scene is abstract with zero named products, REWRITE. Specificity is non-negotiable.
+2. IS THIS A JOKE OR A NEWS BEAT? If it's just a "philosophical observation" with no punchline and no concrete fact, REWRITE. Kill vague wisdom.
+3. WOULD A DEVELOPER READING THIS SAY "OH GOD YES"? If no recognition, it's not relatable enough. Push toward actual developer pain.
+4. Does the final line recontextualize the hook? Read scene 1 → scene N back-to-back. If no, rewrite the payoff.
+5. Word count per scene within the format's limits?
+6. Does scene 2 use a different mood than scene 1?
+7. For 30s: does scene 3 genuinely re-hook? If not, drop to 15s.
+8. Is the hook text visible from frame 1 (no "fade in from black")?
+9. Could this line be a LinkedIn post? If yes, kill it. Shorts ≠ LinkedIn.
 
-Skip (confidence=0) if: the seed is too generic, would reveal product, or the best version is still boring.`;
+Skip (confidence=0) if: the seed can't sustain a named product / real joke / real news beat, OR the best version still reads like a vague observation, OR the loop doesn't close.`;
 
-  const prompt = `Seed from recent intelligence:
+  // SEED CONTEXT BLOCK — structured intelligence the model can mine for
+  // specificity. Highlights are the richest field: real posts, real handles,
+  // real products, real engagement. Model is licensed (in system prompt) to
+  // paraphrase and cite these.
+  const highlightsBlock = (seed.highlights || []).length
+    ? `  highlights (real posts from this week — paraphrase, cite @handle, or riff on them for specificity):
+${seed.highlights.map(h => `    - ${h.handle ? '@' + h.handle + ': ' : ''}"${h.text}"`).join('\n')}`
+    : '';
+  const continuityBlock = (seed.continuity || []).length
+    ? `  continuity (how this connects to prior weeks):
+${seed.continuity.map(c => `    - ${c}`).join('\n')}`
+    : '';
+  const predictionsBlock = (seed.predictions || []).length
+    ? `  predictions made earlier (falsifiable, may be retrospectively scored):
+${seed.predictions.map(p => `    - "${p.what}" by ${p.by_when} (conf=${p.confidence})`).join('\n')}`
+    : '';
+
+  const prompt = `Seed (recent AI-space intelligence, ${seed.date}):
   bucket: ${seed.bucket}
-  date: ${seed.date}
   headline: ${seed.headline || '(none)'}
-  emerging_pattern: ${seed.pattern}
+  main pattern: ${seed.pattern}
+${highlightsBlock}
+${continuityBlock}
+${predictionsBlock}
 
-Create ONE YouTube Short.`;
+Create ONE YouTube Short.
+- Use the highlights for concrete specificity: name the products, name the @handles if they add credibility, quote/paraphrase the actual posts.
+- If the main pattern is abstract, ANCHOR the Short on a specific highlight — that's your material.
+- If every highlight feels boring, you can skip (confidence=0) rather than produce vague output.`;
 
   const out = await llm({ purpose: 'reasoning', system: sys, prompt });
   return { parsed: extractJson(out.text), model: out.model_used };
@@ -444,9 +616,10 @@ function buildFullSpec(draft, { voiceoverRef = null, audioDurationMs = null } = 
     durationInFrames: s.durationInFrames || 240,
   }));
 
+  const declaredFormat = draft.format === '30s' || draft.format === '15s' ? draft.format : 'auto';
   if (audioDurationMs && audioDurationMs > 0) {
-    scenes = alignSceneDurations(scenes, audioDurationMs);
-    console.log(`[yt-compose] aligned scene durations to ${audioDurationMs}ms audio: ${scenes.map(s => s.durationInFrames).join('+')}`);
+    scenes = alignSceneDurations(scenes, audioDurationMs, { format: declaredFormat });
+    console.log(`[yt-compose] aligned scene durations (${declaredFormat}) to ${audioDurationMs}ms audio: ${scenes.map(s => s.durationInFrames).join('+')}`);
   }
 
   const voiceovers = voiceoverRef
@@ -670,7 +843,7 @@ async function main() {
 
   let draft;
   try {
-    const result = await draftShort({ brandVoice: cfg.brand_voice, workspaceDesc: cfg.workspace_description, seed });
+    const result = await draftShort({ brandVoice: cfg.brand_voice, workspaceDesc: cfg.workspace_description, seed, formatMode: FORMAT });
     draft = result.parsed;
     console.log(`[yt-compose] drafted: "${draft.title}" · conf=${draft.confidence} · model=${result.model}`);
   } catch (e) {
