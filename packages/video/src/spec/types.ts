@@ -21,6 +21,12 @@ export interface AudioRef {
   volume?: number;
 }
 
+export type WipeDirection =
+  | "from-left"
+  | "from-right"
+  | "from-top"
+  | "from-bottom";
+
 export type TransitionSpec =
   | {
       kind: "fade";
@@ -28,6 +34,7 @@ export type TransitionSpec =
       spring?: { damping: number; durationRestThreshold?: number };
     }
   | { kind: "slide"; direction: "from-left" | "from-right"; durationInFrames: number }
+  | { kind: "wipe"; direction: WipeDirection; durationInFrames: number }
   | { kind: "none" };
 
 /**

@@ -8,6 +8,7 @@ import {
 } from "@remotion/transitions";
 import { fade } from "@remotion/transitions/fade";
 import { slide } from "@remotion/transitions/slide";
+import { wipe } from "@remotion/transitions/wipe";
 import type { VideoSpec, TransitionSpec, AudioRef, CaptionSpec } from "./spec/types";
 import { totalDurationFrames } from "./spec/totalDuration";
 import { renderScene } from "./scenes/registry";
@@ -33,15 +34,17 @@ function timingFor(t: TransitionSpec): TransitionTiming {
         })
       : linearTiming({ durationInFrames: t.durationInFrames });
   }
-  if (t.kind === "slide") {
+  if (t.kind === "slide" || t.kind === "wipe") {
     return linearTiming({ durationInFrames: t.durationInFrames });
   }
   return linearTiming({ durationInFrames: 0 });
 }
 
-function presentationFor(t: TransitionSpec) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function presentationFor(t: TransitionSpec): any {
   if (t.kind === "fade") return fade();
   if (t.kind === "slide") return slide({ direction: t.direction });
+  if (t.kind === "wipe") return wipe({ direction: t.direction });
   return fade();
 }
 

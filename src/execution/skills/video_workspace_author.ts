@@ -1033,10 +1033,18 @@ function buildComposableParams(
 type TransitionSpec =
   | { kind: 'fade'; durationInFrames: number; spring: { damping: number; durationRestThreshold: number } }
   | { kind: 'slide'; direction: 'from-right' | 'from-left'; durationInFrames: number }
+  | { kind: 'wipe'; direction: 'from-left' | 'from-right' | 'from-top' | 'from-bottom'; durationInFrames: number }
   | { kind: 'none' };
 
 const CALM_MOODS = new Set(['warm', 'forest', 'sunset', 'cool']);
 const INTENSE_MOODS = new Set(['electric', 'dark', 'midnight']);
+const EXTREME_PAIRS: ReadonlySet<string> = new Set([
+  'warm|electric', 'electric|warm',
+  'warm|dark', 'dark|warm',
+  'forest|electric', 'electric|forest',
+  'sunset|dark', 'dark|sunset',
+]);
+const WIPE_DIRECTIONS = ['from-left', 'from-right', 'from-top', 'from-bottom'] as const;
 
 function pickTransition(
   from: { kind: string; params?: Record<string, unknown> },
@@ -1047,16 +1055,24 @@ function pickTransition(
   const toMood = (to.params as { mood?: string } | undefined)?.mood;
   const sameMood = fromMood === toMood;
   const calmToCalm = CALM_MOODS.has(fromMood ?? '') && CALM_MOODS.has(toMood ?? '');
-  const intensityShift =
-    (CALM_MOODS.has(fromMood ?? '') && INTENSE_MOODS.has(toMood ?? '')) ||
-    (INTENSE_MOODS.has(fromMood ?? '') && CALM_MOODS.has(toMood ?? ''));
 
   if (sameMood || calmToCalm) {
     return { kind: 'fade', durationInFrames: Math.round(TRANSITION_FRAMES * 1.5), spring: { damping: 200, durationRestThreshold: 0.001 } };
   }
-  if (intensityShift) {
+
+  const pairKey = `${fromMood ?? ''}|${toMood ?? ''}`;
+  if (EXTREME_PAIRS.has(pairKey)) {
     return { kind: 'none' };
   }
+
+  const intensityShift =
+    (CALM_MOODS.has(fromMood ?? '') && INTENSE_MOODS.has(toMood ?? '')) ||
+    (INTENSE_MOODS.has(fromMood ?? '') && CALM_MOODS.has(toMood ?? ''));
+  if (intensityShift) {
+    const dir = WIPE_DIRECTIONS[index % WIPE_DIRECTIONS.length];
+    return { kind: 'wipe', direction: dir, durationInFrames: TRANSITION_FRAMES };
+  }
+
   const direction = index % 2 === 0 ? 'from-right' as const : 'from-left' as const;
   return { kind: 'slide', direction, durationInFrames: TRANSITION_FRAMES };
 }
