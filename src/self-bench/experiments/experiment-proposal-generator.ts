@@ -516,6 +516,7 @@ export class ExperimentProposalGenerator implements Experiment {
     const researchContext = await readRecentKbByType(ctx, 'arxiv', RULE5_ARXIV_LIMIT);
     const selfObsContext = await readRecentKbByType(ctx, 'self-observation', RULE5_SELF_OBS_LIMIT);
     const paperGapContext = await readLatestPaperGaps(ctx);
+    const revenuePulseContext = await readLatestRevenuePulse(ctx);
 
     const coveredList = Array.from(existingProposals)
       .concat(existingSlugs)
@@ -544,7 +545,14 @@ export class ExperimentProposalGenerator implements Experiment {
       'so operators can measure whether paper-attributed probes hold. ' +
       'Prefer briefs that target tokens from <paper_gaps> when present — ' +
       'those are techniques the papers discuss that do not yet appear in ' +
-      'the codebase, so probing them has the highest learning yield.';
+      'the codebase, so probing them has the highest learning yield. ' +
+      'When <revenue_pulse> is present, prefer briefs that target its ' +
+      'next_move directly — that is the system\'s current read of the ' +
+      'highest-leverage lever to move revenue, and probes whose slugs ' +
+      'contain revenue keywords (revenue, sales, deal, customer, ' +
+      'conversion, outreach, outbound, reply-rate, classifier, ' +
+      'qualified, attribution, thermostat, pricing, billing, burn-rate, ' +
+      'spend) jump the author queue via the revenue bucket.';
 
     const promptParts: string[] = [];
     promptParts.push('<already_covered_slugs>');
@@ -579,6 +587,18 @@ export class ExperimentProposalGenerator implements Experiment {
         if (r.snippet) promptParts.push(`    ${r.snippet}`);
       }
       promptParts.push('</self_observations>');
+    }
+    if (revenuePulseContext) {
+      promptParts.push('');
+      promptParts.push('<revenue_pulse source="revenue-pulse, most recent hourly finding">');
+      promptParts.push(`  next_move: ${revenuePulseContext.next_move}`);
+      promptParts.push(
+        `  snapshot: 7d_revenue=$${(revenuePulseContext.revenue_cents_7d / 100).toFixed(2)} ` +
+        `burn_today=$${(revenuePulseContext.burn_cents_today / 100).toFixed(2)} ` +
+        `outbound_dm_24h=${revenuePulseContext.outbound_dm_24h} ` +
+        `active_customers=${revenuePulseContext.active_customers}`,
+      );
+      promptParts.push('</revenue_pulse>');
     }
     if (paperGapContext && (paperGapContext.aggregate.length > 0 || paperGapContext.papers.length > 0)) {
       promptParts.push('');
@@ -1007,6 +1027,52 @@ async function readLatestPaperGaps(
       .filter((e) => e.gap_concepts && e.gap_concepts.length > 0)
       .sort((a, b) => b.gap_ratio - a.gap_ratio);
     return { aggregate, papers };
+  } catch {
+    return null;
+  }
+}
+
+async function readLatestRevenuePulse(
+  ctx: ExperimentContext,
+): Promise<
+  | {
+      next_move: string;
+      revenue_cents_7d: number;
+      burn_cents_today: number;
+      outbound_dm_24h: number;
+      active_customers: number;
+    }
+  | null
+> {
+  try {
+    const { data } = await ctx.db
+      .from<{ evidence: string }>('self_findings')
+      .select('evidence')
+      .eq('experiment_id', 'revenue-pulse')
+      .order('ran_at', { ascending: false })
+      .limit(5);
+    const rows = (data ?? []) as Array<{ evidence: string }>;
+    for (const row of rows) {
+      const ev = JSON.parse(row.evidence) as {
+        skipped?: boolean;
+        next_move?: string;
+        revenue_cents_7d?: number;
+        burn_cents_today?: number;
+        outbound_dm_24h?: number;
+        active_customers?: number;
+      };
+      // Skip the dedupe-skip rows — they carry no Next Move to act on.
+      if (ev.skipped) continue;
+      if (typeof ev.next_move !== 'string') continue;
+      return {
+        next_move: ev.next_move,
+        revenue_cents_7d: Number(ev.revenue_cents_7d ?? 0),
+        burn_cents_today: Number(ev.burn_cents_today ?? 0),
+        outbound_dm_24h: Number(ev.outbound_dm_24h ?? 0),
+        active_customers: Number(ev.active_customers ?? 0),
+      };
+    }
+    return null;
   } catch {
     return null;
   }
