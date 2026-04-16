@@ -42,6 +42,7 @@ import { getAgentSuggestions } from './agent-suggestions.js';
 import { listAvailablePresets, setupAgents, bootstrapWorkspace } from './setup-agents.js';
 import { discoverCapabilities, proposeAutomation, createAutomation } from './automation-builder.js';
 import { generateSlides, exportSlidesToPdf, generateMusic, generateVideo, generateVoice } from './media.js';
+import { generateVideoFromSpec } from './video.js';
 import { evolveTask } from './co-evolution.js';
 import { openclawListSkills, openclawImportSkill, openclawRemoveSkill, openclawAuditSkill } from './openclaw.js';
 import { getAgentState, setAgentState, listAgentState, deleteAgentState, clearAgentState } from './state.js';
@@ -270,6 +271,7 @@ export const toolRegistry = new Map<string, ToolHandler>([
   ['export_slides_pdf', (ctx, input) => exportSlidesToPdf(ctx, input)],
   ['generate_music', (ctx, input) => generateMusic(ctx, input)],
   ['generate_video', (ctx, input) => generateVideo(ctx, input)],
+  ['generate_video_from_spec', (ctx, input) => generateVideoFromSpec(ctx, input)],
   ['generate_voice', (ctx, input) => generateVoice(ctx, input)],
 
   // OpenClaw tools
