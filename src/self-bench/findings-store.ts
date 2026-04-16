@@ -141,6 +141,36 @@ async function supersedeDuplicates(
   }
 }
 
+async function supersedeOnPassFlip(
+  db: DatabaseAdapter,
+  newId: string,
+  row: NewFindingRow,
+): Promise<number> {
+  try {
+    let query = db
+      .from<{ id: string }>('self_findings')
+      .select('id')
+      .eq('experiment_id', row.experimentId)
+      .eq('status', 'active')
+      .in('verdict', ['warning', 'fail']);
+    if (row.subject != null) {
+      query = query.eq('subject', row.subject);
+    }
+    const { data } = await query;
+    const stale = (data ?? []).filter((r) => r.id !== newId);
+    if (stale.length === 0) return 0;
+    for (const s of stale) {
+      await db
+        .from('self_findings')
+        .update({ status: 'superseded', superseded_by: newId })
+        .eq('id', s.id);
+    }
+    return stale.length;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Insert a finding row. Generates the id so callers don't have to.
  * Returns the new id.
@@ -203,6 +233,15 @@ export async function writeFinding(
   }
 
   await supersedeDuplicates(db, id, row, opts.supersedeWindowMs ?? DEFAULT_SUPERSEDE_WINDOW_MS);
+
+  // When a probe flips to pass, supersede older warning/fail findings
+  // for the same (experiment_id, subject). Without this, stale warnings
+  // survive indefinitely and poison downstream consumers like
+  // patch-author's candidate ranker.
+  if (row.verdict === 'pass' && row.subject != null) {
+    await supersedeOnPassFlip(db, id, row);
+  }
+
   return id;
 }
 
