@@ -56,6 +56,7 @@ import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
+import { DeliverableActionSentinelExperiment } from '../self-bench/experiments/deliverable-action-sentinel.js';
 import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
 import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
@@ -145,6 +146,13 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new XShapeTunerExperiment());
   experimentRunner.register(new MigrationDriftSentinelExperiment());
   experimentRunner.register(new BrowserProfileGuardianExperiment());
+  // Deliverable action sentinel: scans recent deferred-action tasks
+  // (post_tweet, send_email, etc.) for agent-narrated auth/permission
+  // failures on rows marked status=completed. Closes the observability
+  // gap the 2026-04-16 "unauthed chromium on X" loop exposed —
+  // content-cadence was marking every dispatch completed even when the
+  // agent plainly wrote "I cannot log in".
+  experimentRunner.register(new DeliverableActionSentinelExperiment());
   // Piece 5: revenue pipeline observer (advisory).
   experimentRunner.register(new RevenuePipelineObserverExperiment());
   // Piece 4b: X per-shape engagement observer.
