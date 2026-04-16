@@ -12,6 +12,9 @@
  *   HISTORY_DAYS=5           how far back to pull emerging patterns
  *   SKIP_RENDER=0            skip Remotion render (for testing LLM drafts)
  *   SKIP_VOICE=0             skip voice generation (for testing visuals)
+ *   VOICE_PROVIDER=openrouter (default) | kokoro
+ *   VOICE_NAME=onyx          voice preset (openrouter: alloy/ash/ballad/coral/
+ *                            echo/fable/nova/onyx/sage/shimmer/verse)
  *   VISIBILITY=unlisted      YouTube visibility (private/unlisted/public)
  */
 import fs from 'node:fs';
@@ -47,15 +50,39 @@ function detectBanned(text) {
   return BANNED_PHRASES.filter(p => t.includes(p));
 }
 
+function readOpenRouterKey() {
+  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.ohwow', 'config.json'), 'utf8'));
+    return cfg.openRouterApiKey || null;
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------------------
-// Voice generation — calls Kokoro directly (free, local) with graceful fallback
+// Voice generation — OpenRouter gpt-audio-mini (primary) or Kokoro (local)
 // ---------------------------------------------------------------------------
-const KOKORO_URL = 'http://127.0.0.1:8880';
-const VOICE_NAME = 'af_heart';
+// VOICE_PROVIDER=openrouter (default) uses openai/gpt-audio-mini via OpenRouter.
+// VOICE_PROVIDER=kokoro uses a locally-running Kokoro FastAPI server on :8880.
+// VOICE_NAME overrides the default voice preset for the active provider.
+const VOICE_PROVIDER = process.env.VOICE_PROVIDER || 'openrouter';
+const OPENROUTER_DEFAULT_VOICE = 'onyx';
+const KOKORO_DEFAULT_VOICE = 'af_heart';
+const VOICE_NAME = process.env.VOICE_NAME
+  || (VOICE_PROVIDER === 'kokoro' ? KOKORO_DEFAULT_VOICE : OPENROUTER_DEFAULT_VOICE);
 const VOICE_SPEED = 1.0;
 const VOICE_LEAD_FRAMES = 5;
 const VOICE_TAIL_FRAMES = 20;
 const SCENE_MIN_FRAMES = 90;
+const KOKORO_URL = 'http://127.0.0.1:8880';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const TTS_MODEL = 'openai/gpt-audio-mini';
+
+// Strict system prompt that turns the conversational gpt-audio model into a
+// verbatim TTS engine. Without this the model answers the input as dialog.
+const TTS_SYSTEM_PROMPT =
+  'You are a TTS engine. The user will send text in quotes. You must speak ' +
+  'exactly the quoted text, verbatim, with natural prosody. Never respond, ' +
+  'never acknowledge, never add words. Just read what is between the quotes.';
 
 async function kokoroAvailable() {
   try {
@@ -64,26 +91,128 @@ async function kokoroAvailable() {
   } catch { return false; }
 }
 
-async function generateVoiceOver(text, voice = VOICE_NAME, speed = VOICE_SPEED) {
+/**
+ * Save an MP3 buffer under ~/.ohwow/media/audio/ with a content-addressable
+ * filename (first 16 hex of sha256). Returns the absolute path.
+ */
+function saveVoiceMp3(buffer) {
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
+  const audioDir = path.join(os.homedir(), '.ohwow', 'media', 'audio');
+  fs.mkdirSync(audioDir, { recursive: true });
+  const filePath = path.join(audioDir, `voice-${hash.slice(0, 16)}.mp3`);
+  fs.writeFileSync(filePath, buffer);
+  return filePath;
+}
+
+/**
+ * Generate voiceover via Kokoro FastAPI (local, free). Returns null if the
+ * server is not reachable on localhost:8880.
+ */
+async function generateVoiceKokoro(text, voice, speed = VOICE_SPEED) {
   if (!(await kokoroAvailable())) {
-    console.log('[yt-compose] kokoro not available, skipping voiceover');
+    console.log('[yt-compose] kokoro not available on :8880');
     return null;
   }
+  const resp = await fetch(`${KOKORO_URL}/v1/audio/speech`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'kokoro', input: text, voice, speed, response_format: 'mp3' }),
+  });
+  if (!resp.ok) throw new Error(`Kokoro TTS ${resp.status}`);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const filePath = saveVoiceMp3(buffer);
+  console.log(`[yt-compose] voice (kokoro ${voice}): ${Math.round(buffer.length / 1024)}KB → ${filePath}`);
+  return filePath;
+}
+
+/**
+ * Generate voiceover via OpenRouter gpt-audio-mini. The model requires
+ * streaming + pcm16 output; we transcode to MP3 via ffmpeg after collecting
+ * the raw PCM buffer (24kHz mono 16-bit).
+ */
+async function generateVoiceOpenRouter(text, voice) {
+  const apiKey = readOpenRouterKey();
+  if (!apiKey) {
+    console.log('[yt-compose] no OpenRouter API key, skipping voiceover');
+    return null;
+  }
+  const resp = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://ohwow.fun',
+      'X-Title': 'OHWOW',
+    },
+    signal: AbortSignal.timeout(60_000),
+    body: JSON.stringify({
+      model: TTS_MODEL,
+      modalities: ['text', 'audio'],
+      audio: { voice, format: 'pcm16' },
+      stream: true,
+      messages: [
+        { role: 'system', content: TTS_SYSTEM_PROMPT },
+        { role: 'user', content: `Read this aloud: "${text}"` },
+      ],
+    }),
+  });
+  if (!resp.ok) {
+    const err = await resp.text().catch(() => '');
+    throw new Error(`OpenRouter TTS ${resp.status}: ${err.slice(0, 200)}`);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let sseBuf = '', b64 = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    sseBuf += decoder.decode(value, { stream: true });
+    const lines = sseBuf.split('\n');
+    sseBuf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const payload = line.slice(6).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(payload);
+        const audio = chunk.choices?.[0]?.delta?.audio ?? chunk.choices?.[0]?.message?.audio;
+        if (audio?.data) b64 += audio.data;
+      } catch {}
+    }
+  }
+  if (!b64) throw new Error('OpenRouter TTS returned no audio');
+
+  // pcm16 @ 24kHz mono → mp3 via ffmpeg. Use a temp pcm file to avoid ffmpeg stdin buffering.
+  const pcmBuffer = Buffer.from(b64, 'base64');
+  const tmpPcm = path.join(os.tmpdir(), `voice-${Date.now()}.pcm`);
+  fs.writeFileSync(tmpPcm, pcmBuffer);
+  const tmpMp3 = path.join(os.tmpdir(), `voice-${Date.now()}.mp3`);
+  execSync(
+    `ffmpeg -y -f s16le -ar 24000 -ac 1 -i "${tmpPcm}" -c:a libmp3lame -q:a 4 "${tmpMp3}"`,
+    { stdio: 'pipe' },
+  );
+  const mp3Buffer = fs.readFileSync(tmpMp3);
+  fs.unlinkSync(tmpPcm);
+  fs.unlinkSync(tmpMp3);
+
+  const filePath = saveVoiceMp3(mp3Buffer);
+  const durSec = pcmBuffer.length / 2 / 24000;
+  console.log(`[yt-compose] voice (openrouter ${voice}): ${durSec.toFixed(2)}s, ${Math.round(mp3Buffer.length / 1024)}KB → ${filePath}`);
+  return filePath;
+}
+
+/**
+ * Unified voiceover generator. Routes to the configured provider and falls
+ * back to Kokoro if OpenRouter is selected but no API key is configured.
+ */
+async function generateVoiceOver(text, voice = VOICE_NAME) {
   try {
-    const resp = await fetch(`${KOKORO_URL}/v1/audio/speech`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'kokoro', input: text, voice, speed, response_format: 'mp3' }),
-    });
-    if (!resp.ok) throw new Error(`Kokoro TTS ${resp.status}`);
-    const buffer = Buffer.from(await resp.arrayBuffer());
-    const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-    const audioDir = path.join(os.homedir(), '.ohwow', 'media', 'audio');
-    fs.mkdirSync(audioDir, { recursive: true });
-    const filePath = path.join(audioDir, `voice-${hash.slice(0, 16)}.mp3`);
-    fs.writeFileSync(filePath, buffer);
-    console.log(`[yt-compose] voice generated: ${Math.round(buffer.length / 1024)}KB → ${filePath}`);
-    return filePath;
+    if (VOICE_PROVIDER === 'kokoro') return await generateVoiceKokoro(text, voice);
+    const result = await generateVoiceOpenRouter(text, voice);
+    if (result) return result;
+    // OpenRouter unavailable → try Kokoro as last resort
+    console.log('[yt-compose] OpenRouter TTS unavailable, trying Kokoro...');
+    return await generateVoiceKokoro(text, KOKORO_DEFAULT_VOICE);
   } catch (e) {
     console.log(`[yt-compose] voice generation failed: ${e.message}`);
     return null;
@@ -132,14 +261,6 @@ function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
 // Visual self-review — OpenRouter vision API (cheap Gemini Flash Lite)
 // ---------------------------------------------------------------------------
 const REVIEW_MODEL = 'google/gemini-2.5-flash-lite';
-
-function readOpenRouterKey() {
-  if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.ohwow', 'config.json'), 'utf8'));
-    return cfg.openRouterApiKey || null;
-  } catch { return null; }
-}
 
 function workspaceConfigPath(ws) {
   return path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-config.json');
