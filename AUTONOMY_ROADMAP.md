@@ -10,7 +10,7 @@ This is the top-level index. Always read this first.
 
 ---
 
-## 1. Current System State (as of 2026-04-15T16:15Z, loop active + roadmap-aware)
+## 1. Current System State (as of 2026-04-16T06:23Z, loop active + roadmap-aware)
 
 ### Architecture Summary
 
@@ -90,7 +90,7 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ## 2. Active Focus
 **Loop is converging. Watching hold_rate recover as old reverts age out.**
 
-As of 2026-04-15T16:15Z:
+As of 2026-04-16T06:23Z:
 - 6 patches landed in the 24h window, 4 reverted (hold_rate=33%), but the 4
   reverts are ALL pre-session (oscillation era). The 2 patches from this session
   (Agents.tsx, Dashboard.tsx) have both held. A third patch (FlowBuilder.tsx) is
@@ -264,12 +264,17 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-### Missing Experiments (6)
+### Missing Experiments (12)
 The following experiment files are not yet listed in the Active Experiments section above:
-- toolchain-lint
-- toolchain-tests
-- toolchain-typecheck
-- unknown-latency
-- unknown-latency
-- unknown-latency
-- unknown-latency
+- browser-profile-guardian
+- daily-surprise-digest
+- deliverable-action-sentinel
+- git-velocity
+- google-gemini-3-1-pro-preview-latency
+- mig-smoke-1776324117308
+- migration-drift-sentinel
+- revenue-pipeline-observer
+- x-autonomy-ramp
+- x-engagement-observer
+- x-ops-observer
+- x-shape-tuner
