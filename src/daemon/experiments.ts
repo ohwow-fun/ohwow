@@ -192,8 +192,8 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new VitestHealthProbeExperiment());
   experimentRunner.register(new LoopCadenceProbeExperiment());
   experimentRunner.register(new TestCoverageProbeExperiment());
-  // Storage reaper: hard-deletes superseded self_findings + closed
-  // experiment_validations older than 6h. Kill switch:
+  // Storage reaper: hard-deletes superseded self_findings older than
+  // 6h and closed experiment_validations older than 30min. Kill switch:
   // ~/.ohwow/findings-gc-disabled. Without this, fast-cadence
   // probes inflate runtime.db unbounded.
   experimentRunner.register(new FindingsGcExperiment());

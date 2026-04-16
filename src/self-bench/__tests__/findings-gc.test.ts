@@ -191,6 +191,34 @@ describe('FindingsGcExperiment', () => {
     expect(exp.judge(result, [])).toBe('pass');
   });
 
+  it('honors split TTLs: validations cleaned faster than findings', async () => {
+    // Default split: findings 6h, validations 30min. Seed a row exactly in
+    // the gap (45min old) — the validation should be reaped, the finding
+    // should be left alone.
+    const fixedNow = Date.parse('2026-04-16T20:00:00Z');
+    const fortyFiveMinAgo = new Date(fixedNow - 45 * 60 * 1000).toISOString();
+    insertFinding(env, { id: 'mid-superseded', status: 'superseded', ranAtIso: fortyFiveMinAgo });
+    insertValidation(env, { id: 'mid-completed', status: 'completed', completedAtIso: fortyFiveMinAgo });
+
+    const exp = new FindingsGcExperiment({
+      killSwitchPath: join(env.dir, 'no-such-kill-switch'),
+      now: () => fixedNow,
+    });
+    const result = await exp.probe(buildCtx(env));
+    const ev = result.evidence as {
+      deleted_findings: number;
+      deleted_validations: number;
+      findings_ttl_ms: number;
+      validations_ttl_ms: number;
+    };
+    expect(ev.deleted_findings).toBe(0);
+    expect(ev.deleted_validations).toBe(1);
+    // Defaults are advertised in evidence so an operator inspecting the
+    // probe finding sees the asymmetric TTLs without grepping source.
+    expect(ev.findings_ttl_ms).toBe(6 * 60 * 60 * 1000);
+    expect(ev.validations_ttl_ms).toBe(30 * 60 * 1000);
+  });
+
   it('respects the kill switch and writes nothing', async () => {
     const killPath = join(env.dir, 'findings-gc-disabled');
     writeFileSync(killPath, '');
@@ -209,13 +237,13 @@ describe('FindingsGcExperiment', () => {
     expect(count.n).toBe(1);
   });
 
-  it('reports nothing-to-prune cleanly when the table is fresh', async () => {
+  it('reports nothing-to-prune cleanly when the tables are fresh', async () => {
     const exp = new FindingsGcExperiment({
       killSwitchPath: join(env.dir, 'no-such-kill-switch'),
       now: () => Date.parse('2026-04-16T20:00:00Z'),
     });
     const result = await exp.probe(buildCtx(env));
-    expect(result.summary).toMatch(/^nothing to prune older than /);
+    expect(result.summary).toMatch(/^nothing to prune \(findings older than .+, validations older than .+\)/);
     expect(exp.judge(result, [])).toBe('pass');
   });
 });

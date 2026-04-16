@@ -64,9 +64,11 @@ import { pruneOldSuperseded } from '../findings-store.js';
 import { pruneClosedValidations } from '../validation-store.js';
 import { logger } from '../../lib/logger.js';
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
 /**
- * 6h default. Rationale:
+ * Default findings TTL: 6h. Rationale:
  *
  *   - supersedeDuplicates uses a 10-minute window. Once a row is
  *     superseded, by definition a newer row covers it within 10min;
@@ -77,16 +79,33 @@ const HOUR_MS = 60 * 60 * 1000;
  *     superseded row of the same shape is already represented by its
  *     active successor.
  *   - JUDGE_HISTORY_LIMIT=20 reads recent findings per experiment with
- *     no status filter; at 1 finding / 10s for chatty probes that's
- *     ~3 minutes of history — far short of 6h.
- *   - 6h still gives operators a comfortable window to query "what got
- *     superseded earlier this morning" via ohwow_list_findings with
- *     status='superseded'.
+ *     no status filter. At 10s/finding for chatty probes that's ~3min;
+ *     at 5min cadence for slow probes that's ~100min. 6h covers both.
+ *   - 24h aggregators (intervention-audit, burn-rate, daily-surprise-
+ *     digest) still get a 6h slice of superseded data. Tighter would
+ *     undercut their denominators.
  *
  * Bump higher (e.g. 24h) if a probe shape ever needs a longer historical
- * trace.
+ * trace; lower if disk pressure forces aggressive cleanup.
  */
-const DEFAULT_TTL_MS = 6 * HOUR_MS;
+const DEFAULT_FINDINGS_TTL_MS = 6 * HOUR_MS;
+
+/**
+ * Default validations TTL: 30 min. Rationale:
+ *
+ *   - A closed validation row (completed | skipped | error) is pure
+ *     scheduling metadata. The live signal — outcome, baseline, error
+ *     details — already landed in self_findings as a row with
+ *     category='validation'. Nothing in the codebase reads
+ *     experiment_validations after a row closes except the
+ *     intervention_finding_id link for debugging.
+ *   - Pending validations are NEVER deleted regardless of age, so a
+ *     stuck pending row stays visible to the operator.
+ *   - 30min gives operator a window to debug "what just validated and
+ *     how" before the row gets reaped. Past that, the finding row in
+ *     self_findings is the canonical record.
+ */
+const DEFAULT_VALIDATIONS_TTL_MS = 30 * MINUTE_MS;
 
 export const FINDINGS_GC_DISABLED_PATH = path.join(
   os.homedir(),
@@ -95,7 +114,27 @@ export const FINDINGS_GC_DISABLED_PATH = path.join(
 );
 
 export interface FindingsGcOptions {
-  /** Override the per-table TTL. Defaults to 24h for both tables. */
+  /**
+   * Findings TTL override. Defaults to 6h.
+   *
+   * Tuned conservatively because self_findings is read by both fast
+   * judges (3min of history) and slow daily aggregators (24h windows).
+   * 6h covers most readers without breaking the daily ones.
+   */
+  findingsTtlMs?: number;
+  /**
+   * Validations TTL override. Defaults to 30min.
+   *
+   * Aggressive because closed validation rows are scheduling metadata
+   * — the live signal already lives in self_findings.
+   */
+  validationsTtlMs?: number;
+  /**
+   * Convenience: set both TTLs to the same value. Equivalent to passing
+   * findingsTtlMs and validationsTtlMs to the same number. Wins over
+   * the per-table overrides if all three are set (last-wins is the
+   * tests' usual ergonomic choice).
+   */
   ttlMs?: number;
   /** Test-only override of the kill-switch path. */
   killSwitchPath?: string;
@@ -106,8 +145,10 @@ export interface FindingsGcOptions {
 export interface FindingsGcEvidence extends Record<string, unknown> {
   affected_files: string[];
   killed: boolean;
-  ttl_ms: number;
-  cutoff_iso: string;
+  findings_ttl_ms: number;
+  validations_ttl_ms: number;
+  findings_cutoff_iso: string;
+  validations_cutoff_iso: string;
   deleted_findings: number;
   deleted_validations: number;
 }
@@ -117,28 +158,34 @@ export class FindingsGcExperiment implements Experiment {
   readonly name = 'Findings + validations storage reaper';
   readonly category: ExperimentCategory = 'other';
   readonly hypothesis =
-    'Superseded findings and closed validations older than the longest known reader window (24h is well past every observed lookback) are dead weight in storage. Hard-deleting them on a fixed cadence keeps fast-cadence probes from inflating runtime.db without touching live signal.';
+    'Superseded findings and closed validations age out at different rates: validations are pure scheduling metadata once closed (the signal lives in self_findings), so 30min suffices; findings carry baseline data for judges and aggregators, so 6h is the conservative floor. Hard-deleting on a fixed cadence keeps fast-cadence probes from inflating runtime.db without touching live signal.';
   readonly cadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
 
-  private readonly ttlMs: number;
+  private readonly findingsTtlMs: number;
+  private readonly validationsTtlMs: number;
   private readonly killSwitchPath: string;
   private readonly now: () => number;
 
   constructor(opts: FindingsGcOptions = {}) {
-    this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
+    this.findingsTtlMs = opts.ttlMs ?? opts.findingsTtlMs ?? DEFAULT_FINDINGS_TTL_MS;
+    this.validationsTtlMs = opts.ttlMs ?? opts.validationsTtlMs ?? DEFAULT_VALIDATIONS_TTL_MS;
     this.killSwitchPath = opts.killSwitchPath ?? FINDINGS_GC_DISABLED_PATH;
     this.now = opts.now ?? Date.now;
   }
 
   async probe(ctx: ExperimentContext): Promise<ProbeResult> {
-    const cutoffIso = new Date(this.now() - this.ttlMs).toISOString();
+    const nowMs = this.now();
+    const findingsCutoffIso = new Date(nowMs - this.findingsTtlMs).toISOString();
+    const validationsCutoffIso = new Date(nowMs - this.validationsTtlMs).toISOString();
 
     if (this.isKilled()) {
       const evidence: FindingsGcEvidence = {
         affected_files: [],
         killed: true,
-        ttl_ms: this.ttlMs,
-        cutoff_iso: cutoffIso,
+        findings_ttl_ms: this.findingsTtlMs,
+        validations_ttl_ms: this.validationsTtlMs,
+        findings_cutoff_iso: findingsCutoffIso,
+        validations_cutoff_iso: validationsCutoffIso,
         deleted_findings: 0,
         deleted_validations: 0,
       };
@@ -149,16 +196,18 @@ export class FindingsGcExperiment implements Experiment {
       };
     }
 
-    const deletedFindings = await pruneOldSuperseded(ctx.db, cutoffIso);
-    const deletedValidations = await pruneClosedValidations(ctx.db, cutoffIso);
+    const deletedFindings = await pruneOldSuperseded(ctx.db, findingsCutoffIso);
+    const deletedValidations = await pruneClosedValidations(ctx.db, validationsCutoffIso);
 
     if (deletedFindings + deletedValidations > 0) {
       logger.info(
         {
           deletedFindings,
           deletedValidations,
-          cutoffIso,
-          ttlHours: this.ttlMs / HOUR_MS,
+          findingsCutoffIso,
+          validationsCutoffIso,
+          findingsTtlHours: this.findingsTtlMs / HOUR_MS,
+          validationsTtlMinutes: this.validationsTtlMs / MINUTE_MS,
         },
         '[findings-gc] pruned stale rows',
       );
@@ -167,14 +216,16 @@ export class FindingsGcExperiment implements Experiment {
     const evidence: FindingsGcEvidence = {
       affected_files: [],
       killed: false,
-      ttl_ms: this.ttlMs,
-      cutoff_iso: cutoffIso,
+      findings_ttl_ms: this.findingsTtlMs,
+      validations_ttl_ms: this.validationsTtlMs,
+      findings_cutoff_iso: findingsCutoffIso,
+      validations_cutoff_iso: validationsCutoffIso,
       deleted_findings: deletedFindings,
       deleted_validations: deletedValidations,
     };
     const summary =
       deletedFindings + deletedValidations === 0
-        ? `nothing to prune older than ${cutoffIso}`
+        ? `nothing to prune (findings older than ${findingsCutoffIso}, validations older than ${validationsCutoffIso})`
         : `pruned ${deletedFindings} superseded finding(s) + ${deletedValidations} closed validation(s)`;
     return { subject: 'meta:findings-gc', summary, evidence };
   }
