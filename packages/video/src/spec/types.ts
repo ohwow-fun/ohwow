@@ -1,4 +1,7 @@
 import type { ScenePayload } from "./kinds";
+import type { VisualLayer, TextLayer, VideoPalette } from "../layers/types";
+
+export type { VisualLayer, TextLayer, VideoPalette };
 
 export interface BrandTokens {
   colors: Record<string, string>;
@@ -67,6 +70,7 @@ export interface VideoSpec {
   width: number;
   height: number;
   brand: BrandTokens;
+  palette?: VideoPalette;
   music?: AudioRef;
   voiceovers: AudioRef[];
   transitions: TransitionSpec[];

@@ -13,6 +13,7 @@ import { BeforeAfter } from "./BeforeAfter";
 import { NotificationStack } from "./NotificationStack";
 import { QuoteCard } from "./QuoteCard";
 import { WorkflowSteps } from "./WorkflowSteps";
+import { ComposableScene } from "./ComposableScene";
 
 type SceneComponent = React.FC<{
   params?: Record<string, unknown>;
@@ -33,6 +34,7 @@ const registry = new Map<string, SceneComponent>([
   ["notification-stack", NotificationStack as SceneComponent],
   ["quote-card", QuoteCard as SceneComponent],
   ["workflow-steps", WorkflowSteps as SceneComponent],
+  ["composable", ComposableScene as SceneComponent],
 ]);
 
 export function registerSceneKind(kind: string, component: SceneComponent): void {

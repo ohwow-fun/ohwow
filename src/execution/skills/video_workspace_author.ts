@@ -145,6 +145,14 @@ export interface SceneScript {
   kind: string;
   script: string;           // narration (5-15s worth)
   caption?: string;         // single highlight sentence under 60 chars
+  mood?: string;
+  visualLayers?: Array<{ primitive: string; [key: string]: unknown }>;
+  text?: { content: string; animation?: string; position?: string; fontSize?: number };
+}
+
+export interface LlmStoryboard {
+  palette?: { seedHue: number; harmony: string; mood: string };
+  scenes: SceneScript[];
 }
 
 export interface SceneBrief {
@@ -343,26 +351,80 @@ const catalogBlock = (): string =>
     s => `  - "${s.kind}" (${s.name}): ${s.fits}`,
   ).join('\n');
 
+const VISUAL_PRIMITIVES = [
+  { id: 'aurora', name: 'Aurora bands', desc: 'Slow luminous bands with blur. Ethereal, calm.', params: 'colors[], speed, opacity, y' },
+  { id: 'bokeh', name: 'Bokeh circles', desc: 'Soft out-of-focus circles drifting. Dreamy, depth.', params: 'count, colors[], seed, minSize, maxSize, speed' },
+  { id: 'light-rays', name: 'Light rays', desc: 'Crepuscular rays from a point. Divine, dramatic.', params: 'count, color, originX, originY, spread, opacity' },
+  { id: 'constellation', name: 'Constellation net', desc: 'Nodes + faint connecting lines. Network, intelligence.', params: 'nodeCount, color, seed, speed, lineOpacity' },
+  { id: 'waveform', name: 'SVG waveform', desc: 'Layered sine waves. Audio, rhythm, flow.', params: 'color, amplitude, frequency, speed, y, layers' },
+  { id: 'geometric', name: 'Geometric shapes', desc: 'Rotating circles/squares/triangles. Structure.', params: 'count, color, seed, shapes[], opacity' },
+  { id: 'vignette', name: 'Vignette', desc: 'Edge darkening. Focus, cinematic.', params: 'intensity, color' },
+  { id: 'ripple', name: 'Ripple rings', desc: 'Expanding concentric circles. Impact, signal.', params: 'cx, cy, color, count, speed, maxRadius, opacity' },
+  { id: 'gradient-wash', name: 'Gradient wash', desc: 'Moving color gradient overlay. Mood.', params: 'colors[], speed, angle, opacity' },
+  { id: 'flow-field', name: 'Flow field particles', desc: 'Noise-driven particle swarm. Energy, organic.', params: 'count, seed, speed, colors[]' },
+  { id: 'pulse-ring', name: 'Pulse ring', desc: 'Single breathing ring. Heartbeat, life.', params: 'cx, cy, radius, color, speed, thickness' },
+  { id: 'glow-orb', name: 'Glow orb', desc: 'Soft radial glow. Warmth, presence.', params: 'cx, cy, size, color, pulseSpeed' },
+  { id: 'noise-grid', name: 'Noise grid', desc: 'Grid cells with noise opacity. Data, matrix.', params: 'cols, rows, cellSize, seed, color, speed' },
+  { id: 'scan-line', name: 'Scan line', desc: 'Moving horizontal line. CRT, tech.', params: 'color, speed, opacity' },
+  { id: 'film-grain', name: 'Film grain', desc: 'Subtle noise texture. Analog, cinematic.', params: 'intensity' },
+] as const;
+
+const TEXT_ANIMATIONS = ['typewriter', 'fade-in', 'word-by-word', 'letter-scatter'] as const;
+const TEXT_POSITIONS = ['center', 'bottom-center', 'bottom-left', 'top-center'] as const;
+
+const primitiveCatalogBlock = (): string =>
+  VISUAL_PRIMITIVES.map(
+    p => `  - "${p.id}" (${p.name}): ${p.desc} Params: ${p.params}`,
+  ).join('\n');
+
 const SCRIPT_SYSTEM = `You are a copywriter and motion-graphics director for ohwow — a local-first AI runtime that gives people an "AI team" that learns, remembers, and works autonomously.
 
 Ohwow's voice: direct, warm, confident, zero corporate language, zero marketing buzzwords. Short sentences. Second person ("you"). Sounds like a knowing friend, not a brochure.
 
-You author video storyboards. Each scene pairs narration (what the voice says) with a visual scene kind (motion-graphics template). You choose how many scenes a video needs — 3 to 7 — depending on the story. Not every video needs 5 scenes. A punchy 15-second teaser might have 3. A comprehensive showcase might have 6. Pick the number that serves the content.
+You author video storyboards. Each scene pairs narration with visuals. You have two modes:
 
-Available scene kinds (motion-graphics templates):
+MODE 1 — COMPOSABLE SCENES (preferred for new videos)
+You design the visual composition from scratch using visual primitives. Each scene gets:
+- A "visualLayers" array: primitives stacked bottom-to-top, each with params
+- A "text" object: the on-screen text content with animation style
+- A "mood": one of dark, warm, cool, electric, forest, sunset, midnight
+
+Available visual primitives (composable, stackable):
+${primitiveCatalogBlock()}
+
+Text animation styles: typewriter, fade-in, word-by-word, letter-scatter
+Text positions: center, bottom-center, bottom-left, top-center
+
+Creative guidance for layer composition:
+- 2-4 visual layers per scene is the sweet spot. Too many = visual noise.
+- Start with atmosphere (aurora, gradient-wash, bokeh) then add structure (constellation, geometric, waveform).
+- End with polish (vignette, film-grain, scan-line).
+- Vary layer combinations between scenes. Every scene should feel distinct.
+- Use opacity to control visual weight. Background layers: 0.05-0.15. Foreground: 0.1-0.3.
+- Speed creates rhythm. Slow (0.002-0.008) = meditative. Fast (0.02-0.05) = energetic.
+
+MODE 2 — TEMPLATE SCENES (for structured content)
+Pre-built motion-graphics templates. Use these when you need specific data visualizations:
 ${catalogBlock()}
 
-A kind CAN repeat if the story benefits (e.g., two outcome-orbit scenes for different angles).
+You choose how many scenes a video needs — 3 to 7 — depending on the story.
+
+PER-VIDEO COLOR IDENTITY
+Pick a single palette for the whole video:
+- "seedHue": 0-360 (the base hue from which all colors derive)
+- "harmony": analogous, complementary, triadic, or split
+- "mood": the dominant mood for the video
+Scenes vary within this palette. This gives each video a cohesive look.
 
 Constraints:
-- DO NOT lead with raw metrics. "33 agents" means nothing to someone who doesn't use ohwow yet. Instead, describe what those agents FEEL like to live with: "You woke up and your week was already in motion."
-- When you do use a number, make it land: tie it to a human outcome. "166 tasks done while you slept" beats "166 completed tasks."
+- DO NOT lead with raw metrics. Describe what agents FEEL like to live with.
+- When you use a number, tie it to a human outcome. "166 tasks done while you slept" beats "166 completed tasks."
 - Never invent product features. Only describe what the facts support.
 - No em-dashes, no parentheses, no "(s)" pluralization.
 - Second person. No "we" or "our".
-- Write for a busy founder who has 30 seconds and a skeptical mind. Don't pitch features. Paint the AFTER picture. Make them feel the gap between where they are and where they could be.
-- Philosophical > promotional. "What would you build if you never had to follow up again?" > "Automated follow-ups for your business."
-- End with a memorable tagline on the last scene (cta-mesh is ideal for closings but not required).`;
+- Write for a busy founder who has 30 seconds and a skeptical mind. Paint the AFTER picture.
+- Philosophical > promotional.
+- End with a memorable tagline on the last scene.`;
 
 function factsBlock(facts: WorkspaceFacts): string {
   const lines: string[] = [];
@@ -414,23 +476,43 @@ Respond with ONLY a JSON array:
 ]`;
   }
 
-  // Free-form mode: LLM decides the storyboard.
+  // Free-form mode: LLM decides the storyboard with composable visuals.
   return `${factsSection}
 ${extraSection}
-Design a video storyboard for this workspace. Choose 3 to 7 scenes — however many the story needs. Pick scene kinds from the catalog, in whatever order tells the best story. You may repeat a kind if useful.
+Design a video storyboard for this workspace using COMPOSABLE SCENES. Choose 3 to 7 scenes.
+
+First, pick a video-level palette (seedHue 0-360, harmony, mood) that fits the brand.
 
 For each scene, write:
-- "kind": one of the available scene kinds
+- "kind": "composable" (use visual primitives) or a template kind for data-heavy scenes
 - "script": the narration (1-3 short sentences, second person, conversational)
 - "targetSeconds": how long the narration takes to speak (3-12 seconds)
+- "mood": scene mood (dark, warm, cool, electric, forest, sunset, midnight)
+- "visualLayers": array of { "primitive": "<id>", ...params } — 2-4 layers per scene
+- "text": { "content": "<on-screen text>", "animation": "typewriter|fade-in|word-by-word|letter-scatter", "position": "center|bottom-center|bottom-left|top-center", "fontSize": <number> }
 
-If facts are thin, lean on business_description and growth context. Do not mention "warmup" drills or internal plumbing. End the video with a strong tagline.
+For composable scenes, the text.content should be a punchy version of the narration — not the full script. Think title card, not transcript.
 
-Respond with ONLY a JSON array:
-[
-  { "kind": "<scene-kind>", "script": "...", "targetSeconds": 5 },
-  ...
-]`;
+If facts are thin, lean on business_description and growth context. Do not mention "warmup" drills. End with a strong tagline.
+
+Respond with ONLY a JSON object:
+{
+  "palette": { "seedHue": <0-360>, "harmony": "analogous|complementary|triadic|split", "mood": "<mood>" },
+  "scenes": [
+    {
+      "kind": "composable",
+      "script": "narration text",
+      "targetSeconds": 5,
+      "mood": "cool",
+      "visualLayers": [
+        { "primitive": "aurora", "colors": ["#22d3ee", "#818cf8"], "speed": 0.006, "opacity": 0.12 },
+        { "primitive": "constellation", "nodeCount": 15, "color": "#818cf8", "speed": 0.003 },
+        { "primitive": "vignette", "intensity": 0.5 }
+      ],
+      "text": { "content": "Short punchy text", "animation": "fade-in", "position": "center" }
+    }
+  ]
+}`;
 }
 
 export async function generateScripts(
@@ -439,7 +521,7 @@ export async function generateScripts(
   apiKey: string,
   model = 'anthropic/claude-sonnet-4-5',
   extraBrief?: string,
-): Promise<SceneScript[]> {
+): Promise<LlmStoryboard> {
   const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -464,27 +546,61 @@ export async function generateScripts(
   }
   const data = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const raw = data.choices?.[0]?.message?.content ?? '';
-  const json = raw.slice(raw.indexOf('['), raw.lastIndexOf(']') + 1);
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json);
-  } catch (err) {
-    throw new Error(`Script LLM returned non-JSON: ${raw.slice(0, 300)}`);
+    // Try parsing as a JSON object first (new composable format)
+    const objStart = raw.indexOf('{');
+    const objEnd = raw.lastIndexOf('}');
+    if (objStart !== -1 && objEnd > objStart) {
+      parsed = JSON.parse(raw.slice(objStart, objEnd + 1));
+    }
+  } catch {
+    // fall through
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error(`Script LLM returned ${Array.isArray(parsed) ? 'empty array' : 'non-array'}`);
+
+  // Fall back to array format (legacy guided mode)
+  if (!parsed) {
+    try {
+      const arrJson = raw.slice(raw.indexOf('['), raw.lastIndexOf(']') + 1);
+      const arr = JSON.parse(arrJson);
+      if (Array.isArray(arr)) {
+        parsed = { scenes: arr };
+      }
+    } catch {
+      throw new Error(`Script LLM returned non-JSON: ${raw.slice(0, 300)}`);
+    }
   }
-  if (briefs && parsed.length !== briefs.length) {
-    throw new Error(`Script LLM returned ${parsed.length} items, need ${briefs.length}`);
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(`Script LLM returned unparseable response: ${raw.slice(0, 300)}`);
   }
-  return (parsed as Array<Record<string, unknown>>).map((s, i) => {
-    const kind = String(s.kind ?? (briefs ? briefs[i].kind : 'outcome-orbit'));
-    return {
+
+  const obj = parsed as Record<string, unknown>;
+  const scenesArr = Array.isArray(obj.scenes) ? obj.scenes : Array.isArray(parsed) ? (parsed as unknown[]) : null;
+  if (!scenesArr || scenesArr.length === 0) {
+    throw new Error('Script LLM returned no scenes');
+  }
+  if (briefs && scenesArr.length !== briefs.length) {
+    throw new Error(`Script LLM returned ${scenesArr.length} items, need ${briefs.length}`);
+  }
+
+  const palette = obj.palette as LlmStoryboard['palette'] | undefined;
+
+  const scenes: SceneScript[] = (scenesArr as Array<Record<string, unknown>>).map((s, i) => {
+    const kind = String(s.kind ?? (briefs ? briefs[i].kind : 'composable'));
+    const result: SceneScript = {
       kind,
       script: String(s.script ?? '').trim(),
       caption: s.caption ? String(s.caption).trim() : undefined,
     };
+    if (s.mood) result.mood = String(s.mood);
+    if (Array.isArray(s.visualLayers)) result.visualLayers = s.visualLayers as SceneScript['visualLayers'];
+    if (s.text && typeof s.text === 'object') result.text = s.text as SceneScript['text'];
+    return result;
   });
+
+  return { palette, scenes };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -692,6 +808,9 @@ interface ResolvedVoice {
   path: string;
   durationMs: number;
   voiceFrames: number;
+  mood?: string;
+  visualLayers?: SceneScript['visualLayers'];
+  text?: SceneScript['text'];
 }
 
 function framesFor(resolved: ResolvedVoice): number {
@@ -863,18 +982,53 @@ function deriveVisualParams(
   }
 }
 
+/**
+ * Build params for a composable scene from LLM output.
+ * The LLM provides visualLayers, text config, and mood directly.
+ * We pass them through as ComposableScene params.
+ */
+function buildComposableParams(
+  voice: ResolvedVoice,
+  palette?: LlmStoryboard['palette'],
+  sceneIndex = 0,
+): Record<string, unknown> {
+  const params: Record<string, unknown> = { sceneIndex };
+
+  if (voice.visualLayers && voice.visualLayers.length > 0) {
+    params.visualLayers = voice.visualLayers.map(layer => {
+      const { primitive, ...rest } = layer;
+      return { primitive, params: rest };
+    });
+  }
+
+  if (voice.text) {
+    params.text = voice.text;
+  } else {
+    const content = voice.script.split(/[.!?]/).filter(s => s.trim().length > 5)[0]?.trim() ?? voice.script;
+    params.text = {
+      content: content.length > 80 ? content.slice(0, 77) + '...' : content,
+      animation: (['typewriter', 'fade-in', 'word-by-word', 'letter-scatter'] as const)[sceneIndex % 4],
+      position: 'center',
+    };
+  }
+
+  if (voice.mood) params.mood = voice.mood;
+  if (palette) params.palette = palette;
+
+  return params;
+}
+
 function buildSpec(params: {
   voices: ResolvedVoice[];
   musicSrc: string;
   brand?: BrandDefaults;
   id?: string;
   facts?: WorkspaceFacts;
+  palette?: LlmStoryboard['palette'];
 }) {
   const brand = params.brand ?? DEFAULT_BRAND;
   const id = params.id ?? `workspace-${Date.now()}`;
 
-  // Compute cumulative composition-time voice start frames.
-  // Each scene starts at the running offset; voice begins VOICE_LEAD_FRAMES into the scene.
   let cursor = 0;
   const voiceovers: Array<{ src: string; startFrame: number; volume: number }> = [];
   const scenes: Array<{ id: string; kind: string; durationInFrames: number; params: Record<string, unknown>; narration: string }> = [];
@@ -883,11 +1037,19 @@ function buildSpec(params: {
     const v = params.voices[i];
     const sceneFrames = framesFor(v);
     voiceovers.push({ src: v.publicRef, startFrame: cursor + VOICE_LEAD_FRAMES, volume: 0.9 });
+
+    let sceneParams: Record<string, unknown>;
+    if (v.kind === 'composable') {
+      sceneParams = buildComposableParams(v, params.palette, i);
+    } else {
+      sceneParams = deriveVisualParams(v.kind, v.script, params.facts, i);
+    }
+
     scenes.push({
       id: `s${i + 1}`,
       kind: v.kind,
       durationInFrames: sceneFrames,
-      params: deriveVisualParams(v.kind, v.script, params.facts, i),
+      params: sceneParams,
       narration: v.script,
     });
     cursor += sceneFrames;
@@ -901,6 +1063,7 @@ function buildSpec(params: {
     width: 1280 as const,
     height: 720 as const,
     brand,
+    ...(params.palette ? { palette: params.palette } : {}),
     music: { src: params.musicSrc, startFrame: 0, volume: 0.22 },
     voiceovers,
     transitions: Array.from({ length: Math.max(0, params.voices.length - 1) }, (_, i) => {
@@ -937,13 +1100,14 @@ export async function authorWorkspaceVideoSpec(
   const mode = briefs ? `guided (${briefs.length} scenes)` : 'free-form (LLM decides)';
 
   progress(`generating scripts — ${mode}, ${facts.agentCount} agents, ${facts.taskCount} tasks`);
-  const scripts = await generateScripts(
+  const storyboard = await generateScripts(
     facts,
     briefs,
     opts.openRouterApiKey,
     opts.copyModel ?? 'anthropic/claude-sonnet-4-5',
     opts.extraBrief,
   );
+  const scripts = storyboard.scenes;
 
   if (opts.scriptsOnly) {
     return {
@@ -976,11 +1140,14 @@ export async function authorWorkspaceVideoSpec(
       path,
       durationMs,
       voiceFrames,
+      mood: s.mood,
+      visualLayers: s.visualLayers,
+      text: s.text,
     });
   }
 
   const musicSrc = 'audio/ambient.mp3';
-  const spec = buildSpec({ voices, musicSrc, facts });
+  const spec = buildSpec({ voices, musicSrc, facts, palette: storyboard.palette });
 
   const outDir = opts.outputDir ?? join(homedir(), '.ohwow', 'media', 'specs');
   await mkdir(outDir, { recursive: true });
