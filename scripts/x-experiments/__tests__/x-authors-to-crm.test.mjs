@@ -97,6 +97,52 @@ describe('x-authors-to-crm DRY path', () => {
   });
 });
 
+describe('bucket-priority ordering', () => {
+  it('ranks by explicit bucketPriority when present, else allowedBuckets', async () => {
+    const { bucketRank } = await import('../x-authors-to-crm.mjs');
+    const cfg1 = { freeGates: { bucketPriority: ['market_signal', 'competitors', 'hacks'] } };
+    expect(bucketRank(cfg1, 'market_signal')).toBe(0);
+    expect(bucketRank(cfg1, 'competitors')).toBe(1);
+    expect(bucketRank(cfg1, 'hacks')).toBe(2);
+    expect(bucketRank(cfg1, 'advancements')).toBe(Number.MAX_SAFE_INTEGER);
+
+    const cfg2 = { freeGates: { allowedBuckets: ['market_signal', 'competitors', 'hacks'] } };
+    expect(bucketRank(cfg2, 'market_signal')).toBe(0);
+    expect(bucketRank(cfg2, 'hacks')).toBe(2);
+    expect(bucketRank(cfg2, 'unknown')).toBe(Number.MAX_SAFE_INTEGER);
+
+    expect(bucketRank({}, 'anything')).toBe(0);
+  });
+
+  it('sorts candidates by bucket priority then score desc', async () => {
+    const { sortByBucketPriority } = await import('../x-authors-to-crm.mjs');
+    const cfg = { freeGates: { bucketPriority: ['market_signal', 'competitors', 'hacks'] } };
+    const cands = [
+      { row: { handle: 'a', bucket: 'hacks', score: 0.9 } },
+      { row: { handle: 'b', bucket: 'market_signal', score: 0.6 } },
+      { row: { handle: 'c', bucket: 'competitors', score: 0.7 } },
+      { row: { handle: 'd', bucket: 'market_signal', score: 0.85 } },
+      { row: { handle: 'e', bucket: 'hacks', score: 0.95 } },
+    ];
+    const sorted = sortByBucketPriority(cfg, cands);
+    expect(sorted.map(c => c.row.handle)).toEqual(['d', 'b', 'c', 'e', 'a']);
+    // Original array not mutated.
+    expect(cands.map(c => c.row.handle)).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+
+  it('puts unknown buckets last while preserving score order within them', async () => {
+    const { sortByBucketPriority } = await import('../x-authors-to-crm.mjs');
+    const cfg = { freeGates: { bucketPriority: ['market_signal'] } };
+    const cands = [
+      { row: { handle: 'a', bucket: 'noise', score: 0.5 } },
+      { row: { handle: 'b', bucket: 'market_signal', score: 0.6 } },
+      { row: { handle: 'c', bucket: 'noise', score: 0.9 } },
+    ];
+    const sorted = sortByBucketPriority(cfg, cands);
+    expect(sorted.map(c => c.row.handle)).toEqual(['b', 'c', 'a']);
+  });
+});
+
 describe('appendClassifierAudit', () => {
   let tmp;
   let prevHome, prevUser;

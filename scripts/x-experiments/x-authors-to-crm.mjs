@@ -107,6 +107,42 @@ function writeBrief(dir, entry, extras = {}) {
 }
 
 /**
+ * Bucket-priority ordering for the per-run cap. Live runs 1+2 + the
+ * audit-log smoke-run all burned the cap on advancements/hacks-bucket
+ * candidates because Map iteration order is sidecar-historic and the
+ * higher-precision market_signal bucket lives later in the ledger.
+ *
+ * Resolution order for the priority list:
+ *   1. cfg.freeGates.bucketPriority (ordered array, explicit)
+ *   2. cfg.freeGates.allowedBuckets (the allowlist's order)
+ *   3. fall through (every bucket equally prioritised)
+ *
+ * Within a bucket, secondary sort by score desc so the strongest
+ * candidates inside the top bucket get the cap before weaker ones.
+ */
+export function bucketRank(cfg, bucket) {
+  const order = cfg?.freeGates?.bucketPriority;
+  if (Array.isArray(order) && order.length > 0) {
+    const i = order.indexOf(bucket);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  }
+  const allow = cfg?.freeGates?.allowedBuckets;
+  if (Array.isArray(allow) && allow.length > 0) {
+    const i = allow.indexOf(bucket);
+    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+  }
+  return 0;
+}
+
+export function sortByBucketPriority(cfg, candidates) {
+  return [...candidates].sort((a, b) => {
+    const r = bucketRank(cfg, a.row.bucket) - bucketRank(cfg, b.row.bucket);
+    if (r !== 0) return r;
+    return (b.row.score ?? 0) - (a.row.score ?? 0);
+  });
+}
+
+/**
  * Per-author classifier audit row. Appended once per fresh candidate on
  * the live (DRY=0) path. Captures the full lifecycle of the decision —
  * classifier verdict, accept-gate result, and downstream promotion
@@ -185,7 +221,9 @@ async function main() {
     try { existingHandles = await fetchExistingHandles(url, token); }
     catch (e) { console.warn('[x-authors-to-crm] could not fetch existing handles:', e.message); }
   }
-  const fresh = passed.filter(({ row }) => !existingHandles.has(row.handle)).slice(0, MAX_AUTHORS_PER_RUN);
+  const fresh = sortByBucketPriority(cfg, passed)
+    .filter(({ row }) => !existingHandles.has(row.handle))
+    .slice(0, MAX_AUTHORS_PER_RUN);
 
   // Intent classification — one LLM call per fresh author.
   const briefDir = DRY ? `/tmp/x-authors-to-crm-${Date.now()}` : null;
