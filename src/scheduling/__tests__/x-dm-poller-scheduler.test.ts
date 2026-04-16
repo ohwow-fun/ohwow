@@ -23,7 +23,11 @@ import type Database from 'better-sqlite3';
 import { initDatabase } from '../../db/init.js';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
 import { XDmPollerScheduler } from '../x-dm-poller-scheduler.js';
-import type { ListDmsResult } from '../../orchestrator/tools/x-posting.js';
+import type {
+  DmMessage,
+  ListDmsResult,
+  ReadDmThreadResult,
+} from '../../orchestrator/tools/x-posting.js';
 
 const WORKSPACE_ID = 'ws-dm-poll-1';
 
@@ -47,6 +51,22 @@ function teardownEnv(env: Env): void {
 
 function listerOf(result: ListDmsResult): () => Promise<ListDmsResult> {
   return vi.fn().mockResolvedValue(result);
+}
+
+function readerOf(
+  resultsByPair: Record<string, ReadDmThreadResult>,
+): (input: { conversationPair: string }) => Promise<ReadDmThreadResult> {
+  return vi.fn(async ({ conversationPair }) =>
+    resultsByPair[conversationPair] ?? {
+      success: false,
+      message: `no fixture for ${conversationPair}`,
+      conversationName: null,
+    },
+  );
+}
+
+function msg(id: string, text: string, direction: DmMessage['direction'] = 'inbound', isMedia = false): DmMessage {
+  return { id, text, direction, isMedia };
 }
 
 function todayJsonlPath(dir: string): string {
@@ -226,5 +246,159 @@ describe('XDmPollerScheduler', () => {
       .prepare('SELECT COUNT(*) as n FROM x_dm_threads')
       .get() as { n: number }).n;
     expect(n).toBe(1);
+  });
+
+  it('enters changed/unread threads and stores per-message bodies', async () => {
+    const lister = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [
+        { pair: '1:2', primaryName: 'Alice teaser', preview: 'Hey there', hasUnread: true },
+        { pair: '3:4', primaryName: 'Bob teaser', preview: 'Old message', hasUnread: false },
+      ],
+    });
+    const reader = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice (canonical)',
+        messages: [
+          msg('uuid-a1', 'Hey there', 'inbound'),
+          msg('uuid-a2', 'Following up', 'inbound'),
+          msg('uuid-a3', 'Got it', 'outbound'),
+        ],
+      },
+      '3:4': {
+        success: true, message: 'ok', conversationName: 'Bob (canonical)',
+        messages: [msg('uuid-b1', 'Old message', 'inbound')],
+      },
+    });
+    const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      dataDir: env.dir,
+      inboxLister: lister,
+      threadReader: reader,
+    });
+    await sched.tick();
+
+    // 1:2 was unread → entered. 3:4 unread=false but preview never seen → also entered.
+    expect(reader).toHaveBeenCalledTimes(2);
+
+    const messages = env.rawDb
+      .prepare('SELECT message_id, direction, text FROM x_dm_messages ORDER BY message_id')
+      .all() as Array<{ message_id: string; direction: string; text: string }>;
+    expect(messages).toHaveLength(4);
+    const a3 = messages.find((m) => m.message_id === 'uuid-a3');
+    expect(a3?.direction).toBe('outbound');
+
+    // Thread row picks up the canonical name from the in-thread header.
+    const threads = env.rawDb
+      .prepare('SELECT conversation_pair, primary_name, last_message_id, last_message_text, last_message_direction FROM x_dm_threads ORDER BY conversation_pair')
+      .all() as Array<{ conversation_pair: string; primary_name: string; last_message_id: string; last_message_text: string; last_message_direction: string }>;
+    expect(threads[0]).toMatchObject({
+      conversation_pair: '1:2',
+      primary_name: 'Alice (canonical)',
+      last_message_id: 'uuid-a3',
+      last_message_text: 'Got it',
+      last_message_direction: 'outbound',
+    });
+  });
+
+  it('previously-seen messages are deduped by message_id across ticks', async () => {
+    const lister = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'm1', hasUnread: true }],
+    });
+    const reader = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice',
+        messages: [msg('uuid-1', 'm1'), msg('uuid-2', 'm2')],
+      },
+    });
+    const sched1 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: lister, threadReader: reader,
+    });
+    await sched1.tick();
+
+    // Second tick: same messages + one new one. Preview changed so we
+    // re-enter the thread.
+    const lister2 = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'm3', hasUnread: true }],
+    });
+    const reader2 = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice',
+        messages: [msg('uuid-1', 'm1'), msg('uuid-2', 'm2'), msg('uuid-3', 'm3')],
+      },
+    });
+    const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: lister2, threadReader: reader2,
+    });
+    await sched2.tick();
+
+    const n = (env.rawDb
+      .prepare('SELECT COUNT(*) as n FROM x_dm_messages')
+      .get() as { n: number }).n;
+    expect(n).toBe(3);
+  });
+
+  it('caps per-tick thread reads at MAX_THREADS_READ_PER_TICK', async () => {
+    const threadCount = 12;
+    const inboxThreads = Array.from({ length: threadCount }, (_, i) => ({
+      pair: `${i}a:${i}b`, primaryName: `t${i}`, preview: `p${i}`, hasUnread: true,
+    }));
+    const lister = listerOf({ success: true, message: 'ok', threads: inboxThreads });
+    const fixtures: Record<string, ReadDmThreadResult> = {};
+    for (const t of inboxThreads) {
+      fixtures[t.pair] = {
+        success: true, message: 'ok', conversationName: t.primaryName,
+        messages: [msg(`m-${t.pair}`, 'hello')],
+      };
+    }
+    const reader = readerOf(fixtures);
+    const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: lister, threadReader: reader,
+    });
+    await sched.tick();
+
+    // Source of truth: only 8 threads should have been read this tick.
+    expect(reader).toHaveBeenCalledTimes(8);
+    const messageCount = (env.rawDb
+      .prepare('SELECT COUNT(*) as n FROM x_dm_messages')
+      .get() as { n: number }).n;
+    expect(messageCount).toBe(8);
+  });
+
+  it('skips entering threads that are already known and unchanged', async () => {
+    // First tick: ingest one thread + body.
+    const initialLister = listerOf({
+      success: true,
+      message: 'ok',
+      threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'Same preview', hasUnread: false }],
+    });
+    const initialReader = readerOf({
+      '1:2': {
+        success: true, message: 'ok', conversationName: 'Alice',
+        messages: [msg('uuid-1', 'm1')],
+      },
+    });
+    const sched1 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: initialLister, threadReader: initialReader,
+    });
+    await sched1.tick();
+    expect(initialReader).toHaveBeenCalledTimes(1);
+
+    // Second tick: same preview, not unread. Reader should NOT be called.
+    const noopReader = vi.fn();
+    const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
+      inboxLister: listerOf({
+        success: true,
+        message: 'ok',
+        threads: [{ pair: '1:2', primaryName: 'Alice', preview: 'Same preview', hasUnread: false }],
+      }),
+      threadReader: noopReader,
+    });
+    await sched2.tick();
+    expect(noopReader).not.toHaveBeenCalled();
   });
 });

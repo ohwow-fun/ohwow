@@ -1005,16 +1005,34 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
   await page.goto(DM_INBOX_URL);
   await wait(HYDRATION_WAIT_MS);
 
+  // Inbox-item DOM (verified 2026-04-16 via scripts/probe-x-dm-dom.mjs):
+  //   [testid=dm-conversation-item-<pair>]
+  //     div.flex flex-col
+  //       div.flex flex-row justify-between          ← name+time row
+  //         …
+  //         div.font-chirp.…break-all.…              ← (1) NAME
+  //         div.font-chirp.…break-words.…            ← (2) TIME (e.g. "7h")
+  //       div.flex flex-row …gap-4                   ← preview row
+  //         span.font-chirp.…break-words.…           ← (3) PREVIEW
+  //
+  // The previous selector (`div[dir="ltr"] span, span[dir="ltr"]`) matched
+  // the preview span as `nameEl` because X wraps preview text in a
+  // dir="ltr" span too. Switch to a positional read of the three
+  // .font-chirp text nodes — the one signal that has stayed stable
+  // across recent X redesigns.
   const threads = await page.evaluate<DmThreadSummary[]>(`(() => {
     const limit = ${limit};
     const items = Array.from(document.querySelectorAll('[data-testid^="dm-conversation-item-"]'));
     return items.slice(0, limit).map((it) => {
       const testid = it.getAttribute('data-testid') || '';
       const pair = testid.replace(/^dm-conversation-item-/, '');
-      const nameEl = it.querySelector('div[dir="ltr"] span, span[dir="ltr"]');
-      const preview = (it.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 200);
+      const chirps = Array.from(it.querySelectorAll('.font-chirp'))
+        .map((el) => (el.textContent || '').trim())
+        .filter((t) => t.length > 0);
+      const primaryName = chirps[0] || null;
+      const preview = chirps[2] || (it.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 200);
       const hasUnread = !!it.querySelector('[data-testid*="unread" i]');
-      return { pair, primaryName: nameEl?.textContent?.trim() || null, preview, hasUnread };
+      return { pair, primaryName, preview, hasUnread };
     });
   })()`);
 
@@ -1023,6 +1041,141 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
     message: `Found ${threads.length} DM thread(s).`,
     threads,
     screenshotBase64: await captureScreenshot(page),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DMs: read messages inside a single conversation
+// ---------------------------------------------------------------------------
+
+export interface ReadDmThreadInput {
+  /** Conversation pair (colon or hyphen form, same as ListDms returns). */
+  conversationPair: string;
+  /** Cap on number of messages returned, newest-first after the cap is applied. */
+  limit?: number;
+  expectedBrowserContextId?: string;
+}
+
+export interface DmMessage {
+  /**
+   * X's stable per-message UUID (from `data-testid="message-<uuid>"`).
+   * Use this as the dedup key — it survives reloads and is unique to
+   * the message inside this conversation.
+   */
+  id: string;
+  /** Message body, trimmed and capped at 1000 chars. Null for media-only messages. */
+  text: string | null;
+  /**
+   * 'outbound' when the message bubble uses the primary brand color
+   * (X's "we sent it" treatment), 'inbound' when it uses the gray
+   * background, 'unknown' when neither match (e.g. system messages).
+   *
+   * X never exposes a sender id in the DM DOM, so this is the most
+   * reliable directionality signal available without authenticated API
+   * access. Verified 2026-04-16 via probe-x-dm-dom.mjs.
+   */
+  direction: 'outbound' | 'inbound' | 'unknown';
+  /**
+   * True when the message appears to be a non-text payload (audio,
+   * video, attachment) rather than typed prose. Detected by the
+   * Seek aria-label that X attaches to media controls.
+   */
+  isMedia: boolean;
+}
+
+export interface ReadDmThreadResult {
+  success: boolean;
+  message: string;
+  /** Counterparty display name from the conversation header, when readable. */
+  conversationName: string | null;
+  /** Newest-last ordering (matches DOM order, which is also chronological). */
+  messages?: DmMessage[];
+  currentUrl?: string;
+}
+
+const DM_MESSAGE_LIST_TESTID = 'dm-message-list';
+const DM_HEADER_USERNAME_TESTID = 'dm-conversation-username';
+const DEFAULT_THREAD_READ_LIMIT = 30;
+const THREAD_HYDRATION_WAIT_MS = 3500;
+
+export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<ReadDmThreadResult> {
+  const pair = (input.conversationPair || '').trim();
+  if (!pair) return { success: false, message: 'conversationPair is required', conversationName: null };
+  const pairHyphen = pair.replace(/:/g, '-');
+  const limit = Math.max(1, Math.min(200, input.limit ?? DEFAULT_THREAD_READ_LIMIT));
+
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  if (!page) return { success: false, message: 'Could not attach to Chrome CDP.', conversationName: null };
+
+  await page.goto(`https://x.com/i/chat/${pairHyphen}`);
+  await wait(THREAD_HYDRATION_WAIT_MS);
+
+  const currentUrl = await page.url();
+  if (isLoginRedirect(currentUrl)) {
+    return { success: false, message: `X redirected to login (${currentUrl}).`, conversationName: null, currentUrl };
+  }
+
+  // Wait for the message list container to mount; retry briefly if X
+  // is still hydrating after the initial wait.
+  const listReady = await page.waitForSelector(`[data-testid="${DM_MESSAGE_LIST_TESTID}"]`, 5000);
+  if (!listReady) {
+    return {
+      success: false,
+      message: 'dm-message-list did not mount within 5s; thread may not have loaded.',
+      conversationName: null,
+      currentUrl,
+    };
+  }
+
+  // Read header + messages in one round-trip to avoid a second
+  // CDP frame per thread (we may iterate many in a tick).
+  const probe = await page.evaluate<{ conversationName: string | null; messages: DmMessage[] }>(`(() => {
+    const headerEl = document.querySelector('[data-testid="${DM_HEADER_USERNAME_TESTID}"]');
+    const conversationName = headerEl?.textContent?.trim().slice(0, 200) || null;
+
+    // Filter to message containers (testid: message-<uuid>) and exclude
+    // the per-message-text child (testid: message-text-<uuid>) which has
+    // a UUID-shaped suffix too.
+    const roots = Array.from(document.querySelectorAll('[data-testid^="message-"]'))
+      .filter((el) => /^message-[0-9a-f-]{8,}$/.test(el.getAttribute('data-testid') || ''));
+
+    const messages = roots.map((root) => {
+      const id = (root.getAttribute('data-testid') || '').replace(/^message-/, '');
+      const textEl = root.querySelector('[data-testid="message-text-' + id + '"]');
+      const rawText = textEl?.textContent?.trim() || null;
+      // X concatenates the timestamp tooltip into the same text node;
+      // strip a trailing "<time><time>" pair (e.g. "...6:49 AM6:49 AM"
+      // appears because the AM/PM hover renders inline). Best-effort:
+      // remove a duplicated AM/PM suffix and any trailing absolute time.
+      const timeRe = /(\\d{1,2}:\\d{2}\\s?(?:AM|PM))(\\1)?$/i;
+      const text = rawText ? rawText.replace(timeRe, '').trim().slice(0, 1000) : null;
+
+      const isMedia = !!root.querySelector('[aria-label="Seek"], [aria-label*="audio" i], [aria-label*="video" i]');
+
+      // Direction: the message bubble's class list carries either
+      // bg-primary (we sent) or bg-gray-50 (they sent). Fall back to
+      // 'unknown' for system rows or future X redesigns.
+      let direction = 'unknown';
+      const bubble = root.querySelector('[class*="bg-primary"], [class*="bg-gray-50"]');
+      const cls = bubble ? (bubble.className || '').toString() : '';
+      if (cls.includes('bg-primary')) direction = 'outbound';
+      else if (cls.includes('bg-gray-50')) direction = 'inbound';
+
+      return { id, text, direction, isMedia };
+    });
+
+    return { conversationName, messages };
+  })()`);
+
+  // Cap from the newest end so callers don't pay for ancient history.
+  const trimmed = (probe.messages ?? []).slice(-limit) as DmMessage[];
+
+  return {
+    success: true,
+    message: `Read ${trimmed.length} message(s) from ${pairHyphen}.`,
+    conversationName: probe.conversationName,
+    messages: trimmed,
+    currentUrl,
   };
 }
 

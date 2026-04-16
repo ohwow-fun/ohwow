@@ -30,15 +30,30 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
 import {
   listDmsViaBrowser,
+  readDmThreadViaBrowser,
+  type DmMessage,
   type DmThreadSummary,
   type ListDmsInput,
   type ListDmsResult,
+  type ReadDmThreadInput,
+  type ReadDmThreadResult,
 } from '../orchestrator/tools/x-posting.js';
 
 /** Default tick interval — every hour. */
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 /** How many threads to ask for per tick. */
 const FETCH_LIMIT = 50;
+/**
+ * Cap on how many threads we'll enter per tick. Each thread read costs
+ * a navigation + ~3.5s hydration wait, so reading every thread on a
+ * busy inbox would burn the whole tick. We only enter threads that
+ * looked changed (preview hash differs OR has_unread set), and even
+ * then we cap to bound CDP-lane competition with ContentCadence's
+ * posting tab. Bumpable when we observe inbox sizes.
+ */
+const MAX_THREADS_READ_PER_TICK = 8;
+/** Cap on messages pulled per thread (newest-last). */
+const THREAD_READ_LIMIT = 30;
 
 export interface XDmPollerSchedulerOptions {
   /**
@@ -52,6 +67,11 @@ export interface XDmPollerSchedulerOptions {
    * real CDP-driven listDmsViaBrowser.
    */
   inboxLister?: (input: ListDmsInput) => Promise<ListDmsResult>;
+  /**
+   * Override the thread reader. Tests inject a fake; prod uses the
+   * real CDP-driven readDmThreadViaBrowser.
+   */
+  threadReader?: (input: ReadDmThreadInput) => Promise<ReadDmThreadResult>;
 }
 
 /** Subset of x_dm_threads relevant to upsert decisions. */
@@ -66,6 +86,7 @@ export class XDmPollerScheduler {
   private running = false;
   private executing = false;
   private readonly inboxLister: (input: ListDmsInput) => Promise<ListDmsResult>;
+  private readonly threadReader: (input: ReadDmThreadInput) => Promise<ReadDmThreadResult>;
   private readonly dataDir: string | null;
 
   constructor(
@@ -74,6 +95,7 @@ export class XDmPollerScheduler {
     options: XDmPollerSchedulerOptions = {},
   ) {
     this.inboxLister = options.inboxLister ?? listDmsViaBrowser;
+    this.threadReader = options.threadReader ?? readDmThreadViaBrowser;
     this.dataDir = options.dataDir ?? null;
   }
 
@@ -118,18 +140,41 @@ export class XDmPollerScheduler {
         );
         return;
       }
+      // Phase 1: ingest inbox-level summaries (cheap, no per-thread nav).
+      // Track which threads look interesting enough to enter for body
+      // reads — preview changed since last tick OR thread is unread.
+      const candidates: DmThreadSummary[] = [];
       let inserted = 0;
       let unchanged = 0;
       for (const thread of result.threads) {
-        const wrote = await this.ingestThread(thread);
-        if (wrote) inserted++;
+        const { previewChanged } = await this.ingestThread(thread);
+        if (previewChanged) inserted++;
         else unchanged++;
+        if (previewChanged || thread.hasUnread) candidates.push(thread);
       }
+
+      // Phase 2: enter changed/unread threads to capture message bodies.
+      // Cap to MAX_THREADS_READ_PER_TICK to bound CDP-lane time. Newest
+      // candidates first — they're the ones most likely to need the
+      // operator's attention.
+      const toRead = candidates.slice(0, MAX_THREADS_READ_PER_TICK);
+      let messagesIngested = 0;
+      let threadsRead = 0;
+      let threadsFailed = 0;
+      for (const thread of toRead) {
+        const newMsgs = await this.ingestThreadBodies(thread);
+        if (newMsgs === null) threadsFailed++;
+        else { threadsRead++; messagesIngested += newMsgs; }
+      }
+
       logger.info(
         {
           threads: result.threads.length,
           inserted,
           unchanged,
+          threadsRead,
+          threadsFailed,
+          messagesIngested,
           ms: Date.now() - startedAt,
         },
         '[XDmPollerScheduler] tick complete',
@@ -143,9 +188,10 @@ export class XDmPollerScheduler {
 
   /**
    * Upsert one thread row + (only if preview changed) one observation.
-   * Returns true when a new observation was written.
+   * Returns whether the preview changed so the caller can decide to
+   * enter the thread for a body read.
    */
-  private async ingestThread(thread: DmThreadSummary): Promise<boolean> {
+  private async ingestThread(thread: DmThreadSummary): Promise<{ previewChanged: boolean }> {
     const previewHash = sha1(thread.preview);
     const nowIso = new Date().toISOString();
 
@@ -199,7 +245,7 @@ export class XDmPollerScheduler {
         .eq('id', existing.id);
     }
 
-    if (!previewChanged) return false;
+    if (!previewChanged) return { previewChanged: false };
 
     // UNIQUE(workspace_id, conversation_pair, preview_hash) protects
     // against duplicate observations across racy ticks. We catch the
@@ -219,10 +265,11 @@ export class XDmPollerScheduler {
         { err: err instanceof Error ? err.message : err, pair: thread.pair },
         '[XDmPollerScheduler] observation insert lost dedup race',
       );
-      return false;
+      return { previewChanged: false };
     }
 
     this.appendJsonl({
+      kind: 'thread_observation',
       ts: nowIso,
       pair: thread.pair,
       primary_name: thread.primaryName,
@@ -231,7 +278,85 @@ export class XDmPollerScheduler {
       has_unread: thread.hasUnread,
       first_seen: isNew,
     });
-    return true;
+    return { previewChanged: true };
+  }
+
+  /**
+   * Open a thread, scrape messages, insert any not-yet-stored ones.
+   * Returns the count of newly-stored messages, or null on a thread-
+   * read failure (the next tick will retry naturally).
+   *
+   * Side-effects:
+   *   - Inserts new rows into x_dm_messages keyed on X's message UUID.
+   *   - Updates x_dm_threads with the conversation_name from the
+   *     in-thread header (more reliable than the inbox-row name) and
+   *     stamps last_message_id/text/direction with the newest message.
+   *   - Appends a JSONL line per new message for greppable history.
+   */
+  private async ingestThreadBodies(thread: DmThreadSummary): Promise<number | null> {
+    const result = await this.threadReader({
+      conversationPair: thread.pair,
+      limit: THREAD_READ_LIMIT,
+    });
+    if (!result.success || !result.messages) {
+      logger.warn(
+        { pair: thread.pair, message: result.message },
+        '[XDmPollerScheduler] thread read failed',
+      );
+      return null;
+    }
+
+    const nowIso = new Date().toISOString();
+    let newCount = 0;
+    let newest: DmMessage | null = null;
+    for (const msg of result.messages) {
+      newest = msg;
+      try {
+        await this.db.from('x_dm_messages').insert({
+          workspace_id: this.workspaceId,
+          conversation_pair: thread.pair,
+          message_id: msg.id,
+          direction: msg.direction,
+          text: msg.text,
+          is_media: msg.isMedia ? 1 : 0,
+          observed_at: nowIso,
+        });
+        newCount++;
+        this.appendJsonl({
+          kind: 'message',
+          ts: nowIso,
+          pair: thread.pair,
+          message_id: msg.id,
+          direction: msg.direction,
+          text: msg.text,
+          is_media: msg.isMedia,
+        });
+      } catch (err) {
+        // UNIQUE(workspace_id, message_id) collision = already stored
+        // (the common case on every tick). Don't log per row; only the
+        // unexpected (e.g. NOT NULL violation) matters here.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!/UNIQUE|constraint/i.test(errMsg)) {
+          logger.debug({ err: errMsg, pair: thread.pair, msgId: msg.id }, '[XDmPollerScheduler] message insert failed');
+        }
+      }
+    }
+
+    // Promote the in-thread header name (more accurate than the inbox
+    // row's text) and stamp the newest message snapshot on the thread.
+    const threadPatch: Record<string, unknown> = { last_seen_at: nowIso };
+    if (result.conversationName) threadPatch.primary_name = result.conversationName;
+    if (newest) {
+      threadPatch.last_message_id = newest.id;
+      threadPatch.last_message_text = newest.text;
+      threadPatch.last_message_direction = newest.direction;
+    }
+    await this.db.from('x_dm_threads')
+      .update(threadPatch)
+      .eq('workspace_id', this.workspaceId)
+      .eq('conversation_pair', thread.pair);
+
+    return newCount;
   }
 
   private async findThread(pair: string): Promise<ExistingThreadRow | null> {
