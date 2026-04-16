@@ -68,6 +68,7 @@ import { MediaGallery } from '../media-gallery.js';
 import { ConfirmDialog } from '../../components/confirm-dialog.js';
 import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
+import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
 
 import { GridMenuPanel } from './grid-menu.js';
 import { ChatPanel } from './chat-panel.js';
@@ -116,6 +117,15 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     activeModel,
   );
   const ollamaModels = useOllamaModels(config.port);
+
+  // When another session writes to ~/.ohwow/current-workspace, nudge the user.
+  // We don't auto-relaunch — they might be typing, and /workspace is one key away.
+  useWorkspacePointerWatch(workspaceName, useCallback((newName: string) => {
+    orchestrator.addSystemMessage(
+      `Workspace switched to "${newName}" in another session. ` +
+      `You're still focused on "${workspaceName}". Type /workspace to switch.`,
+    );
+  }, [workspaceName, orchestrator]));
 
   // Focus zone state
   const [focusZone, setFocusZone] = useState<FocusZone>('chat');
