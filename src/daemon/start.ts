@@ -81,6 +81,7 @@ import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
 import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
+import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
@@ -1656,6 +1657,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
         // autonomous-vs-human split. Pure awareness signal — pass
         // verdict always, consumed by RoadmapObserver / strategist.
         experimentRunner.register(new GitVelocityExperiment());
+        // Layer 4 of bench level-up: reads the X ledgers under the
+        // workspace data dir and emits a single summary finding per tick
+        // with posts/24h, shape mix, dispatch success rate, approval
+        // ratio, and x-intel staleness. Observer-only; x-shape-tuner
+        // (Layer 5) consumes its findings.
+        experimentRunner.register(new XOpsObserverExperiment());
         // Structural invariants for the three-file roadmap suite. Fires
         // fail findings the moment a RoadmapUpdaterExperiment patch
         // drops an anchor H2, reorders the iteration log, or dangles a
