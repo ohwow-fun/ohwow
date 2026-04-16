@@ -1,0 +1,58 @@
+{
+  "id": "short-test-portrait",
+  "version": 1,
+  "fps": 30,
+  "width": 1080,
+  "height": 1920,
+  "brand": {
+    "colors": {
+      "bg": "#0a0a0f",
+      "accent": "#f97316",
+      "text": "#e4e4e7",
+      "textMuted": "#71717a"
+    },
+    "fonts": {
+      "sans": "Inter, system-ui, -apple-system, sans-serif",
+      "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+      "display": "'Smooch Sans', system-ui, sans-serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.06)",
+      "border": "1px solid rgba(255,255,255,0.1)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(20px)"
+    }
+  },
+  "music": null,
+  "voiceovers": [],
+  "transitions": [
+    { "kind": "fade", "durationInFrames": 15 }
+  ],
+  "scenes": [
+    {
+      "id": "hook",
+      "kind": "text-typewriter",
+      "durationInFrames": 270,
+      "params": {
+        "text": "Everyone's building agents that do things.",
+        "mood": "contemplative",
+        "fontSize": 52,
+        "typingSpeed": 1.2,
+        "variation": 3
+      },
+      "narration": "Everyone's building agents that do things."
+    },
+    {
+      "id": "turn",
+      "kind": "quote-card",
+      "durationInFrames": 330,
+      "params": {
+        "quote": "Nobody's building agents that notice things.",
+        "mood": "electric",
+        "fontSize": 48,
+        "variation": 1
+      },
+      "narration": "Nobody's building agents that notice things."
+    }
+  ]
+}

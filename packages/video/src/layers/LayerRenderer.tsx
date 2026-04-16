@@ -40,9 +40,32 @@ const PRIMITIVE_MAP: Record<VisualLayerPrimitive, PrimitiveComponent> = {
 
 const POSITION_KEYS = new Set(["cx", "cy", "originX", "originY", "y"]);
 
-function normalizeParams(params: Record<string, unknown>): Record<string, unknown> {
+const PARAM_WHITELIST: Record<VisualLayerPrimitive, Set<string>> = {
+  aurora: new Set(["colors", "speed", "opacity", "y"]),
+  bokeh: new Set(["count", "colors", "seed", "minSize", "maxSize", "speed"]),
+  "light-rays": new Set(["count", "color", "originX", "originY", "spread", "speed", "opacity"]),
+  constellation: new Set(["nodeCount", "color", "seed", "speed", "lineOpacity", "dotSize"]),
+  waveform: new Set(["color", "amplitude", "frequency", "speed", "y", "opacity", "layers"]),
+  geometric: new Set(["count", "color", "seed", "speed", "opacity", "shapes"]),
+  vignette: new Set(["intensity", "color"]),
+  ripple: new Set(["cx", "cy", "color", "count", "speed", "maxRadius", "opacity"]),
+  "gradient-wash": new Set(["colors", "speed", "angle", "opacity"]),
+  "flow-field": new Set(["count", "seed", "speed", "colors", "width", "height"]),
+  "pulse-ring": new Set(["cx", "cy", "radius", "color", "speed", "thickness"]),
+  "glow-orb": new Set(["cx", "cy", "size", "color", "pulseSpeed"]),
+  "noise-grid": new Set(["cols", "rows", "cellSize", "seed", "color", "speed"]),
+  "scan-line": new Set(["color", "speed", "opacity"]),
+  "film-grain": new Set(["intensity"]),
+};
+
+function normalizeParams(
+  primitive: VisualLayerPrimitive,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const allowed = PARAM_WHITELIST[primitive];
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(params)) {
+    if (!allowed?.has(k)) continue;
     if (POSITION_KEYS.has(k) && typeof v === "number" && v >= 0 && v <= 1) {
       out[k] = `${Math.round(v * 100)}%`;
     } else {
@@ -55,7 +78,7 @@ function normalizeParams(params: Record<string, unknown>): Record<string, unknow
 export const LayerRenderer: React.FC<{ layer: VisualLayer }> = ({ layer }) => {
   const Comp = PRIMITIVE_MAP[layer.primitive];
   if (!Comp) return null;
-  return <Comp {...normalizeParams(layer.params ?? {})} />;
+  return <Comp {...normalizeParams(layer.primitive, layer.params ?? {})} />;
 };
 
 export const LayerStack: React.FC<{ layers: VisualLayer[] }> = ({ layers }) => (

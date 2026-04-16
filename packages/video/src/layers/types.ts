@@ -33,7 +33,10 @@ export type TextAnimation =
   | "typewriter"
   | "fade-in"
   | "word-by-word"
-  | "letter-scatter";
+  | "letter-scatter"
+  | "glow-text"
+  | "split-reveal"
+  | "count-up";
 
 export type TextPosition =
   | "center"

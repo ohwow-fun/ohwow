@@ -103,6 +103,113 @@ const WordByWordText: React.FC<{
   );
 };
 
+const GlowText: React.FC<{
+  text: string;
+  style: React.CSSProperties;
+  accentColor: string;
+}> = ({ text, style, accentColor }) => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [0, 20], [0, 1], { extrapolateRight: "clamp" });
+  const glowRadius = interpolate(
+    breathe(frame, 0.04, 1),
+    [0, 2],
+    [8, 30],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  const glowOpacity = interpolate(
+    breathe(frame, 0.04, 1),
+    [0, 2],
+    [0.4, 0.9],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  return (
+    <div
+      style={{
+        ...style,
+        opacity,
+        textShadow: [
+          `0 0 ${glowRadius}px ${accentColor}${Math.round(glowOpacity * 255).toString(16).padStart(2, "0")}`,
+          `0 0 ${glowRadius * 2}px ${accentColor}40`,
+          `0 0 ${glowRadius * 4}px ${accentColor}18`,
+        ].join(", "),
+      }}
+    >
+      {text}
+    </div>
+  );
+};
+
+const SplitRevealText: React.FC<{
+  text: string;
+  style: React.CSSProperties;
+}> = ({ text, style }) => {
+  const frame = useCurrentFrame();
+  const lines = text.split("\n").filter(Boolean);
+
+  return (
+    <div style={{ ...style, display: "flex", flexDirection: "column", gap: 12 }}>
+      {lines.map((line, i) => {
+        const delay = i * 8;
+        const progress = interpolate(frame, [delay + 5, delay + 25], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
+        const fromRight = i % 2 === 0;
+        const x = (1 - progress) * (fromRight ? 120 : -120);
+
+        return (
+          <div
+            key={i}
+            style={{
+              opacity: progress,
+              transform: `translateX(${x}px)`,
+              textAlign: style.textAlign,
+            }}
+          >
+            {line}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const CountUpText: React.FC<{
+  text: string;
+  style: React.CSSProperties;
+  accentColor: string;
+}> = ({ text, style, accentColor }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const match = text.match(/^(\d+(?:[.,]\d+)?)/);
+  const target = match ? parseFloat(match[1].replace(",", "")) : 0;
+  const suffix = match ? text.slice(match[0].length) : text;
+  const isDecimal = match ? match[1].includes(".") : false;
+  const decimals = isDecimal ? (match![1].split(".")[1]?.length ?? 0) : 0;
+
+  const countDuration = Math.min(fps * 2, 60);
+  const progress = interpolate(frame, [8, 8 + countDuration], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const eased = 1 - Math.pow(1 - progress, 3);
+  const current = target * eased;
+  const display = isDecimal ? current.toFixed(decimals) : Math.round(current).toLocaleString();
+
+  const fadeIn = interpolate(frame, [0, 12], [0, 1], { extrapolateRight: "clamp" });
+
+  return (
+    <div style={{ ...style, opacity: fadeIn }}>
+      <span style={{ color: accentColor, fontVariantNumeric: "tabular-nums" }}>
+        {display}
+      </span>
+      {suffix && <span>{suffix}</span>}
+    </div>
+  );
+};
+
 const LetterScatterText: React.FC<{
   text: string;
   style: React.CSSProperties;
@@ -199,6 +306,15 @@ export const TextLayerRenderer: React.FC<{
       )}
       {animation === "letter-scatter" && (
         <LetterScatterText text={config.content} style={textStyle} />
+      )}
+      {animation === "glow-text" && (
+        <GlowText text={config.content} style={textStyle} accentColor={accent} />
+      )}
+      {animation === "split-reveal" && (
+        <SplitRevealText text={config.content} style={textStyle} />
+      )}
+      {animation === "count-up" && (
+        <CountUpText text={config.content} style={textStyle} accentColor={accent} />
       )}
 
       {config.subtitle && subtitleFade > 0 && (

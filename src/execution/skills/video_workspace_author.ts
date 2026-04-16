@@ -370,7 +370,7 @@ const VISUAL_PRIMITIVES = [
   { id: 'film-grain', name: 'Film grain', desc: 'Subtle noise texture. Analog, cinematic.', params: 'intensity' },
 ] as const;
 
-const TEXT_ANIMATIONS = ['typewriter', 'fade-in', 'word-by-word', 'letter-scatter'] as const;
+const TEXT_ANIMATIONS = ['typewriter', 'fade-in', 'word-by-word', 'letter-scatter', 'glow-text', 'split-reveal', 'count-up'] as const;
 const TEXT_POSITIONS = ['center', 'bottom-center', 'bottom-left', 'top-center'] as const;
 
 const primitiveCatalogBlock = (): string =>
@@ -393,7 +393,14 @@ You design the visual composition from scratch using visual primitives. Each sce
 Available visual primitives (composable, stackable):
 ${primitiveCatalogBlock()}
 
-Text animation styles: typewriter, fade-in, word-by-word, letter-scatter
+Text animation styles:
+  - typewriter: char-by-char reveal with cursor (default, good for narration)
+  - fade-in: fade + slide up (clean, minimal)
+  - word-by-word: words appear sequentially, last word accented (emphasis)
+  - letter-scatter: letters fly in from random positions (playful, energetic)
+  - glow-text: text with animated bloom/glow (taglines, dramatic moments)
+  - split-reveal: lines slide in from alternating sides (use \\n to split lines)
+  - count-up: animated number counting from 0 to N (stats: "33 agents", "189 tasks")
 Text positions: center, bottom-center, bottom-left, top-center
 
 Creative guidance for layer composition:
