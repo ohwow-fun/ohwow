@@ -45,7 +45,11 @@ export interface Scene<K extends SceneKind = SceneKind> {
   id: string;
   kind: K;
   durationInFrames: number;
-  params: ScenePayload[K];
+  /**
+   * v1: optional — scene components use baked-in defaults when omitted.
+   * v2 will thread params through to override scene content for variants.
+   */
+  params?: Partial<ScenePayload[K]>;
   captions?: CaptionSpec[];
 }
 

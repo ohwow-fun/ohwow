@@ -1,0 +1,59 @@
+{
+  "id": "ohwow-demo-v1",
+  "version": 1,
+  "fps": 30,
+  "width": 1280,
+  "height": 720,
+  "brand": {
+    "colors": {
+      "bg": "#0a0a0f",
+      "accent": "#f97316",
+      "accentGlow": "rgba(249, 115, 22, 0.3)",
+      "blue": "#3b82f6",
+      "green": "#22c55e",
+      "purple": "#a855f7",
+      "text": "#e4e4e7",
+      "textMuted": "#71717a",
+      "textDim": "rgba(255,255,255,0.4)",
+      "card": "rgba(255,255,255,0.06)",
+      "cardBorder": "rgba(255,255,255,0.1)",
+      "chatgpt": "#10a37f",
+      "claude": "#d97706",
+      "gemini": "#4285f4",
+      "perplexity": "#20b2aa",
+      "grok": "#e5e5e5"
+    },
+    "fonts": {
+      "sans": "Inter, system-ui, -apple-system, sans-serif",
+      "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+      "display": "'Smooch Sans', system-ui, sans-serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.06)",
+      "border": "1px solid rgba(255,255,255,0.1)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(20px)"
+    }
+  },
+  "music": { "src": "audio/ambient.mp3", "startFrame": 0, "volume": 0.25 },
+  "voiceovers": [
+    { "src": "audio/scene1.mp3", "startFrame": 5,    "volume": 0.9 },
+    { "src": "audio/scene2.mp3", "startFrame": 370,  "volume": 0.9 },
+    { "src": "audio/scene3.mp3", "startFrame": 470,  "volume": 0.9 },
+    { "src": "audio/scene4.mp3", "startFrame": 780,  "volume": 0.9 },
+    { "src": "audio/scene5.mp3", "startFrame": 1075, "volume": 0.9 }
+  ],
+  "transitions": [
+    { "kind": "fade", "durationInFrames": 20, "spring": { "damping": 200, "durationRestThreshold": 0.001 } },
+    { "kind": "fade", "durationInFrames": 20, "spring": { "damping": 200, "durationRestThreshold": 0.001 } },
+    { "kind": "fade", "durationInFrames": 20, "spring": { "damping": 200, "durationRestThreshold": 0.001 } },
+    { "kind": "fade", "durationInFrames": 20, "spring": { "damping": 200, "durationRestThreshold": 0.001 } }
+  ],
+  "scenes": [
+    { "id": "s1", "kind": "prompts-grid",  "durationInFrames": 380, "params": {} },
+    { "id": "s2", "kind": "drop",          "durationInFrames": 120, "params": {} },
+    { "id": "s3", "kind": "extraction",    "durationInFrames": 330, "params": {} },
+    { "id": "s4", "kind": "outcome-orbit", "durationInFrames": 315, "params": {} },
+    { "id": "s5", "kind": "cta-mesh",      "durationInFrames": 280, "params": {} }
+  ]
+}
