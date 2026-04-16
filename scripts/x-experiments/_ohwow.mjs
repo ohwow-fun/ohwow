@@ -70,9 +70,22 @@ async function req(method, route, body, asForm) {
  *   memory_extraction, ocr, workflow_step, simple_classification, desktop_control,
  *   reasoning, generation, summarization, extraction, critique, translation, embedding
  */
-export async function llm({ purpose = 'generation', prompt, system, agentId, constraints }) {
+export async function llm({
+  purpose = 'generation',
+  prompt,
+  system,
+  agentId,
+  constraints,
+  prefer_model,
+  difficulty,
+}) {
   const full = system ? `${system}\n\n${prompt}` : prompt;
-  const r = await req('POST', '/api/llm', { purpose, prompt: full, agentId, constraints });
+  // prefer_model + difficulty are flat fields on /api/llm's runLlmCall input
+  // (see src/execution/llm-organ.ts). Pass them through so callers can pin a
+  // specific tier when a purpose-level route is too weak.
+  const r = await req('POST', '/api/llm', {
+    purpose, prompt: full, agentId, constraints, prefer_model, difficulty,
+  });
   return r.data;
 }
 

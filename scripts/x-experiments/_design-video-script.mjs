@@ -110,11 +110,15 @@ const REGISTER_ANCHORS = {
 const NEGATIVE_BASELINE = 'text, captions, subtitles, readable screens, numerals, logos, brand names, watermarks, recognizable faces, cartoon, anime, illustrated';
 
 // Register-specific negatives layered on top of the baseline.
+// Invariant: a negative MUST NOT contradict its own anchor. "Film grain" was
+// removed from photographic + documentary because both anchors already steer
+// toward subtle/mild grain — conflicting directives fight inside the diffusion
+// model. Check REGISTER_ANCHORS before adding back.
 const REGISTER_NEGATIVES = {
-  'photographic':    'film grain, anamorphic, lens flare, over-saturation',
+  'photographic':    'anamorphic, lens flare, over-saturation',
   'cinematic-noir':  '',
   'dreamlike':       'harsh shadows, high contrast, hard edges, desaturation',
-  'documentary':     'film grain, color grade, anamorphic, slow motion',
+  'documentary':     'color grade, anamorphic, slow motion',
   'glitched':        '',
   'cctv':            'smooth cinematic motion, shallow depth of field, color grade',
   'super-8':         'digital sharpness, modern color grade, ultra-high resolution',
@@ -524,6 +528,58 @@ function providerStats(design) {
 
 // ---------- Phase 5: cinematographer (pass 2) ----------
 
+// Symmetric domain-sibling pairs that don't count as a real cross-domain
+// jump. The cinematographer must emit narration_domain + domain_chosen as
+// the first block of its JSON; the validator rejects the response when the
+// two sides of the shot live in the same domain or a trivial sibling. Extend
+// this list whenever a sweep surfaces a new lazy pairing — it's cheaper to
+// block it here than to notice the cliché after $18 of Seedance renders.
+const FORBIDDEN_DOMAIN_SIBLINGS = [
+  ['software', 'hardware'],
+  ['software', 'electronics'],
+  ['software', 'circuit'],
+  ['software', 'circuitboard'],
+  ['software', 'computer'],
+  ['software', 'computing'],
+  ['software', 'code'],
+  ['software', 'coding'],
+  ['software', 'programming'],
+  ['software', 'tech'],
+  ['software', 'technology'],
+  ['software', 'IT'],
+  ['code', 'keyboard'],
+  ['code', 'programming'],
+  ['code', 'computer'],
+  ['programming', 'keyboard'],
+  ['programming', 'computer'],
+  ['office', 'workstation'],
+  ['office', 'workplace'],
+  ['office', 'desk'],
+  ['office', 'cubicle'],
+  ['tech', 'hardware'],
+  ['tech', 'electronics'],
+  ['engineering', 'hardware'],
+  ['engineering', 'electronics'],
+].map(([a, b]) => [a.toLowerCase(), b.toLowerCase()]);
+
+function normalizeDomain(s) {
+  return String(s || '').toLowerCase().trim().replace(/[^a-z]/g, '');
+}
+
+function checkDomainDistance(narrationDomain, domainChosen) {
+  const a = normalizeDomain(narrationDomain);
+  const b = normalizeDomain(domainChosen);
+  if (!a) return { forbidden: true, reason: 'missing narration_domain' };
+  if (!b) return { forbidden: true, reason: 'missing domain_chosen' };
+  if (a === b) return { forbidden: true, reason: `same domain: "${a}"` };
+  for (const [x, y] of FORBIDDEN_DOMAIN_SIBLINGS) {
+    if ((a === x && b === y) || (a === y && b === x)) {
+      return { forbidden: true, reason: `sibling domains: "${a}" ↔ "${b}"` };
+    }
+  }
+  return { forbidden: false };
+}
+
 // Compact the x-intel seed into a brief the cinematographer can actually
 // metabolise. Null when no seed is available (back-compat).
 function formatKbSeed(kbSeed) {
@@ -588,7 +644,7 @@ You're not illustrating the narration — you're RHYMING with it. Every choice b
 
 COMPASS CHECK (answer each before emitting — if any fails, start over):
  a. THE GUESS TEST — the sharpest of these. If someone watched your silent shot and tried to guess the narration from the image alone, could they? If yes, the rhyme is too semantic — the shot is echoing the narration's subject. The viewer should be UNABLE to predict the voiceover from the image.
- b. THE TWO-DOMAINS TEST — in one word, what domain does the narration live in? In one word, what domain does your shot live in? If the words are the same, or close relatives of each other (e.g. "software" / "hardware", "kitchen" / "dining", "office" / "business"), change the shot's domain.
+ b. THE TWO-DOMAINS TEST — this one is enforced structurally: you MUST emit narration_domain, candidate_domains, domain_chosen, domain_distance_rationale as the FIRST block of your JSON (see schema below). A validator will reject you if narration_domain and domain_chosen are the same word or trivial siblings (software ↔ hardware, software ↔ electronics, software ↔ circuit, software ↔ code, code ↔ keyboard, office ↔ workstation, tech ↔ hardware). Be honest: if the narration is about coding/IDEs/software, then "code", "keyboard", "laptop", "monitor", "screen", "IDE", "circuit-board", "soldering", "server-rack", "hardware", "electronics", "tech" are ALL same-domain siblings. A true jump lives somewhere else entirely — weather, water, birdsong, a kitchen, weaving, baking, grief, childhood, a hallway of doors, a polaroid developing, a pencil snapping. Commit to the domain BEFORE you compose the shot; compose the shot to honour the commitment.
  c. Which principle is this shot most earning? Name it in the rationale.
  d. With the voiceover muted, does this image still do something on its own terms?
  e. Is there a single specific detail in the shot a generic stock-image search could not produce?
@@ -605,8 +661,13 @@ OUTPUT CONSTRAINTS (technical, non-creative — a downstream string validator en
 NEGATIVE_ADDITIONS:
  Comma-separated bare keywords. No "no " prefix. The compiler already injects: text, captions, subtitles, readable screens, numerals, logos, brand names, watermarks, recognizable faces, cartoon, anime, illustrated. Add only scene-specific extras, or use "".
 
-OUTPUT STRICT JSON, nothing else:
+OUTPUT STRICT JSON, nothing else. Emit fields in the order below — the top block is a commitment you make BEFORE composing the shot, and a downstream validator will reject responses where domain_chosen equals narration_domain or is a trivial sibling. A rejection costs you exactly one retry. Don't waste it.
+
 {
+  "narration_domain":          "<ONE WORD. The subject-matter field the narration actually lives in. Be specific and honest — if the narration is about IDEs/coding/software engineering, write "software", not a dodge like "tools" or "work".>",
+  "candidate_domains":         ["<ONE WORD>", "<ONE WORD>", "<ONE WORD>"],
+  "domain_chosen":             "<one of the three candidates — this is the domain your shot lives in>",
+  "domain_distance_rationale": "<=15 words: how domain_chosen is NOT a sibling of narration_domain>",
   "shot":               "<framing + subject, one line>",
   "environment":        "<location + props + atmosphere, one line>",
   "camera":             "<camera motion verb + lens + depth cue, one line>",
@@ -649,16 +710,56 @@ Emit the JSON only. duration_seconds should match target_clip_seconds unless nar
 Remember: avoid the laptop/keyboard cliche; reach into the visual vocabulary list and pick a physical metaphor.`;
 }
 
+// Pin pass-2 to a strong reasoning tier. The "auto" route for purpose=reasoning
+// lands on a free-tier model (xiaomi/mimo-v2-flash) which can recite the craft
+// principles but can't self-enforce the two-domains test — the measured result
+// was 73% laptop/keyboard cliche shots. A Seedance clip is ~$0.50, a single
+// cinematographer call is a few hundred tokens; the ratio easily earns the
+// upgrade. If gemini-3.1-pro-preview is unavailable the organ falls back per
+// the workspace's normal reasoning policy.
+const CINEMATOGRAPHER_PREFER_MODEL = 'google/gemini-3.1-pro-preview';
+
 async function cinematographerOne({ scene, copyContext, format, direction }) {
   const system = cinematographerSystemPrompt({
     format,
     direction,
     palette_mood: scene.mood_palette,
   });
-  const prompt = cinematographerUserPrompt({ scene, copyContext, format, direction });
-  const out = await llm({ purpose: 'reasoning', system, prompt });
-  const parsed = extractJson(out.text);
-  return { parsed, model: out.model_used };
+  const basePrompt = cinematographerUserPrompt({ scene, copyContext, format, direction });
+  const callOpts = {
+    purpose: 'reasoning',
+    prefer_model: CINEMATOGRAPHER_PREFER_MODEL,
+    difficulty: 'complex',
+  };
+
+  // Attempt 1 — free-form. Validator checks the emitted domain pair.
+  const out1 = await llm({ ...callOpts, system, prompt: basePrompt });
+  const parsed1 = extractJson(out1.text);
+  const check1 = checkDomainDistance(parsed1.narration_domain, parsed1.domain_chosen);
+  if (!check1.forbidden) {
+    return { parsed: parsed1, model: out1.model_used, domainRetry: false };
+  }
+
+  // Attempt 2 — cite the specific failure and demand a further jump.
+  const retryPrompt = `${basePrompt}
+
+REJECTED — your domain_chosen was too close to narration_domain:
+ - narration_domain:       "${parsed1.narration_domain}"
+ - domain_chosen:          "${parsed1.domain_chosen}"
+ - candidate_domains:      ${JSON.stringify(parsed1.candidate_domains || [])}
+ - validator failure:      ${check1.reason}
+
+Try again. Forbidden: anything in the same field as the narration's subject (for software narration that means code, keyboards, laptops, monitors, IDEs, screens, servers, circuits, hardware, electronics, tech). None of your previous candidate_domains may be reused. Reach into an unrelated domain — weather, water, birds, a kitchen, grief, childhood, a craft, a ritual, the body, architecture, music, sleep. Re-emit the FULL JSON with a new narration_domain/candidate_domains/domain_chosen and a new shot composed from the new domain.`;
+
+  const out2 = await llm({ ...callOpts, system, prompt: retryPrompt });
+  const parsed2 = extractJson(out2.text);
+  const check2 = checkDomainDistance(parsed2.narration_domain, parsed2.domain_chosen);
+  return {
+    parsed: parsed2,
+    model: out2.model_used,
+    domainRetry: true,
+    domainWarning: check2.forbidden ? `retry still forbidden: ${check2.reason}` : null,
+  };
 }
 
 // ---------- Phase 5: deterministic Seedance prompt compiler ----------
@@ -752,7 +853,7 @@ async function runCinematographerPass({ design, copy, format, direction, kbSeed 
 
   const results = await Promise.all(seedanceScenes.map(async ({ scene, idx }) => {
     try {
-      const { parsed, model } = await cinematographerOne({
+      const { parsed, model, domainRetry, domainWarning } = await cinematographerOne({
         scene, copyContext, format, direction,
       });
       const seed = deriveSeed({
@@ -762,7 +863,11 @@ async function runCinematographerPass({ design, copy, format, direction, kbSeed 
         direction,
       });
       const compiled = compileSeedancePrompt({ cin: parsed, seed });
-      return { idx, sceneId: scene.id, cin: parsed, compiled, model };
+      return {
+        idx, sceneId: scene.id, cin: parsed, compiled, model,
+        domainRetry: Boolean(domainRetry),
+        domainWarning: domainWarning || null,
+      };
     } catch (e) {
       return { idx, sceneId: scene.id, error: e.message };
     }
@@ -878,8 +983,15 @@ function renderMarkdown({ copy, format, designs }) {
           continue;
         }
         const { cin, compiled } = c;
-        lines.push(`model: \`${c.model}\` · register **${compiled.register}** · ${compiled.durationSeconds}s · seed \`${compiled.seed}\``);
+        const retryTag = c.domainRetry ? ' · _domain retry_' : '';
+        lines.push(`model: \`${c.model}\` · register **${compiled.register}** · ${compiled.durationSeconds}s · seed \`${compiled.seed}\`${retryTag}`);
         lines.push('');
+        if (cin.narration_domain || cin.domain_chosen) {
+          lines.push(`- **domain:** \`${cin.narration_domain || '?'}\` → \`${cin.domain_chosen || '?'}\`${cin.domain_distance_rationale ? ` — _${cin.domain_distance_rationale}_` : ''}`);
+        }
+        if (c.domainWarning) {
+          lines.push(`- **⚠ domain warning:** ${c.domainWarning}`);
+        }
         lines.push(`- **shot:** ${cin.shot}`);
         lines.push(`- **environment:** ${cin.environment}`);
         lines.push(`- **camera:** ${cin.camera}`);
@@ -1038,6 +1150,8 @@ async function main() {
                   model: c.model,
                   cinematography: c.cin,
                   compiled: c.compiled,
+                  domainRetry: Boolean(c.domainRetry),
+                  domainWarning: c.domainWarning || null,
                 }),
               })),
             };
@@ -1050,8 +1164,10 @@ async function main() {
           const pw = (providerWarnings || []).length;
           const cc = cinematography.filter(c => !c.error).length;
           const ce = cinematography.filter(c => c.error).length;
+          const cr = cinematography.filter(c => !c.error && c.domainRetry).length;
+          const cwarn = cinematography.filter(c => c.domainWarning).length;
           const phase5Tag = ENABLE_SEEDANCE
-            ? ` · providers ${pw ? `${pw} warn` : 'ok'}${cinematography.length ? ` · cin ${cc}✓${ce ? `/${ce}✗` : ''}` : ''}`
+            ? ` · providers ${pw ? `${pw} warn` : 'ok'}${cinematography.length ? ` · cin ${cc}✓${ce ? `/${ce}✗` : ''}${cr ? ` · ${cr} retry` : ''}${cwarn ? ` · ${cwarn} ⚠domain` : ''}` : ''}`
             : '';
           console.log(`✓ ${report.total}f · ${w} warning${w === 1 ? '' : 's'}${phase5Tag}`);
         } catch (e) {
