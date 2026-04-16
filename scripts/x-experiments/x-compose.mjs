@@ -24,10 +24,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
 import { postTweet } from './_x-harvest.mjs';
+import { ensureXReady } from './_x-browser.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 3);
@@ -114,6 +114,12 @@ Tone: ${brandVoice?.tone || 'warm, direct, builder-to-builder'}
 
 THE BAR: a senior builder who ships agents for a living must STOP SCROLLING and either save, disagree, or reply. "Competent dev-tip energy" is a FAIL. "I could write this in my sleep" is a FAIL. "Vaguely on-brand" is a FAIL. The post must teach something the reader didn't already know, or reframe something they thought they knew. If you can't clear that bar on this seed, skip.
 
+VOICE: you are a sharp observer of the AI agent space who clearly works in it but NEVER reveals what you build or sell. Think: a smart insider at a dinner party who has opinions on everything happening in AI agents and automation — not pitching, not tutorializing, just being interesting. You draw from the daily intel you see (the seed patterns) and turn them into witty commentary, philosophical reframes, or sharp opinions.
+
+WHAT TO DO: jokes, opinions, observations about the state of the art. Philosophical takes on where agents are headed and why. Wry humor about the gap between demos and production. Commentary on patterns you keep seeing across the ecosystem.
+
+WHAT NOT TO DO: reveal what you build. No "we pipe/route/checkpoint/use X tool". No how-tos from your own stack. No tactical tips that describe YOUR infrastructure. No first-person product framing AT ALL. If a reader could figure out what product you sell from the post, it failed. The audience should think "this person sees a lot and thinks clearly" not "this person is marketing their agent runtime."
+
 Hard rules:
 ${dontDo}
   - Every post MUST stand alone. A reader who never heard of us should LEARN something or FEEL something — not be told what we are.
@@ -126,15 +132,15 @@ ${dontDo}
   - Banned filler phrases (instant skip if any appear in the post): "our daemon", "our runtime", "our local runtime", "our stack", "our platform", "our system", "mcp-first", "local-first" as an adjective, "multi-workspace", "keys and machines", "routing through", "on your machine, on your schedule". These read like product spec and kill engagement.
   - It's fine to say "we" when sharing an experience. Not fine when what follows is a feature list.
   - No hype. No "future of X". No "AI will change everything". No em-dashes. No hashtags. Lowercase ok. Plain text only.
-  - Max 260 chars. Most should land 120-200.
+  - HARD LIMIT 240 chars. Count before submitting. If the post is over 240 chars, CUT IT DOWN or skip. Posts over 240 get truncated mid-sentence by the system. Best range: 120-200 chars. If you can't say it in 240, it's trying to be an article, not a tweet.
 
 Allowed shapes (pick ONE that fits the seed, or skip):
-  - tactical_tip: a how-to that another senior builder would SAVE. Must meet ALL THREE tests: (a) names a specific tool, model, or technique from our actual stack (mcp, ollama, claude/anthropic, sqlite, chrome cdp, etc.); (b) fixes a specific failure mode readers have HIT — not a theoretical risk; (c) the fix is non-obvious. If the advice is "add retries", "add a timeout", "add logging", "run a cron job", "tune your prompt", skip — that's boilerplate reflex, not insight. Do NOT borrow my wording verbatim; construct the insight yourself from the seed. If you can't clear all three tests for this seed, pick a different shape or skip.
-  - observation: "here's the pattern we keep seeing" — cite one concrete instance, not a category.
-  - opinion: a sharp take we'd defend in a thread. Must include the reason it matters in ONE sentence.
-  - question: a real question we'd pay for a good answer to. No "what do you think" bait.
-  - story: 1-2 sentences, past tense, something that actually happened. Focus on the OUTCOME or what the AGENT did, not what orchestrated it. Mentioning "the daemon" / "the runtime" / "the workspace" as the hero of a story turns it into architecture marketing. An agent doing a surprising thing in a specific situation is a story; infrastructure catching errors is a feature dump. Not a metaphor. Not "last week...last week...last week".
-  - humor: a subtle joke about AI / the state of the art / the agent ecosystem. See humor rules below.
+  - opinion: a sharp take on something happening in AI agents right now. Must include WHY it matters. Think: dinner-party argument-starter, not blog post thesis. "most agent benchmarks test curiosity, not competence" is an opinion. "agents need bigger context" is a fact nobody cares about.
+  - observation: a pattern you keep seeing across the ecosystem — not about your own product. "every new agent tool ships a dashboard before it ships error recovery" is an observation. "we see agents fail on X" is product intel.
+  - question: a real question you'd ask a table of senior builders. Should make the reader pause and think. Not "what do you think about agents?" but "if an agent can't explain why it chose a tool, does it actually understand the task?"
+  - humor: a subtle joke about AI / the state of the art / the agent ecosystem. See humor rules below. THIS IS THE PREFERRED SHAPE for most posts. If you can land the humor, do it.
+  - story: something you OBSERVED happening in the ecosystem or in the news (NOT something you built). An agent doing something surprising in someone else's demo. A pattern you noticed in a launch. Focus on what it reveals about the state of the art.
+  - tactical_tip: USE SPARINGLY. Only when the tip is ecosystem-level wisdom, not your-stack-specific. "name your agent's goals in the prompt, not its tools" is ecosystem advice. "pipe your logs to sqlite" is product implementation.
 
 Humor rules (when shape='humor'):
   - Subtle over loud. The reader earns the laugh, not gets punched by it.
@@ -177,7 +183,7 @@ ${priorBlock}
 Allowed shapes this run: ${[...allowedShapes].join(', ')}
 
 Draft ONE post.`;
-  const out = await llm({ purpose: 'generation', system: sys, prompt });
+  const out = await llm({ purpose: 'reasoning', system: sys, prompt });
   const parsed = extractJson(out.text);
   return {
     shape: String(parsed.shape || 'skip'),
@@ -264,6 +270,12 @@ async function main() {
       console.log(`  [${i+1}] filtered: banned phrase '${offenders[0]}' — downgraded to skip`);
       draft = { ...draft, shape: 'skip', post: '', confidence: 0, reason: `auto-skip: banned phrase '${offenders[0]}'` };
     }
+    // Truncation check: if the slice(0,280) cut the LLM's output
+    // mid-sentence, the post ends without terminal punctuation. Kill it.
+    if (draft.post && !/[.!?'"]$/.test(draft.post.trim())) {
+      console.log(`  [${i+1}] filtered: truncated (no terminal punctuation) — downgraded to skip`);
+      draft = { ...draft, shape: 'skip', post: '', confidence: 0, reason: 'auto-skip: truncated mid-sentence' };
+    }
     const record = { seed, draft, proposed: false, ts: new Date().toISOString() };
 
     console.log(`\n  [${i+1}] shape=${draft.shape} · conf=${draft.confidence.toFixed(2)}`);
@@ -291,10 +303,7 @@ async function main() {
       console.log(`    approval ${entry.status} · id=${entry.id.slice(0, 8)}`);
       if (entry.status === 'auto_applied') {
         try {
-          const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
-          const page = await findOrOpenXTab(browser);
-          if (!page) throw new Error('no x.com tab');
-          await page.installUnloadEscapes();
+          const { browser, page } = await ensureXReady();
           await postTweet(page, draft.post);
           browser.close();
           record.posted = true;

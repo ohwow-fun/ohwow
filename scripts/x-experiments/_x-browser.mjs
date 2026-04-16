@@ -1,0 +1,106 @@
+/**
+ * Deterministic Chrome + x.com session for x-experiments scripts.
+ *
+ * ensureXReady() guarantees: debug Chrome running on :9222 with an
+ * x.com tab that has a logged-in session. If Chrome isn't running, it
+ * spawns it with the configured profile. If no x.com tab exists, it
+ * opens one. Returns a RawCdpPage ready for navigation.
+ *
+ * Used by: x-intel, x-compose, x-reply, dm-to-code, approval-queue.
+ * Replaces the fragile pattern of `RawCdpBrowser.connect` + `findOrOpenXTab`
+ * with null-check + bail that every script was duplicating and getting wrong.
+ */
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const CDP_PORT = 9222;
+const DEBUG_DIR = path.join(os.homedir(), '.ohwow', 'chrome-debug');
+
+async function probeCdp(port) {
+  try {
+    const res = await fetch(`http://localhost:${port}/json/version`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) return await res.json();
+  } catch {}
+  return null;
+}
+
+async function probeTargets(port) {
+  try {
+    const res = await fetch(`http://localhost:${port}/json`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) return await res.json();
+  } catch {}
+  return [];
+}
+
+function resolveProfile() {
+  return process.env.OHWOW_CHROME_PROFILE || 'Profile 1';
+}
+
+function chromeBinary() {
+  const macPath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (existsSync(macPath)) return macPath;
+  return 'google-chrome';
+}
+
+async function spawnChrome(profile) {
+  if (!existsSync(DEBUG_DIR)) {
+    throw new Error(`debug Chrome dir missing: ${DEBUG_DIR}. Run 'ohwow chrome bootstrap' first.`);
+  }
+  const child = spawn(chromeBinary(), [
+    `--user-data-dir=${DEBUG_DIR}`,
+    `--profile-directory=${profile}`,
+    `--remote-debugging-port=${CDP_PORT}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+  ], { detached: true, stdio: 'ignore' });
+  child.unref();
+  // Wait for CDP port
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    if (await probeCdp(CDP_PORT)) return;
+  }
+  throw new Error('Chrome spawned but CDP not ready after 10s');
+}
+
+async function openXTab(browser) {
+  // Use CDP Target.createTarget (works across Chrome versions; the
+  // HTTP /json/new endpoint returns 405 on some builds).
+  await browser.send('Target.createTarget', { url: 'https://x.com/home' });
+  await sleep(5000);
+}
+
+/**
+ * Returns a { browser, page } pair with a live x.com tab ready for use.
+ * Spawns Chrome if needed, opens an x.com tab if missing.
+ */
+export async function ensureXReady() {
+  const profile = resolveProfile();
+
+  // Step 1: ensure Chrome is running on the CDP port.
+  let ver = await probeCdp(CDP_PORT);
+  if (!ver) {
+    console.log(`[x-browser] no Chrome on :${CDP_PORT}, spawning with profile=${profile}`);
+    await spawnChrome(profile);
+    ver = await probeCdp(CDP_PORT);
+    if (!ver) throw new Error('Chrome spawn failed');
+  }
+
+  // Step 2: connect via CDP.
+  const browser = await RawCdpBrowser.connect(`http://localhost:${CDP_PORT}`, 5000);
+
+  // Step 3: find or open x.com tab.
+  let page = await findOrOpenXTab(browser);
+  if (!page) {
+    console.log('[x-browser] no x.com tab found, opening one');
+    await openXTab(browser);
+    page = await findOrOpenXTab(browser);
+    if (!page) throw new Error('opened x.com tab but could not attach');
+  }
+
+  await page.installUnloadEscapes();
+  return { browser, page };
+}

@@ -32,11 +32,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
 import { buildOutboundGate } from './_outbound-gate.mjs';
 import { replyToPost } from './_x-harvest.mjs';
+import { ensureXReady } from './_x-browser.mjs';
 
 const DRY = process.env.DRY !== '0';
 const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 5);
@@ -249,10 +249,7 @@ async function main() {
       console.log(`    approval ${entry.status} (id=${entry.id.slice(0, 8)})`);
       if (entry.status === 'auto_applied') {
         try {
-          const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
-          const page = await findOrOpenXTab(browser);
-          if (!page) throw new Error('no x.com tab');
-          await page.installUnloadEscapes();
+          const { browser, page } = await ensureXReady();
           await replyToPost(page, post.permalink, draft.reply);
           browser.close();
           record.posted = true;

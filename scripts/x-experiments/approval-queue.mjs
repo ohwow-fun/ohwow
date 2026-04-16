@@ -15,8 +15,8 @@
  */
 import { loadQueue, rate, stats } from './_approvals.mjs';
 import { chat, ingestKnowledgeFile, resolveOhwow } from './_ohwow.mjs';
-import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { postTweet, replyToPost } from './_x-harvest.mjs';
+import { ensureXReady } from './_x-browser.mjs';
 import crypto from 'node:crypto';
 
 const [, , cmd, ...rest] = process.argv;
@@ -38,29 +38,19 @@ async function applyEntry(e) {
     return chat({ message: e.payload.message });
   }
   if (e.kind === 'reply') {
-    const { permalink, draft } = e.payload;
-    const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
-    const page = await findOrOpenXTab(browser);
-    if (!page) throw new Error('no x.com tab');
-    await page.installUnloadEscapes();
-    await replyToPost(page, permalink, draft);
+    const { browser, page } = await ensureXReady();
+    await replyToPost(page, e.payload.permalink, e.payload.draft);
     browser.close();
     return { posted: true };
   }
   if (e.kind === 'x_outbound_post') {
-    const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
-    const page = await findOrOpenXTab(browser);
-    if (!page) throw new Error('no x.com tab');
-    await page.installUnloadEscapes();
+    const { browser, page } = await ensureXReady();
     await postTweet(page, e.payload.post_text);
     browser.close();
     return { posted: true };
   }
   if (e.kind === 'x_outbound_reply') {
-    const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
-    const page = await findOrOpenXTab(browser);
-    if (!page) throw new Error('no x.com tab');
-    await page.installUnloadEscapes();
+    const { browser, page } = await ensureXReady();
     await replyToPost(page, e.payload.permalink, e.payload.reply_text);
     browser.close();
     return { posted: true };

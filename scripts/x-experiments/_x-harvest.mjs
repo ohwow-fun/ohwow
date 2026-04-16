@@ -173,11 +173,20 @@ export async function postTweet(page, text) {
   await page.typeText(text);
   await sleep(1200);
   // X's Post button uses React handlers that plain CDP clicks may not
-  // trigger reliably. Keyboard shortcut cmd+enter is handled by a
-  // deterministic listener and submits the composer from any focused
-  // state. Try that first; fall back to click for older UI variants.
-  await page.pressKey('Meta+Enter');
-  await sleep(2500);
+  // trigger. We dispatch Cmd+Enter via raw CDP with the metaKey modifier
+  // flag set — X's composer listens for this combo deterministically.
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyDown', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    commands: ['insertNewline'],
+    modifiers: 4, // 4 = metaKey on macOS
+  });
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyUp', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    modifiers: 4,
+  });
+  await sleep(3000);
   return null;
 }
 
@@ -206,8 +215,18 @@ export async function replyToPost(page, permalink, text) {
   await sleep(600);
   await page.typeText(text);
   await sleep(1200);
-  await page.pressKey('Meta+Enter');
-  await sleep(2500);
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyDown', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    commands: ['insertNewline'],
+    modifiers: 4,
+  });
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyUp', key: 'Enter', code: 'Enter',
+    windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+    modifiers: 4,
+  });
+  await sleep(3000);
   return null;
 }
 
