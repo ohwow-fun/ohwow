@@ -10,7 +10,7 @@ This is the top-level index. Always read this first.
 
 ---
 
-## 1. Current System State (as of 2026-04-16T06:23Z, loop active + roadmap-aware)
+## 1. Current System State (as of 2026-04-16T13:00Z, loop active + roadmap-aware)
 
 ### Architecture Summary
 
@@ -88,9 +88,9 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-**Loop is converging. Watching hold_rate recover as old reverts age out.**
+**Loop is converging. Violation pool is shrinking; hold_rate is recovering.**
 
-As of 2026-04-16T06:23Z:
+As of 2026-04-16T13:00Z:
 - 6 patches landed in the 24h window, 4 reverted (hold_rate=33%), but the 4
   reverts are ALL pre-session (oscillation era). The 2 patches from this session
   (Agents.tsx, Dashboard.tsx) have both held. A third patch (FlowBuilder.tsx) is
@@ -119,6 +119,16 @@ Layer C (now in progress): Promote the roadmap suite to tier-2 whole-file mode
   (done for AUTONOMY_ROADMAP.md, roadmap/gaps.md, roadmap/iteration-log.md)
   with a roadmap-shape-probe guarding structural invariants and auto-reverting
   any RoadmapUpdaterExperiment patch that breaks the shape.
+
+**Recent Signals & Missing Experiments:**
+The roadmap-updater experiment flagged 4 experiments present in the codebase but
+missing from this inventory: `agent-state-hygiene-sentinel`, `toolchain-lint`,
+`toolchain-tests`, and `toolchain-typecheck`. These should be audited and
+classified:
+- If active and running, add to Section 5.
+- If deprecated or paused, archive or remove their files.
+- If new and not yet integrated, add to Section 6 (Missing Experiments) with a
+  brief note on their purpose and current status.
 
 ## 3. Next Steps
 ### Immediate (next session)
@@ -278,7 +288,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-## 6. Missing Experiments (as of 2026-04-16T06:23Z)
+## 6. Missing Experiments (as of 2026-04-16T13:00Z)
 
 The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
 
