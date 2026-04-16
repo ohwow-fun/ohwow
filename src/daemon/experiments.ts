@@ -74,6 +74,7 @@ import {
 } from '../self-bench/runtime-config.js';
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
+import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
 import { dirname } from 'path';
@@ -233,6 +234,19 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     );
     cadenceScheduler.start();
     logger.info({ approvalsJsonlPath }, '[daemon] content-cadence-scheduler started');
+
+    // Phase 8-A.4: XDmPollerScheduler — read-only DM ingest. Polls the
+    // X inbox via listDmsViaBrowser, upserts threads + observations
+    // into x_dm_threads / x_dm_observations, mirrors deltas to a daily
+    // JSONL ledger. No findings, no contact linking, no auto-replies
+    // in this commit; layered on after a clean ingest is observed.
+    const dmPoller = new XDmPollerScheduler(
+      db,
+      workspaceId,
+      { dataDir: workspaceLayoutFor(workspaceSlug).dataDir },
+    );
+    dmPoller.start();
+    logger.info('[daemon] x-dm-poller-scheduler started');
 
     // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
     // that detects silent failures across the closed loop's stages.
