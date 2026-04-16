@@ -59,6 +59,7 @@ import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/brow
 import { DeliverableActionSentinelExperiment } from '../self-bench/experiments/deliverable-action-sentinel.js';
 import { AgentStateHygieneSentinelExperiment } from '../self-bench/experiments/agent-state-hygiene-sentinel.js';
 import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
+import { AttributionObserverExperiment } from '../self-bench/experiments/attribution-observer.js';
 import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
 import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
@@ -167,6 +168,10 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new AgentStateHygieneSentinelExperiment());
   // Piece 5: revenue pipeline observer (advisory).
   experimentRunner.register(new RevenuePipelineObserverExperiment());
+  // Funnel Surgeon Phase 1: attribution rollup observer (advisory).
+  // Reads the migration-128 view and surfaces bucket-level conversion
+  // stats + the worst-performing bucket as strategy.attribution_findings.
+  experimentRunner.register(new AttributionObserverExperiment());
   // Piece 4b: X per-shape engagement observer.
   experimentRunner.register(new XEngagementObserverExperiment());
   // Piece 4c: X autonomy ramp.
