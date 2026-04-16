@@ -1,11 +1,3 @@
-/**
- * Scene: Text Typewriter — a single powerful sentence typing itself
- * onto a dark screen with a noise grid background and cursor blink.
- *
- * Perfect for dramatic openings, closings, or quote moments.
- * Uses generative noise grid for subtle background life.
- */
-
 import React from "react";
 import {
   AbsoluteFill,
@@ -13,7 +5,12 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, GlowOrb, breathe, SceneBackground, FilmGrain, ScanLine, moodForIndex, getMoodColors, type SceneMood } from "../motion/generative";
+import {
+  GlowOrb, breathe,
+  SceneBackground, FilmGrain, ScanLine,
+  Aurora, Bokeh, LightRays, ConstellationNet, WaveForm, GeometricShapes, Vignette, RippleRings,
+  moodForIndex, getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 export interface TextTypewriterParams {
   text: string;
@@ -24,9 +21,7 @@ export interface TextTypewriterParams {
   cursorColor?: string;
   subtitle?: string;
   centered?: boolean;
-  /** Visual variation index — shifts noise seed, orb position, grid density. */
   variation?: number;
-  /** Intensity 0-1: controls glow size, particle count, grid opacity. */
   intensity?: number;
   mood?: SceneMood;
 }
@@ -39,29 +34,15 @@ export const TextTypewriter: React.FC<{
   const text = params?.text ?? "Conversations die. Knowledge shouldn't.";
   const fontSize = params?.fontSize ?? 42;
   const typingSpeed = params?.typingSpeed ?? 1.5;
+  const subtitle = params?.subtitle;
+  const variation = params?.variation ?? 0;
+  const intensity = params?.intensity ?? 0.5;
   const mood = params?.mood ?? moodForIndex(variation);
   const m = getMoodColors(mood);
   const color = params?.color ?? colors.text;
   const accent = params?.accentColor ?? m.accent;
-  const subtitle = params?.subtitle;
-  const variation = params?.variation ?? 0;
-  const intensity = params?.intensity ?? 0.5;
 
-  const orbPositions = [
-    { cx: '50%', cy: '45%' },
-    { cx: '30%', cy: '55%' },
-    { cx: '70%', cy: '40%' },
-    { cx: '45%', cy: '60%' },
-    { cx: '55%', cy: '35%' },
-  ];
-  const orbPos = orbPositions[variation % orbPositions.length];
-  const orbSize = 120 + intensity * 160;
-  const gridDensity = Math.round(14 + intensity * 10);
-
-  const charsToShow = Math.min(
-    text.length,
-    Math.floor(frame * typingSpeed),
-  );
+  const charsToShow = Math.min(text.length, Math.floor(frame * typingSpeed));
   const typed = text.slice(0, charsToShow);
   const isTyping = charsToShow < text.length;
   const cursorVisible = isTyping || (Math.floor(frame * 0.06) % 2 === 0);
@@ -75,10 +56,47 @@ export const TextTypewriter: React.FC<{
       })
     : 0;
 
+  const bgVariant = variation % 6;
+
   return (
     <SceneBackground mood={mood} intensity={intensity}>
-      <NoiseGrid cols={gridDensity} rows={Math.round(gridDensity * 0.56)} cellSize={64} seed={`tw-${variation}`} color={accent} speed={0.003 + variation * 0.001} />
-      <GlowOrb cx={orbPos.cx} cy={orbPos.cy} size={orbSize} color={accent} pulseSpeed={0.04 + variation * 0.005} />
+      {bgVariant === 0 && (
+        <>
+          <Aurora colors={[accent, m.secondary]} speed={0.008} opacity={0.1} y="25%" />
+          <Vignette intensity={0.6} />
+        </>
+      )}
+      {bgVariant === 1 && (
+        <>
+          <ConstellationNet nodeCount={18} color={accent} seed={`tw-c-${variation}`} speed={0.003} lineOpacity={0.07} />
+          <GlowOrb cx="50%" cy="45%" size={200} color={`${accent}15`} pulseSpeed={0.04} />
+        </>
+      )}
+      {bgVariant === 2 && (
+        <>
+          <WaveForm color={accent} amplitude={25} frequency={0.025} speed={0.03} y="65%" opacity={0.12} layers={4} />
+          <WaveForm color={m.secondary} amplitude={20} frequency={0.03} speed={0.025} y="35%" opacity={0.08} layers={2} />
+        </>
+      )}
+      {bgVariant === 3 && (
+        <>
+          <Bokeh count={10} colors={[accent, m.secondary, `${accent}80`]} seed={`tw-b-${variation}`} minSize={50} maxSize={180} speed={0.004} />
+          <Vignette intensity={0.5} />
+        </>
+      )}
+      {bgVariant === 4 && (
+        <>
+          <LightRays count={6} color={accent} originX="70%" originY="0%" spread={35} opacity={0.035} />
+          <GeometricShapes count={6} color={m.secondary} seed={`tw-g-${variation}`} opacity={0.05} />
+        </>
+      )}
+      {bgVariant === 5 && (
+        <>
+          <RippleRings cx="50%" cy="50%" color={accent} count={5} speed={0.4} maxRadius={350} opacity={0.06} />
+          <GlowOrb cx="50%" cy="50%" size={160} color={`${accent}20`} pulseSpeed={0.05} />
+          <Vignette intensity={0.55} />
+        </>
+      )}
 
       <div
         style={{

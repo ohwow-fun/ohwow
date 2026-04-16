@@ -1,12 +1,3 @@
-/**
- * Scene: Stats Counter — dramatic animated number reveals with
- * a generative flow-field background and pulse rings.
- *
- * Each counter (2-4) animates from 0 to its target value with a
- * spring-driven ease. The flow field and pulse rings create organic
- * motion behind the numbers.
- */
-
 import React from "react";
 import {
   AbsoluteFill,
@@ -16,7 +7,12 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { FlowFieldLayer, PulseRing, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
+import {
+  breathe, shimmer,
+  SceneBackground, FilmGrain,
+  WaveForm, Bokeh, RippleRings, GlowOrb, Vignette,
+  getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 interface CounterItem {
   to: number;
@@ -36,9 +32,9 @@ export interface StatsCounterParams {
 }
 
 const DEFAULT_COUNTERS: CounterItem[] = [
-  { to: 33, label: "agents", color: colors.accent },
-  { to: 188, label: "tasks completed", color: colors.blue },
-  { to: 433, label: "memories", color: colors.green },
+  { to: 33, label: "agents", color: "#f97316" },
+  { to: 188, label: "tasks completed", color: "#3b82f6" },
+  { to: 433, label: "memories", color: "#22c55e" },
 ];
 
 export const StatsCounter: React.FC<{
@@ -49,24 +45,20 @@ export const StatsCounter: React.FC<{
   const { fps } = useVideoConfig();
   const counters = params?.counters?.length ? params.counters : DEFAULT_COUNTERS;
   const layout = params?.layout ?? "row";
-  const accent = params?.accentColor ?? colors.accent;
-  const particleCount = params?.particleCount ?? 25;
+  const mood = params?.mood ?? 'cool';
+  const m = getMoodColors(mood);
+  const accent = params?.accentColor ?? m.accent;
 
   const isGrid = layout === "grid" && counters.length > 2;
   const gridCols = isGrid ? Math.min(counters.length, 3) : counters.length;
 
-  const mood = params?.mood ?? 'cool';
-
   return (
     <SceneBackground mood={mood} intensity={0.6}>
-      <FlowFieldLayer
-        count={particleCount}
-        seed="stats"
-        speed={0.6}
-        colors={[accent, colors.blue, colors.green]}
-      />
-      <PulseRing cx="50%" cy="45%" radius={250} color={accent} speed={0.04} />
-      <PulseRing cx="50%" cy="45%" radius={320} color={`${accent}60`} speed={0.03} />
+      <WaveForm color={accent} amplitude={20} frequency={0.02} speed={0.025} y="75%" opacity={0.1} layers={3} />
+      <WaveForm color={m.secondary} amplitude={15} frequency={0.025} speed={0.02} y="25%" opacity={0.06} layers={2} />
+      <Bokeh count={8} colors={[accent, m.secondary]} seed="stats-bokeh" minSize={40} maxSize={120} speed={0.003} />
+      <RippleRings cx="50%" cy="45%" color={accent} count={3} speed={0.3} maxRadius={300} opacity={0.05} />
+      <GlowOrb cx="50%" cy="45%" size={180} color={`${accent}15`} pulseSpeed={0.04} />
 
       <div
         style={{
@@ -135,6 +127,7 @@ export const StatsCounter: React.FC<{
           );
         })}
       </div>
+      <Vignette intensity={0.5} />
       <FilmGrain intensity={0.03} />
     </SceneBackground>
   );

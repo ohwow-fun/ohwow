@@ -7,7 +7,12 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { NoiseGrid, GlowOrb, FlowFieldLayer, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
+import {
+  breathe, shimmer,
+  SceneBackground, FilmGrain,
+  WaveForm, GlowOrb, Vignette, GradientWash,
+  getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 interface SideItem {
   text: string;
@@ -49,34 +54,25 @@ export const BeforeAfter: React.FC<{
   const beforeLabel = params?.before?.label ?? "before";
   const afterLabel = params?.after?.label ?? "after";
   const splitFrame = params?.splitFrame ?? Math.round(dur * 0.4);
-  const accent = params?.accentColor ?? colors.accent;
+  const afterRevealed = frame >= splitFrame;
+
+  const mood = params?.mood ?? (afterRevealed ? 'forest' : 'sunset');
+  const m = getMoodColors(mood);
+  const accent = params?.accentColor ?? m.accent;
 
   const dividerProgress = interpolate(frame, [splitFrame - 10, splitFrame + 5], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  const afterRevealed = frame >= splitFrame;
-
-  const mood = params?.mood ?? (afterRevealed ? 'forest' : 'sunset');
-
   return (
     <SceneBackground mood={mood} intensity={0.6}>
-      <NoiseGrid cols={16} rows={9} cellSize={80} seed="ba" color={afterRevealed ? accent : "#ef4444"} speed={0.003} />
-
-      {afterRevealed && (
-        <GlowOrb cx="75%" cy="50%" size={250} color={`${accent}40`} pulseSpeed={0.05} />
-      )}
-
-      <FlowFieldLayer
-        count={15}
-        seed="ba-flow"
-        speed={0.5}
-        colors={afterRevealed ? [accent, colors.green, colors.blue] : ["#ef4444", "#f97316", colors.textMuted]}
-      />
+      {!afterRevealed && <GradientWash colors={['#ef4444', '#f97316']} speed={0.003} angle={180} opacity={0.05} />}
+      {afterRevealed && <GradientWash colors={[accent, m.secondary]} speed={0.003} angle={0} opacity={0.05} />}
+      <WaveForm color={afterRevealed ? accent : '#ef4444'} amplitude={20} frequency={0.02} speed={0.03} y="80%" opacity={0.08} layers={2} />
+      {afterRevealed && <GlowOrb cx="75%" cy="50%" size={250} color={`${accent}20`} pulseSpeed={0.05} />}
 
       <div style={{ position: "absolute", inset: 0, display: "flex" }}>
-        {/* Before side */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 50px" }}>
           <div
             style={{
@@ -129,7 +125,6 @@ export const BeforeAfter: React.FC<{
           })}
         </div>
 
-        {/* Divider */}
         <div
           style={{
             width: 2,
@@ -139,7 +134,6 @@ export const BeforeAfter: React.FC<{
           }}
         />
 
-        {/* After side */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 50px" }}>
           {afterRevealed && (
             <>
@@ -193,6 +187,7 @@ export const BeforeAfter: React.FC<{
           )}
         </div>
       </div>
+      <Vignette intensity={0.45} />
       <FilmGrain intensity={0.04} />
     </SceneBackground>
   );

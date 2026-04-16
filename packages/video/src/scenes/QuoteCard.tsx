@@ -5,7 +5,11 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, GlowOrb, PulseRing, FlowFieldLayer, breathe, SceneBackground, FilmGrain, ScanLine, moodForIndex, getMoodColors, type SceneMood } from "../motion/generative";
+import {
+  GlowOrb, breathe,
+  SceneBackground, FilmGrain, Aurora, Bokeh, LightRays, ConstellationNet, Vignette,
+  moodForIndex, getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 export interface QuoteCardParams {
   quote: string;
@@ -30,14 +34,6 @@ export const QuoteCard: React.FC<{
   const fontSize = params?.fontSize ?? (quote.length > 80 ? 32 : quote.length > 50 ? 38 : 46);
   const dur = durationInFrames ?? 180;
 
-  const orbPositions = [
-    { cx: "50%", cy: "50%" },
-    { cx: "35%", cy: "45%" },
-    { cx: "65%", cy: "55%" },
-    { cx: "40%", cy: "60%" },
-  ];
-  const orbPos = orbPositions[variation % orbPositions.length];
-
   const fadeIn = interpolate(frame, [0, 20], [0, 1], { extrapolateRight: "clamp" });
   const quoteMarkFade = interpolate(frame, [5, 25], [0, 0.12], { extrapolateRight: "clamp" });
   const textReveal = interpolate(frame, [10, 40], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
@@ -48,19 +44,24 @@ export const QuoteCard: React.FC<{
   const words = quote.split(" ");
   const visibleWords = Math.ceil(words.length * textReveal);
 
+  const bgVariant = variation % 4;
+
   return (
     <SceneBackground mood={mood} intensity={0.7}>
-      <NoiseGrid cols={12} rows={7} cellSize={100} seed={`quote-${variation}`} color={accent} speed={0.002} />
-      <GlowOrb cx={orbPos.cx} cy={orbPos.cy} size={300 + variation * 30} color={`${accent}25`} pulseSpeed={0.03} />
-      <PulseRing cx="50%" cy="50%" radius={350} color={`${accent}15`} speed={0.025} />
-      <FlowFieldLayer count={10} seed={`quote-flow-${variation}`} speed={0.3} colors={[accent, m.secondary]} />
+      {/* Each variation gets a different primitive combination */}
+      {bgVariant === 0 && <Aurora colors={[accent, m.secondary, `${accent}80`]} speed={0.006} opacity={0.12} />}
+      {bgVariant === 1 && <LightRays count={7} color={accent} originX="30%" spread={50} opacity={0.03} />}
+      {bgVariant === 2 && <ConstellationNet nodeCount={15} color={m.secondary} seed={`q-${variation}`} lineOpacity={0.06} />}
+      {bgVariant === 3 && <Bokeh count={8} colors={[accent, m.secondary]} seed={`qb-${variation}`} minSize={40} maxSize={150} />}
 
-      {/* Giant quotation mark */}
+      <GlowOrb cx="50%" cy="45%" size={280 + variation * 40} color={`${accent}18`} pulseSpeed={0.03} />
+      <Vignette intensity={0.5} />
+
       <div
         style={{
           position: "absolute",
-          top: "20%",
-          left: "10%",
+          top: "18%",
+          left: "8%",
           fontFamily: fonts.display,
           fontSize: 300,
           color: accent,

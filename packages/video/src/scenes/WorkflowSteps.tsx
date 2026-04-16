@@ -7,7 +7,12 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { FlowFieldLayer, GlowOrb, PulseRing, breathe, shimmer, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
+import {
+  breathe, shimmer,
+  SceneBackground, FilmGrain,
+  ConstellationNet, GlowOrb, Vignette, GradientWash,
+  getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 interface Step {
   label: string;
@@ -37,18 +42,18 @@ export const WorkflowSteps: React.FC<{
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const steps = params?.steps?.length ? params.steps : DEFAULT_STEPS;
-  const accent = params?.accentColor ?? colors.accent;
+  const mood = params?.mood ?? 'warm';
+  const m = getMoodColors(mood);
+  const accent = params?.accentColor ?? m.accent;
   const connectorColor = params?.connectorColor ?? accent;
 
-  const stepColors = [colors.accent, colors.blue, colors.green, colors.purple, "#e11d48", "#06b6d4"];
-
-  const mood = params?.mood ?? 'warm';
+  const stepColors = [m.accent, m.secondary, '#22c55e', '#a855f7', '#e11d48', '#06b6d4'];
 
   return (
     <SceneBackground mood={mood} intensity={0.5}>
-      <FlowFieldLayer count={15} seed="workflow" speed={0.4} colors={[accent, colors.blue, colors.green]} />
-      <GlowOrb cx="50%" cy="50%" size={220} color={`${accent}18`} pulseSpeed={0.035} />
-      <PulseRing cx="50%" cy="50%" radius={320} color={`${accent}12`} speed={0.025} />
+      <ConstellationNet nodeCount={16} color={m.secondary} seed="wf-net" speed={0.002} lineOpacity={0.05} dotSize={2} />
+      <GlowOrb cx="50%" cy="50%" size={250} color={`${accent}12`} pulseSpeed={0.03} />
+      <GradientWash colors={[accent, m.secondary]} speed={0.004} angle={45} opacity={0.04} />
 
       <div
         style={{
@@ -95,7 +100,6 @@ export const WorkflowSteps: React.FC<{
                   transform: `scale(${enter * scale}) translateY(${interpolate(enter, [0, 1], [30, 0])}px)`,
                 }}
               >
-                {/* Number circle */}
                 <div
                   style={{
                     width: 56,
@@ -114,16 +118,7 @@ export const WorkflowSteps: React.FC<{
                   {step.icon ?? String(i + 1)}
                 </div>
 
-                <div
-                  style={{
-                    fontFamily: fonts.sans,
-                    fontSize: 18,
-                    fontWeight: 600,
-                    color: colors.text,
-                    marginBottom: 6,
-                    textAlign: "center",
-                  }}
-                >
+                <div style={{ fontFamily: fonts.sans, fontSize: 18, fontWeight: 600, color: colors.text, marginBottom: 6, textAlign: "center" }}>
                   {step.label}
                 </div>
 
@@ -143,17 +138,8 @@ export const WorkflowSteps: React.FC<{
                 )}
               </div>
 
-              {/* Connector arrow */}
               {i < steps.length - 1 && (
-                <div
-                  style={{
-                    width: 60,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    marginTop: -40,
-                  }}
-                >
+                <div style={{ width: 60, display: "flex", alignItems: "center", justifyContent: "center", marginTop: -40 }}>
                   <div
                     style={{
                       width: interpolate(connectorProgress, [0, 1], [0, 40]),
@@ -180,6 +166,7 @@ export const WorkflowSteps: React.FC<{
           );
         })}
       </div>
+      <Vignette intensity={0.4} />
       <FilmGrain intensity={0.03} />
     </SceneBackground>
   );

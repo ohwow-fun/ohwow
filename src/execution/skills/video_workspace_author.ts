@@ -712,11 +712,11 @@ function deriveVisualParams(
 ): Record<string, unknown> {
   switch (kind) {
     case 'text-typewriter': {
-      const accentOptions = ['#f97316', '#3b82f6', '#22c55e', '#a855f7', '#e11d48'];
+      const moods = ['dark', 'cool', 'electric', 'midnight', 'warm', 'sunset'] as const;
       return {
         text: narration,
         fontSize: narration.length > 80 ? 34 : narration.length > 50 ? 38 : 44,
-        accentColor: accentOptions[sceneIndex % accentOptions.length],
+        mood: moods[sceneIndex % moods.length],
         variation: sceneIndex,
         intensity: Math.min(1, 0.3 + sceneIndex * 0.15),
       };
@@ -840,10 +840,10 @@ function deriveVisualParams(
       return notifications.length > 0 ? { notifications } : {};
     }
     case 'quote-card': {
-      const accentOptions = ['#f97316', '#a855f7', '#3b82f6', '#22c55e', '#e11d48'];
+      const moods = ['electric', 'sunset', 'midnight', 'cool', 'warm'] as const;
       return {
         quote: narration,
-        accentColor: accentOptions[sceneIndex % accentOptions.length],
+        mood: moods[sceneIndex % moods.length],
         variation: sceneIndex,
       };
     }
@@ -903,10 +903,15 @@ function buildSpec(params: {
     brand,
     music: { src: params.musicSrc, startFrame: 0, volume: 0.22 },
     voiceovers,
-    transitions: Array(Math.max(0, params.voices.length - 1)).fill({
-      kind: 'fade',
-      durationInFrames: TRANSITION_FRAMES,
-      spring: { damping: 200, durationRestThreshold: 0.001 },
+    transitions: Array.from({ length: Math.max(0, params.voices.length - 1) }, (_, i) => {
+      const patterns = [
+        { kind: 'fade' as const, durationInFrames: TRANSITION_FRAMES, spring: { damping: 200, durationRestThreshold: 0.001 } },
+        { kind: 'slide' as const, direction: 'from-right' as const, durationInFrames: TRANSITION_FRAMES },
+        { kind: 'fade' as const, durationInFrames: Math.round(TRANSITION_FRAMES * 1.5), spring: { damping: 120, durationRestThreshold: 0.001 } },
+        { kind: 'slide' as const, direction: 'from-left' as const, durationInFrames: TRANSITION_FRAMES },
+        { kind: 'none' as const },
+      ];
+      return patterns[i % patterns.length];
     }),
     scenes,
   };

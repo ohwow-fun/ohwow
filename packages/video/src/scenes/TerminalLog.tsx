@@ -5,7 +5,12 @@ import {
   interpolate,
 } from "remotion";
 import { colors, fonts } from "../components/design";
-import { NoiseGrid, FlowFieldLayer, breathe, SceneBackground, ScanLine, FilmGrain, type SceneMood } from "../motion/generative";
+import {
+  breathe,
+  SceneBackground, ScanLine, FilmGrain,
+  ConstellationNet, WaveForm, Vignette, GradientWash,
+  type SceneMood,
+} from "../motion/generative";
 
 interface LogLine {
   text: string;
@@ -22,14 +27,14 @@ export interface TerminalLogParams {
 }
 
 const DEFAULT_LINES: LogLine[] = [
-  { text: "→ scout: researching competitor pricing...", color: colors.blue },
-  { text: "  found 3 changes in the last 24h", color: colors.textMuted },
-  { text: "→ scribe: drafting weekly recap...", color: colors.green },
-  { text: "  1,200 words. tone: conversational. scheduled for 9am.", color: colors.textMuted },
-  { text: "→ sentinel: monitoring uptime...", color: colors.purple },
-  { text: "  all systems nominal. 99.98% over 30d.", color: colors.textMuted },
-  { text: "→ broker: 2 new leads responded", color: colors.accent },
-  { text: "  follow-ups queued for tomorrow morning.", color: colors.textMuted },
+  { text: "→ scout: researching competitor pricing...", color: "#3b82f6" },
+  { text: "  found 3 changes in the last 24h", color: "#71717a" },
+  { text: "→ scribe: drafting weekly recap...", color: "#22c55e" },
+  { text: "  1,200 words. tone: conversational. scheduled for 9am.", color: "#71717a" },
+  { text: "→ sentinel: monitoring uptime...", color: "#a855f7" },
+  { text: "  all systems nominal. 99.98% over 30d.", color: "#71717a" },
+  { text: "→ broker: 2 new leads responded", color: "#f97316" },
+  { text: "  follow-ups queued for tomorrow morning.", color: "#71717a" },
 ];
 
 export const TerminalLog: React.FC<{
@@ -39,17 +44,17 @@ export const TerminalLog: React.FC<{
   const frame = useCurrentFrame();
   const lines = params?.lines?.length ? params.lines : DEFAULT_LINES;
   const prompt = params?.prompt ?? "ohwow";
-  const accent = params?.accentColor ?? colors.accent;
+  const accent = params?.accentColor ?? "#818cf8";
   const typingSpeed = params?.typingSpeed ?? 2;
+  const mood = params?.mood ?? 'midnight';
 
   const headerFade = interpolate(frame, [0, 12], [0, 1], { extrapolateRight: "clamp" });
 
-  const mood = params?.mood ?? 'midnight';
-
   return (
     <SceneBackground mood={mood} intensity={0.6}>
-      <NoiseGrid cols={20} rows={12} cellSize={64} seed="term" color={accent} speed={0.002} />
-      <FlowFieldLayer count={12} seed="term-flow" speed={0.3} colors={[accent, colors.blue]} />
+      <ConstellationNet nodeCount={12} color={accent} seed="term-net" speed={0.002} lineOpacity={0.04} dotSize={2} />
+      <WaveForm color={accent} amplitude={15} frequency={0.015} speed={0.02} y="85%" opacity={0.06} layers={2} />
+      <GradientWash colors={[accent, '#22d3ee']} speed={0.003} angle={160} opacity={0.04} />
 
       <div
         style={{
@@ -59,18 +64,18 @@ export const TerminalLog: React.FC<{
           transform: `translate(-50%, -50%) scale(${breathe(frame, 0.02, 0.005)})`,
           width: 800,
           maxHeight: 500,
-          background: "rgba(10, 10, 18, 0.92)",
-          border: `1px solid ${colors.cardBorder}`,
+          background: "rgba(5, 5, 16, 0.94)",
+          border: "1px solid rgba(255,255,255,0.08)",
           borderRadius: 12,
           overflow: "hidden",
-          boxShadow: `0 0 60px rgba(0,0,0,0.5), 0 0 30px ${accent}10`,
+          boxShadow: `0 0 60px rgba(0,0,0,0.5), 0 0 40px ${accent}08`,
         }}
       >
         <div
           style={{
             height: 36,
             background: "rgba(255,255,255,0.04)",
-            borderBottom: `1px solid ${colors.cardBorder}`,
+            borderBottom: "1px solid rgba(255,255,255,0.08)",
             display: "flex",
             alignItems: "center",
             padding: "0 14px",
@@ -121,7 +126,9 @@ export const TerminalLog: React.FC<{
           })()}
         </div>
       </div>
+
       <ScanLine color={accent} speed={0.5} opacity={0.04} />
+      <Vignette intensity={0.5} />
       <FilmGrain intensity={0.05} />
     </SceneBackground>
   );

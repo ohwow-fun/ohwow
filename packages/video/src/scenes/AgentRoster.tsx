@@ -7,7 +7,12 @@ import {
   spring,
 } from "remotion";
 import { colors, fonts, glass } from "../components/design";
-import { FlowFieldLayer, PulseRing, GlowOrb, breathe, shimmer, drift2D, SceneBackground, FilmGrain, type SceneMood } from "../motion/generative";
+import {
+  breathe, shimmer, drift2D,
+  SceneBackground, FilmGrain,
+  Aurora, Bokeh, GeometricShapes, Vignette, RippleRings, GlowOrb,
+  getMoodColors, type SceneMood,
+} from "../motion/generative";
 
 interface AgentCard {
   name: string;
@@ -25,10 +30,10 @@ export interface AgentRosterParams {
 }
 
 const DEFAULT_AGENTS: AgentCard[] = [
-  { name: "Scout", role: "Research", icon: "🔍", color: colors.blue },
-  { name: "Scribe", role: "Content", icon: "📝", color: colors.green },
-  { name: "Sentinel", role: "Monitoring", icon: "🛡️", color: colors.purple },
-  { name: "Broker", role: "Outreach", icon: "📧", color: colors.accent },
+  { name: "Scout", role: "Research", icon: "🔍", color: "#3b82f6" },
+  { name: "Scribe", role: "Content", icon: "📝", color: "#22c55e" },
+  { name: "Sentinel", role: "Monitoring", icon: "🛡️", color: "#a855f7" },
+  { name: "Broker", role: "Outreach", icon: "📧", color: "#f97316" },
 ];
 
 const ROLE_ICONS: Record<string, string> = {
@@ -52,17 +57,18 @@ export const AgentRoster: React.FC<{
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const agents = params?.agents?.length ? params.agents : DEFAULT_AGENTS;
-  const accent = params?.accentColor ?? colors.accent;
-
-  const cardColors = [colors.accent, colors.blue, colors.green, colors.purple, "#e11d48", "#06b6d4"];
-
   const mood = params?.mood ?? 'electric';
+  const m = getMoodColors(mood);
+  const accent = params?.accentColor ?? m.accent;
+
+  const cardColors = [m.accent, m.secondary, '#22c55e', '#a855f7', '#e11d48', '#06b6d4'];
 
   return (
     <SceneBackground mood={mood} intensity={0.6}>
-      <FlowFieldLayer count={20} seed="roster" speed={0.4} colors={[accent, colors.blue, colors.purple]} />
-      <PulseRing cx="50%" cy="50%" radius={300} color={`${accent}40`} speed={0.03} />
-      <GlowOrb cx="50%" cy="40%" size={200} color={`${accent}30`} pulseSpeed={0.04} />
+      <Aurora colors={[accent, m.secondary, `${accent}60`]} speed={0.005} opacity={0.1} y="20%" />
+      <Bokeh count={6} colors={[accent, m.secondary]} seed="roster-b" minSize={60} maxSize={140} speed={0.003} />
+      <GeometricShapes count={5} color={m.secondary} seed="roster-geo" opacity={0.04} shapes={['diamond', 'circle']} />
+      <RippleRings cx="50%" cy="50%" color={`${accent}40`} count={3} speed={0.3} maxRadius={350} opacity={0.05} />
 
       <div
         style={{
@@ -128,15 +134,7 @@ export const AgentRoster: React.FC<{
               >
                 {icon}
               </div>
-              <div
-                style={{
-                  fontFamily: fonts.sans,
-                  fontSize: 18,
-                  fontWeight: 600,
-                  color: colors.text,
-                  marginBottom: 4,
-                }}
-              >
+              <div style={{ fontFamily: fonts.sans, fontSize: 18, fontWeight: 600, color: colors.text, marginBottom: 4 }}>
                 {agent.name}
               </div>
               <div
@@ -155,6 +153,7 @@ export const AgentRoster: React.FC<{
           );
         })}
       </div>
+      <Vignette intensity={0.45} />
       <FilmGrain intensity={0.03} />
     </SceneBackground>
   );

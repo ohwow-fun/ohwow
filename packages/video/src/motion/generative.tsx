@@ -349,7 +349,6 @@ export const ScanLine: React.FC<{
 
 export const FilmGrain: React.FC<{ intensity?: number }> = ({ intensity = 0.04 }) => {
   const frame = useCurrentFrame();
-  const seed = `grain-${frame % 4}`;
   return (
     <div style={{
       position: 'absolute', inset: 0, pointerEvents: 'none',
@@ -358,5 +357,391 @@ export const FilmGrain: React.FC<{ intensity?: number }> = ({ intensity = 0.04 }
       backgroundSize: '256px 256px',
       mixBlendMode: 'overlay',
     }} />
+  );
+};
+
+// ─── Advanced visual primitives ──────────────────────────────────────────────
+
+export const Aurora: React.FC<{
+  colors?: string[];
+  speed?: number;
+  opacity?: number;
+  y?: string;
+}> = ({ colors: cols = ['#22d3ee', '#818cf8', '#c084fc'], speed = 0.008, opacity = 0.15, y = '30%' }) => {
+  const frame = useCurrentFrame();
+  const bands = cols.map((color, i) => {
+    const yOffset = Math.sin(frame * speed + i * 1.2) * 30;
+    const xOffset = Math.cos(frame * speed * 0.7 + i * 0.8) * 50;
+    const scaleX = 1 + Math.sin(frame * speed * 0.5 + i) * 0.3;
+    return (
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: `${20 + xOffset + i * 15}%`,
+          top: y,
+          width: '60%',
+          height: 120 + i * 40,
+          background: `radial-gradient(ellipse at 50% 50%, ${color}${Math.round(opacity * 255).toString(16).padStart(2, '0')} 0%, transparent 70%)`,
+          transform: `translateY(${yOffset}px) scaleX(${scaleX}) rotate(${Math.sin(frame * speed * 0.3 + i) * 5}deg)`,
+          filter: 'blur(40px)',
+          pointerEvents: 'none',
+        }}
+      />
+    );
+  });
+  return <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>{bands}</div>;
+};
+
+export const Bokeh: React.FC<{
+  count?: number;
+  colors?: string[];
+  seed?: string;
+  minSize?: number;
+  maxSize?: number;
+  speed?: number;
+}> = ({ count = 12, colors: cols = ['#f97316', '#3b82f6', '#22c55e', '#a855f7'], seed = 'bokeh', minSize = 30, maxSize = 120, speed = 0.003 }) => {
+  const frame = useCurrentFrame();
+  const dots: React.ReactElement[] = [];
+  for (let i = 0; i < count; i++) {
+    const baseX = noise2D(`${seed}-bx-${i}`, i * 0.5, 0) * 0.5 + 0.5;
+    const baseY = noise2D(`${seed}-by-${i}`, 0, i * 0.5) * 0.5 + 0.5;
+    const drift = drift2D(`${seed}-${i}`, frame, speed, 20);
+    const size = minSize + (noise2D(`${seed}-sz-${i}`, i, 0) * 0.5 + 0.5) * (maxSize - minSize);
+    const pulseScale = 1 + Math.sin(frame * 0.02 + i * 0.7) * 0.15;
+    const color = cols[i % cols.length];
+    dots.push(
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: `${baseX * 100}%`,
+          top: `${baseY * 100}%`,
+          width: size,
+          height: size,
+          marginLeft: -size / 2 + drift.x,
+          marginTop: -size / 2 + drift.y,
+          borderRadius: '50%',
+          background: `radial-gradient(circle, ${color}20 0%, ${color}08 40%, transparent 70%)`,
+          transform: `scale(${pulseScale})`,
+          pointerEvents: 'none',
+        }}
+      />,
+    );
+  }
+  return <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>{dots}</div>;
+};
+
+export const LightRays: React.FC<{
+  count?: number;
+  color?: string;
+  originX?: string;
+  originY?: string;
+  spread?: number;
+  speed?: number;
+  opacity?: number;
+}> = ({ count = 5, color = '#ffffff', originX = '50%', originY = '0%', spread = 40, speed = 0.01, opacity = 0.04 }) => {
+  const frame = useCurrentFrame();
+  const rays: React.ReactElement[] = [];
+  for (let i = 0; i < count; i++) {
+    const baseAngle = -spread / 2 + (spread / (count - 1 || 1)) * i;
+    const angle = baseAngle + Math.sin(frame * speed + i * 1.5) * 8;
+    const rayOpacity = opacity * (0.5 + Math.sin(frame * 0.03 + i * 0.8) * 0.5);
+    rays.push(
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: originX,
+          top: originY,
+          width: 3,
+          height: '120%',
+          background: `linear-gradient(${color}${Math.round(rayOpacity * 255).toString(16).padStart(2, '0')}, transparent)`,
+          transformOrigin: 'top center',
+          transform: `rotate(${angle}deg)`,
+          pointerEvents: 'none',
+        }}
+      />,
+    );
+  }
+  return <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>{rays}</div>;
+};
+
+export const ConstellationNet: React.FC<{
+  nodeCount?: number;
+  color?: string;
+  seed?: string;
+  speed?: number;
+  lineOpacity?: number;
+  dotSize?: number;
+}> = ({ nodeCount = 20, color = '#818cf8', seed = 'const', speed = 0.002, lineOpacity = 0.08, dotSize = 3 }) => {
+  const frame = useCurrentFrame();
+
+  const nodes = Array.from({ length: nodeCount }, (_, i) => {
+    const bx = (noise2D(`${seed}-nx-${i}`, i * 0.3, 0) * 0.5 + 0.5) * 100;
+    const by = (noise2D(`${seed}-ny-${i}`, 0, i * 0.3) * 0.5 + 0.5) * 100;
+    const d = drift2D(`${seed}-n-${i}`, frame, speed, 8);
+    return { x: bx + d.x * 0.5, y: by + d.y * 0.5, pulse: shimmer(frame, i, 0.04, 0.5) };
+  });
+
+  const connectionThreshold = 25;
+  const lines: React.ReactElement[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const dx = nodes[i].x - nodes[j].x;
+      const dy = nodes[i].y - nodes[j].y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < connectionThreshold) {
+        const op = lineOpacity * (1 - dist / connectionThreshold);
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        lines.push(
+          <div
+            key={`l-${i}-${j}`}
+            style={{
+              position: 'absolute',
+              left: `${nodes[j].x}%`,
+              top: `${nodes[j].y}%`,
+              width: `${dist}%`,
+              height: 1,
+              background: color,
+              opacity: op,
+              transformOrigin: '0 50%',
+              transform: `rotate(${angle}deg)`,
+              pointerEvents: 'none',
+            }}
+          />,
+        );
+      }
+    }
+  }
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      {lines}
+      {nodes.map((n, i) => (
+        <div
+          key={`d-${i}`}
+          style={{
+            position: 'absolute',
+            left: `${n.x}%`,
+            top: `${n.y}%`,
+            width: dotSize + n.pulse * 2,
+            height: dotSize + n.pulse * 2,
+            marginLeft: -(dotSize + n.pulse) / 2,
+            marginTop: -(dotSize + n.pulse) / 2,
+            borderRadius: '50%',
+            background: color,
+            opacity: 0.3 + n.pulse * 0.5,
+            boxShadow: n.pulse > 0.3 ? `0 0 ${6 * n.pulse}px ${color}60` : 'none',
+            pointerEvents: 'none',
+          }}
+        />
+      ))}
+    </div>
+  );
+};
+
+export const WaveForm: React.FC<{
+  color?: string;
+  amplitude?: number;
+  frequency?: number;
+  speed?: number;
+  y?: string;
+  opacity?: number;
+  layers?: number;
+}> = ({ color = '#f97316', amplitude = 30, frequency = 0.02, speed = 0.04, y = '50%', opacity = 0.15, layers = 3 }) => {
+  const frame = useCurrentFrame();
+  const width = 1280;
+  const points = 80;
+
+  const waveLayers = Array.from({ length: layers }, (_, l) => {
+    const layerAmp = amplitude * (1 - l * 0.2);
+    const layerFreq = frequency * (1 + l * 0.3);
+    const layerSpeed = speed * (1 + l * 0.15);
+    const layerOp = opacity * (1 - l * 0.25);
+
+    let path = `M 0 ${layerAmp + 10}`;
+    for (let i = 0; i <= points; i++) {
+      const x = (i / points) * width;
+      const wave1 = Math.sin(i * layerFreq + frame * layerSpeed + l) * layerAmp;
+      const wave2 = Math.sin(i * layerFreq * 1.7 + frame * layerSpeed * 0.8 + l * 2) * layerAmp * 0.4;
+      const yVal = wave1 + wave2 + layerAmp + 10;
+      path += ` L ${x} ${yVal}`;
+    }
+
+    return (
+      <svg
+        key={l}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: y,
+          width: '100%',
+          height: amplitude * 3 + 20,
+          marginTop: -(amplitude * 1.5),
+          pointerEvents: 'none',
+          opacity: layerOp,
+        }}
+        viewBox={`0 0 ${width} ${amplitude * 3 + 20}`}
+        preserveAspectRatio="none"
+      >
+        <path d={path} fill="none" stroke={color} strokeWidth={1.5 - l * 0.3} />
+      </svg>
+    );
+  });
+
+  return <>{waveLayers}</>;
+};
+
+export const GeometricShapes: React.FC<{
+  count?: number;
+  color?: string;
+  seed?: string;
+  speed?: number;
+  opacity?: number;
+  shapes?: Array<'circle' | 'square' | 'triangle' | 'diamond'>;
+}> = ({
+  count = 8,
+  color = '#f97316',
+  seed = 'geo',
+  speed = 0.005,
+  opacity = 0.06,
+  shapes = ['circle', 'square', 'triangle', 'diamond'],
+}) => {
+  const frame = useCurrentFrame();
+  const elements: React.ReactElement[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const bx = (noise2D(`${seed}-gx-${i}`, i * 0.4, 0) * 0.5 + 0.5) * 100;
+    const by = (noise2D(`${seed}-gy-${i}`, 0, i * 0.4) * 0.5 + 0.5) * 100;
+    const d = drift2D(`${seed}-g-${i}`, frame, speed, 12);
+    const size = 20 + (i % 4) * 15;
+    const rotation = frame * (0.2 + i * 0.1) * (i % 2 === 0 ? 1 : -1);
+    const shape = shapes[i % shapes.length];
+    const elementOpacity = opacity * (0.5 + shimmer(frame, i, 0.025, 0.6) * 0.5);
+
+    const shapeStyle: React.CSSProperties = {
+      position: 'absolute',
+      left: `${bx}%`,
+      top: `${by}%`,
+      width: size,
+      height: size,
+      marginLeft: -size / 2 + d.x,
+      marginTop: -size / 2 + d.y,
+      border: `1px solid ${color}`,
+      opacity: elementOpacity,
+      transform: `rotate(${rotation}deg)`,
+      pointerEvents: 'none',
+    };
+
+    switch (shape) {
+      case 'circle':
+        elements.push(<div key={i} style={{ ...shapeStyle, borderRadius: '50%' }} />);
+        break;
+      case 'square':
+        elements.push(<div key={i} style={{ ...shapeStyle, borderRadius: 2 }} />);
+        break;
+      case 'diamond':
+        elements.push(<div key={i} style={{ ...shapeStyle, borderRadius: 2, transform: `${shapeStyle.transform} rotate(45deg)` }} />);
+        break;
+      case 'triangle':
+        elements.push(
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `${bx}%`,
+              top: `${by}%`,
+              marginLeft: -size / 2 + d.x,
+              marginTop: -size / 2 + d.y,
+              width: 0,
+              height: 0,
+              borderLeft: `${size / 2}px solid transparent`,
+              borderRight: `${size / 2}px solid transparent`,
+              borderBottom: `${size}px solid ${color}`,
+              opacity: elementOpacity * 0.6,
+              transform: `rotate(${rotation}deg)`,
+              pointerEvents: 'none',
+            }}
+          />,
+        );
+        break;
+    }
+  }
+
+  return <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>{elements}</div>;
+};
+
+export const Vignette: React.FC<{
+  intensity?: number;
+  color?: string;
+}> = ({ intensity = 0.6, color = '#000000' }) => (
+  <div
+    style={{
+      position: 'absolute',
+      inset: 0,
+      background: `radial-gradient(ellipse at 50% 50%, transparent 40%, ${color}${Math.round(intensity * 255).toString(16).padStart(2, '0')} 100%)`,
+      pointerEvents: 'none',
+    }}
+  />
+);
+
+export const RippleRings: React.FC<{
+  cx?: string;
+  cy?: string;
+  color?: string;
+  count?: number;
+  speed?: number;
+  maxRadius?: number;
+  opacity?: number;
+}> = ({ cx = '50%', cy = '50%', color = '#3b82f6', count = 4, speed = 0.6, maxRadius = 300, opacity = 0.1 }) => {
+  const frame = useCurrentFrame();
+  const rings: React.ReactElement[] = [];
+  for (let i = 0; i < count; i++) {
+    const progress = ((frame * speed + i * (maxRadius / count)) % maxRadius) / maxRadius;
+    const radius = progress * maxRadius;
+    const ringOpacity = opacity * (1 - progress);
+    rings.push(
+      <div
+        key={i}
+        style={{
+          position: 'absolute',
+          left: cx,
+          top: cy,
+          width: radius * 2,
+          height: radius * 2,
+          marginLeft: -radius,
+          marginTop: -radius,
+          border: `1px solid ${color}`,
+          borderRadius: '50%',
+          opacity: ringOpacity,
+          pointerEvents: 'none',
+        }}
+      />,
+    );
+  }
+  return <>{rings}</>;
+};
+
+export const GradientWash: React.FC<{
+  colors?: string[];
+  speed?: number;
+  angle?: number;
+  opacity?: number;
+}> = ({ colors: cols = ['#f97316', '#3b82f6', '#22c55e'], speed = 0.005, angle = 135, opacity = 0.08 }) => {
+  const frame = useCurrentFrame();
+  const shift = frame * speed * 100;
+  const stops = cols.map((c, i) => `${c}${Math.round(opacity * 255).toString(16).padStart(2, '0')} ${(i / (cols.length - 1)) * 100 + shift}%`).join(', ');
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: '-50%',
+        background: `linear-gradient(${angle}deg, ${stops})`,
+        backgroundSize: '200% 200%',
+        animation: 'none',
+        pointerEvents: 'none',
+      }}
+    />
   );
 };
