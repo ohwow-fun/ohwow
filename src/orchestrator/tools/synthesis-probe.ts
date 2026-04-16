@@ -34,6 +34,7 @@
  */
 
 import { logger } from '../../lib/logger.js';
+import { connectAndPinCdpPage } from '../../execution/browser/chrome-profile-router.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -51,6 +52,15 @@ export interface ProbeSurfaceInput {
   goalDescription?: string;
   /** Extra settle time after page load to let SPAs hydrate. Default 2500ms. */
   waitMs?: number;
+  /**
+   * Chrome profile hint (email / directory / local name). Threaded
+   * straight to `connectAndPinCdpPage`. Omit to fall back to the
+   * daemon-wide default (OHWOW_CHROME_PROFILE → first-with-email →
+   * first profile). Callers that know the target site requires a
+   * specific signed-in account (e.g. X → `x_posting_profile`) should
+   * pass it so the probe lands in the right logged-in window.
+   */
+  profile?: string;
 }
 
 export interface TestidElement {
@@ -132,123 +142,43 @@ export type ProbePage = Pick<
 >;
 
 
-/**
- * Cache the lazy-imported playwright-core module so the dynamic
- * import is only paid once per daemon process. The import type is
- * inferred from the package's own declarations, so there's no cast
- * required here — we just hold a reference to the resolved module.
- */
-let cachedPlaywright: typeof import('playwright-core') | null = null;
-
-async function getPlaywright(): Promise<typeof import('playwright-core')> {
-  if (!cachedPlaywright) {
-    cachedPlaywright = await import('playwright-core');
-  }
-  return cachedPlaywright;
-}
-
-const CDP_URL = 'http://localhost:9222';
 const DEFAULT_HYDRATION_WAIT_MS = 2500;
 
 /**
- * Hosts whose URLs are "sensitive" — navigating a tab away from them
- * would destroy user work we can't get back. The probe refuses to
- * hijack these tabs; it opens a fresh page instead. The list is the
- * set of live-editor surfaces ohwow's own synthesized + x-posting
- * tools already touch. Extend this set as more editor surfaces land.
+ * Resolve a Probe-driving Page pinned to the correct Chrome profile.
+ *
+ * Previously this function did `connectOverCDP(:9222).contexts()[0]` and
+ * called `context.newPage()` — which picks whichever profile Playwright
+ * happened to enumerate first. On any multi-profile debug Chrome that
+ * meant new tabs could land in the unauthenticated Default profile,
+ * and `probeSurface('https://x.com/compose/post')` would open a visible
+ * logged-out X tab without ever invoking chrome-profile-router's
+ * selection logic. Confirmed live 2026-04-16: the autonomous synthesis
+ * loop was producing "unauthed chromium on X" windows this way.
+ *
+ * The safe replacement is `connectAndPinCdpPage`, which:
+ *   - resolves a concrete profile via the same chain
+ *     `deliverable-executor` uses (override → OHWOW_CHROME_PROFILE →
+ *     first-with-email → first),
+ *   - opens a fresh tab in THAT profile's browserContextId loaded on
+ *     `targetUrl` (so no existing tab is hijacked),
+ *   - writes a `route` ledger event so `browser-profile-guardian`
+ *     can see this call surface and flag future mismatches, and
+ *   - returns a Playwright Page correlated to the opened window.
+ *
+ * Probe callers may pass a profile hint; `synthesis-auto-learner` does
+ * not currently, so the default chain applies.
  */
-const SENSITIVE_URL_PATTERNS = [
-  '/compose/post',
-  '/compose/articles',
-  '/compose/tweet',
-  '/i/chat/',
-  '/edit/',
-  '/editor',
-];
-
-function isSensitiveUrl(url: string): boolean {
-  return SENSITIVE_URL_PATTERNS.some((p) => url.includes(p));
-}
-
-function safeHostname(url: string): string | null {
+async function getCdpPageForProbe(
+  targetUrl: string,
+  profileHint?: string,
+): Promise<ProbePage | null> {
   try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Pick or open a CDP page suitable for probing `targetUrl`. The
- * heuristic, in priority order:
- *
- *   1. If an existing tab is already on the SAME hostname as the
- *      target AND is not parked in a sensitive editor URL, reuse it.
- *      This avoids opening a new tab every probe call for the same
- *      host — one probe per site over a synthesis run.
- *
- *   2. Otherwise open a brand new tab via `context.newPage()` so
- *      the probe never navigates the user's existing tabs away from
- *      their work. This was the launch-eve bug: the probe would
- *      hijack an open `x.com/compose/post` tab, triggering a
- *      beforeunload dialog and looking on-screen like a profile
- *      switch.
- *
- *   3. If `newPage` is not available on the resolved context
- *      (stagehand-wrapped contexts sometimes hide it), fall back to
- *      the first non-sensitive page as a last resort. This is the
- *      old behavior.
- *
- * The goto to the target URL happens in `probeSurface`, not here —
- * this function just hands back a safe Page to drive.
- */
-async function getCdpPageForProbe(targetUrl: string): Promise<ProbePage | null> {
-  try {
-    const pw = await getPlaywright();
-    const browser = await pw.chromium.connectOverCDP(CDP_URL);
-    const contexts = browser.contexts();
-    if (contexts.length === 0) return null;
-    const context = contexts[0];
-    const pages = context.pages();
-
-    const targetHost = safeHostname(targetUrl);
-
-    let page: ProbePage | undefined;
-
-    // Preference 1: reuse an existing tab already on the target
-    // host, as long as it isn't parked in a sensitive editor URL.
-    if (targetHost) {
-      page = pages.find((p) => {
-        const pu = p.url();
-        return pu.includes(targetHost) && !isSensitiveUrl(pu);
-      });
-    }
-
-    // Preference 2: open a fresh tab so we never hijack existing work.
-    if (!page) {
-      try {
-        const fresh = await context.newPage();
-        page = fresh;
-        logger.info({ targetUrl }, '[synthesis-probe] opened a new tab for probe');
-      } catch (err) {
-        logger.warn(
-          { err: err instanceof Error ? err.message : err },
-          '[synthesis-probe] context.newPage failed, falling back to safe existing tab',
-        );
-      }
-    }
-
-    // Preference 3 (fallback): first non-sensitive existing tab.
-    if (!page) {
-      page = pages.find((p) => !isSensitiveUrl(p.url())) ?? pages[0];
-    }
-
-    if (!page) return null;
-
-    // Suppress beforeunload dialogs on whichever page we landed on.
-    page.on('dialog', (d: unknown) => {
-      (d as { accept: () => Promise<void> }).accept().catch(() => {});
+    const { page } = await connectAndPinCdpPage({
+      url: targetUrl,
+      profile: profileHint,
     });
+    page.on('dialog', (d) => { d.accept().catch(() => {}); });
     await page.evaluate(`(() => {
       try {
         window.onbeforeunload = null;
@@ -258,10 +188,13 @@ async function getCdpPageForProbe(targetUrl: string): Promise<ProbePage | null> 
         }, { capture: true });
       } catch {}
       return true;
-    })()`).catch(() => {});
+    })()`).catch(() => { /* page closed; non-fatal */ });
     return page;
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : err }, '[synthesis-probe] CDP connect failed');
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, targetUrl },
+      '[synthesis-probe] connectAndPinCdpPage failed',
+    );
     return null;
   }
 }
@@ -435,9 +368,9 @@ export async function probeSurface(input: ProbeSurfaceInput): Promise<ProbeSurfa
   }
   const waitMs = typeof input.waitMs === 'number' && input.waitMs >= 0 ? input.waitMs : DEFAULT_HYDRATION_WAIT_MS;
 
-  const page = await getCdpPageForProbe(url);
+  const page = await getCdpPageForProbe(url, input.profile);
   if (!page) {
-    return { success: false, message: 'Could not attach to Chrome CDP at :9222. Is the debug Chrome running?' };
+    return { success: false, message: 'Could not attach to Chrome CDP at :9222. Is the debug Chrome running, and does the profile dir exist?' };
   }
 
   try {

@@ -43,6 +43,7 @@ import { logger } from '../../lib/logger.js';
 import {
   ChromeLifecycleError,
   DEFAULT_CDP_PORT,
+  ensureDebugChrome,
   findProfileByIdentity,
   listChromeWindowTitlesMac,
   listProfiles,
@@ -50,6 +51,7 @@ import {
   parseWindowTitleSuffix,
   type ProfileInfo,
 } from './chrome-lifecycle.js';
+import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -289,6 +291,156 @@ export async function debugPageProfileMap(browser: Browser): Promise<
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Profile-pinned CDP connection for external callers
+// ---------------------------------------------------------------------------
+
+export interface ConnectAndPinOptions {
+  /**
+   * URL the caller wants opened in the target profile. Passed to
+   * `openProfileWindow({url})` so Chrome creates a fresh tab in the
+   * correct browserContextId and lands it on this URL. The returned
+   * Page will also be re-`goto`'d to this URL by the underlying
+   * `routeToProfile` call.
+   */
+  url: string;
+  /**
+   * Profile hint (email, directory name, or localProfileName). When
+   * omitted, resolution falls back to `OHWOW_CHROME_PROFILE` env, then
+   * the first profile with an email, then the first profile overall.
+   * Same default chain `deliverable-executor.ensureProfileChrome` uses.
+   */
+  profile?: string;
+  port?: number;
+  timeoutMs?: number;
+}
+
+export interface ConnectAndPinResult {
+  /**
+   * Live Playwright Browser handle. Caller is responsible for closing
+   * it when done (or letting GC reclaim — the underlying CDP
+   * connection is cheap and the debug Chrome owns the actual browser).
+   */
+  browser: Browser;
+  page: Page;
+  profile: ProfileInfo;
+  /** The browserContextId of the freshly-opened profile tab; null on lookup failure. */
+  browserContextId: string | null;
+  matchReason: RouteResult['matchReason'];
+}
+
+/**
+ * One-call "give me a Playwright Page pinned to a Chrome profile" —
+ * the safe replacement for `chromium.connectOverCDP(...).contexts()[0]`.
+ *
+ * The bare `connectOverCDP + contexts[0]` anti-pattern picks whichever
+ * profile Playwright enumerates first, so in multi-profile debug Chrome
+ * (the default ohwow setup once any secondary profile has been opened)
+ * a caller can silently land in the Default profile's window — which on
+ * most machines is unauthenticated. Then `page.goto('https://x.com/...')`
+ * lands an unauthed tab on X. That was the live bug 2026-04-16.
+ *
+ * This helper fixes the class of bug at the source:
+ *   1. Resolves a concrete profile from the hint (same chain
+ *      deliverable-executor uses for x_posting_profile).
+ *   2. Calls `ensureDebugChrome` + `openProfileWindow({url})` so the
+ *      target URL is opened as a fresh tab in the correct
+ *      browserContextId.
+ *   3. Writes a `route`-source event to the chrome-profile-events
+ *      ledger so `BrowserProfileGuardianExperiment` can detect future
+ *      mismatches. Without this step the Guardian was blind to every
+ *      bypass in synthesis-probe / acceptance / generated skills.
+ *   4. Connects Playwright and uses `routeToProfile` (macOS window-
+ *      title correlation) to hand back a Page in the right window.
+ *
+ * Callers that need a generated-skill-safe pattern should migrate from
+ * `browser.contexts()[0]` to this helper. Use `debugPageProfileMap` to
+ * confirm a given session has the expected mapping.
+ */
+export async function connectAndPinCdpPage(
+  opts: ConnectAndPinOptions,
+): Promise<ConnectAndPinResult> {
+  const port = opts.port ?? DEFAULT_CDP_PORT;
+  const timeoutMs = opts.timeoutMs ?? 10000;
+
+  const profiles = listProfiles();
+  if (profiles.length === 0) {
+    throw new ChromeLifecycleError(
+      'DEBUG_DIR_MISSING',
+      'No profiles in debug Chrome dir. Run `ohwow chrome bootstrap` to populate it.',
+    );
+  }
+
+  // Resolve target profile. Preference order matches
+  // `deliverable-executor.ensureProfileChrome`:
+  //   1. explicit `profile` arg (email / directory / local name)
+  //   2. OHWOW_CHROME_PROFILE env (daemon-wide default)
+  //   3. first profile with an email
+  //   4. first profile overall
+  const explicit = opts.profile ? findProfileByIdentity(profiles, opts.profile) : null;
+  const envHint = process.env.OHWOW_CHROME_PROFILE;
+  const envMatched = envHint ? findProfileByIdentity(profiles, envHint) : null;
+  const target = explicit
+    ?? envMatched
+    ?? profiles.find((p) => !!p.email)
+    ?? profiles[0];
+
+  await ensureDebugChrome({ port, preferredProfile: target.directory });
+  const opened = await openProfileWindow({
+    profileDir: target.directory,
+    port,
+    url: opts.url,
+    timeoutMs,
+  });
+
+  // Ledger event so the Guardian can see every explicit pin we perform.
+  // `resolved_profile` is the same as `expected_profile` here because
+  // `openProfileWindow` addresses a specific profile directory by name
+  // — if it succeeded, Chrome opened the right window. The Guardian
+  // still learns this helper was invoked, which bounds the ledger's
+  // blind spot and gives `mismatch` detection a baseline.
+  void appendChromeProfileEvent({
+    source: 'route',
+    port,
+    pid: null,
+    expected_profile: target.directory,
+    resolved_profile: target.directory,
+  });
+
+  const pw = await import('playwright-core');
+  const browser = await pw.chromium.connectOverCDP(`http://localhost:${port}`);
+
+  try {
+    const routed = await routeToProfile({
+      browser,
+      profile: target.email ?? target.directory,
+      urlHint: opts.url,
+      port,
+      timeoutMs,
+    });
+    logger.debug(
+      {
+        profile: target.directory,
+        ctx: opened.browserContextId?.slice(0, 8),
+        matchReason: routed.matchReason,
+      },
+      '[chrome-profile-router] connectAndPinCdpPage resolved',
+    );
+    return {
+      browser,
+      page: routed.page,
+      profile: routed.profile,
+      browserContextId: opened.browserContextId,
+      matchReason: routed.matchReason,
+    };
+  } catch (err) {
+    // Close the Playwright Browser handle so we don't leak the CDP
+    // connection on failure. The underlying debug Chrome stays up.
+    await browser.close().catch(() => { /* ignore */ });
+    throw err;
+  }
 }
 
 // Re-export everything callers typically need so chrome-lifecycle stays
