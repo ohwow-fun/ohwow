@@ -75,6 +75,7 @@ import {
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
+import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
 import { dirname } from 'path';
@@ -247,6 +248,23 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     );
     dmPoller.start();
     logger.info('[daemon] x-dm-poller-scheduler started');
+
+    // XDmReplyDispatcher — SEND side of the DM loop. Drains operator-
+    // approved kind='x_dm_outbound' entries from the shared approvals
+    // ledger, serializes on the workspace CDP lane with the poller +
+    // content-cadence, and delivers via sendDmViaBrowser. No autonomous
+    // producer today; this is the infrastructure that lets a human-
+    // reviewed reply actually leave the daemon.
+    const dmReplyDispatcher = new XDmReplyDispatcher(
+      db,
+      workspaceId,
+      {
+        approvalsJsonlPath,
+        dataDir: workspaceLayoutFor(workspaceSlug).dataDir,
+      },
+    );
+    dmReplyDispatcher.start();
+    logger.info({ approvalsJsonlPath }, '[daemon] x-dm-reply-dispatcher started');
 
     // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
     // that detects silent failures across the closed loop's stages.
