@@ -9,10 +9,8 @@
  */
 
 import { randomUUID } from 'crypto';
-import { writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname } from 'path';
 import { resolveActiveWorkspace } from '../config.js';
-import { createServer } from '../api/server.js';
 import { WhatsAppClient } from '../whatsapp/client.js';
 import { TelegramClient } from '../integrations/telegram/client.js';
 import { ExperimentRunner } from '../self-bench/experiment-runner.js';
@@ -100,6 +98,7 @@ import { initDaemon, createServices, createEngine } from './init.js';
 import { setupInference } from './inference.js';
 import { connectCloudAndConsolidate, startCloudPolling } from './cloud.js';
 import { setupOrchestration } from './orchestration.js';
+import { setupHttpServer } from './http.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -162,75 +161,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
   await setupOrchestration(ctx, inferenceState);
   const { channelRegistry, connectorRegistry, triggerEvaluator, orchestrator, digitalBody, digitalNS, messageRouter, deviceFetcher } = ctx;
 
-  // 11. Start Express server + WebSocket
+  // 11. Start Express server + WebSocket + register daemon status endpoints
   let waClient: WhatsAppClient | null = null;
   let scheduler: LocalScheduler | null = null;
   let connectorSyncScheduler: ConnectorSyncScheduler | null = null;
-  const { app, attachWs } = createServer({
-    config: {
-      port: config.port,
-      jwtSecret: config.jwtSecret,
-      tier: config.tier,
-      contentPublicKey: controlPlane?.contentPublicKey ?? undefined,
-      dataDir,
-      browserHeadless: config.browserHeadless,
-      anthropicApiKey: config.anthropicApiKey,
-      openRouterApiKey: config.openRouterApiKey,
-    },
-    db,
-    rawDb,
-    startTime,
-    eventBus: bus,
-    engine,
-    orchestrator,
-    sessionToken,
-    triggerEvaluator,
-    workspaceId,
-    voiceboxService,
-    modelRouter,
-    getWhatsAppClient: () => waClient,
-    channelRegistry,
-    messageRouter: messageRouter ?? undefined,
-    controlPlane,
-    onScheduleChange: () => scheduler?.notify(),
-    ragConfig: {
-      ollamaUrl: config.ollamaUrl,
-      embeddingModel: config.embeddingModel,
-      ollamaModel: config.ollamaModel,
-      ragBm25Weight: config.ragBm25Weight,
-      rerankerEnabled: config.rerankerEnabled,
-    },
-  });
-
-  // Bind port — only write PID lock and token AFTER successful bind
-  // In headless/Docker mode bind to all interfaces; otherwise localhost only (security default)
-  const host = process.env.OHWOW_HOST || (process.env.OHWOW_HEADLESS === '1' ? '0.0.0.0' : '127.0.0.1');
-  const server = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
-    const srv = app.listen(config.port, host, () => {
-      logger.info(`[daemon] HTTP server on ${host}:${config.port}`);
-      logger.info(`[daemon] Health: http://${host === '0.0.0.0' ? 'localhost' : host}:${config.port}/health`);
-      resolve(srv);
-    });
-    srv.on('error', (err: NodeJS.ErrnoException) => {
-      // Clean up the pre-check lock since we never fully started
-      releaseLock(pidPath);
-      if (err.code === 'EADDRINUSE') {
-        reject(new Error(
-          `Port ${config.port} is already in use. ` +
-          `Another process may be using it. ` +
-          `Set a different port in ~/.ohwow/config.json ("port": 7701) or stop the conflicting process.`
-        ));
-      } else {
-        reject(err);
-      }
-    });
-  });
-
-  // Port bound successfully — now write the token file with restricted permissions
-  const tokenPath = join(dataDir, 'daemon.token');
-  writeFileSync(tokenPath, sessionToken, { mode: 0o600 });
-
-  attachWs(server);
+  await setupHttpServer(ctx, inferenceState);
+  const { app, server } = ctx;
 
   // 12. Initialize integrations (all devices — workers relay to primary)
   let tgClient: TelegramClient | null = null;
@@ -271,11 +207,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
       }
       // Keep waClient pointing to the default/first for backward-compat shutdown
       waClient = channelRegistry.get('whatsapp') as WhatsAppClient | null;
+      ctx.waClient = waClient;
     } else {
       // No connections yet — create a single client (legacy single-instance mode)
       waClient = new WhatsAppClient(rawDb, workspaceId, bus);
       channelRegistry.register(waClient);
       waClient.setMessageHandler(waMessageHandler);
+      ctx.waClient = waClient;
     }
 
     // Telegram — create one client per connection row (multi-bot support)
@@ -323,6 +261,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
   if (!isWorker) {
     // Scheduler
     scheduler = new LocalScheduler(db, engine, workspaceId);
+    ctx.scheduler = scheduler;
     scheduler.setTriggerEvaluator(triggerEvaluator);
     scheduler.start().catch(err => {
       logger.warn(`[daemon] Scheduler failed: ${err instanceof Error ? err.message : err}`);
@@ -1545,112 +1484,6 @@ export async function startDaemon(): Promise<DaemonHandle> {
       logger.warn({ err }, '[daemon] OpenClaw integration setup failed (non-fatal)');
     }
   }
-
-  // Ollama models endpoint
-  app.get('/api/ollama/models', async (_req, res) => {
-    if (!ollamaMonitor) {
-      res.json({ data: [] });
-      return;
-    }
-    try {
-      const summaries = await ollamaMonitor.getModelSummaries();
-      res.json({ data: summaries });
-    } catch {
-      res.json({ data: [] });
-    }
-  });
-
-  // Process statuses + capacity endpoint
-  app.get('/api/process-status', (_req, res) => {
-    const statuses = processMonitor.getStatuses();
-    const capacity = processMonitor.estimateCapacity();
-    res.json({ statuses, capacity });
-  });
-
-  // Consolidated inference status endpoint (provider, VRAM, switch state)
-  app.get('/api/inference/status', (_req, res) => {
-    const capacity = processMonitor.estimateCapacity();
-    const mlxRunning = inferenceState.mlxEnabled && mlxManager !== null && mlxManager !== undefined;
-    const llamaCppRunning = llamaCppManager !== null && llamaCppManager !== undefined && inferenceState.llamaCppUrl !== undefined;
-
-    res.json({
-      activeProvider: mlxRunning ? 'mlx' : llamaCppRunning ? 'llama-cpp' : 'ollama',
-      mlx: mlxRunning ? { url: mlxManager!.getUrl(), model: mlxManager!.getModel() } : null,
-      llamaCpp: llamaCppRunning ? { url: inferenceState.llamaCppUrl } : null,
-      switchInProgress: inferenceState.modelSwitchInProgress,
-      capacity: {
-        totalVramGB: capacity.totalVramGB,
-        usedVramGB: capacity.usedVramGB,
-        availableVramGB: capacity.availableVramGB,
-      },
-      processes: processMonitor.getStatuses().filter(s => s.running),
-    });
-  });
-
-  // Unload the MLX model from GPU memory without killing the server
-  app.post('/api/inference/mlx/unload', async (_req, res) => {
-    if (!mlxManager) {
-      res.status(404).json({ error: 'MLX server not running' });
-      return;
-    }
-    try {
-      await mlxManager.unloadModel();
-      inferenceState.dedicatedServerVramGB = 0;
-      processMonitor.unregisterExternalProcess('mlx');
-      bus.emit('inference:capabilities-changed', (await import('../lib/inference-capabilities.js')).createDefaultCapabilities());
-      res.json({ data: { unloaded: true } });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Unload failed' });
-    }
-  });
-
-  // TurboQuant capabilities endpoint
-  app.get('/api/turboquant/status', (_req, res) => {
-    const caps = mlxManager?.getCapabilities() ?? llamaCppManager?.getCapabilities() ?? null;
-    res.json({
-      active: caps?.turboQuantActive ?? false,
-      bits: caps?.turboQuantBits ?? 0,
-      cacheTypeK: caps?.cacheTypeK ?? null,
-      cacheTypeV: caps?.cacheTypeV ?? null,
-      provider: caps?.provider ?? 'ollama',
-      llamaServerRunning: llamaCppManager ? true : false,
-      mlxServerRunning: mlxManager ? true : false,
-      mlxModel: mlxManager?.getModel() ?? null,
-    });
-  });
-
-  // Queue status endpoint (used by auto-updater to wait for active tasks)
-  app.get('/api/daemon/queue-status', (_req, res) => {
-    const status = engine.getQueueStatus();
-    res.json({ active: status.active, waiting: status.waiting });
-  });
-
-  // Add daemon-specific status endpoint (after all services initialized)
-  app.get('/api/daemon/status', (_req, res) => {
-    const orchestratorSetting = rawDb.prepare(
-      "SELECT value FROM runtime_settings WHERE key = 'orchestrator_model'"
-    ).get() as { value: string } | undefined;
-    const orchestratorModel = orchestratorSetting?.value || config.orchestratorModel || null;
-    res.json({
-      pid: process.pid,
-      uptime: Math.round((Date.now() - startTime) / 1000),
-      version: VERSION,
-      port: config.port,
-      tier: config.tier,
-      workspaceId,
-      cloudConnected: !!controlPlane?.connectedWorkspaceId,
-      ollamaConnected: inferenceState.ollamaStatus,
-      ollamaAutoStartFailed: inferenceState.ollamaAutoStartFailed,
-      ollamaModel: config.ollamaModel,
-      orchestratorModel,
-      modelReady: inferenceState.ollamaStatus || config.modelSource === 'cloud' || !!config.anthropicApiKey || !!config.openRouterApiKey,
-      tunnelUrl: tunnel?.url || null,
-      cloudWebhookBaseUrl: controlPlane?.connectedWorkspaceId
-        ? `${config.cloudUrl}/hooks/${controlPlane.connectedWorkspaceId}`
-        : null,
-      deviceId: controlPlane?.connectedDeviceId || null,
-    });
-  });
 
   logger.info('[daemon] Ready');
 
