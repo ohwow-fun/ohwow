@@ -99,16 +99,32 @@ async function supersedeDuplicates(
   row: NewFindingRow,
   windowMs: number,
 ): Promise<number> {
-  if (!row.subject || !row.summary) return 0;
+  // Empty summary still bails — without summary the dedupe key is just
+  // (experiment_id), which would suppress legitimately distinct rows.
+  if (!row.summary) return 0;
   const windowStart = new Date(Date.now() - windowMs).toISOString();
   try {
-    const { data } = await db
+    // Two query shapes depending on whether this row carries a subject.
+    // Subject-bearing experiments dedupe by (experiment_id, subject,
+    // summary) — the original Phase-1 contract. Subject-less ones
+    // (agent-coverage-gap, experiment-author's "no proposals" message,
+    // burn-rate's daily summary, ...) used to skip dedup entirely
+    // because `.eq('subject', null)` evaluates to FALSE in SQL. Those
+    // experiments accumulated thousands of identical active rows. The
+    // null-branch here treats them by (experiment_id, summary) inside
+    // the same window so the GC actually has something to reap.
+    let query = db
       .from<{ id: string; summary: string }>('self_findings')
       .select('id, summary')
       .eq('experiment_id', row.experimentId)
-      .eq('subject', row.subject)
       .eq('status', 'active')
       .gte('ran_at', windowStart);
+    if (row.subject != null) {
+      query = query.eq('subject', row.subject);
+    } else {
+      query = query.is('subject', null);
+    }
+    const { data } = await query;
     const dupes = (data ?? []).filter((r) => r.summary === row.summary && r.id !== newId);
     if (dupes.length === 0) return 0;
     for (const d of dupes) {

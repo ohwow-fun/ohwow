@@ -23,7 +23,9 @@ function buildDb(seedRows: Array<Record<string, unknown>> = []) {
     let updateFields: Record<string, unknown> | null = null;
 
     const apply = () => tableRows.filter((r) =>
-      filters.every((f) => r[f.col] === f.val) &&
+      filters.every((f) => f.val === '__IS_NULL__'
+        ? r[f.col] === null || r[f.col] === undefined
+        : r[f.col] === f.val) &&
       rangeFilters.every((f) =>
         f.op === 'gte' ? String(r[f.col]) >= String(f.val) : String(r[f.col]) <= String(f.val)),
     );
@@ -37,6 +39,17 @@ function buildDb(seedRows: Array<Record<string, unknown>> = []) {
         return Promise.resolve({ data: null, error: null });
       }
       filters.push({ col, val });
+      return builder;
+    };
+    builder.is = (col: string, val: null | boolean) => {
+      // Mirror SqliteAdapter: .is(col, null) means WHERE col IS NULL,
+      // matching both undefined and explicit nulls in the JS rows.
+      filters.push({
+        col,
+        val: val === null
+          ? '__IS_NULL__'
+          : val,
+      });
       return builder;
     };
     builder.gte = (col: string, val: unknown) => {
@@ -115,10 +128,46 @@ describe('findings supersession', () => {
     expect(active).toHaveLength(2);
   });
 
-  it('skips supersession logic when subject is null', async () => {
+  it('supersedes a prior null-subject row when (experiment_id, summary) match', async () => {
+    // Fixed in commit "supersedeDuplicates handles null subject by
+    // (experiment_id, summary)" — agent-coverage-gap and friends fire
+    // null-subject summary-only findings every ~10s. Without this the
+    // active pool grows unbounded.
     const env = buildDb();
+    const firstId = await writeFinding(env.db as never, { ...baseRow, subject: null });
+    const secondId = await writeFinding(env.db as never, { ...baseRow, subject: null });
+    const first = env.rows.find((r) => r.id === firstId)!;
+    const second = env.rows.find((r) => r.id === secondId)!;
+    expect(first.status).toBe('superseded');
+    expect(first.superseded_by).toBe(secondId);
+    expect(second.status).toBe('active');
+  });
+
+  it('does NOT cross-supersede a null-subject row with a subject-bearing one', async () => {
+    // The subject branch and null-subject branch must stay isolated:
+    // a null-subject "summary X" must not eat a subject="foo" row that
+    // happens to share the same summary, and vice versa.
+    const env = buildDb();
+    await writeFinding(env.db as never, { ...baseRow, subject: 'foo' });
     await writeFinding(env.db as never, { ...baseRow, subject: null });
-    await writeFinding(env.db as never, { ...baseRow, subject: null });
+    const active = env.rows.filter((r) => r.status === 'active');
+    expect(active).toHaveLength(2);
+  });
+
+  it('does NOT supersede null-subject rows with different summaries', async () => {
+    const env = buildDb();
+    await writeFinding(env.db as never, { ...baseRow, subject: null, summary: 'A' });
+    await writeFinding(env.db as never, { ...baseRow, subject: null, summary: 'B' });
+    const active = env.rows.filter((r) => r.status === 'active');
+    expect(active).toHaveLength(2);
+  });
+
+  it('still bails when the new row has an empty summary', async () => {
+    // Empty summary collapses the dedupe key to (experiment_id) alone,
+    // which would suppress legitimately distinct rows. Keep the bail.
+    const env = buildDb();
+    await writeFinding(env.db as never, { ...baseRow, subject: null, summary: '' });
+    await writeFinding(env.db as never, { ...baseRow, subject: null, summary: '' });
     const active = env.rows.filter((r) => r.status === 'active');
     expect(active).toHaveLength(2);
   });
