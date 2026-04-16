@@ -15,7 +15,6 @@ import type { ConnectorSyncScheduler } from '../scheduling/connector-sync-schedu
 import type { ProactiveEngine } from '../planning/proactive-engine.js';
 import { getPidPath } from './lifecycle.js';
 import { migrateLegacyDataDirIfNeeded } from './migrate-legacy.js';
-import type { TunnelResult } from '../tunnel/tunnel.js';
 import { logger } from '../lib/logger.js';
 import { createEmptyContext, type DaemonContext } from './context.js';
 import { initDaemon, createServices, createEngine } from './init.js';
@@ -26,6 +25,7 @@ import { setupHttpServer } from './http.js';
 import { initializeMessagingChannels } from './channels.js';
 import { initializeScheduling } from './scheduling.js';
 import { initializePeersAndDocuments } from './peers.js';
+import { setupOptionalIntegrations } from './extras.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -110,74 +110,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const { documentWorker, peerDiscovery, peerMonitor } = ctx;
 
 
-  // 13. Cloudflare tunnel (if enabled)
-  let tunnel: TunnelResult | null = null;
-  if (config.tunnelEnabled) {
-    try {
-      const { startTunnel } = await import('../tunnel/tunnel.js');
-      tunnel = await startTunnel(config.port);
-
-      const { data: existing } = await db.from('runtime_settings')
-        .select('key').eq('key', 'tunnel_url').maybeSingle();
-      if (existing) {
-        await db.from('runtime_settings')
-          .update({ value: tunnel.url, updated_at: new Date().toISOString() })
-          .eq('key', 'tunnel_url');
-      } else {
-        await db.from('runtime_settings')
-          .insert({ key: 'tunnel_url', value: tunnel.url });
-      }
-
-      logger.info(`[daemon] Tunnel: ${tunnel.url}`);
-      bus.emit('tunnel:url', tunnel.url);
-
-      if (controlPlane) {
-        controlPlane.setTunnelUrl(tunnel.url);
-        controlPlane.sendHeartbeatNow().catch(() => {});
-      }
-
-      // React to every subsequent URL rotation: update runtime_settings,
-      // notify the bus, and push a fresh heartbeat to the control plane so
-      // the cloud never keeps calling a dead cloudflared hostname. Without
-      // this the runtime appears "disconnected" until the regular 15s
-      // heartbeat cycle catches up.
-      tunnel.onUrlChange(async (newUrl) => {
-        logger.info(`[daemon] Tunnel URL rotated -> ${newUrl}`);
-        try {
-          await db.from('runtime_settings')
-            .update({ value: newUrl, updated_at: new Date().toISOString() })
-            .eq('key', 'tunnel_url');
-        } catch (err) {
-          logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] persist rotated tunnel URL failed');
-        }
-        bus.emit('tunnel:url', newUrl);
-        if (controlPlane) {
-          controlPlane.setTunnelUrl(newUrl);
-          controlPlane.sendHeartbeatNow().catch((err) => {
-            logger.warn({ err: err instanceof Error ? err.message : err }, '[daemon] immediate heartbeat after tunnel rotation failed');
-          });
-        }
-      });
-    } catch (err) {
-      logger.warn(`[daemon] Tunnel failed: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  // 13b. OpenClaw integration (if enabled)
-  if (config.openclaw?.enabled && config.openclaw.binaryPath) {
-    try {
-      const { buildMcpServerConfig } = await import('../integrations/openclaw/mcp-bridge.js');
-      const { registerOpenClawA2ARoutes } = await import('../integrations/openclaw/a2a-bridge.js');
-
-      const openclawMcpConfig = buildMcpServerConfig(config.openclaw);
-      config.mcpServers = [...config.mcpServers, openclawMcpConfig];
-
-      registerOpenClawA2ARoutes(app, config.openclaw, config.localUrl);
-      logger.info('[daemon] OpenClaw integration enabled');
-    } catch (err) {
-      logger.warn({ err }, '[daemon] OpenClaw integration setup failed (non-fatal)');
-    }
-  }
+  // 13. Cloudflare tunnel + 13b. OpenClaw integration
+  await setupOptionalIntegrations(ctx);
+  const tunnel = ctx.tunnel;
 
   logger.info('[daemon] Ready');
 
