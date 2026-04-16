@@ -21,23 +21,21 @@ describe('OutreachCopyFuzzExperiment', () => {
     expect(ev.samples.map((s) => s.channel)).toEqual(['x_dm', 'x_reply', 'email']);
   });
 
-  it('flags the em-dash currently present in the x_reply template', async () => {
-    // The existing template 'running everything local' string uses a
-    // \u2014 em-dash. This assertion is the regression guard for our
-    // Phase 2 wiring — if someone rewrites the templates to drop the
-    // em-dash BEFORE the patch-author does, this test will need to
-    // be updated (intentional, signals the heal happened).
+  it('templates carry no em-dash (regression guard after manual heal)', async () => {
+    // The x_reply and email templates were healed manually because
+    // patch-author's string-literal mode could not find the em-dash:
+    // source stores \u2014 as a six-char escape, the probe sees the
+    // one-char runtime output. This guard prevents re-introduction.
     const r = await exp.probe(stubCtx);
     const ev = r.evidence as OutreachCopyFuzzEvidence;
     const emDashHit = ev.violations.find((v) => v.ruleId === 'no-em-dash');
-    expect(emDashHit).toBeDefined();
-    expect(emDashHit?.channel).toBe('x_reply');
+    expect(emDashHit).toBeUndefined();
   });
 
-  it('verdict is warning when any invariant fails', async () => {
+  it('clean templates produce a pass verdict', async () => {
     const r = await exp.probe(stubCtx);
     const verdict = exp.judge(r, []);
-    expect(['warning', 'fail']).toContain(verdict);
+    expect(verdict).toBe('pass');
   });
 
   it('every violation carries a ruleId (so evidenceLiteralsAppearInSource accepts the short em-dash)', async () => {

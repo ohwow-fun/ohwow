@@ -226,12 +226,12 @@ export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): 
     return `Hey ${name}, caught ${bucketHint}. Happy to DM a few notes on how we\u2019ve handled similar at ohwow if useful.`;
   }
   if (channel === 'x_reply') {
-    return `This resonates. If you want, I can share what\u2019s worked for us at ohwow\u2014running everything local, no n8n required.`;
+    return `This resonates. If you want, I can share what\u2019s worked for us at ohwow. Running everything local, no n8n required.`;
   }
   if (channel === 'email') {
     return {
       subject: `re: ${bucketHint}`,
-      text: `Hi ${name},\n\nSaw ${bucketHint} and thought ohwow might fit. We run agents locally against your own data, no n8n, no Zapier limits.\n\nIf it sounds useful, you can book a short call here: https://ohwow.fun/\n\n\u2014 Jesus`,
+      text: `Hi ${name},\n\nSaw ${bucketHint} and thought ohwow might fit. We run agents locally against your own data, no n8n, no Zapier limits.\n\nIf it sounds useful, you can book a short call here: https://ohwow.fun/\n\nJesus`,
     };
   }
   return '';
