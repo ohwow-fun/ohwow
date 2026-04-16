@@ -105,6 +105,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '126-x-dm-signals.sql', expectedTables: ['x_dm_signals'] },
   { migrationFile: '129-x-posted-log.sql', expectedTables: ['x_posted_log'] },
   { migrationFile: '130-patches-attempted-log.sql', expectedTables: ['patches_attempted_log'] },
+  { migrationFile: '131-research-citations-ledger.sql', expectedTables: ['research_citations_ledger'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —

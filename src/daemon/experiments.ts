@@ -52,6 +52,7 @@ import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-
 import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
 import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
 import { ObservationProbeExperiment } from '../self-bench/experiments/observation-probe.js';
+import { ResearchIngestProbeExperiment } from '../self-bench/experiments/research-ingest-probe.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
 import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
@@ -152,6 +153,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new RoadmapUpdaterExperiment());
   experimentRunner.register(new RoadmapObserverExperiment());
   experimentRunner.register(new ObservationProbeExperiment());
+  experimentRunner.register(new ResearchIngestProbeExperiment());
   experimentRunner.register(new GitVelocityExperiment());
   experimentRunner.register(new XOpsObserverExperiment());
   experimentRunner.register(new XShapeTunerExperiment());

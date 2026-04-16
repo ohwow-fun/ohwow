@@ -34,6 +34,9 @@ export const ANOMALY_CODES = [
   'PRIORITY_WORK_LOG_STALE',
   'PATCHES_ATTEMPTED_TABLE_EMPTY',
   'SESSION_MARKER_PRESENT',
+  // Tier-2 info codes — celebrate first-of-kind integration milestones
+  // so operators see the research-ingest loop actually closing.
+  'RESEARCH_CITED_IN_COMMIT',
 ] as const;
 
 export type AnomalyCode = (typeof ANOMALY_CODES)[number];
@@ -117,6 +120,7 @@ export interface Observation {
 const TRAILER_CODES = [
   'Fixes-Finding-Id',
   'Cites-Sales-Signal',
+  'Cites-Research-Paper',
   'Auto-Reverts',
   'Self-Authored-By',
   'Co-Authored-By',
@@ -335,6 +339,14 @@ export function detectAnomalies(inputs: AnomalyInputs): Anomaly[] {
       code: 'SESSION_MARKER_PRESENT',
       severity: 'info',
       detail: 'loop may defer autonomous commits',
+    });
+  }
+  const researchCites = inputs.commits.by_trailer['Cites-Research-Paper'] ?? 0;
+  if (researchCites > 0) {
+    out.push({
+      code: 'RESEARCH_CITED_IN_COMMIT',
+      severity: 'info',
+      detail: `cites=${researchCites}`,
     });
   }
   return out;

@@ -50,6 +50,7 @@ import {
   type RankerReport,
   THRESHOLDS,
 } from '../observation.js';
+import { ingestKnowledgeText } from '../knowledge-ingest.js';
 
 const WINDOW_MINUTES = 30;
 const PROBE_EVERY_MS = 10 * 60 * 1000;
@@ -195,6 +196,28 @@ export class ObservationProbeExperiment implements Experiment {
       `patches=${patches_attempted.total} ` +
       `err=${errorAnomalies.length} warn=${warnAnomalies.length}`;
 
+    // Ingest this snapshot into the KB only when the anomaly signature
+    // changes — consecutive "same state" snapshots would bloat the KB
+    // and hurt search quality. The ledger (self_findings) still gets
+    // a row per probe tick for full-fidelity timeseries; the KB gets
+    // state transitions only. Smart-ingest principle: the KB is the
+    // long-term memory, so it should remember changes, not heartbeats.
+    if (await shouldIngestObservation(ctx, observation)) {
+      const kbText = renderObservationForKb(observation);
+      try {
+        await ingestKnowledgeText(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          title: `[self-observation] ${observation.verdict} @ ${observation.generated_at}`,
+          text: kbText,
+          sourceType: 'self-observation',
+          sourceUrl: `ohwow://observation/${observation.generated_at}`,
+          description: 'Autonomous-loop snapshot (observation-probe)',
+        });
+      } catch (err) {
+        logger.debug({ err }, '[observation-probe] kb ingest failed; finding still written');
+      }
+    }
+
     return {
       subject: 'autonomous-loop-snapshot',
       summary,
@@ -224,4 +247,80 @@ export class ObservationProbeExperiment implements Experiment {
    * validator from flagging every new snapshot as regression.
    */
   readonly burnDownKeys: string[] = [];
+}
+
+function observationSignature(obs: Observation): string {
+  // verdict + sorted anomaly codes. Two snapshots with the same
+  // signature are semantically the "same state" for KB purposes —
+  // absolute counts can drift (findings keep accumulating) without
+  // adding information to the knowledge layer.
+  return `${obs.verdict}|${obs.anomalies.map((a) => a.code).sort().join(',')}`;
+}
+
+async function shouldIngestObservation(
+  ctx: ExperimentContext,
+  current: Observation,
+): Promise<boolean> {
+  const { data } = await ctx.db
+    .from<{ evidence: string }>('self_findings')
+    .select('evidence')
+    .eq('experiment_id', 'observation-probe')
+    .order('ran_at', { ascending: false })
+    .limit(1);
+  const rows = (data ?? []) as Array<{ evidence: string }>;
+  if (rows.length === 0) return true; // first snapshot — always ingest
+  try {
+    const prev = JSON.parse(rows[0].evidence) as Observation;
+    if (!prev.anomalies) return true; // malformed → ingest to be safe
+    return observationSignature(prev) !== observationSignature(current);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Convert an Observation to natural-language text for KB ingestion.
+ * Keeps the shape stable so BM25 + semantic search hit the same keys
+ * across snapshots: "verdict:", "reverts:", enumerated anomaly codes,
+ * etc. Rule 5 of the proposal generator (Tier 3) can then pull a
+ * readable history with a single searchKnowledge call instead of
+ * parsing the raw evidence JSON.
+ */
+function renderObservationForKb(obs: Observation): string {
+  const lines: string[] = [];
+  lines.push(`Autonomous-loop snapshot at ${obs.generated_at} (workspace=${obs.workspace}).`);
+  lines.push(`Verdict: ${obs.verdict}.`);
+  lines.push(
+    `Window: ${obs.window.start} → ${obs.window.end} (${Math.round(obs.window.duration_s / 60)} min).`,
+  );
+  lines.push(
+    `Commits: ${obs.commits.total} total, ${obs.commits.autonomous} autonomous, ${
+      obs.commits.by_trailer['Auto-Reverts'] ?? 0
+    } reverts, ${obs.commits.by_trailer['Cites-Sales-Signal'] ?? 0} cite sales signal, ${
+      obs.commits.by_trailer['Cites-Research-Paper'] ?? 0
+    } cite research paper.`,
+  );
+  lines.push(
+    `Patches attempted: ${obs.patches_attempted.total} total (${Object.entries(obs.patches_attempted.by_outcome).map(([k, v]) => `${v} ${k}`).join(', ')}).`,
+  );
+  lines.push(
+    `Priorities: ${obs.priorities.active_slugs.length} active (${obs.priorities.active_slugs.join(', ') || 'none'}), ${obs.priorities.pending_slugs.length} pending.`,
+  );
+  if (obs.ranker.last_ran_at) {
+    const novel = obs.ranker.novelty?.repeat_count ?? 0;
+    lines.push(
+      `Patch-author ranker: last ran ${obs.ranker.last_ran_at}, top_pick ${
+        obs.ranker.top_pick ? 'present' : 'null'
+      }, novelty repeat_count=${novel}.`,
+    );
+  }
+  if (obs.anomalies.length > 0) {
+    lines.push('Anomalies detected:');
+    for (const a of obs.anomalies) {
+      lines.push(`  - [${a.severity}] ${a.code}: ${a.detail || '(no detail)'}`);
+    }
+  } else {
+    lines.push('Anomalies: none.');
+  }
+  return lines.join('\n');
 }
