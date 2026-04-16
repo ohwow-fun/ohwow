@@ -538,6 +538,11 @@ export class ExperimentAuthorExperiment implements Experiment {
     }
 
     const commitMessage = `feat(self-bench): auto-author ${brief.slug} via LLM from proposal brief`;
+    // Tier-3 wiring: if the proposal generator's LLM flagged papers
+    // that influenced this brief, pass them through to the commit so
+    // each one lands as a Cites-Research-Paper trailer. Downstream
+    // observation-probe already parses that trailer into the
+    // RESEARCH_CITED_IN_COMMIT anomaly + the future ledger resolver.
     const commitResult = await safeSelfCommit({
       files: [
         { path: sourcePath, content: parsed.source },
@@ -548,6 +553,7 @@ export class ExperimentAuthorExperiment implements Experiment {
       extendsExperimentId: null,
       whyNotEditExisting:
         'Phase 7-C Rule 5 llm_authored_probe: new-file-only probe drafted by LLM; tier-1 gates validate safety.',
+      citesResearchPapers: params.cites_papers,
     });
 
     if (commitResult.ok && commitResult.filesWritten) {

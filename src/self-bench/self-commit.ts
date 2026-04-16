@@ -156,6 +156,16 @@ export interface SelfCommitOptions {
    */
   citesSalesSignal?: string;
   /**
+   * Tier-2/3 — research-driven self-improvement receipt. One or more
+   * paper identifiers (arXiv id, DOI, or similar) that informed this
+   * patch. Each lands as a separate `Cites-Research-Paper:` trailer
+   * so downstream experiments can grep commits for
+   * paper-attributed changes and score whether the research actually
+   * produced commits that held vs. reverted. Capped at 5 ids; each
+   * id is length-limited and newline-stripped.
+   */
+  citesResearchPapers?: string[];
+  /**
    * Callback that resolves a finding id to its {verdict, ranAt,
    * evidence} tuple. Takes a callback (not a DatabaseAdapter ref)
    * so self-commit.ts stays free of the DB dep and stays trivially
@@ -846,7 +856,20 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
     typeof opts.citesSalesSignal === 'string' && opts.citesSalesSignal.length > 0
       ? `Cites-Sales-Signal: ${opts.citesSalesSignal.replace(/[\r\n]+/g, ' ').slice(0, 240)}\n`
       : '';
-  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}${citesTrailer}`;
+  // Cites-Research-Paper trailers — one per paper id. Each id passes
+  // through the same newline strip + cap as sales signals. We cap the
+  // total number of papers at 5 so a malformed list can't balloon the
+  // commit message.
+  const researchPapers = Array.isArray(opts.citesResearchPapers)
+    ? opts.citesResearchPapers
+        .filter((p): p is string => typeof p === 'string' && p.length > 0)
+        .slice(0, 5)
+        .map((p) => p.replace(/[\r\n]+/g, ' ').slice(0, 120))
+    : [];
+  const researchTrailer = researchPapers.length > 0
+    ? researchPapers.map((p) => `Cites-Research-Paper: ${p}`).join('\n') + '\n'
+    : '';
+  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}${citesTrailer}${researchTrailer}`;
   const fileArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
   try {
     runInRepo(`git add -N -- ${fileArgs}`, repoRoot);

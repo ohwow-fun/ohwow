@@ -170,6 +170,12 @@ const RULE5_CONTEXT_EXPERIMENTS: readonly string[] = [
 const RULE5_FINDINGS_PER_EXPERIMENT = 5;
 /** Default cadence for llm-authored probes (1h, mirrors migration probes). */
 const LLM_AUTHORED_PROBE_EVERY_MS = 60 * 60 * 1000;
+/** How many arXiv KB entries to inline into the Rule 5 prompt. */
+const RULE5_ARXIV_LIMIT = 6;
+/** How many recent self-observation KB entries to inline. */
+const RULE5_SELF_OBS_LIMIT = 3;
+/** Abstract snippet cap — keeps the prompt bounded when 6 papers all have 1KB summaries. */
+const RULE5_KB_SNIPPET_CHARS = 360;
 
 interface LlmCallRow {
   model: string;
@@ -498,6 +504,14 @@ export class ExperimentProposalGenerator implements Experiment {
       }
     }
 
+    // Tier-3 wiring: pull the latest research + self-observation rows
+    // out of the KB so the proposal LLM can read what ohwow has been
+    // studying + how the loop has been behaving. Kept deliberately
+    // small — too much context dilutes the ask, and the KB has a
+    // stable short-form representation per source_type.
+    const researchContext = await readRecentKbByType(ctx, 'arxiv', RULE5_ARXIV_LIMIT);
+    const selfObsContext = await readRecentKbByType(ctx, 'self-observation', RULE5_SELF_OBS_LIMIT);
+
     const coveredList = Array.from(existingProposals)
       .concat(existingSlugs)
       .sort()
@@ -512,11 +526,17 @@ export class ExperimentProposalGenerator implements Experiment {
       '(<=200 chars), hypothesis (<=500 chars), everyMs (60000..86400000), ' +
       'probe_description (40..2000 chars; prose describing what to measure ' +
       'and how, including which tables/files/metrics to read), category ' +
-      "(one of: 'model_health', 'tool_reliability', 'data_freshness', 'other'). " +
+      "(one of: 'model_health', 'tool_reliability', 'data_freshness', 'other'), " +
+      'and optionally cites_papers (array of up to 3 arXiv ids or paper ' +
+      'identifiers the brief draws on — empty or omitted when no paper ' +
+      'influenced the design). ' +
       'Rules: propose read-only observation probes; no writes, no subprocess ' +
       'spawns unless the category is tool_reliability; do not duplicate ' +
       'slugs already covered; each probe must target something concrete ' +
-      'the loop can observe via ctx.db or fs.';
+      'the loop can observe via ctx.db or fs. When a paper from ' +
+      '<research_papers> directly informs the brief, list its arXiv id in ' +
+      'cites_papers — that produces a Cites-Research-Paper commit trailer ' +
+      'so operators can measure whether paper-attributed probes hold.';
 
     const promptParts: string[] = [];
     promptParts.push('<already_covered_slugs>');
@@ -533,6 +553,24 @@ export class ExperimentProposalGenerator implements Experiment {
       promptParts.push('<autonomy_roadmap excerpt="Known Gaps + Active Focus">');
       promptParts.push(roadmapCtx);
       promptParts.push('</autonomy_roadmap>');
+    }
+    if (researchContext.length > 0) {
+      promptParts.push('');
+      promptParts.push('<research_papers source="arxiv via research-ingest-probe">');
+      for (const r of researchContext) {
+        promptParts.push(`  - id=${r.paper_id} title="${r.title.slice(0, 140)}"`);
+        if (r.snippet) promptParts.push(`    abstract: ${r.snippet}`);
+      }
+      promptParts.push('</research_papers>');
+    }
+    if (selfObsContext.length > 0) {
+      promptParts.push('');
+      promptParts.push('<self_observations source="observation-probe, state changes only">');
+      for (const r of selfObsContext) {
+        promptParts.push(`  - ${r.title}`);
+        if (r.snippet) promptParts.push(`    ${r.snippet}`);
+      }
+      promptParts.push('</self_observations>');
     }
     promptParts.push('');
     promptParts.push(
@@ -587,16 +625,27 @@ export class ExperimentProposalGenerator implements Experiment {
         continue;
       }
       if (existingProposals.has(rec.slug)) continue;
+      // cites_papers: optional, tolerant of missing / wrong type. Keep
+      // only string entries, cap at 3, strip empties. A malformed
+      // value doesn't invalidate the brief — the rest of the brief is
+      // still useful without a citation trailer.
+      const rawCites = Array.isArray(rec.cites_papers) ? rec.cites_papers : [];
+      const citesPapers = rawCites
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        .map((x) => x.trim())
+        .slice(0, 3);
+      const params: LlmAuthoredProbeParams = {
+        probe_description: rec.probe_description,
+        category: rec.category as LlmAuthoredProbeParams['category'],
+      };
+      if (citesPapers.length > 0) params.cites_papers = citesPapers;
       const brief: ExperimentBrief = {
         slug: rec.slug,
         name: rec.name,
         hypothesis: rec.hypothesis,
         everyMs: rec.everyMs > 0 ? rec.everyMs : LLM_AUTHORED_PROBE_EVERY_MS,
         template: 'llm_authored_probe',
-        params: {
-          probe_description: rec.probe_description,
-          category: rec.category as LlmAuthoredProbeParams['category'],
-        } satisfies LlmAuthoredProbeParams,
+        params,
       };
       if (validateBrief(brief) !== null) continue;
       proposals.push(brief);
@@ -848,6 +897,54 @@ function listExperimentBasenames(repoRoot: string): string[] {
  * the loop's current convergence state. Best-effort — missing file
  * or unreadable sections return null and Rule 5 proceeds without it.
  */
+/**
+ * Pull recent KB entries of a single source_type into a compact
+ * prompt-ready form. source_type='arxiv' yields research papers the
+ * research-ingest-probe has fetched; source_type='self-observation'
+ * yields snapshot summaries of the autonomous loop. Both flow into
+ * the Rule 5 prompt so the proposal LLM sees both "what the field
+ * is producing" and "what this loop has been doing lately."
+ *
+ * Ordered by most recent first; snippet is the first ~360 chars of
+ * compiled_text (the original abstract or observation summary).
+ * Extracts the arXiv id from the title's `[arxiv/cat]` prefix or
+ * falls back to the source_url path when absent.
+ */
+async function readRecentKbByType(
+  ctx: ExperimentContext,
+  sourceType: 'arxiv' | 'self-observation',
+  limit: number,
+): Promise<Array<{ paper_id: string; title: string; snippet: string }>> {
+  try {
+    const { data } = await ctx.db
+      .from<{ title: string; compiled_text: string | null; source_url: string | null; created_at: string }>(
+        'agent_workforce_knowledge_documents',
+      )
+      .select('title, compiled_text, source_url, created_at')
+      .eq('workspace_id', ctx.workspaceId)
+      .eq('source_type', sourceType)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    const rows = (data ?? []) as Array<{
+      title: string;
+      compiled_text: string | null;
+      source_url: string | null;
+    }>;
+    return rows.map((r) => {
+      const paperId = sourceType === 'arxiv' && r.source_url
+        ? (r.source_url.split('/').pop() ?? r.source_url)
+        : (r.source_url ?? 'unknown');
+      const snippet = (r.compiled_text ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, RULE5_KB_SNIPPET_CHARS);
+      return { paper_id: paperId, title: r.title, snippet };
+    });
+  } catch {
+    return [];
+  }
+}
+
 function loadRoadmapContext(repoRoot: string): string | null {
   try {
     const full = fs.readFileSync(path.join(repoRoot, 'AUTONOMY_ROADMAP.md'), 'utf-8');

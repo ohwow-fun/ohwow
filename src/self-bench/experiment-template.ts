@@ -97,6 +97,14 @@ export interface LlmAuthoredProbeParams {
   probe_description: string;
   /** Which experiment category the generated class should declare. */
   category: 'model_health' | 'tool_reliability' | 'data_freshness' | 'other';
+  /**
+   * Optional research-paper identifiers the LLM drew on when writing
+   * the brief (e.g. arXiv ids). The author threads these into the
+   * commit as `Cites-Research-Paper:` trailers so the
+   * research_citations_ledger can later measure whether
+   * paper-attributed probes hold or get reverted. Capped at 5.
+   */
+  cites_papers?: string[];
 }
 
 /** Parameters for the model_latency_probe template. */

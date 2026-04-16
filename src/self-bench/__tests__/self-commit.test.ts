@@ -794,6 +794,53 @@ describe('safeSelfCommit — Layer 2 fixesFindingId gate', () => {
     expect(msg).not.toContain('Cites-Sales-Signal');
   });
 
+  it('citesResearchPapers appends one Cites-Research-Paper trailer per id', async () => {
+    const result = await safeSelfCommit(
+      l2Opts({ citesResearchPapers: ['2103.04529v3', '2306.11885v1'] }),
+    );
+    expect(result.ok).toBe(true);
+    const msg = lastCommitMessage(tempRoot);
+    const trailers = msg.split('\n').filter((l) => l.startsWith('Cites-Research-Paper:'));
+    expect(trailers).toHaveLength(2);
+    expect(trailers[0]).toBe('Cites-Research-Paper: 2103.04529v3');
+    expect(trailers[1]).toBe('Cites-Research-Paper: 2306.11885v1');
+  });
+
+  it('citesResearchPapers strips embedded newlines and caps list to 5', async () => {
+    const result = await safeSelfCommit(
+      l2Opts({
+        citesResearchPapers: [
+          'a\nMalicious-Trailer: injected',
+          'b',
+          'c',
+          'd',
+          'e',
+          'f-over-cap',
+          'g-over-cap',
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    const msg = lastCommitMessage(tempRoot);
+    const trailers = msg.split('\n').filter((l) => l.startsWith('Cites-Research-Paper:'));
+    expect(trailers).toHaveLength(5);
+    expect(trailers[0]).toBe('Cites-Research-Paper: a Malicious-Trailer: injected');
+    // Malicious-Trailer collapse into the first value; no standalone line.
+    expect(msg.split('\n').filter((l) => l.startsWith('Malicious-Trailer:'))).toHaveLength(0);
+  });
+
+  it('omits Cites-Research-Paper when citesResearchPapers is absent', async () => {
+    const a = await safeSelfCommit(l2Opts());
+    expect(a.ok).toBe(true);
+    expect(lastCommitMessage(tempRoot)).not.toContain('Cites-Research-Paper');
+  });
+
+  it('omits Cites-Research-Paper when citesResearchPapers is an empty array', async () => {
+    const b = await safeSelfCommit(l2Opts({ citesResearchPapers: [] }));
+    expect(b.ok).toBe(true);
+    expect(lastCommitMessage(tempRoot)).not.toContain('Cites-Research-Paper');
+  });
+
   it('fixesFindingId absent: no trailer, audit line has fixes_finding_id: null (regression guard)', async () => {
     const result = await safeSelfCommit(baseOpts({
       files: [{ path: 'src/self-bench/experiments/no-fix.ts', content: 'export const n = 1;' }],
