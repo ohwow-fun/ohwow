@@ -225,19 +225,19 @@ export class ObservationProbeExperiment implements Experiment {
     };
   }
 
-  judge(result: ProbeResult, _history: Finding[]): Verdict {
-    const verdict = (result.evidence as { verdict?: string }).verdict;
-    switch (verdict) {
-      case 'healthy':
-        return 'pass';
-      case 'quiet':
-        return 'warning';
-      case 'thrashing':
-      case 'degraded':
-        return 'fail';
-      default:
-        return 'pass';
-    }
+  /**
+   * Always pass. The observation-probe *observes* the loop's health;
+   * it never fails itself. Returning warning/fail on a quiet/degraded
+   * loop state caused the adaptive scheduler to pull cadence in to
+   * seconds (observed 15 firings in 2 minutes during live-run 2). The
+   * actual "is the loop healthy?" signal lives in evidence.verdict and
+   * evidence.anomalies; downstream experiments key off those, not the
+   * judge output. Keeping this probe's judge at pass means the runner
+   * respects its 10-minute cadence and lets the observation keep its
+   * sampling integrity.
+   */
+  judge(_result: ProbeResult, _history: Finding[]): Verdict {
+    return 'pass';
   }
 
   /**

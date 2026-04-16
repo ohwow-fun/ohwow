@@ -164,6 +164,15 @@ export class DocumentWorker {
         text = doc.compiled_text;
       } else if (sourceType === 'connector') {
         text = (payload.content as string) || doc.compiled_text;
+      } else {
+        // Generic fallback: any source that pre-populated compiled_text
+        // on insert (e.g. 'arxiv', 'self-observation' from
+        // knowledge-ingest.ts) is valid to process without needing a
+        // dedicated branch. The chunk/embed pipeline doesn't care where
+        // the text came from — only that it exists and is non-empty.
+        // Matches the contract knowledge-ingest.ts already assumes:
+        // "hand the worker compiled_text, it chunks + embeds."
+        text = doc.compiled_text;
       }
 
       if (!text || text.trim().length === 0) {

@@ -206,6 +206,62 @@ describe('DocumentWorker', () => {
     expect(events[1]).toMatchObject({ documentId: 'doc-2', status: 'failed', error: 'No text could be extracted.' });
   });
 
+  it('uses compiled_text as fallback for unknown source_type (arxiv, self-observation)', async () => {
+    // Regression guard for the self-bench knowledge-ingest path: if a
+    // new source_type lands in the KB that doesn't match upload/url/
+    // connector, the worker must still chunk its compiled_text rather
+    // than fail with "No text could be extracted."
+    const mockJob = {
+      id: 'job-arxiv',
+      workspace_id: 'ws-1',
+      document_id: 'doc-arxiv',
+      status: 'pending',
+      payload: JSON.stringify({ source_type: 'arxiv', url: 'https://arxiv.org/abs/2103.04529v3' }),
+    };
+    const mockDoc = {
+      id: 'doc-arxiv',
+      title: '[arxiv/cs.LG] Self-Supervised Online Reward Shaping',
+      filename: 'arxiv-abc.txt',
+      file_type: '.txt',
+      storage_path: 'inline://arxiv/doc-arxiv',
+      source_type: 'arxiv',
+      compiled_text: 'Abstract: we introduce Self-Supervised Online Reward Shaping (SORS).',
+    };
+
+    const fromCalls: Array<{ table: string }> = [];
+    const db = {
+      from: vi.fn((table: string) => {
+        if (table === 'document_processing_queue' && fromCalls.filter(c => c.table === table).length === 0) {
+          fromCalls.push({ table });
+          return makeBuilder({ data: [mockJob], error: null });
+        }
+        if (table === 'agent_workforce_knowledge_documents' && fromCalls.filter(c => c.table === table).length === 0) {
+          fromCalls.push({ table });
+          return makeBuilder({ data: mockDoc, error: null });
+        }
+        fromCalls.push({ table });
+        return makeBuilder({ data: [], error: null });
+      }),
+    };
+
+    const events: Array<{ documentId: string; status: string }> = [];
+    bus.on('knowledge:processing', (payload) => events.push(payload));
+
+    const worker = new DocumentWorker(
+      db as unknown as import('../../../db/adapter-types.js').DatabaseAdapter,
+      bus,
+      {},
+    );
+
+    worker.start();
+    await worker.tick();
+    worker.stop();
+
+    expect(events.length).toBe(2);
+    expect(events[0]).toMatchObject({ documentId: 'doc-arxiv', status: 'started' });
+    expect(events[1]).toMatchObject({ documentId: 'doc-arxiv', status: 'completed' });
+  });
+
   it('emits failed event when document record not found', async () => {
     const mockJob = {
       id: 'job-3',
