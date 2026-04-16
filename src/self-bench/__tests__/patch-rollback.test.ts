@@ -85,10 +85,23 @@ describe('findAutonomousPatchesInWindow', () => {
 
   it('emits patch.ts in UTC Z-form regardless of committer local offset', () => {
     // Simulate a committer in Chicago (UTC-5) making an autonomous patch.
-    // git %aI would emit e.g. 2026-04-14T21:26:01-05:00 — lexicographically
+    // git %aI emits e.g. 2026-04-14T21:26:01-05:00 — lexicographically
     // greater than a UTC finding at the same UTC time. The normalization
     // inside findAutonomousPatchesInWindow must strip the offset so
     // downstream string compares against ran_at (stored as …Z) work.
+    //
+    // Dates are computed relative to "now" so the commit always falls
+    // inside the 24 h query window regardless of when the test runs —
+    // a fixed date would age out of the window after 24 h and the
+    // assertion "patches[0]" would start reading `undefined`.
+    const commitUtcMs = Date.now() - 60 * 60 * 1000; // 1 h ago in UTC
+    const localOffsetMin = -5 * 60;
+    const localMs = commitUtcMs + localOffsetMin * 60_000;
+    const d = new Date(localMs);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const localIso = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}-05:00`;
+    const expectedUtc = new Date(commitUtcMs - (commitUtcMs % 1000)).toISOString();
+
     const abs = path.join(repo, 'x.ts');
     fs.writeFileSync(abs, 'export const x = 1;\n');
     git('git add x.ts');
@@ -102,15 +115,17 @@ describe('findAutonomousPatchesInWindow', () => {
       stdio: 'pipe',
       env: {
         ...process.env,
-        GIT_AUTHOR_DATE: '2026-04-14T21:26:01-05:00',
-        GIT_COMMITTER_DATE: '2026-04-14T21:26:01-05:00',
+        GIT_AUTHOR_DATE: localIso,
+        GIT_COMMITTER_DATE: localIso,
       },
     });
     const patches = findAutonomousPatchesInWindow(repo, 24 * 60 * 60_000);
     expect(patches).toHaveLength(1);
-    expect(patches[0].ts).toBe('2026-04-15T02:26:01.000Z');
-    // And a ran_at in the pre-patch gap must NOT be > patch.ts:
-    expect('2026-04-15T02:05:13Z' > patches[0].ts).toBe(false);
+    expect(patches[0].ts).toBe(expectedUtc);
+    // And a ran_at timestamp from 10 s before the commit must NOT string-
+    // compare greater than patch.ts — the whole point of normalization.
+    const preGap = new Date(commitUtcMs - 10_000).toISOString();
+    expect(preGap > patches[0].ts).toBe(false);
   });
 
   it('excludes commits already reverted via Auto-Reverts trailer', () => {
