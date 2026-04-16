@@ -146,6 +146,7 @@ export interface SceneScript {
   script: string;           // narration (5-15s worth)
   caption?: string;         // single highlight sentence under 60 chars
   mood?: string;
+  pacing?: string;
   visualLayers?: Array<{ primitive: string; [key: string]: unknown }>;
   text?: { content: string; animation?: string; position?: string; fontSize?: number };
 }
@@ -488,6 +489,7 @@ For each scene, write:
 - "script": the narration (1-3 short sentences, second person, conversational)
 - "targetSeconds": how long the narration takes to speak (3-12 seconds)
 - "mood": scene mood (dark, warm, cool, electric, forest, sunset, midnight)
+- "pacing": "urgent" (fast particles, quick reveals) | "steady" (balanced) | "reflective" (slow, breathing). If omitted, derived from mood.
 - "visualLayers": array of { "primitive": "<id>", ...params } — 2-4 layers per scene
 - "text": { "content": "<on-screen text>", "animation": "typewriter|fade-in|word-by-word|letter-scatter", "position": "center|bottom-center|bottom-left|top-center", "fontSize": <number> }
 
@@ -595,6 +597,7 @@ export async function generateScripts(
       caption: s.caption ? String(s.caption).trim() : undefined,
     };
     if (s.mood) result.mood = String(s.mood);
+    if (s.pacing) result.pacing = String(s.pacing);
     if (Array.isArray(s.visualLayers)) result.visualLayers = s.visualLayers as SceneScript['visualLayers'];
     if (s.text && typeof s.text === 'object') result.text = s.text as SceneScript['text'];
     return result;
@@ -809,6 +812,7 @@ interface ResolvedVoice {
   durationMs: number;
   voiceFrames: number;
   mood?: string;
+  pacing?: string;
   visualLayers?: SceneScript['visualLayers'];
   text?: SceneScript['text'];
 }
@@ -1013,6 +1017,7 @@ function buildComposableParams(
   }
 
   if (voice.mood) params.mood = voice.mood;
+  if (voice.pacing) params.pacing = voice.pacing;
   if (palette) params.palette = palette;
 
   return params;
@@ -1141,6 +1146,7 @@ export async function authorWorkspaceVideoSpec(
       durationMs,
       voiceFrames,
       mood: s.mood,
+      pacing: s.pacing,
       visualLayers: s.visualLayers,
       text: s.text,
     });
