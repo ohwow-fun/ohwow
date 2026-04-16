@@ -10,63 +10,6 @@
  * so shutdown and the HTTP onScheduleChange callback can find them.
  */
 
-import { ExperimentRunner } from '../self-bench/experiment-runner.js';
-import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js';
-import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
-import { CanaryExperiment } from '../self-bench/experiments/canary-experiment.js';
-import { LedgerHealthExperiment } from '../self-bench/experiments/ledger-health.js';
-import { BurnRateExperiment } from '../self-bench/experiments/burn-rate.js';
-import { ThroughputDailyExperiment } from '../self-bench/experiments/throughput-daily.js';
-import { InterventionAuditExperiment } from '../self-bench/experiments/intervention-audit.js';
-import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
-import { StrategistExperiment } from '../self-bench/experiments/strategist.js';
-import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
-import { ContentCadenceTunerExperiment } from '../self-bench/experiments/content-cadence-tuner.js';
-import { ContentCadenceLoopHealthExperiment } from '../self-bench/experiments/content-cadence-loop-health.js';
-import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
-import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
-import { ExperimentProposalGenerator } from '../self-bench/experiments/experiment-proposal-generator.js';
-import { ExperimentAuthorExperiment } from '../self-bench/experiments/experiment-author.js';
-import { ListHandlersFuzzExperiment } from '../self-bench/experiments/list-handlers-fuzz.js';
-import { HandlerSchemaDriftExperiment } from '../self-bench/experiments/handler-schema-drift.js';
-import { ProseInvariantDriftExperiment } from '../self-bench/experiments/prose-invariant-drift.js';
-import { AgentOutcomesExperiment } from '../self-bench/experiments/agent-outcomes.js';
-import { AutonomousAuthorQualityExperiment } from '../self-bench/experiments/autonomous-author-quality.js';
-import { AutonomousPatchRollbackExperiment } from '../self-bench/experiments/autonomous-patch-rollback.js';
-import { PatchAuthorExperiment } from '../self-bench/experiments/patch-author.js';
-import { FormatDurationFuzzExperiment } from '../self-bench/experiments/format-duration-fuzz.js';
-import { TokenSimilarityFuzzExperiment } from '../self-bench/experiments/token-similarity-fuzz.js';
-import { StagnationFuzzExperiment } from '../self-bench/experiments/stagnation-fuzz.js';
-import { ErrorClassificationFuzzExperiment } from '../self-bench/experiments/error-classification-fuzz.js';
-import { SitemapDriftExperiment } from '../self-bench/experiments/sitemap-drift.js';
-import { DashboardSmokeExperiment } from '../self-bench/experiments/dashboard-smoke.js';
-import { DashboardCopyExperiment } from '../self-bench/experiments/dashboard-copy.js';
-import { SourceCopyLintExperiment } from '../self-bench/experiments/source-copy-lint.js';
-import { AgentTaskCostWatcherExperiment } from '../self-bench/experiments/agent-cost-watcher.js';
-import { ProviderAvailabilityExperiment } from '../self-bench/experiments/provider-availability.js';
-import { PatchLoopHealthExperiment } from '../self-bench/experiments/patch-loop-health.js';
-import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-updater.js';
-import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
-import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
-import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
-import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
-import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
-import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
-import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
-import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
-import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
-import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
-import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
-import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
-import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
-import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
-import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
-import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
-import {
-  refreshRuntimeConfigCache,
-  RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
-} from '../self-bench/runtime-config.js';
-import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { LocalScheduler } from '../scheduling/local-scheduler.js';
 import { HeartbeatCoordinator } from '../scheduling/heartbeat-coordinator.js';
 import { ConnectorSyncScheduler } from '../scheduling/connector-sync-scheduler.js';
@@ -75,7 +18,6 @@ import { LogTailWatcher } from '../scheduling/log-tail-watcher.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { consolidateReflection } from '../oneiros/reflection-consolidator.js';
 import { runLlmCall } from '../execution/llm-organ.js';
-import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { XIntelScheduler } from '../scheduling/x-intel-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
@@ -89,8 +31,8 @@ import { HumanGrowthEngine } from '../hexis/human-growth.js';
 import { ObservationEngine } from '../hexis/observation-engine.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { resolveActiveWorkspace } from '../config.js';
-import { dirname } from 'path';
 import { logger } from '../lib/logger.js';
+import { registerExperiments } from './experiments.js';
 import type { DaemonContext } from './context.js';
 
 export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise<void> {
@@ -372,212 +314,8 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
     logger.debug('[daemon] Person model refinement scheduled (1h interval)');
   }
 
-  // Self-bench experiment runner: the substrate for continuous
-  // self-testing. Every registered Experiment fires on its cadence,
-  // lands a row in self_findings, and (if it implements intervene)
-  // changes config when its judge says so.
-  {
-    // Phase 5-B: runtime config overrides cache. Experiments read
-    // runtime-mutable settings via getRuntimeConfig() which
-    // synchronously reads this cache. Prime on boot + refresh every
-    // 60 seconds so writes from other processes (or other
-    // experiment runs) become visible within a minute.
-    void refreshRuntimeConfigCache(db);
-    setInterval(() => {
-      void refreshRuntimeConfigCache(db);
-    }, RUNTIME_CONFIG_REFRESH_INTERVAL_MS);
+  await registerExperiments(ctx);
 
-    // Phase 7-A: configure the self-commit repo root from the
-    // daemon binary path. Derives /path/to/repo from
-    // /path/to/repo/dist/index.js. Self-commit stays disabled
-    // by default regardless — the kill-switch file at
-    // ~/.ohwow/self-commit-enabled is the operator's opt-in.
-    try {
-      const entryPath = process.argv[1];
-      if (entryPath) {
-        const derived = dirname(dirname(entryPath));
-        setSelfCommitRepoRoot(derived);
-        logger.debug({ repoRoot: derived }, '[daemon] self-commit repo root configured');
-      }
-    } catch (err) {
-      logger.debug({ err }, '[daemon] could not configure self-commit repo root');
-    }
-
-    if (engine) {
-      // workspaceId is the consolidated row id (cloud UUID or 'local');
-      // workspaceSlug is the human-readable name ('default', 'avenued', ...)
-      // that business experiments match against.
-      const workspaceSlug = resolveActiveWorkspace().name;
-      const experimentRunner = new ExperimentRunner(db, engine, workspaceId, workspaceSlug);
-      experimentRunner.register(new ModelHealthExperiment());
-      experimentRunner.register(new TriggerStabilityExperiment());
-      experimentRunner.register(new CanaryExperiment());
-      experimentRunner.register(new LedgerHealthExperiment());
-      experimentRunner.register(new BurnRateExperiment());
-      experimentRunner.register(new ThroughputDailyExperiment());
-      experimentRunner.register(new InterventionAuditExperiment());
-      experimentRunner.register(new StaleTaskCleanupExperiment());
-      experimentRunner.register(new StrategistExperiment());
-      experimentRunner.register(new AdaptiveSchedulerExperiment());
-      experimentRunner.register(new StaleTaskThresholdTunerExperiment());
-      experimentRunner.register(new AgentCoverageGapExperiment());
-      experimentRunner.register(new ExperimentProposalGenerator());
-      experimentRunner.register(new ExperimentAuthorExperiment());
-      experimentRunner.register(new ListHandlersFuzzExperiment());
-      experimentRunner.register(new HandlerSchemaDriftExperiment());
-      experimentRunner.register(new ProseInvariantDriftExperiment());
-      experimentRunner.register(new AgentOutcomesExperiment());
-      experimentRunner.register(new AutonomousAuthorQualityExperiment());
-      experimentRunner.register(new AutonomousPatchRollbackExperiment());
-      experimentRunner.register(new PatchLoopHealthExperiment());
-      experimentRunner.register(new PatchAuthorExperiment());
-      experimentRunner.register(new RoadmapUpdaterExperiment());
-      experimentRunner.register(new RoadmapObserverExperiment());
-      experimentRunner.register(new GitVelocityExperiment());
-      experimentRunner.register(new XOpsObserverExperiment());
-      experimentRunner.register(new XShapeTunerExperiment());
-      experimentRunner.register(new MigrationDriftSentinelExperiment());
-      experimentRunner.register(new BrowserProfileGuardianExperiment());
-      // Piece 5: revenue pipeline observer (advisory). Reads goals,
-      // contacts, contact_events, revenue_entries, x-authors-ledger;
-      // writes strategy.revenue_gap_focus + priorities when below pace.
-      experimentRunner.register(new RevenuePipelineObserverExperiment());
-      // Piece 4b: X per-shape engagement observer. Piece 4a's
-      // x-own-engagement.mjs populates x-own-posts.jsonl; this
-      // aggregates and emits per-shape findings with
-      // __tracked_field='median_engagement' for Piece 1's distiller.
-      experimentRunner.register(new XEngagementObserverExperiment());
-      // Piece 4c: X autonomy ramp. Reads the x_posts_per_week goal +
-      // per-shape engagement baselines, writes
-      // x-autonomy-allowlist.json + runtime_config
-      // x_compose.autonomy_allowlist so x-compose.mjs can drop DRY
-      // for shape-graduated drafts up to the goal-paced daily budget.
-      experimentRunner.register(new XAutonomyRampExperiment());
-      // Piece 6: daily surprise digest. 24h cadence, runOnBoot=false,
-      // gates internally on "already ran today" so a daemon restart
-      // doesn't spawn duplicates. Narrative finding with subject
-      // digest:YYYY-MM-DD in category 'other' for easy filtering.
-      experimentRunner.register(new DailySurpriseDigestExperiment());
-      experimentRunner.register(new RoadmapShapeProbeExperiment());
-      experimentRunner.register(new VitestHealthProbeExperiment());
-      experimentRunner.register(new LoopCadenceProbeExperiment());
-      experimentRunner.register(new TestCoverageProbeExperiment());
-      experimentRunner.register(new FormatDurationFuzzExperiment());
-      experimentRunner.register(new TokenSimilarityFuzzExperiment());
-      experimentRunner.register(new StagnationFuzzExperiment());
-      experimentRunner.register(new ErrorClassificationFuzzExperiment());
-      experimentRunner.register(new SitemapDriftExperiment());
-      experimentRunner.register(new DashboardSmokeExperiment());
-      experimentRunner.register(new DashboardCopyExperiment());
-      experimentRunner.register(new SourceCopyLintExperiment());
-      // Phase 8-A (live): ContentCadenceTunerExperiment is the first
-      // BusinessExperiment in the live runner. Gated behind workspaceSlug
-      // === 'default' because its probe anchors to a business goal that
-      // only makes sense on the GTM dogfood workspace.
-      if (workspaceSlug === 'default') {
-        const cadenceTuner = new ContentCadenceTunerExperiment({ dryRun: false });
-        const fast = process.env.OHWOW_CONTENT_CADENCE_TUNER_FAST;
-        if (fast === '1' || fast === 'true') {
-          cadenceTuner.cadence = {
-            everyMs: 5 * 60 * 1000,
-            runOnBoot: true,
-            validationDelayMs: 5 * 60 * 1000,
-          };
-        }
-        experimentRunner.register(cadenceTuner);
-        logger.info(
-          {
-            experimentId: cadenceTuner.id,
-            dryRun: cadenceTuner.dryRun,
-            fastCadence: fast === '1' || fast === 'true',
-            everyMs: cadenceTuner.cadence.everyMs,
-            validationDelayMs: cadenceTuner.cadence.validationDelayMs,
-          },
-          '[daemon] content-cadence-tuner registered in live mode',
-        );
-
-        // Phase 8-A: ContentCadenceScheduler — downstream consumer that
-        // reads content_cadence.posts_per_day every hour, seeds the
-        // x_posts_per_week goal row on first run, dispatches X post tasks
-        // when under the daily budget, and updates goal.current_value with
-        // the trailing-7d count so validate() has real signal.
-        const cadenceScheduler = new ContentCadenceScheduler(db, engine, workspaceId);
-        cadenceScheduler.start();
-        logger.info('[daemon] content-cadence-scheduler started');
-
-        // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
-        // that detects silent failures across the closed loop's stages.
-        const loopHealth = new ContentCadenceLoopHealthExperiment();
-        const loopHealthFast = process.env.OHWOW_CONTENT_CADENCE_LOOP_HEALTH_FAST;
-        if (loopHealthFast === '1' || loopHealthFast === 'true') {
-          loopHealth.cadence = {
-            everyMs: 5 * 60 * 1000,
-            runOnBoot: true,
-          };
-        }
-        experimentRunner.register(loopHealth);
-        logger.info(
-          {
-            fastCadence: loopHealthFast === '1' || loopHealthFast === 'true',
-            everyMs: loopHealth.cadence.everyMs,
-          },
-          '[daemon] content-cadence-loop-health registered',
-        );
-      }
-
-      // Phase 8-A.1: LLM provider availability — watches failure rates
-      // per provider in a rolling 1h window. Warns at >5%, fails at >20%.
-      // No intervene; routing adaptation is Phase 8-B.
-      experimentRunner.register(new ProviderAvailabilityExperiment());
-
-      // Phase 8-A.2: Agent lock contention — detects agents marked
-      // 'working' whose active task hasn't updated in >30 minutes.
-      // Warns at 10% stalled agents, fails at 30%.
-      experimentRunner.register(new AgentLockContentionExperiment());
-
-      // Phase 8-A.3: List handler completeness digest — meta-experiment
-      // that surfaces a weekly summary of list-handlers-fuzz findings
-      // as a business-facing signal. 1h cadence.
-      experimentRunner.register(new ListCompletenessSummaryExperiment());
-
-      // Phase 8-B: AgentTaskCostWatcherExperiment — observer for the
-      // rolling 7d avg cost per completed task. Anchors to the
-      // agent_avg_task_cost_cents goal (operator creates via UI with a
-      // target value in cents). Warns when avg exceeds target; no
-      // intervention until Phase 8-B.2 adds a routing knob.
-      experimentRunner.register(new AgentTaskCostWatcherExperiment());
-
-      // Auto-registry: every experiment autonomously authored by
-      // ExperimentAuthorExperiment is listed in auto-registry.ts.
-      // Dynamic import here so daemon restart is the only coupling —
-      // the author commits the registry update, the daemon picks it
-      // up on the next boot without any code change to this file.
-      try {
-        const { autoRegisteredExperiments } = await import('../self-bench/auto-registry.js');
-        for (const factory of autoRegisteredExperiments) {
-          experimentRunner.register(factory());
-        }
-        logger.info(
-          { count: autoRegisteredExperiments.length },
-          '[daemon] auto-registry experiments registered',
-        );
-      } catch (err) {
-        // Non-fatal: auto-registry may not exist yet (fresh install).
-        logger.debug({ err }, '[daemon] auto-registry not found or failed to load');
-      }
-
-      await experimentRunner.rehydrateSchedule().catch((err) => {
-        logger.warn({ err }, '[daemon] rehydrateSchedule failed; continuing with fresh schedule');
-      });
-      experimentRunner.start();
-      logger.debug(
-        { experiments: experimentRunner.registeredIds() },
-        '[daemon] self-bench experiment runner started',
-      );
-    } else {
-      logger.debug('[daemon] engine unavailable — experiment runner skipped');
-    }
-  }
 
   // Human Growth Engine: compute growth snapshots alongside refinement
   {
