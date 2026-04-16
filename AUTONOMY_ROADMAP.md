@@ -257,7 +257,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
-### Missing Experiments (8)
+### Missing Experiments (9)
 The following experiment files are not yet listed in the Active Experiments section above:
 - intervention-audit
 - strategist
@@ -266,4 +266,5 @@ The following experiment files are not yet listed in the Active Experiments sect
 - toolchain-lint
 - toolchain-tests
 - toolchain-typecheck
+- unknown-latency
 - unknown-latency
