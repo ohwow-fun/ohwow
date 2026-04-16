@@ -204,7 +204,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 
 ## 5. Experiment Inventory
 
-### Active Experiments (68 total)
+### Active Experiments (69 total)
 
 1. adaptive-scheduler
 2. agent-cost-watcher
@@ -274,6 +274,7 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 66. unknown-latency
 67. unknown-latency
 68. unknown-latency
+69. agent-state-hygiene-sentinel
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
 
@@ -293,3 +294,7 @@ The following experiment files exist but are not listed in the Active Experiment
 - x-engagement-observer
 - x-ops-observer
 - x-shape-tuner
+- agent-state-hygiene-sentinel
+- toolchain-lint
+- toolchain-tests
+- toolchain-typecheck
