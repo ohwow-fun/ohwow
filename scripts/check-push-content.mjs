@@ -56,6 +56,21 @@ function isTrailerLine(line) {
   return /^(?:Signed-off-by|Co-Authored-By):/i.test(line.trim());
 }
 
+// Suppress env-var references on the generic bearer-token / api-key patterns.
+// `apiKey: process.env.OPENAI_API_KEY` is a reference, not a secret; the
+// 26-char tail `process.env.OPENAI_API_KEY` otherwise trips bearer-token.
+// Mirrors src/lib/secret-patterns.ts.
+const ENV_REFERENCE_MARKERS = [
+  /process\.env\b/i,
+  /import\.meta\.env\b/i,
+  /os\.environ\b/i,
+  /Deno\.env\b/i,
+  /\$\{?[A-Z_][A-Z0-9_]*\}?/,
+];
+function isEnvReference(match) {
+  return ENV_REFERENCE_MARKERS.some((re) => re.test(match));
+}
+
 function scan(text, source) {
   const hits = [];
   const lines = text.split('\n');
@@ -65,6 +80,12 @@ function scan(text, source) {
       const line = lines[i];
       if (spec.allowTrailers && isTrailerLine(line)) continue;
       for (const m of line.matchAll(spec.re)) {
+        if (
+          (spec.kind === 'bearer-token' || spec.kind === 'api-key') &&
+          isEnvReference(m[0])
+        ) {
+          continue;
+        }
         hits.push({ kind: spec.kind, match: m[0].slice(0, 80), source, line: i + 1 });
       }
     }

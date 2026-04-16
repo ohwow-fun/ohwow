@@ -119,6 +119,25 @@ function isTrailerLine(line: string): boolean {
 }
 
 /**
+ * True when the generic bearer-token / api-key match is a reference to an
+ * env var rather than an inline secret. The tail `process.env.OPENAI_API_KEY`
+ * is 26 `[A-Za-z0-9_]` chars, so `apiKey: process.env.OPENAI_API_KEY` trips
+ * the bearer-token regex — but no secret has actually landed in source.
+ * Scoped to the already-matched substring so unrelated `$VAR` usages don't
+ * get silently suppressed elsewhere.
+ */
+const ENV_REFERENCE_MARKERS: readonly RegExp[] = [
+  /process\.env\b/i,
+  /import\.meta\.env\b/i,
+  /os\.environ\b/i,
+  /Deno\.env\b/i,
+  /\$\{?[A-Z_][A-Z0-9_]*\}?/,
+];
+function isEnvReference(match: string): boolean {
+  return ENV_REFERENCE_MARKERS.some((re) => re.test(match));
+}
+
+/**
  * Scan a blob of text for any pattern match. Returns all hits; empty
  * array means clean. `source` is a human-readable label that ends up in
  * each SecretHit for downstream audit logging.
@@ -135,6 +154,14 @@ export function scanForSecrets(text: string, source: string): SecretHit[] {
       if (spec.allowTrailers && isTrailerLine(line)) continue;
       // `String.prototype.matchAll` returns all non-overlapping matches.
       for (const m of line.matchAll(spec.re)) {
+        // Env-var references aren't secrets — suppress on the two generic
+        // keyword-triggered patterns where this false positive is common.
+        if (
+          (spec.kind === 'bearer-token' || spec.kind === 'api-key') &&
+          isEnvReference(m[0])
+        ) {
+          continue;
+        }
         hits.push({
           kind: spec.kind,
           match: m[0].length > 120 ? `${m[0].slice(0, 117)}...` : m[0],

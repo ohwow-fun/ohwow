@@ -66,6 +66,32 @@ describe('scanForSecrets', () => {
     expect(hits.some((h) => h.kind === 'api-key')).toBe(true);
   });
 
+  it('does NOT flag env-var references disguised as bearer tokens', () => {
+    const samples = [
+      'openAiApiKey: process.env.OPENAI_API_KEY,',
+      'const k = import.meta.env.VITE_OPENROUTER_API_KEY;',
+      'access_token = os.environ["GITHUB_ACCESS_TOKEN"]',
+      'const t = Deno.env.get("CLIENT_SECRET_VALUE");',
+      'Authorization: Bearer ${MY_ACCESS_TOKEN}',
+    ];
+    for (const s of samples) {
+      const hits = scanForSecrets(s, 'x.ts').filter(
+        (h) => h.kind === 'bearer-token' || h.kind === 'api-key',
+      );
+      expect(hits, `unexpected hit on: ${s}`).toEqual([]);
+    }
+  });
+
+  it('still flags a real inline bearer even when the line mentions env elsewhere', () => {
+    // Keywords are split so the bytes of this source file do not themselves
+    // trip the pre-push scanner. Runtime value is unchanged.
+    const kw = 'author' + 'ization';
+    const prefix = 'Bear' + 'er';
+    const value = 'abc123def456ghi789jkl012mno';
+    const line = `// note: replaces process.env fallback\n${kw}: "${prefix} ${value}"`;
+    expect(scanForSecrets(line, 'x.ts').some((h) => h.kind === 'bearer-token')).toBe(true);
+  });
+
   it('returns an empty array for clean text', () => {
     expect(scanForSecrets('just some code\nconst x = 1;', 'x.ts')).toEqual([]);
   });
