@@ -37,9 +37,14 @@ function latestById(rows) {
   return m;
 }
 
-function appendApproval(id) {
+function appendApproval(originalEntry) {
+  // latestById() in approval-queue.ts OVERWRITES rather than merges —
+  // so the status-update row must re-carry the ENTIRE original entry
+  // (kind, payload, summary, workspace) otherwise XDmReplyDispatcher
+  // reads an empty payload and can't send. See
+  // src/scheduling/approval-queue.ts + src/scheduling/x-dm-reply-dispatcher.ts.
   const entry = {
-    id,
+    ...originalEntry,
     ts: new Date().toISOString(),
     status: 'approved',
     notes: JSON.stringify({ approved_by: 'scripts/approve-dm-reply.mjs' }),
@@ -76,7 +81,7 @@ if (arg === '--all') {
     process.exit(0);
   }
   for (const e of pendingDm) {
-    appendApproval(e.id);
+    appendApproval(e);
     console.log(`approved ${e.id.slice(0, 8)}`);
   }
   process.exit(0);
@@ -87,5 +92,5 @@ if (!match) {
   console.error(`No pending x_dm_outbound approval matching "${arg}".`);
   process.exit(1);
 }
-appendApproval(match.id);
+appendApproval(match);
 console.log(`approved ${match.id}`);
