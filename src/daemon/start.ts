@@ -15,14 +15,6 @@ import { resolveActiveWorkspace } from '../config.js';
 import { createServer } from '../api/server.js';
 import { WhatsAppClient } from '../whatsapp/client.js';
 import { TelegramClient } from '../integrations/telegram/client.js';
-import { ChannelRegistry } from '../integrations/channel-registry.js';
-import { ConnectorRegistry } from '../integrations/connector-registry.js';
-import { GitHubConnector } from '../integrations/connectors/github-connector.js';
-import { GoogleDriveConnector } from '../integrations/connectors/google-drive-connector.js';
-import { LocalFilesConnector } from '../integrations/connectors/local-files-connector.js';
-import { NotionConnector } from '../integrations/connectors/notion-connector.js';
-import { MessageRouter } from '../integrations/message-router.js';
-import { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { ExperimentRunner } from '../self-bench/experiment-runner.js';
 import { ModelHealthExperiment } from '../self-bench/experiments/model-health.js';
 import { TriggerStabilityExperiment } from '../self-bench/experiments/trigger-stability.js';
@@ -90,17 +82,13 @@ import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synth
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
 import { InnerThoughtsLoop } from '../presence/inner-thoughts.js';
 import { PresenceEngine } from '../presence/presence-engine.js';
-import { ConsciousnessBridge } from '../brain/consciousness-bridge.js';
 import { ProactiveEngine } from '../planning/proactive-engine.js';
 import { LocalTransitionEngine } from '../hexis/transition-engine.js';
 import { LocalWorkRouter } from '../hexis/work-router.js';
 import { HumanGrowthEngine } from '../hexis/human-growth.js';
 import { ObservationEngine } from '../hexis/observation-engine.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
-import { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
 import { DocumentWorker } from '../execution/workers/document-worker.js';
-import { DigitalBody, type VoiceServiceLike } from '../body/digital-body.js';
-import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { releaseLock } from '../lib/instance-lock.js';
 import { getPidPath } from './lifecycle.js';
 import { migrateLegacyDataDirIfNeeded } from './migrate-legacy.js';
@@ -111,6 +99,7 @@ import { createEmptyContext, type DaemonContext } from './context.js';
 import { initDaemon, createServices, createEngine } from './init.js';
 import { setupInference } from './inference.js';
 import { connectCloudAndConsolidate, startCloudPolling } from './cloud.js';
+import { setupOrchestration } from './orchestration.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -169,154 +158,9 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // 9. Start polling (connected tier only)
   startCloudPolling(ctx);
 
-  // 10. Initialize channel registry + orchestrator
-  const channelRegistry = new ChannelRegistry();
-  const connectorRegistry = new ConnectorRegistry();
-  connectorRegistry.registerFactory('github', (cfg) => new GitHubConnector(cfg));
-  connectorRegistry.registerFactory('google-drive', (cfg) => new GoogleDriveConnector(cfg));
-  connectorRegistry.registerFactory('local-files', (cfg) => new LocalFilesConnector(cfg));
-  connectorRegistry.registerFactory('notion', (cfg) => new NotionConnector(cfg));
-  const triggerEvaluator = new LocalTriggerEvaluator(db, engine, workspaceId, channelRegistry);
-  ctx.triggerEvaluator = triggerEvaluator;
-
-  // Workers skip orchestrator/messaging (task execution only)
-  const orchestrator = isWorker ? null : new LocalOrchestrator(
-    db, engine, workspaceId, config.anthropicApiKey,
-    channelRegistry, controlPlane!, modelRouter, scraplingService, config.orchestratorModel, process.cwd(),
-    config.browserHeadless, dataDir, config.mcpServers,
-    config.browserTarget, config.chromeCdpPort,
-    config.desktopToolsEnabled,
-  );
-
-  if (orchestrator) {
-    orchestrator.setRagConfig({
-      ollamaUrl: config.ollamaUrl,
-      embeddingModel: config.embeddingModel,
-      ollamaModel: config.ollamaModel,
-      ragBm25Weight: config.ragBm25Weight,
-      rerankerEnabled: config.rerankerEnabled,
-      meshRagEnabled: config.meshRagEnabled,
-    });
-    orchestrator.setConnectorRegistry(connectorRegistry);
-    orchestrator.setChromeProfileAliases(config.chromeProfileAliases);
-    // Propagate the configured Chrome profile to every spawn path that
-    // reads OHWOW_CHROME_PROFILE (ensureDebugChrome, x-intel child, etc).
-    // Without this, a daemon restart that has to spawn a fresh debug
-    // Chrome lands on 'Default' profile, which is rarely the Google
-    // account signed into x.com for this workspace.
-    if (config.chromeDefaultProfile) {
-      process.env.OHWOW_CHROME_PROFILE = config.chromeDefaultProfile;
-    }
-    orchestrator.setSkipMediaCostConfirmation(config.skipMediaCostConfirmation);
-
-    // LSP manager — lazy-start language servers on first tool call
-    if (config.lspEnabled) {
-      const { LspManager } = await import('../lsp/lsp-manager.js');
-      const lspManager = new LspManager(process.cwd());
-      orchestrator.setLspManager(lspManager);
-      bus.on('shutdown', () => { lspManager.stopAll().catch(() => {}); });
-    }
-    if (inferenceState.inferenceCapabilities) {
-      orchestrator.setInferenceCapabilities(inferenceState.inferenceCapabilities);
-      bus.emit('inference:capabilities-changed', inferenceState.inferenceCapabilities);
-    }
-
-    // Initialize meeting session (macOS only)
-    if (process.platform === 'darwin') {
-      const { MeetingSession } = await import('../meeting/meeting-session.js');
-      const openaiKey = (engine as unknown as { config?: { openaiApiKey?: string } })?.config?.openaiApiKey;
-      const meetingSession = new MeetingSession(
-        db, modelRouter, controlPlane, workspaceId,
-        config.ollamaUrl, openaiKey,
-      );
-      orchestrator.setMeetingSession(meetingSession);
-      if (controlPlane) {
-        controlPlane.setMeetingSession(meetingSession);
-      }
-    }
-  }
-
-  // 10b. Bootstrap digital body (Merleau-Ponty: embodiment)
-  // Mutable voice state tracker — updated by server.ts when voice sessions start/stop
-  const voiceState = { state: 'idle' as 'idle' | 'listening' | 'processing' | 'speaking', stt: null as string | null, tts: null as string | null };
-  const voiceAdapter: VoiceServiceLike = {
-    isActive: () => voiceState.state !== 'idle',
-    getState: () => voiceState.state,
-    getSttProvider: () => voiceState.stt,
-    getTtsProvider: () => voiceState.tts,
-  };
-
-  const digitalBody = new DigitalBody({
-    channels: channelRegistry,
-    voice: voiceAdapter,
-    workingDirectory: process.cwd(),
-  });
-
-  const digitalNS = new DigitalNervousSystem({
-    body: digitalBody,
-    experienceStream: orchestrator?.getBrain()?.experienceStream,
-    workspace: orchestrator?.getBrain()?.workspace,
-  });
-  digitalNS.start();
-
-  // Subscribe to high-salience nervous signals for logging
-  digitalNS.onSignal((signal) => {
-    if (signal.salience >= 0.5) {
-      logger.info({ organ: signal.organId, type: signal.type, salience: signal.salience }, '[body] Nervous signal');
-    }
-  });
-
-  // Wire body into brain(s) and orchestrator for proprioceptive awareness
-  if (orchestrator) {
-    orchestrator.getBrain()?.setDigitalBody(digitalBody);
-    orchestrator.setDigitalBody(digitalBody);
-  }
-  engine.getBrain().setDigitalBody(digitalBody);
-
-  // Wire consciousness bridge for persistence and cloud sync
-  if (orchestrator) {
-    const orchBrain = orchestrator.getBrain();
-    if (orchBrain) {
-      const consciousnessBridge = new ConsciousnessBridge(db, orchBrain.workspace, workspaceId);
-      orchBrain.setConsciousnessBridge(consciousnessBridge);
-      consciousnessBridge.hydrate().catch(err => {
-        logger.debug({ err }, '[daemon] Consciousness hydration failed');
-      });
-      // Wire to control plane for cloud sync (if connected)
-      if (controlPlane) {
-        controlPlane.setConsciousnessBridge(consciousnessBridge);
-      }
-    }
-  }
-
-  logger.info(`[body] Digital body created with ${digitalBody.getOrgans().length} organs, nervous system started`);
-
-  let messageRouter: MessageRouter | null = null;
-  if (!isWorker) {
-    messageRouter = new MessageRouter({ orchestrator: orchestrator!, channelRegistry, rawDb, db, workspaceId, triggerEvaluator, eventBus: bus });
-  }
-
-  // Device data fetcher (for device-pinned data)
-  let deviceFetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher | null = null;
-  if (controlPlane?.connectedDeviceId) {
-    const { DeviceDataFetcher } = await import('../data-locality/fetch-client.js');
-    const { createPeerResolver } = await import('../data-locality/resolve-peer.js');
-
-    deviceFetcher = new DeviceDataFetcher({
-      db,
-      workspaceId,
-      deviceId: controlPlane.connectedDeviceId,
-      cloudUrl: config.cloudUrl || '',
-      sessionToken: controlPlane.cloudSessionToken,
-      resolvePeer: createPeerResolver(db, {
-        cloudUrl: config.cloudUrl,
-        sessionToken: controlPlane.cloudSessionToken,
-      }),
-    });
-
-    // Wire into engine for device-pinned memory retrieval during tasks
-    engine.setDeviceFetcher(deviceFetcher);
-  }
+  // 10. Initialize channel registry + orchestrator + digital body
+  await setupOrchestration(ctx, inferenceState);
+  const { channelRegistry, connectorRegistry, triggerEvaluator, orchestrator, digitalBody, digitalNS, messageRouter, deviceFetcher } = ctx;
 
   // 11. Start Express server + WebSocket
   let waClient: WhatsAppClient | null = null;
