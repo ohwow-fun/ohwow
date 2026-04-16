@@ -72,6 +72,7 @@ import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-he
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
 import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
 import { FindingsGcExperiment } from '../self-bench/experiments/findings-gc.js';
+import { ExperimentCostObserverExperiment } from '../self-bench/experiments/experiment-cost-observer.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -216,6 +217,11 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // ~/.ohwow/findings-gc-disabled. Without this, fast-cadence
   // probes inflate runtime.db unbounded.
   experimentRunner.register(new FindingsGcExperiment());
+  // Per-experiment LLM cost rollup. Joins llm_calls.experiment_id (added
+  // in migration 132) with self_findings warning|fail counts to surface
+  // experiments spending without producing non-trivial signal. Read-only
+  // — defunding is an operator decision.
+  experimentRunner.register(new ExperimentCostObserverExperiment());
   experimentRunner.register(new FormatDurationFuzzExperiment());
   experimentRunner.register(new TokenSimilarityFuzzExperiment());
   experimentRunner.register(new StagnationFuzzExperiment());
