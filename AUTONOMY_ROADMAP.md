@@ -1,4 +1,4 @@
-# AUTONOMY_ROADMAP.md
+AUTONOMY_ROADMAP.md
 
 Single source of truth for the ohwow autonomous self-improvement loop.
 This is the top-level index. Always read this first.
