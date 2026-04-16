@@ -210,12 +210,12 @@ function pickChannel(
   return { channel: 'none', reason: 'no_reach_channel' };
 }
 
-interface EmailDraft {
+export interface EmailDraft {
   subject: string;
   text: string;
 }
 
-function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string | EmailDraft {
+export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string | EmailDraft {
   const name = plan.display_name || plan.handle || 'there';
   const bucketHint = plan.bucket === 'market_signal'
     ? 'the workflow pain you mentioned'
