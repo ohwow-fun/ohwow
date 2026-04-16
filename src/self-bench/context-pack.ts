@@ -35,6 +35,7 @@ import { redactForPrompt } from '../lib/prompt-redact.js';
 import { getRuntimeConfig } from './runtime-config.js';
 import { readApprovalRows, type ApprovalEntry } from '../scheduling/approval-queue.js';
 import { recentRevertedAttempts } from '../lib/patches-attempted-log.js';
+import { readActivePriorities } from '../lib/priorities.js';
 
 export interface ContextPackInputs {
   db: DatabaseAdapter;
@@ -43,6 +44,11 @@ export interface ContextPackInputs {
   repoRoot: string | null;
   /** Path to the workspace's x-approvals.jsonl. Null = skip rejection section. */
   approvalsJsonlPath: string | null;
+  /**
+   * Workspace dataDir — used to read operator-authored priority docs
+   * from `<dataDir>/priorities/*.md`. Null = skip active-priorities section.
+   */
+  workspaceDataDir?: string | null;
   /** Lookback window for recent findings. Default 24h. */
   findingsWindowHours?: number;
   /** Max findings included. Default 20 (roughly ~3KB of prompt). */
@@ -99,8 +105,10 @@ export async function buildContextPack(inputs: ContextPackInputs): Promise<Conte
   const revenueGap = collectRevenueGapFocus();
   const attribution = collectAttributionFindings();
   const roadmap = collectRoadmapGaps(inputs.repoRoot);
+  const priorities = collectActivePriorities(inputs.workspaceDataDir ?? null);
 
   const maybeSections: Array<ContextPackSection | null> = [
+    priorities,
     findings,
     revenueGap,
     attribution,
@@ -287,6 +295,39 @@ async function collectOperatorRejections(
     name: 'operator-rejections',
     body: redacted,
   };
+}
+
+/**
+ * Active priorities the operator has declared for this workspace. Read
+ * from `<dataDir>/priorities/*.md`. Keeping this section at the TOP of
+ * the pack signals "these are what the operator wants you to steer
+ * toward" before the LLM sees anything else. Returns null for a
+ * workspace with no active priorities or no priorities dir — both
+ * indistinguishable from the reader's POV.
+ */
+function collectActivePriorities(dataDir: string | null): ContextPackSection | null {
+  if (!dataDir) return null;
+  try {
+    const active = readActivePriorities(dataDir);
+    if (active.length === 0) return null;
+    const lines = active.map((p) => {
+      const tags = p.tags.length > 0 ? ` tags=[${p.tags.join(', ')}]` : '';
+      return `  - "${p.title}"${tags}\n    goal: ${firstParagraph(p.summary).slice(0, 200)}`;
+    });
+    return {
+      name: 'active-priorities',
+      body: `Operator-declared priorities the loop should steer toward this week. Prefer candidates whose experiment / subject / paths intersect a priority's tags; after a successful commit, append a work-log entry to the matching priority file:\n${lines.join('\n')}`,
+    };
+  } catch (err) {
+    logger.debug({ err }, '[context-pack] active-priorities source failed');
+    return null;
+  }
+}
+
+function firstParagraph(summary: string): string {
+  const stripped = summary.replace(/^##[^\n]*\n/gm, '').trim();
+  const para = stripped.split(/\n\n+/)[0] ?? stripped;
+  return para.replace(/\s+/g, ' ');
 }
 
 function collectRoadmapGaps(repoRoot: string | null): ContextPackSection | null {

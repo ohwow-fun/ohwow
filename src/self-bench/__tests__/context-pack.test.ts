@@ -310,6 +310,57 @@ describe('buildContextPack', () => {
     expect(pack.sections).toEqual([]);
   });
 
+  it('surfaces active priorities from the workspace priorities dir', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctxpack-priorities-'));
+    fs.mkdirSync(path.join(tmpDir, 'priorities'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'priorities', 'market-signal.md'),
+      [
+        '---',
+        'title: "Market signal rubric tuning"',
+        'status: active',
+        'tags: [attribution, market-signal]',
+        '---',
+        '',
+        '## Goal',
+        'Get market_signal conversion above 10%.',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'priorities', 'done-one.md'),
+      '---\ntitle: "Done already"\nstatus: done\n---\n',
+      'utf-8',
+    );
+    const env = buildDb({});
+    const pack = await buildContextPack({
+      db: env.db,
+      workspaceId: 'ws-1',
+      repoRoot: null,
+      approvalsJsonlPath: null,
+      workspaceDataDir: tmpDir,
+    });
+    const section = pack.sections.find((s) => s.name === 'active-priorities');
+    expect(section).toBeDefined();
+    expect(section!.body).toContain('Market signal rubric tuning');
+    expect(section!.body).toContain('tags=[attribution, market-signal]');
+    expect(section!.body).not.toContain('Done already'); // status=done filtered
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('omits active-priorities section when no priorities dir is provided', async () => {
+    const env = buildDb({});
+    const pack = await buildContextPack({
+      db: env.db,
+      workspaceId: 'ws-1',
+      repoRoot: null,
+      approvalsJsonlPath: null,
+      workspaceDataDir: null,
+    });
+    expect(pack.sections.find((s) => s.name === 'active-priorities')).toBeUndefined();
+  });
+
   it('renders a prompt string with <context> blocks for each section', async () => {
     _seedRuntimeConfigCacheForTests(
       'strategy.revenue_gap_focus',

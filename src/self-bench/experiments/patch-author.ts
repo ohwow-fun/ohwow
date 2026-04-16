@@ -48,6 +48,12 @@ import {
   hasRecentlyRevertedPatch,
 } from '../../lib/patches-attempted-log.js';
 import { rankCandidates, type EvidencePointer } from '../value-ranker.js';
+import {
+  readActivePriorities,
+  matchActivePriorities,
+  appendWorkLogEntry,
+  type PriorityDoc,
+} from '../../lib/priorities.js';
 import { getAllowedPrefixes, resolvePathTier, resolvePatchMode } from '../path-trust-tiers.js';
 import {
   parseStringLiteralEditsResponse,
@@ -220,13 +226,18 @@ export class PatchAuthorExperiment implements Experiment {
     // first. `otherFindings` is the whole recent-findings set so the
     // ranker can measure evidence strength (how many other rows
     // point at the same subject/files).
+    // Phase 6 — flatten active-priority tags into the ranker input so
+    // a candidate whose signals intersect an operator-declared
+    // priority tag gets a direct score bump.
     const otherFindings: EvidencePointer[] = findings.map((r) => ({
       subject: r.subject,
       affectedFiles: extractAffectedFiles(r.evidence),
     }));
+    const priorityTags = collectActivePriorityTags(ctx.workspaceSlug ?? null);
     const ranked = rankCandidates({
       candidates,
       otherFindings,
+      priorityTags,
     });
     const rankedOrdered: PatchCandidate[] = ranked.map((r) => r.candidate);
     const topBreakdown = ranked[0]
@@ -407,18 +418,18 @@ export class PatchAuthorExperiment implements Experiment {
     // Phase 2: cross-domain context pack. Widens the author's view
     // beyond "here's the file and the finding" to include sales-side
     // state the operator keeps track of: attribution rollup, active
-    // goals, recent rejection reasons, roadmap gaps. The pack is
-    // fail-soft — a missing source degrades to no section, never
-    // blocks the author.
+    // goals, recent rejection reasons, roadmap gaps, operator-authored
+    // priorities (Phase 6). The pack is fail-soft — a missing source
+    // degrades to no section, never blocks the author.
     try {
-      const approvalsPath = ctx.workspaceSlug
-        ? path.join(workspaceLayoutFor(ctx.workspaceSlug).dataDir, 'x-approvals.jsonl')
-        : null;
+      const layout = ctx.workspaceSlug ? workspaceLayoutFor(ctx.workspaceSlug) : null;
+      const approvalsPath = layout ? path.join(layout.dataDir, 'x-approvals.jsonl') : null;
       const pack = await buildContextPack({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         repoRoot,
         approvalsJsonlPath: approvalsPath,
+        workspaceDataDir: layout?.dataDir ?? null,
       });
       const packBody = pack.toPromptString();
       if (packBody.length > 0) {
@@ -521,6 +532,7 @@ export class PatchAuthorExperiment implements Experiment {
       citesSalesSignal,
       findingResolver,
     });
+    let loggedPriorities: PriorityDoc[] = [];
     if (commit.ok) {
       // Phase 3 — record the attempt so the auto-revert path can flip
       // its outcome and the next probe tick can skip (finding, file-
@@ -538,6 +550,21 @@ export class PatchAuthorExperiment implements Experiment {
         });
       } catch (err) {
         logger.warn({ err, commitSha: commit.commitSha }, '[patch-author] patches-attempted-log record failed');
+      }
+      // Phase 6 — append a work-log entry to any active priority whose
+      // tags match this candidate's signals. Operator sees the patch
+      // land in the priority file without checking git. Fail-soft —
+      // a write error just means no work-log entry; commit already
+      // succeeded.
+      try {
+        loggedPriorities = logCommitToMatchingPriorities(
+          ctx.workspaceSlug ?? null,
+          candidate,
+          commit.commitSha ?? null,
+          citesSalesSignal,
+        );
+      } catch (err) {
+        logger.warn({ err, commitSha: commit.commitSha }, '[patch-author] priorities work-log append failed');
       }
     }
     if (!commit.ok) {
@@ -610,6 +637,7 @@ export class PatchAuthorExperiment implements Experiment {
         patchMode,
         edits: editsApplied,
         post_patch_remaining: postPatchRemaining,
+        priorities_logged: loggedPriorities.map((p) => ({ slug: p.slug, title: p.title })),
         model: llm.data.model_used,
         provider: llm.data.provider,
         cost_cents: llm.data.cost_cents,
@@ -639,6 +667,70 @@ export class PatchAuthorExperiment implements Experiment {
       return [];
     }
   }
+}
+
+/**
+ * Flatten the active priorities' tags for this workspace into a
+ * unique, lowercased list. Empty array when the workspace slug is
+ * unknown or the priorities dir is missing. Fail-soft — never throws.
+ */
+export function collectActivePriorityTags(workspaceSlug: string | null): string[] {
+  if (!workspaceSlug) return [];
+  try {
+    const dataDir = workspaceLayoutFor(workspaceSlug).dataDir;
+    const active = readActivePriorities(dataDir);
+    const tags = new Set<string>();
+    for (const p of active) {
+      for (const t of p.tags) {
+        const clean = t.trim().toLowerCase();
+        if (clean.length > 0) tags.add(clean);
+      }
+    }
+    return [...tags];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * After a successful autonomous commit, append a work-log entry to
+ * every active priority whose tags match the candidate's signals.
+ * Operator opens the priority file and sees the ohwow entry land in
+ * real-time. Never throws — a permission error on the priorities dir
+ * just degrades to no work-log entry.
+ */
+export function logCommitToMatchingPriorities(
+  workspaceSlug: string | null,
+  candidate: PatchCandidate,
+  commitSha: string | null,
+  citesSalesSignal: string | undefined,
+): PriorityDoc[] {
+  if (!workspaceSlug) return [];
+  let active: PriorityDoc[];
+  try {
+    active = readActivePriorities(workspaceLayoutFor(workspaceSlug).dataDir);
+  } catch {
+    return [];
+  }
+  if (active.length === 0) return [];
+  const matches = matchActivePriorities(active, {
+    experimentId: candidate.experimentId,
+    subject: candidate.subject,
+    paths: candidate.tier2Files,
+  });
+  for (const p of matches) {
+    const sha = commitSha ? commitSha.slice(0, 12) : '?';
+    const citesBlock = citesSalesSignal ? `\nCites-Sales-Signal: ${citesSalesSignal}` : '';
+    const message =
+      `Landed autonomous patch ${sha} in response to ${candidate.experimentId} finding ${candidate.findingId.slice(0, 8)}. ` +
+      `Files: ${candidate.tier2Files.join(', ')}.${citesBlock}`;
+    appendWorkLogEntry({
+      priority: p,
+      actor: 'ohwow/patch-author',
+      message,
+    });
+  }
+  return matches;
 }
 
 /**

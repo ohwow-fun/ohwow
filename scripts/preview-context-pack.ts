@@ -58,6 +58,7 @@ async function main() {
       workspaceId: workspaceId ?? 'unknown',
       repoRoot,
       approvalsJsonlPath: approvalsPath,
+      workspaceDataDir: layout.dataDir,
     });
 
     const summary = pack.summary();

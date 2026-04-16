@@ -53,6 +53,8 @@ export interface ScoreBreakdown {
   evidence_strength: number;
   blast_radius: number;
   recency: number;
+  /** Phase 6 — 1 when at least one active priority's tag intersects the candidate's signals. */
+  priority_match: number;
 }
 
 export interface RankedCandidate<T extends RankableCandidate> {
@@ -70,6 +72,13 @@ export interface RankInput<T extends RankableCandidate> {
    * against this list.
    */
   otherFindings?: readonly EvidencePointer[];
+  /**
+   * Flattened tag list drawn from operator-authored active priorities.
+   * A candidate whose subject / experiment id / touched path contains
+   * any of these tags (case-insensitive substring) gets the
+   * priority_match bonus. Empty/missing = no bonus.
+   */
+  priorityTags?: readonly string[];
   /** Clock injection for tests. Defaults to `new Date()`. */
   now?: Date;
 }
@@ -80,6 +89,10 @@ const WEIGHT = {
   evidence_strength: 2,
   blast_radius: -1,
   recency: 1,
+  // Priority match is a direct operator override. Weighted alongside
+  // evidence_strength — a priority-tagged candidate beats a single-
+  // corroboration one, and combined with revenue-proximity it dominates.
+  priority_match: 2,
 } as const;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -193,12 +206,29 @@ function scoreRecency<T extends RankableCandidate>(c: T, now: Date): number {
   return 1 - ageDays / RECENCY_HALF_LIFE_DAYS;
 }
 
+function scorePriorityMatch<T extends RankableCandidate>(
+  c: T,
+  priorityTags: readonly string[],
+): number {
+  if (priorityTags.length === 0) return 0;
+  const haystacks: string[] = [c.experimentId.toLowerCase()];
+  if (c.subject) haystacks.push(c.subject.toLowerCase());
+  for (const p of c.tier2Files) haystacks.push(p.toLowerCase());
+  for (const rawTag of priorityTags) {
+    const tag = rawTag.trim().toLowerCase();
+    if (tag.length === 0) continue;
+    if (haystacks.some((h) => h.includes(tag))) return 1;
+  }
+  return 0;
+}
+
 function combineScore(b: ScoreBreakdown): number {
   return (
     WEIGHT.revenue_proximity * b.revenue_proximity +
     WEIGHT.evidence_strength * b.evidence_strength +
     WEIGHT.blast_radius * b.blast_radius +
-    WEIGHT.recency * b.recency
+    WEIGHT.recency * b.recency +
+    WEIGHT.priority_match * b.priority_match
   );
 }
 
@@ -225,6 +255,9 @@ function buildRationale<T extends RankableCandidate>(
   if (breakdown.recency > 0) {
     parts.push(`+${(WEIGHT.recency * breakdown.recency).toFixed(2)} recency`);
   }
+  if (breakdown.priority_match > 0) {
+    parts.push(`+${WEIGHT.priority_match.toFixed(1)} operator-priority tag match`);
+  }
   if (parts.length === 0) parts.push('baseline (no positive signals)');
   return parts;
 }
@@ -239,12 +272,14 @@ export function rankCandidates<T extends RankableCandidate>(
 ): RankedCandidate<T>[] {
   const now = input.now ?? new Date();
   const others = input.otherFindings ?? [];
+  const priorityTags = input.priorityTags ?? [];
   const ranked = input.candidates.map((c) => {
     const breakdown: ScoreBreakdown = {
       revenue_proximity: scoreRevenueProximity(c),
       evidence_strength: scoreEvidenceStrength(c, others),
       blast_radius: scoreBlastRadius(c),
       recency: scoreRecency(c, now),
+      priority_match: scorePriorityMatch(c, priorityTags),
     };
     const score = combineScore(breakdown);
     return {
