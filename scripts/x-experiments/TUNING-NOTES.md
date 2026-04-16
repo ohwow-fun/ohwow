@@ -149,10 +149,44 @@ Known gaps surfaced by Live Run 1:
 2. `markQualified` path on the ledger isn't writing a `crm_contact_id` marker for the promoted candidate's row — the ledger still shows 57 unqualified handles after a successful promotion. Likely an earlier-session path bypass. Non-blocking for the pipeline, but will cause re-classification of the same handle if the ledger is ever re-read. Flagging for a follow-up fix — do not re-tune until verified.
 3. Advancements-bucket candidates saturate the `X_AUTHORS_MAX_PER_RUN=5` cap before any `market_signal` rows get classified (insertion order is sidecar-historic). Consider reordering ledger iteration by bucket priority (ms → comp → hacks) or weighting the cap per bucket in a follow-up.
 
+## Live Run 2 (2026-04-16)
+
+Second live run, smaller cap, post-sidecar-refresh.
+Scope: `DRY=0 X_AUTHORS_MAX_PER_RUN=3 node scripts/x-experiments/x-authors-to-crm.mjs`.
+Ledger state before: 69 rows (1 prior CRM contact); sidecar grew 10 → 15 rows since Live Run 1.
+
+Report:
+
+| metric             | Live Run 1 | Live Run 2 |
+|--------------------|------------|------------|
+| sidecarRows        | 10         | 15         |
+| ledgerTotal        | 57         | 69         |
+| freeGatePassed     | 22         | 29         |
+| freeGateRejected   | 35         | 40         |
+| free-gate pass rate | 38.6%     | **42.0%**  |
+| fresh (cap)        | 5 (cap=5)  | 3 (cap=3)  |
+| llmCalls           | 5          | 3          |
+| intentRejected     | 5          | **3**      |
+| promoted           | 0          | 0          |
+| existingCrm        | 0          | 1          |
+| durationMs         | 15915      | 5631       |
+
+Same pattern, now confirmed twice: **100% intent-rejection rate** at the current `minConfidence=0.65` floor, on advancements-heavy sidecar batches. Cost this run: ~$0.0009.
+
+Engager harvest remains a no-op (`engagerRows=0`) on the live path — but root cause is now identified as **config**, not code: x-intel.mjs already harvests when `profiles[].harvest_engagers=true` (lines 211, 226, 355) and writes rows tagged `__source='engager:competitor:<handle>'`. The default `~/.ohwow/workspaces/default/x-config.json` has `harvest_engagers: null` for both `n8n_io` and `zapier`. Flipping those to `true` (with a sane `engagers_per_post` cap) is the actual unblock for E2's engager-boost branch on live traffic.
+
+Forecast-scorer → outbound-gate is **already wired**: scorer writes `x-predictions-scores.jsonl` → `_accuracy.mjs.loadRollingAccuracy()` → `_outbound-gate.mjs`. Current state: `x-predictions-scores.jsonl` is empty (no predictions matured past `by_when` yet), so outbound-gate fail-closes for `x_outbound_post` / `x_outbound_reply` auto-apply. Self-resolves once predictions age in.
+
+Auditability gap surfaced by Live Run 2: the script keeps no per-author classifier trail. Both live runs report aggregate `intentRejected` counts but no record of which handle got which `{intent, confidence, reason}`. We can't tell if rejections are precision-correct (rubric working) or recall-too-tight (rubric leaving leads on the table) without re-running with ad-hoc logging. Proposed follow-up: append `{ts, handle, bucket, intent, confidence, accepted, reason}` to `x-authors-classifier-log.jsonl` inside `classifyIntent`'s caller. ~10 lines, no new deps.
+
+Live Run 1's gap #3 (bucket-imbalanced cap) confirmed: ledger iteration is Map-insertion-order = sidecar-historic order, so advancements-bucket candidates always saturate the cap before market_signal candidates get a turn.
+
 ## Open follow-ups
 
 1. Trigger x-intel once manually so sidecar exists, then run `DRY=0 X_AUTHORS_MAX_PER_RUN=5 node scripts/x-experiments/x-authors-to-crm.mjs`. If ≥1 real contact passes inspection, flip `xAuthorsToCrmEnabled=true` in `~/.ohwow/workspaces/default/workspace.json`.
-2. Engager harvest is still a stub (`return []` in x-authors-to-crm.mjs). Adding replier/quoter primitives to `_x-harvest` will populate the `engager:own-post` + `engager:competitor` sources the rubric is tuned for, dramatically increasing recall.
-3. Day-3+ operators should bump private-config `minTouches` from 1 → 2. Could be automated once the ledger tracks first-observed-at per workspace.
-4. Corpus has no "hacks" bucket rows; E3 is speculative until the bucket has real examples. Re-run E3 once `hacks` rows appear in sidecar data.
-5. E5's sole miss (Make.com complaint routed as builder) is a known prompt weakness. Budget 20 more calls for a prompt-revision A/B when the false-positive rate matters.
+2. Engager harvest config flip: set `harvest_engagers: true` on competitor profiles in `~/.ohwow/workspaces/default/x-config.json` (code already wired in x-intel.mjs).
+3. Per-author classifier log (Live Run 2 follow-up) — small patch to `x-authors-to-crm.mjs` so future live runs leave a forensic trail.
+4. Re-order ledger iteration by bucket priority (ms → comp → hacks) so the cap doesn't always burn on advancements-bucket leftovers (Live Run 1 gap #3).
+5. Day-3+ operators should bump private-config `minTouches` from 1 → 2. Could be automated once the ledger tracks first-observed-at per workspace.
+6. Corpus has no "hacks" bucket rows; E3 is speculative until the bucket has real examples. Re-run E3 once `hacks` rows appear in sidecar data.
+7. E5's sole miss (Make.com complaint routed as builder) is a known prompt weakness. Budget 20 more calls for a prompt-revision A/B when the false-positive rate matters.
