@@ -169,9 +169,24 @@ describe('evidenceLiteralsAppearInSource', () => {
     expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
   });
 
-  it('ignores violations whose literal/match is too short to be specific', () => {
+  it('ignores violations whose literal/match is too short to be specific (no ruleId)', () => {
     const ev = { violations: [{ literal: '—' }] };
     expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
+  });
+
+  it('accepts short literals when the violation carries a ruleId (deterministic copy-lint)', () => {
+    // With ruleId present, `—` (length 1) is a valid freshness check —
+    // the copy-lint rule itself identifies the violation, so we just
+    // need to confirm the char is still in the source. Without this
+    // branch, every source-copy-lint em-dash warning was being filtered
+    // out of the patch-author candidate list in strict mode, silently
+    // denying the loop its largest fuel stream (3000+ warnings/day).
+    const ev = { violations: [{ ruleId: 'no-em-dash', literal: '—' }] };
+    // Permissive mode: literal appears in source → true
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev)).toBe(true);
+    // Strict mode (string-literal tier-2 targets): same result — this
+    // is the regression we're guarding against
+    expect(evidenceLiteralsAppearInSource(tmp, ['src/file.tsx'], ev, true)).toBe(true);
   });
 
   it('returns true if any listed file matches (OR across files)', () => {

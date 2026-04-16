@@ -939,10 +939,19 @@ export function evidenceLiteralsAppearInSource(
   const literals: string[] = [];
   for (const v of violations) {
     if (!v || typeof v !== 'object') continue;
-    const lit = (v as Record<string, unknown>).literal;
-    const match = (v as Record<string, unknown>).match;
-    if (typeof lit === 'string' && lit.length >= 3) literals.push(lit);
-    else if (typeof match === 'string' && match.length >= 3) literals.push(match);
+    const vv = v as Record<string, unknown>;
+    const lit = vv.literal;
+    const match = vv.match;
+    // Violations carrying a `ruleId` come from deterministic copy-lint
+    // rules (source-copy-lint, dashboard-copy). Their `literal`/`match`
+    // is often a single punctuation char (—, ', ") that's still a valid
+    // freshness check: "is this char still present in the source?".
+    // For other evidence shapes (DOM-scraped text, heuristic matches)
+    // a short substring matches too promiscuously, so require 3+.
+    const hasRuleId = typeof vv.ruleId === 'string' && vv.ruleId.length > 0;
+    const minLen = hasRuleId ? 1 : 3;
+    if (typeof lit === 'string' && lit.length >= minLen) literals.push(lit);
+    else if (typeof match === 'string' && match.length >= minLen) literals.push(match);
   }
   if (literals.length === 0) return !strict;
   for (const file of tier2Files) {
