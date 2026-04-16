@@ -41,6 +41,8 @@ import {
   safeSelfCommit,
   type FindingLookup,
 } from '../self-commit.js';
+import { buildContextPack } from '../context-pack.js';
+import { workspaceLayoutFor } from '../../config.js';
 import { getAllowedPrefixes, resolvePathTier, resolvePatchMode } from '../path-trust-tiers.js';
 import {
   parseStringLiteralEditsResponse,
@@ -326,6 +328,34 @@ export class PatchAuthorExperiment implements Experiment {
     if (rawReflectionCtx) {
       const { redacted } = redactForPrompt(rawReflectionCtx);
       promptBody += `\n\n<context name="recent-reflections">\n${redacted}\n</context>`;
+    }
+
+    // Phase 2: cross-domain context pack. Widens the author's view
+    // beyond "here's the file and the finding" to include sales-side
+    // state the operator keeps track of: attribution rollup, active
+    // goals, recent rejection reasons, roadmap gaps. The pack is
+    // fail-soft — a missing source degrades to no section, never
+    // blocks the author.
+    try {
+      const approvalsPath = ctx.workspaceSlug
+        ? path.join(workspaceLayoutFor(ctx.workspaceSlug).dataDir, 'x-approvals.jsonl')
+        : null;
+      const pack = await buildContextPack({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        repoRoot,
+        approvalsJsonlPath: approvalsPath,
+      });
+      const packBody = pack.toPromptString();
+      if (packBody.length > 0) {
+        promptBody += `\n\n${packBody}`;
+        logger.debug(
+          { sections: pack.summary(), target: targetPath },
+          '[patch-author] appended cross-domain context pack',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, '[patch-author] context-pack build failed; proceeding without');
     }
 
     const sys =
