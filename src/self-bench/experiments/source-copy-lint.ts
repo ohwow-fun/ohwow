@@ -198,6 +198,7 @@ export function scanFile(file: string, source: string): SourceViolation[] {
     const vs = lintCopy(lit.value);
     if (vs.length === 0) continue;
     for (const v of vs) {
+      if (isStandalonePunctuationPlaceholder(lit.value, v)) continue;
       // Map the within-literal index back to a source-file location.
       const absIndex = lit.start + v.index + (lit.contentOffset ?? 0);
       const { line, column } = indexToLineColumn(source, absIndex);
@@ -212,6 +213,27 @@ export function scanFile(file: string, source: string): SourceViolation[] {
     }
   }
   return out;
+}
+
+/**
+ * Whitelist one shape the blunt em-dash / en-dash rules over-trigger on:
+ * a string literal whose ENTIRE content is the flagged dash character.
+ * Idioms like `successRate === null ? '—' : pct` render `—` as a
+ * no-data visual placeholder, not prose — the rule's spirit is "avoid
+ * em dashes in prose", and a 1-char placeholder isn't prose. Without
+ * this, the autonomous patch loop keeps rewriting `'—'` → `'. '` and
+ * breaking the UI.
+ *
+ * Narrow on purpose: only the two dash rules, and only when the
+ * literal's entire content matches. "Failed to" as a whole literal
+ * would NOT be exempted — no-failed-to is not a placeholder rule.
+ */
+function isStandalonePunctuationPlaceholder(
+  literal: string,
+  v: CopyViolation,
+): boolean {
+  if (v.ruleId !== 'no-em-dash' && v.ruleId !== 'no-en-dash') return false;
+  return literal.trim() === v.match;
 }
 
 interface ExtractedLiteral {

@@ -63,4 +63,29 @@ const err = "Failed to load thing";
     const vs = scanFile('x.tsx', src);
     expect(vs.some((v) => v.ruleId === 'no-em-dash' && v.kind === 'jsx-text')).toBe(true);
   });
+
+  it('exempts a standalone em dash literal (UI no-data placeholder)', () => {
+    // Ternary-null placeholders are the idiom the autonomous patch
+    // loop kept regressing: `pct === null ? '—' : `${pct}%`` renders
+    // `—` as "no data" — a visual glyph, not prose. The rule's spirit
+    // is "avoid em dashes in prose"; a 1-char literal isn't prose.
+    const src = "const x = rate === null ? '—' : `${rate}%`;";
+    const vs = scanFile('x.tsx', src);
+    expect(vs.filter((v) => v.ruleId === 'no-em-dash')).toEqual([]);
+  });
+
+  it('still flags em dashes that sit inside real prose', () => {
+    // Regression guard: the exemption must be narrow. A longer string
+    // that contains an em-dash (even if brief) keeps firing.
+    const src = "const x = 'Hello — world';";
+    const vs = scanFile('x.tsx', src);
+    expect(vs.some((v) => v.ruleId === 'no-em-dash')).toBe(true);
+  });
+
+  it('exempts standalone en dash but keeps en dashes in prose', () => {
+    const placeholder = "const x = '–';";
+    expect(scanFile('x.tsx', placeholder).filter((v) => v.ruleId === 'no-en-dash')).toEqual([]);
+    const prose = "const x = 'page 1–2';";
+    expect(scanFile('x.tsx', prose).some((v) => v.ruleId === 'no-en-dash')).toBe(true);
+  });
 });
