@@ -222,6 +222,27 @@ export interface RuntimeConfig {
   xAuthorsMinSignal: number;
   /** Scheduler-level bucket allowlist. Overridden by lead-gen-config.json. Default: ['market_signal','competitors']. */
   xAuthorsBuckets: string[];
+  /**
+   * Chain x-compose.mjs after a successful x-intel run — drafts
+   * original posts (tactical_tip / observation / opinion / question /
+   * story / humor shapes) from the fresh x-intel-history patterns.
+   * DRY-only: nothing is posted automatically. Default: false.
+   */
+  xComposeEnabled: boolean;
+  /**
+   * Chain x-reply.mjs after a successful x-intel run — drafts replies
+   * to strategic posts from the fresh x-posts sidecar. DRY-only.
+   * Default: false.
+   */
+  xReplyEnabled: boolean;
+  /**
+   * Run x-compose with SHAPES=humor on its own cadence. Independent of
+   * x-intel — humor draws from x-intel-history, which persists across
+   * ticks. Default: false.
+   */
+  xHumorEnabled: boolean;
+  /** Cadence for the humor scheduler in minutes. Default: 60 (hourly). */
+  xHumorIntervalMinutes: number;
 }
 
 interface ConfigFile {
@@ -279,6 +300,10 @@ interface ConfigFile {
   xAuthorsToCrmEnabled?: boolean;
   xAuthorsMinSignal?: number;
   xAuthorsBuckets?: string[];
+  xComposeEnabled?: boolean;
+  xReplyEnabled?: boolean;
+  xHumorEnabled?: boolean;
+  xHumorIntervalMinutes?: number;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
   llamaCppUrl?: string;
@@ -510,6 +535,10 @@ export interface WorkspaceConfig {
   xAuthorsMinSignal?: number;
   /** Per-workspace override: scheduler-level bucket allowlist. */
   xAuthorsBuckets?: string[];
+  xComposeEnabled?: boolean;
+  xReplyEnabled?: boolean;
+  xHumorEnabled?: boolean;
+  xHumorIntervalMinutes?: number;
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -651,6 +680,12 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   }
   if (Array.isArray(ws.xAuthorsBuckets)) {
     next.xAuthorsBuckets = ws.xAuthorsBuckets.filter((b) => typeof b === 'string');
+  }
+  if (typeof ws.xComposeEnabled === 'boolean') next.xComposeEnabled = ws.xComposeEnabled;
+  if (typeof ws.xReplyEnabled === 'boolean') next.xReplyEnabled = ws.xReplyEnabled;
+  if (typeof ws.xHumorEnabled === 'boolean') next.xHumorEnabled = ws.xHumorEnabled;
+  if (typeof ws.xHumorIntervalMinutes === 'number' && ws.xHumorIntervalMinutes > 0) {
+    next.xHumorIntervalMinutes = ws.xHumorIntervalMinutes;
   }
   return next;
 }
@@ -828,6 +863,10 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     xAuthorsBuckets: Array.isArray(fileConfig.xAuthorsBuckets) && fileConfig.xAuthorsBuckets.length > 0
       ? fileConfig.xAuthorsBuckets
       : ['market_signal', 'competitors'],
+    xComposeEnabled: process.env.OHWOW_X_COMPOSE_ENABLED === 'true' || fileConfig.xComposeEnabled === true,
+    xReplyEnabled: process.env.OHWOW_X_REPLY_ENABLED === 'true' || fileConfig.xReplyEnabled === true,
+    xHumorEnabled: process.env.OHWOW_X_HUMOR_ENABLED === 'true' || fileConfig.xHumorEnabled === true,
+    xHumorIntervalMinutes: parseInt(process.env.OHWOW_X_HUMOR_INTERVAL_MIN || '', 10) || fileConfig.xHumorIntervalMinutes || 60,
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',

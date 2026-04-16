@@ -55,20 +55,28 @@ export interface XIntelSchedulerOptions {
   heartbeatName?: string;
   /** Log tag for this scheduler instance. Default: XIntelScheduler. */
   logTag?: string;
+  /** Extra env vars for the primary script's child process. Merged onto process.env. */
+  env?: Record<string, string>;
   /**
-   * Chain a second child script after the primary exits 0. Used to run
-   * scripts/x-experiments/x-authors-to-crm.mjs immediately after a
-   * successful x-intel run, sharing the same tick cadence but isolated
-   * via a separate child process + heartbeat. Non-zero primary exit skips
-   * the chain. Non-zero chain exit is logged but does not block the next
-   * primary tick.
+   * Chain one or more child scripts after the primary exits 0. Each
+   * step runs sequentially after the previous one; non-zero exit in
+   * any step is logged but doesn't halt later steps. Used to run
+   * x-authors-to-crm, x-compose, and x-reply all triggered off the
+   * same x-intel heartbeat (they all need its fresh sidecars).
+   *
+   * Accepts a single step object for backward compatibility; a single
+   * object is treated as a one-element array.
    */
-  chainOnZeroExit?: {
-    enabled: boolean;
-    scriptRelPath: string;
-    heartbeatName: string;
-    logTag?: string;
-  };
+  chainOnZeroExit?: ChainStep | ChainStep[];
+}
+
+export interface ChainStep {
+  enabled: boolean;
+  scriptRelPath: string;
+  heartbeatName: string;
+  logTag?: string;
+  /** Extra env vars passed to the child (merged onto process.env). */
+  env?: Record<string, string>;
 }
 
 export class XIntelScheduler {
@@ -132,26 +140,30 @@ export class XIntelScheduler {
     this.executing = true;
     const started = Date.now();
     try {
-      const exitCode = await this.runScript(this.scriptRelPath, this.heartbeatName, this.tag);
+      const exitCode = await this.runScript(this.scriptRelPath, this.heartbeatName, this.tag, this.opts.env);
       this.lastExitCode = exitCode;
       const durationMs = Date.now() - started;
       logger.info(
         { workspaceSlug: this.opts.workspaceSlug, exitCode, durationMs },
         `${this.tag} tick complete`,
       );
-      const chain = this.opts.chainOnZeroExit;
-      if (exitCode === 0 && chain && chain.enabled) {
-        const chainTag = chain.logTag ?? '[XIntelScheduler:chain]';
-        const chainStarted = Date.now();
-        const chainExit = await this.runScript(chain.scriptRelPath, chain.heartbeatName, chainTag);
-        logger.info(
-          {
-            workspaceSlug: this.opts.workspaceSlug,
-            exitCode: chainExit,
-            durationMs: Date.now() - chainStarted,
-          },
-          `${chainTag} chain complete`,
-        );
+      if (exitCode === 0 && this.opts.chainOnZeroExit) {
+        const rawChain = this.opts.chainOnZeroExit;
+        const chainSteps: ChainStep[] = Array.isArray(rawChain) ? rawChain : [rawChain];
+        for (const step of chainSteps) {
+          if (!step.enabled) continue;
+          const stepTag = step.logTag ?? '[XIntelScheduler:chain]';
+          const stepStarted = Date.now();
+          const stepExit = await this.runScript(step.scriptRelPath, step.heartbeatName, stepTag, step.env);
+          logger.info(
+            {
+              workspaceSlug: this.opts.workspaceSlug,
+              exitCode: stepExit,
+              durationMs: Date.now() - stepStarted,
+            },
+            `${stepTag} chain step complete`,
+          );
+        }
       }
     } catch (err) {
       logger.error({ err }, `${this.tag} tick failed`);
@@ -160,7 +172,7 @@ export class XIntelScheduler {
     }
   }
 
-  private runScript(scriptRelPath: string, heartbeatName: string, tag: string): Promise<number> {
+  private runScript(scriptRelPath: string, heartbeatName: string, tag: string, extraEnv?: Record<string, string>): Promise<number> {
     return new Promise((resolveRun) => {
       const scriptPath = resolvePath(this.opts.repoRoot, scriptRelPath);
       const child = spawn('npx', ['tsx', scriptPath], {
@@ -169,6 +181,7 @@ export class XIntelScheduler {
           ...process.env,
           OHWOW_WORKSPACE: this.opts.workspaceSlug,
           OHWOW_PORT: process.env.OHWOW_PORT ?? '',
+          ...(extraEnv ?? {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

@@ -1232,19 +1232,42 @@ export async function startDaemon(): Promise<DaemonHandle> {
       // process.cwd() which is correct when launched from the repo root.
       const repoRoot = process.env.OHWOW_REPO_ROOT || process.cwd();
       const workspaceSlug = resolveActiveWorkspace().name;
+      // Chain steps fire sequentially after a successful x-intel tick,
+      // each with its own heartbeat and child process. All three
+      // scripts depend on x-intel's fresh sidecars, so piggybacking on
+      // the same trigger avoids re-scraping. DRY is default inside
+      // each script; the live write paths are separate work.
+      const chainSteps = [];
+      if (config.xAuthorsToCrmEnabled) {
+        chainSteps.push({
+          enabled: true,
+          scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
+          heartbeatName: 'x-authors-to-crm-last-run.json',
+          logTag: '[XAuthorsToCrmScheduler]',
+        });
+      }
+      if (config.xComposeEnabled) {
+        chainSteps.push({
+          enabled: true,
+          scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
+          heartbeatName: 'x-compose-last-run.json',
+          logTag: '[XComposeScheduler]',
+        });
+      }
+      if (config.xReplyEnabled) {
+        chainSteps.push({
+          enabled: true,
+          scriptRelPath: 'scripts/x-experiments/x-reply.mjs',
+          heartbeatName: 'x-reply-last-run.json',
+          logTag: '[XReplyScheduler]',
+        });
+      }
       const xIntel = new XIntelScheduler({
         workspaceSlug,
         dataDir,
         repoRoot,
         runOnBoot: false,
-        chainOnZeroExit: config.xAuthorsToCrmEnabled
-          ? {
-              enabled: true,
-              scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
-              heartbeatName: 'x-authors-to-crm-last-run.json',
-              logTag: '[XAuthorsToCrmScheduler]',
-            }
-          : undefined,
+        chainOnZeroExit: chainSteps.length ? chainSteps : undefined,
       });
       xIntel.start(config.xIntelIntervalMinutes * 60 * 1000);
       logger.info(
@@ -1271,6 +1294,32 @@ export async function startDaemon(): Promise<DaemonHandle> {
         logger.info(
           { workspaceSlug, intervalMin: config.xForecastIntervalMinutes },
           '[daemon] x-forecast-scheduler started',
+        );
+      }
+
+      // Humor scheduler — runs x-compose with SHAPES=humor on its own
+      // hourly cadence. Independent of x-intel because humor draws
+      // from x-intel-history (persists across ticks) rather than the
+      // day's fresh sidecars. Default cadence 60min; workspace can
+      // override via xHumorIntervalMinutes.
+      if (config.xHumorEnabled) {
+        const xHumor = new XIntelScheduler({
+          workspaceSlug,
+          dataDir,
+          repoRoot,
+          runOnBoot: false,
+          scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
+          heartbeatName: 'x-humor-last-run.json',
+          logTag: '[XHumorScheduler]',
+          // SHAPES=humor scopes this instance's spawns to the humor
+          // shape only. The x-intel chain step (which also runs
+          // x-compose) keeps the default mixed shapes.
+          env: { SHAPES: 'humor', MAX_DRAFTS: '1' },
+        });
+        xHumor.start(config.xHumorIntervalMinutes * 60 * 1000);
+        logger.info(
+          { workspaceSlug, intervalMin: config.xHumorIntervalMinutes },
+          '[daemon] x-humor-scheduler started',
         );
       }
     }

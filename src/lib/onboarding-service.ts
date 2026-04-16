@@ -245,6 +245,10 @@ export class OnboardingService {
       xAuthorsToCrmEnabled: false,
       xAuthorsMinSignal: 0.6,
       xAuthorsBuckets: ['market_signal', 'competitors'],
+      xComposeEnabled: false,
+      xReplyEnabled: false,
+      xHumorEnabled: false,
+      xHumorIntervalMinutes: 60,
       chromeDefaultProfile: 'Default',
     };
 

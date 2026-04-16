@@ -131,6 +131,38 @@ describe('XIntelScheduler', () => {
     expect(hb.stdoutTail).toContain('chain-ran');
   });
 
+  it('chainOnZeroExit: runs each step in an array sequentially with env override', async () => {
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-authors-to-crm.mjs'),
+      `process.stdout.write('step-a'); process.exit(0);`,
+    );
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-compose.mjs'),
+      `process.stdout.write('step-b shape=' + (process.env.SHAPES || 'mixed')); process.exit(0);`,
+    );
+    writeFileSync(
+      join(repoRoot, 'scripts/x-experiments/x-reply.mjs'),
+      `process.stdout.write('step-c'); process.exit(0);`,
+    );
+    const s = new XIntelScheduler({
+      workspaceSlug: 'default',
+      dataDir,
+      repoRoot,
+      chainOnZeroExit: [
+        { enabled: true, scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs', heartbeatName: 'x-authors-to-crm-last-run.json' },
+        { enabled: true, scriptRelPath: 'scripts/x-experiments/x-compose.mjs', heartbeatName: 'x-compose-last-run.json', env: { SHAPES: 'humor' } },
+        { enabled: false, scriptRelPath: 'scripts/x-experiments/x-reply.mjs', heartbeatName: 'x-reply-last-run.json' },
+      ],
+    });
+    await s.tick();
+    const hbA = JSON.parse(readFileSync(join(dataDir, 'x-authors-to-crm-last-run.json'), 'utf8'));
+    const hbB = JSON.parse(readFileSync(join(dataDir, 'x-compose-last-run.json'), 'utf8'));
+    expect(hbA.stdoutTail).toContain('step-a');
+    expect(hbB.stdoutTail).toContain('step-b shape=humor');
+    // Disabled step must not have written a heartbeat.
+    expect(existsSync(join(dataDir, 'x-reply-last-run.json'))).toBe(false);
+  });
+
   it('chainOnZeroExit: skips chain when primary exits non-zero', async () => {
     writeFileSync(
       join(repoRoot, 'scripts/x-experiments/x-intel.mjs'),
