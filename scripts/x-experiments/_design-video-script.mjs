@@ -718,11 +718,10 @@ Remember: avoid the laptop/keyboard cliche; reach into the visual vocabulary lis
 // upgrade. If gemini-3.1-pro-preview is unavailable the organ falls back per
 // the workspace's normal reasoning policy.
 const CINEMATOGRAPHER_PREFER_MODEL = 'google/gemini-3.1-pro-preview';
-// The new schema adds a domain-commitment block before the shot fields; with
-// gemini-3.1-pro's fuller reasoning voice this regularly overruns the provider
-// default. Observed 3 truncation failures out of 35 successful calls in the
-// baseline sweep — all right before the closing brace. 2048 gives ~2x headroom.
-const CINEMATOGRAPHER_MAX_TOKENS = 2048;
+// gemini-3.1-pro-preview spends internal reasoning tokens against max_tokens,
+// so the budget has to cover thinking + schema output. 2048 truncated mid-JSON
+// on anchor-15s (both atmospheric + geometric) — bumping to 4096.
+const CINEMATOGRAPHER_MAX_TOKENS = 4096;
 
 async function cinematographerOne({ scene, copyContext, format, direction }) {
   const system = cinematographerSystemPrompt({
