@@ -176,6 +176,10 @@ const RULE5_ARXIV_LIMIT = 6;
 const RULE5_SELF_OBS_LIMIT = 3;
 /** Abstract snippet cap — keeps the prompt bounded when 6 papers all have 1KB summaries. */
 const RULE5_KB_SNIPPET_CHARS = 360;
+/** Top-N aggregate gap tokens inlined — one line, comma-separated. */
+const RULE5_GAP_AGGREGATE_LIMIT = 10;
+/** Max per-paper gap entries — bounded because a 5-paper scan can emit 20+ concepts. */
+const RULE5_GAP_PAPER_LIMIT = 3;
 
 interface LlmCallRow {
   model: string;
@@ -511,6 +515,7 @@ export class ExperimentProposalGenerator implements Experiment {
     // stable short-form representation per source_type.
     const researchContext = await readRecentKbByType(ctx, 'arxiv', RULE5_ARXIV_LIMIT);
     const selfObsContext = await readRecentKbByType(ctx, 'self-observation', RULE5_SELF_OBS_LIMIT);
+    const paperGapContext = await readLatestPaperGaps(ctx);
 
     const coveredList = Array.from(existingProposals)
       .concat(existingSlugs)
@@ -536,7 +541,10 @@ export class ExperimentProposalGenerator implements Experiment {
       'the loop can observe via ctx.db or fs. When a paper from ' +
       '<research_papers> directly informs the brief, list its arXiv id in ' +
       'cites_papers — that produces a Cites-Research-Paper commit trailer ' +
-      'so operators can measure whether paper-attributed probes hold.';
+      'so operators can measure whether paper-attributed probes hold. ' +
+      'Prefer briefs that target tokens from <paper_gaps> when present — ' +
+      'those are techniques the papers discuss that do not yet appear in ' +
+      'the codebase, so probing them has the highest learning yield.';
 
     const promptParts: string[] = [];
     promptParts.push('<already_covered_slugs>');
@@ -571,6 +579,23 @@ export class ExperimentProposalGenerator implements Experiment {
         if (r.snippet) promptParts.push(`    ${r.snippet}`);
       }
       promptParts.push('</self_observations>');
+    }
+    if (paperGapContext && (paperGapContext.aggregate.length > 0 || paperGapContext.papers.length > 0)) {
+      promptParts.push('');
+      promptParts.push('<paper_gaps source="code-paper-compare-probe, tokens absent from repo">');
+      if (paperGapContext.aggregate.length > 0) {
+        const topAgg = paperGapContext.aggregate
+          .slice(0, RULE5_GAP_AGGREGATE_LIMIT)
+          .map((g) => `${g.token}(${g.papers})`)
+          .join(', ');
+        promptParts.push(`  aggregate_tokens (token(paper_count)): ${topAgg}`);
+      }
+      for (const p of paperGapContext.papers.slice(0, RULE5_GAP_PAPER_LIMIT)) {
+        promptParts.push(
+          `  - paper=${p.paper_id} gap_ratio=${p.gap_ratio.toFixed(2)} gaps=[${p.gap_concepts.join(', ')}]`,
+        );
+      }
+      promptParts.push('</paper_gaps>');
     }
     promptParts.push('');
     promptParts.push(
@@ -942,6 +967,47 @@ async function readRecentKbByType(
     });
   } catch {
     return [];
+  }
+}
+
+/**
+ * Pull the latest `code-paper-compare-probe` finding's gap signal.
+ * Returns null if the probe has never run (new workspace). The shape
+ * is flattened for the prompt: aggregate tokens are the "common to
+ * many papers" signal; per-paper entries show which concrete paper
+ * introduced a given gap so the LLM can anchor a citation.
+ */
+async function readLatestPaperGaps(
+  ctx: ExperimentContext,
+): Promise<
+  | {
+      aggregate: Array<{ token: string; papers: number }>;
+      papers: Array<{ paper_id: string; title: string; gap_concepts: string[]; gap_ratio: number }>;
+    }
+  | null
+> {
+  try {
+    const { data } = await ctx.db
+      .from<{ evidence: string }>('self_findings')
+      .select('evidence')
+      .eq('experiment_id', 'code-paper-compare-probe')
+      .order('ran_at', { ascending: false })
+      .limit(1);
+    const rows = (data ?? []) as Array<{ evidence: string }>;
+    if (rows.length === 0) return null;
+    const ev = JSON.parse(rows[0].evidence) as {
+      aggregate_gap_tokens?: Array<{ token: string; papers: number }>;
+      entries?: Array<{ paper_id: string; title: string; gap_concepts: string[]; gap_ratio: number }>;
+    };
+    const aggregate = Array.isArray(ev.aggregate_gap_tokens) ? ev.aggregate_gap_tokens : [];
+    // Only include papers that actually have unresolved gap concepts —
+    // the LLM doesn't need to see "this paper has no gaps" noise.
+    const papers = (ev.entries ?? [])
+      .filter((e) => e.gap_concepts && e.gap_concepts.length > 0)
+      .sort((a, b) => b.gap_ratio - a.gap_ratio);
+    return { aggregate, papers };
+  } catch {
+    return null;
   }
 }
 
