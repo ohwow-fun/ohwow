@@ -83,7 +83,7 @@ describe('propose() with gate', () => {
   });
 
   it('gate not consulted when below trust threshold', async () => {
-    
+
     // No prior approvals → not trusted → gate irrelevant, status=pending.
     let called = false;
     const e = approvals.propose({
@@ -92,6 +92,115 @@ describe('propose() with gate', () => {
     });
     expect(e.status).toBe('pending');
     expect(called).toBe(false);
+  });
+});
+
+describe('propose() with bucketBy + maxPriorRejected (x_outbound_post escalation)', () => {
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'approvals-bucket-test-'));
+    process.env.HOME = tmpHome;
+    seedDaemon();
+  });
+  afterEach(() => { rmSync(tmpHome, { recursive: true, force: true }); });
+
+  function seedQueueRows(rows) {
+    const p = join(tmpHome, '.ohwow', 'workspaces', WS, 'x-approvals.jsonl');
+    writeFileSync(p, rows.map(r => JSON.stringify({
+      id: r.id, ts: new Date().toISOString(), workspace: WS,
+      summary: 's', ...r,
+    })).join('\n') + '\n');
+  }
+
+  it('shape with 3+ clean approvals auto_applies under bucketBy=shape', () => {
+    seedQueueRows([
+      { id: 'a', kind: 'x_outbound_post', status: 'applied',      payload: { shape: 'tactical_tip' } },
+      { id: 'b', kind: 'x_outbound_post', status: 'auto_applied', payload: { shape: 'tactical_tip' } },
+      { id: 'c', kind: 'x_outbound_post', status: 'approved',     payload: { shape: 'tactical_tip' } },
+    ]);
+    const e = approvals.propose({
+      kind: 'x_outbound_post', summary: 's',
+      payload: { shape: 'tactical_tip', post_text: 'x' },
+      autoApproveAfter: 3, bucketBy: 'shape', maxPriorRejected: 0,
+    });
+    expect(e.status).toBe('auto_applied');
+  });
+
+  it('one rejection in same shape forces pending (maxPriorRejected=0)', () => {
+    seedQueueRows([
+      { id: 'a', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'humor' } },
+      { id: 'b', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'humor' } },
+      { id: 'c', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'humor' } },
+      { id: 'd', kind: 'x_outbound_post', status: 'rejected', payload: { shape: 'humor' } },
+    ]);
+    const e = approvals.propose({
+      kind: 'x_outbound_post', summary: 's',
+      payload: { shape: 'humor', post_text: 'x' },
+      autoApproveAfter: 3, bucketBy: 'shape', maxPriorRejected: 0,
+    });
+    expect(e.status).toBe('pending');
+  });
+
+  it('rejections in OTHER shapes do not block escalation', () => {
+    seedQueueRows([
+      { id: 'a', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'tactical_tip' } },
+      { id: 'b', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'tactical_tip' } },
+      { id: 'c', kind: 'x_outbound_post', status: 'applied',  payload: { shape: 'tactical_tip' } },
+      { id: 'd', kind: 'x_outbound_post', status: 'rejected', payload: { shape: 'humor' } },
+      { id: 'e', kind: 'x_outbound_post', status: 'rejected', payload: { shape: 'opinion' } },
+    ]);
+    const e = approvals.propose({
+      kind: 'x_outbound_post', summary: 's',
+      payload: { shape: 'tactical_tip', post_text: 'x' },
+      autoApproveAfter: 3, bucketBy: 'shape', maxPriorRejected: 0,
+    });
+    expect(e.status).toBe('auto_applied');
+    expect(e.trustStats.priorApproved).toBe(3);
+    expect(e.trustStats.priorRejected).toBe(0);
+    expect(e.trustStats.bucketValue).toBe('tactical_tip');
+  });
+
+  it('approvals in OTHER shapes do not count toward this shape', () => {
+    seedQueueRows([
+      { id: 'a', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+      { id: 'b', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+      { id: 'c', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+    ]);
+    const e = approvals.propose({
+      kind: 'x_outbound_post', summary: 's',
+      payload: { shape: 'humor', post_text: 'x' },
+      autoApproveAfter: 3, bucketBy: 'shape', maxPriorRejected: 0,
+    });
+    expect(e.status).toBe('pending');
+    expect(e.trustStats.priorApproved).toBe(0);
+  });
+
+  it('payload missing the bucket key stays pending (cannot trust by absent bucket)', () => {
+    seedQueueRows([
+      { id: 'a', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+      { id: 'b', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+      { id: 'c', kind: 'x_outbound_post', status: 'applied', payload: { shape: 'tactical_tip' } },
+    ]);
+    const e = approvals.propose({
+      kind: 'x_outbound_post', summary: 's',
+      payload: { post_text: 'x' }, // no shape
+      autoApproveAfter: 3, bucketBy: 'shape', maxPriorRejected: 0,
+    });
+    expect(e.status).toBe('pending');
+  });
+
+  it('maxPriorRejected=null preserves the legacy ratio rule', () => {
+    // 10 approvals + 1 rejection of the same kind: legacy ceiling is
+    // max(1, floor(10/10)) = 1, so 1 rejection still trusts.
+    seedQueueRows(Array.from({ length: 10 }, (_, i) => ({
+      id: `a-${i}`, kind: 'x_outbound_reply', status: 'applied', payload: { bucket: 'ms' },
+    })).concat([
+      { id: 'r', kind: 'x_outbound_reply', status: 'rejected', payload: { bucket: 'ms' } },
+    ]));
+    const e = approvals.propose({
+      kind: 'x_outbound_reply', summary: 's', payload: { bucket: 'ms' },
+      autoApproveAfter: 10, // no bucketBy, no maxPriorRejected
+    });
+    expect(e.status).toBe('auto_applied');
   });
 });
 

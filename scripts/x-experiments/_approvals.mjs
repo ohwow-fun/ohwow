@@ -41,13 +41,41 @@ function writeQueue(workspace, entries) {
  * Record a proposed action. Returns the full entry. If the kind has
  * earned N auto_applied threshold via past approved ratings, the entry
  * is created as 'auto_applied' (caller should apply immediately).
+ *
+ * Options:
+ *   - autoApproveAfter (default 10): priorApproved required for trust.
+ *   - gate: optional secondary check; fail-closed on throw.
+ *   - bucketBy: payload key (string) that scopes the trust counts to a
+ *     sub-population. When set, priorApproved/priorRejected only consider
+ *     entries with the same payload[bucketBy] value as the new entry.
+ *     Used for x_outbound_post where rejection signal is meaningful per
+ *     shape (a rejected `humor` post should not block trust on
+ *     `tactical_tip`).
+ *   - maxPriorRejected: hard ceiling on tolerated rejections inside the
+ *     same bucket. When null (default), uses the legacy ratio rule
+ *     (1 + floor(approved/10)). Set to 0 to require zero rejections —
+ *     appropriate for high-stakes outbound writes where one rejection
+ *     in a shape means the operator dislikes that shape's drafts and
+ *     we should keep gating until they explicitly approve again.
  */
-export function propose({ kind, summary, payload, autoApproveAfter = 10, gate }) {
+export function propose({ kind, summary, payload, autoApproveAfter = 10, gate, bucketBy = null, maxPriorRejected = null }) {
   const { workspace } = resolveOhwow();
   const all = loadQueue(workspace);
-  const priorApproved = all.filter(e => e.kind === kind && (e.status === 'approved' || e.status === 'applied' || e.status === 'auto_applied')).length;
-  const priorRejected = all.filter(e => e.kind === kind && e.status === 'rejected').length;
-  const trusted = priorApproved >= autoApproveAfter && priorRejected <= Math.max(1, Math.floor(priorApproved / 10));
+  const bucketValue = bucketBy && payload && Object.prototype.hasOwnProperty.call(payload, bucketBy)
+    ? payload[bucketBy]
+    : null;
+  const inBucket = (e) => {
+    if (e.kind !== kind) return false;
+    if (!bucketBy) return true;
+    if (bucketValue === null) return false; // new entry has no bucket → can't trust by bucket
+    return e.payload && e.payload[bucketBy] === bucketValue;
+  };
+  const priorApproved = all.filter(e => inBucket(e) && (e.status === 'approved' || e.status === 'applied' || e.status === 'auto_applied')).length;
+  const priorRejected = all.filter(e => inBucket(e) && e.status === 'rejected').length;
+  const rejectedCeiling = maxPriorRejected === null
+    ? Math.max(1, Math.floor(priorApproved / 10))
+    : maxPriorRejected;
+  const trusted = priorApproved >= autoApproveAfter && priorRejected <= rejectedCeiling;
   // Optional secondary gate: even when trust threshold is met, the gate
   // can force the entry back to 'pending' (e.g. forecast-accuracy floor
   // for outbound replies). Throws are treated as a false gate — fail
@@ -65,7 +93,7 @@ export function propose({ kind, summary, payload, autoApproveAfter = 10, gate })
     ts: new Date().toISOString(),
     kind, workspace, summary, payload,
     status: trusted && gatePassed ? 'auto_applied' : 'pending',
-    trustStats: { priorApproved, priorRejected },
+    trustStats: { priorApproved, priorRejected, bucketBy, bucketValue },
   };
   const next = [...all, entry];
   writeQueue(workspace, next);

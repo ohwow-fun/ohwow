@@ -411,8 +411,16 @@ async function main() {
           seed_pattern: seed.pattern,
           confidence: draft.confidence,
         },
-        autoApproveAfter: 10, // outbound-post trust bar is high; we
-                              // want to eyeball many more before auto.
+        // Per-shape escalation: a shape proves itself with 3 clean
+        // approvals; one rejection in that shape resets to pending.
+        // Globally we'd never escalate (10 approved + 6 rejected blocks
+        // the ratio rule), but a shape like `tactical_tip` may have a
+        // perfect record — those drafts are exactly what the content-
+        // cadence bypass should pick up. Strict zero-rejection ceiling
+        // keeps the operator's recent dislikes load-bearing.
+        autoApproveAfter: 3,
+        bucketBy: 'shape',
+        maxPriorRejected: 0,
       });
       record.proposed = true;
       record.approval_status = entry.status;
