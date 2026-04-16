@@ -69,6 +69,8 @@
     "test:watch": "vitest",
     "check-env": "tsx scripts/check-env.ts",
     "probe-loop-health": "tsx scripts/probe-loop-health.ts",
+    "regen:migration-registry": "node scripts/regen-migration-schema-registry.mjs",
+    "check:migration-registry": "node scripts/regen-migration-schema-registry.mjs --check",
     "prepare": "husky || true"
   },
   "lint-staged": {

@@ -1,2 +1,17 @@
 ./scripts/check-personal-data.sh
+
+# Registry parity: if a SQL migration is staged, require the
+# migration-schema-registry to be in sync with it. Runs only when
+# relevant so unrelated commits don't pay the cost.
+if git diff --cached --name-only | grep -q '^src/db/migrations/.*\.sql$'; then
+  npm run check:migration-registry || {
+    echo ""
+    echo "A SQL migration is staged but migration-schema-registry is stale."
+    echo "Run:   npm run regen:migration-registry"
+    echo "Then stage src/self-bench/registries/migration-schema-registry.ts"
+    echo "and commit again."
+    exit 1
+  }
+fi
+
 npx lint-staged
