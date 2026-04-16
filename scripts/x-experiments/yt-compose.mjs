@@ -131,7 +131,7 @@ function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
 // ---------------------------------------------------------------------------
 // Visual self-review — OpenRouter vision API (cheap Gemini Flash Lite)
 // ---------------------------------------------------------------------------
-const REVIEW_MODEL = 'google/gemini-2.5-flash-lite-preview';
+const REVIEW_MODEL = 'google/gemini-2.5-flash-lite';
 
 function readOpenRouterKey() {
   if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
@@ -293,6 +293,24 @@ function enrichVisualLayers(scene) {
   };
 }
 
+const AMBIENT_MOOD_MAP = {
+  contemplative: 'ambient-contemplative.mp3',
+  cosmic:        'ambient-cosmic.mp3',
+  electric:      'ambient-electric.mp3',
+  dawn:          'ambient-electric.mp3',
+  warm:          'ambient-warm.mp3',
+  noir:          'ambient-noir.mp3',
+  ethereal:      'ambient-cosmic.mp3',
+};
+const AMBIENT_FALLBACK = 'ambient.mp3';
+
+function pickAmbientTrack(paletteMood) {
+  const mood = (paletteMood || '').toLowerCase();
+  const file = AMBIENT_MOOD_MAP[mood];
+  if (file && fs.existsSync(path.join(VIDEO_PKG, 'public', 'audio', file))) return `audio/${file}`;
+  return `audio/${AMBIENT_FALLBACK}`;
+}
+
 function buildFullSpec(draft, { voiceoverRef = null, audioDurationMs = null } = {}) {
   let scenes = draft.spec.scenes.map(s => enrichVisualLayers({
     ...s,
@@ -307,6 +325,9 @@ function buildFullSpec(draft, { voiceoverRef = null, audioDurationMs = null } = 
   const voiceovers = voiceoverRef
     ? [{ src: voiceoverRef, startFrame: VOICE_LEAD_FRAMES, volume: 0.9 }]
     : [];
+
+  const ambientSrc = pickAmbientTrack(draft.spec.palette?.mood);
+  console.log(`[yt-compose] ambient track: ${ambientSrc} (palette mood: ${draft.spec.palette?.mood || 'none'})`);
 
   return {
     id: `yt-short-${Date.now()}`,
@@ -332,7 +353,7 @@ function buildFullSpec(draft, { voiceoverRef = null, audioDurationMs = null } = 
       },
     },
     palette: draft.spec.palette || undefined,
-    music: { src: 'audio/ambient.mp3', startFrame: 0, volume: 0.15 },
+    music: { src: ambientSrc, startFrame: 0, volume: 0.15 },
     voiceovers,
     transitions: draft.spec.transitions || [{ kind: 'fade', durationInFrames: 15 }],
     scenes,
