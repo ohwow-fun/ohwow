@@ -121,10 +121,10 @@ Layer C (now in progress): Promote the roadmap suite to tier-2 whole-file mode
   any RoadmapUpdaterExperiment patch that breaks the shape.
 
 **Recent Signals & Missing Experiments:**
-The roadmap-updater experiment flagged 4 experiments present in the codebase but
-missing from this inventory: `agent-state-hygiene-sentinel`, `toolchain-lint`,
-`toolchain-tests`, and `toolchain-typecheck`. These should be audited and
-classified:
+The roadmap-updater experiment flagged 5 experiments present in the codebase but
+missing from this inventory: `attribution-observer`, `mig-smoke-1776367046505`,
+`outreach-thermostat`, `tmpl-smoke-1776361920501`, and `x-dm-signals-rollup`.
+These should be audited and classified:
 - If active and running, add to Section 5.
 - If deprecated or paused, archive or remove their files.
 - If new and not yet integrated, add to Section 6 (Missing Experiments) with a
