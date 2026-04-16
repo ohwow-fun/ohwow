@@ -90,6 +90,45 @@ export async function handler() {
 }
 `;
 
+/**
+ * The exact anti-pattern the Apr 13 generator produced in
+ * `post_tweet_synth_*.ts` — `contexts()[0]` picks whichever Chrome
+ * profile enumerates first, which on multi-profile debug Chrome
+ * reliably ends up unauthenticated. The loader must reject this at
+ * load time so stale files from older templates can't re-register
+ * after a daemon restart.
+ */
+const CDP_CONTEXTS_ZERO_SKILL_TS = `
+import pw from 'playwright-core';
+const { chromium } = pw;
+export const definition = {
+  name: 'broken_cdp_skill',
+  description: 'broken profile pinning',
+  input_schema: { type: 'object', properties: {}, required: [] },
+};
+export async function handler() {
+  const browser = await chromium.connectOverCDP('http://localhost:9222');
+  const ctx = browser.contexts()[0];
+  return { success: true, data: { ctx: !!ctx } };
+}
+`;
+
+const CDP_NEW_PAGE_SKILL_TS = `
+import pw from 'playwright-core';
+const { chromium } = pw;
+export const definition = {
+  name: 'broken_new_page_skill',
+  description: 'opens a tab in an arbitrary profile',
+  input_schema: { type: 'object', properties: {}, required: [] },
+};
+export async function handler() {
+  const browser = await chromium.connectOverCDP('http://localhost:9222');
+  const ctx = browser.contexts().find(() => true);
+  const page = await ctx.newPage();
+  return { success: true, data: { url: page.url() } };
+}
+`;
+
 const INVALID_SHAPE_TS = `
 export const definition = {
   name: 'bad_shape',
@@ -161,6 +200,28 @@ describe('RuntimeSkillLoader', () => {
     const loader = new RuntimeSkillLoader({ skillsDir, compiledDir, db, workspaceId: 'ws-1' });
     await loader.loadFile(tsPath);
     expect(runtimeToolRegistry.get('evil_skill')).toBeUndefined();
+  });
+
+  it('rejects a skill that pins a Chrome profile via browser.contexts()[0]', async () => {
+    const tsPath = join(skillsDir, 'cdp-contexts-zero.ts');
+    await writeFile(tsPath, CDP_CONTEXTS_ZERO_SKILL_TS);
+    const db = makeDbWithSkills([
+      { id: 'sk-cdp', promoted_at: null, script_path: tsPath },
+    ]);
+    const loader = new RuntimeSkillLoader({ skillsDir, compiledDir, db, workspaceId: 'ws-1' });
+    await loader.loadFile(tsPath);
+    expect(runtimeToolRegistry.get('broken_cdp_skill')).toBeUndefined();
+  });
+
+  it('rejects a skill that calls context.newPage() (arbitrary-profile tab)', async () => {
+    const tsPath = join(skillsDir, 'cdp-new-page.ts');
+    await writeFile(tsPath, CDP_NEW_PAGE_SKILL_TS);
+    const db = makeDbWithSkills([
+      { id: 'sk-new-page', promoted_at: null, script_path: tsPath },
+    ]);
+    const loader = new RuntimeSkillLoader({ skillsDir, compiledDir, db, workspaceId: 'ws-1' });
+    await loader.loadFile(tsPath);
+    expect(runtimeToolRegistry.get('broken_new_page_skill')).toBeUndefined();
   });
 
   it('rejects a skill that does not export a handler', async () => {

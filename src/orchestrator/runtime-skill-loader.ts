@@ -210,6 +210,24 @@ export const FORBIDDEN_SOURCE_PATTERNS: Array<{ pattern: RegExp; reason: string 
   { pattern: /\brequire\s*\(/, reason: 'CommonJS require() is not allowed (use ESM imports)' },
   { pattern: /\bfs\.unlink|fs\.rm\b|fs\.rmdir\b/, reason: 'destructive fs operations are not allowed' },
   { pattern: /\bnode:net\b|\bnode:dgram\b|\bnode:http\s/, reason: 'raw network sockets are not allowed (use fetch)' },
+  // Chrome-profile pinning: in a multi-profile debug Chrome the first
+  // enumerated BrowserContext is NOT the signed-in profile on most
+  // machines. `.contexts()[0]` / `.contexts()[ 0 ]` and `context.newPage()`
+  // silently land on the wrong profile and then `goto('https://x.com/...')`
+  // renders a logged-out window — confirmed live 2026-04-16 as the driver
+  // behind the "unauthed chromium tried to post to X" loop. Synthesized
+  // skills that touch playwright-core MUST flatten pages across contexts
+  // (or pin via the routing helper) instead. This rejects the anti-pattern
+  // at load time so stale skill files from older template generations
+  // never get registered.
+  {
+    pattern: /\.contexts\s*\(\s*\)\s*\[\s*0\s*\]/,
+    reason: '.contexts()[0] is not allowed — it picks an arbitrary Chrome profile. Flatten with `browser.contexts().flatMap((c) => c.pages())` and pick by URL.',
+  },
+  {
+    pattern: /\.newPage\s*\(\s*\)/,
+    reason: 'context.newPage() creates a tab in an arbitrary Chrome profile — refuse. Let the orchestrator open a profile-pinned tab and reuse an existing page instead.',
+  },
 ];
 
 /**

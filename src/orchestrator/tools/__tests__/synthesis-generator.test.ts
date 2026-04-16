@@ -210,11 +210,12 @@ export async function handler(_ctx: unknown, input: Record<string, unknown>) {
   if (!text) return { success: false, message: 'text is required' };
 
   const browser = await chromium.connectOverCDP('http://localhost:9222');
-  const ctx = browser.contexts()[0];
-  if (!ctx) return { success: false, message: 'No Chrome context available' };
-  const pages = ctx.pages();
+  // Flatten pages across every BrowserContext so we prefer whichever
+  // profile already has an x.com tab open rather than picking the
+  // arbitrary first-enumerated profile (often unauthenticated).
+  const pages = browser.contexts().flatMap((c) => c.pages());
+  if (pages.length === 0) return { success: false, message: 'No page available' };
   let page = pages.find((p) => p.url().includes('x.com')) || pages[0];
-  if (!page) return { success: false, message: 'No page available' };
 
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
 
