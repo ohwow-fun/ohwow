@@ -10,6 +10,7 @@
  * workspaces.
  */
 
+import type Database from 'better-sqlite3';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { DEFAULT_AGENT_TOOLS } from '../tui/data/agent-presets.js';
 import type { ShowcaseOutcome, ShowcasePlan, ShowcaseResult, ShowcaseTarget } from './types.js';
@@ -41,14 +42,50 @@ export interface ApplyShowcaseInput {
   plan: ShowcasePlan;
   /** Ollama model id to stamp on the agent config. Caller usually passes config.ollamaModel. */
   ollamaModel?: string;
+  /**
+   * Raw better-sqlite3 handle. When passed, the four inserts run inside a
+   * BEGIN/COMMIT so a failure on insert 2+ doesn't leave orphan rows. Safe
+   * to omit (the inserts still run, just without atomicity).
+   */
+  rawDb?: Database.Database;
 }
 
 export async function applyShowcase(
   db: DatabaseAdapter,
   input: ApplyShowcaseInput,
 ): Promise<ShowcaseOutcome> {
-  const { workspaceId, target, result, plan, ollamaModel } = input;
+  const { workspaceId, target, result, plan, ollamaModel, rawDb } = input;
   const now = new Date().toISOString();
+
+  // Transaction boundary. better-sqlite3 is synchronous under the adapter's
+  // thenable, so BEGIN…COMMIT stays within the active connection across the
+  // awaited inserts. On error, ROLLBACK undoes any rows already written.
+  if (rawDb) rawDb.exec('BEGIN IMMEDIATE');
+  try {
+    const outcome = await performInserts(db, workspaceId, target, result, plan, ollamaModel, now);
+    if (rawDb) rawDb.exec('COMMIT');
+    return outcome;
+  } catch (err) {
+    if (rawDb) {
+      try {
+        rawDb.exec('ROLLBACK');
+      } catch {
+        // ROLLBACK can throw if we were never inside a txn; swallow.
+      }
+    }
+    throw err;
+  }
+}
+
+async function performInserts(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  target: ShowcaseTarget,
+  result: ShowcaseResult,
+  plan: ShowcasePlan,
+  ollamaModel: string | undefined,
+  now: string,
+): Promise<ShowcaseOutcome> {
 
   // ── Contact ─────────────────────────────────────────────────────────────
   const contactId = hexId();

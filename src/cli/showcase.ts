@@ -139,6 +139,7 @@ export async function runShowcaseCli(args: string[]): Promise<void> {
   const instance = render(
     React.createElement(ShowcaseWizard, {
       db,
+      rawDb,
       workspaceId,
       workspaceName: active.name,
       dashboardUrl,

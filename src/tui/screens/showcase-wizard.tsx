@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import Spinner from 'ink-spinner';
+import type Database from 'better-sqlite3';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type {
   ShowcaseOutcome,
@@ -27,6 +28,8 @@ type Step = 'splash' | 'research' | 'proposal' | 'executing' | 'done' | 'error';
 
 interface ShowcaseWizardProps {
   db: DatabaseAdapter;
+  /** Raw sqlite handle — used to wrap the four apply-inserts in a transaction. */
+  rawDb?: Database.Database;
   workspaceId: string;
   workspaceName: string;
   dashboardUrl: string;
@@ -105,6 +108,7 @@ const GLYPH_COLOR: Record<ProbeEvent['status'], string> = {
 
 export function ShowcaseWizard({
   db,
+  rawDb,
   workspaceId,
   workspaceName,
   dashboardUrl,
@@ -198,6 +202,7 @@ export function ShowcaseWizard({
           result,
           plan,
           ollamaModel,
+          rawDb,
         });
         setOutcome(o);
         setStep('done');
@@ -206,7 +211,7 @@ export function ShowcaseWizard({
         setStep('error');
       }
     })();
-  }, [step, db, workspaceId, target, result, plan, ollamaModel]);
+  }, [step, db, rawDb, workspaceId, target, result, plan, ollamaModel]);
 
   const hints = useMemo(() => {
     if (step === 'proposal') return [{ key: 'y', label: 'apply' }, { key: 'n', label: 'cancel' }];
@@ -364,7 +369,7 @@ function ProposalBody({
   return (
     <Box flexDirection="column" marginTop={1}>
       {result?.pageDescription && (
-        <Text color="gray">{'“'}{result.pageDescription.slice(0, 160)}{result.pageDescription.length > 160 ? '…' : ''}{'”'}</Text>
+        <Text color="gray">{'“'}{truncateAtWord(result.pageDescription, 160)}{'”'}</Text>
       )}
       <Box
         flexDirection="column"
@@ -382,7 +387,7 @@ function ProposalBody({
         </Box>
         <Box marginTop={1} flexDirection="column">
           <Text color="gray">system prompt:</Text>
-          <Text>{plan.agentSystemPrompt.slice(0, 220)}{plan.agentSystemPrompt.length > 220 ? '…' : ''}</Text>
+          <Text>{truncateAtWord(plan.agentSystemPrompt, 220)}</Text>
         </Box>
       </Box>
       <Box marginTop={1}>
@@ -468,6 +473,14 @@ function Row({
 
 function padRight(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
+}
+
+function truncateAtWord(s: string, n: number): string {
+  if (s.length <= n) return s;
+  const slice = s.slice(0, n);
+  const lastSpace = slice.lastIndexOf(' ');
+  const cut = lastSpace > n * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return cut.replace(/[\s.,;:!?-]+$/, '') + '…';
 }
 
 function formatThousands(n: number): string {
