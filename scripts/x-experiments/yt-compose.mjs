@@ -36,6 +36,10 @@ const BANNED_PHRASES = [
   'the runtime moved', 'the runtime handled', 'our local runtime',
   'our stack', 'on your machine', 'on your schedule', 'with your keys',
   'mcp-first', 'multi-workspace',
+  // First-person product framing: observer voice means no ownership claims
+  'my agent', 'my agents', 'my ai', 'our agent', 'our agents',
+  'we built', 'we ship', 'we run', 'we use', 'i built', 'i ship',
+  'local-first', 'orchestration layer',
 ];
 function detectBanned(text) {
   const t = (text || '').toLowerCase();
@@ -66,9 +70,16 @@ function pickSeed(historyRows) {
     }
   }
   if (!candidates.length) return null;
-  candidates.sort((a, b) => b.date.localeCompare(a.date));
-  // Pick a random one from the top 5 freshest for variety across runs
-  const pool = candidates.slice(0, Math.min(5, candidates.length));
+  // Diversify across buckets: group by bucket, pick a random bucket first,
+  // then pick a random pattern from it. Prevents all Shorts from clustering
+  // on the most populated bucket.
+  const byBucket = {};
+  for (const c of candidates) {
+    (byBucket[c.bucket] ??= []).push(c);
+  }
+  const buckets = Object.keys(byBucket);
+  const bucket = buckets[Math.floor(Math.random() * buckets.length)];
+  const pool = byBucket[bucket];
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -105,25 +116,27 @@ WORD LIMITS PER SCENE (HARD):
 
 VOICE: an insider at a dinner party who has opinions on everything in AI agents. Not pitching, not teaching. Just being interesting. Wry, observational, occasionally dark.
 - NEVER reference your own product, stack, architecture, tools, or infrastructure
-- NEVER use: "local-first", "orchestration", "runtime", "workspaces", "daemon", "our", "we built"
+- NEVER use: "local-first", "orchestration", "runtime", "workspaces", "daemon", "our", "we built", "my agent", "my agents", "mine", "I built", "I run"
+- NEVER claim ownership of agents, tools, or infrastructure. You OBSERVE. You don't OWN.
 - Think in universal AI/agent concepts any builder would recognize
 - Humor preferred. If you can land the joke, always land it.
 - No banned phrases: ${BANNED_PHRASES.join(', ')}
 
-MOOD CONTRAST is mandatory. Scene 1 and Scene 2 must use DIFFERENT moods.
-Example: contemplative → electric, warm → noir, cosmic → dawn.
+MOOD CONTRAST is mandatory. Scene 1 and Scene 2 must use DIFFERENT moods. Vary across runs.
+Good contrasts: contemplative → electric, warm → noir, cosmic → dawn, ethereal → electric, dawn → noir.
+Do NOT always default to contemplative → noir. Surprise with the mood pairing.
 
 VISUAL SPEC: output a valid VideoSpec JSON. Available scene kinds: ${SCENE_KINDS.join(', ')}.
 For 'text-typewriter': params { text, fontSize (48-64 for short text), typingSpeed (1.0-2.0), mood, variation (0-5) }
 For 'quote-card': params { quote, fontSize (40-60), mood, variation (0-3) }
-For 'composable': params { visualLayers: [{primitive, params}], text: {content, animation, fontSize (44-60), position}, mood }
+For 'composable': params { visualLayers: [{primitive, params}], text: {content, animation, fontSize (40-52), position, maxWidth (800)}, mood }
   Available primitives: ${VISUAL_PRIMITIVES.join(', ')}
   Text animations: typewriter, fade-in, word-by-word, letter-scatter
   Text positions: center, bottom-center, top-center
 
 Available moods: ${MOODS.join(', ')}
 
-FONT SIZE RULE: shorter text = bigger font. 5-7 words → fontSize 56-64. 8-12 words → fontSize 48-52. This is mobile-first.
+FONT SIZE RULE: shorter text = bigger font. 5-7 words → fontSize 56-64. 8-12 words → fontSize 44-52. This is mobile at 1080px wide with 120px padding each side (840px text area). Words longer than 8 chars will wrap if fontSize is too large. For composable scenes, use maxWidth: 800 and fontSize 40-48 to prevent mid-word breaks.
 
 YouTube metadata:
 - Title: curiosity-driven, under 60 chars, makes someone tap. Not a summary.
