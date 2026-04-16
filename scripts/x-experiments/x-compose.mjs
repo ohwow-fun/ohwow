@@ -32,6 +32,28 @@ const MAX_DRAFTS = Number(process.env.MAX_DRAFTS || 3);
 const HISTORY_DAYS = Number(process.env.HISTORY_DAYS || 5);
 const SHAPES = new Set((process.env.SHAPES || 'tactical_tip,observation,opinion,question,story,humor').split(',').map(s => s.trim()).filter(Boolean));
 
+// Deterministic post-filter shared in spirit with x-reply. Compose
+// drafts occasionally slip product-architecture dumps past the prompt
+// ban list (tactical_tip is the usual culprit). Any match downgrades
+// the draft to a skip with a logged reason.
+const BANNED_PHRASES = [
+  'our daemon',
+  'a single daemon',
+  'single daemon',
+  'agent workspaces',
+  'our runtime',
+  'our local runtime',
+  'our stack',
+  'on your machine, on your schedule',
+  'with your keys',
+  'mcp-first',
+  'multi-workspace',
+];
+function detectBanned(text) {
+  const t = (text || '').toLowerCase();
+  return BANNED_PHRASES.filter(p => t.includes(p));
+}
+
 function workspaceConfigPath(ws) {
   return path.join(os.homedir(), '.ohwow', 'workspaces', ws, 'x-config.json');
 }
@@ -85,6 +107,7 @@ Tone: ${brandVoice?.tone || 'warm, direct, builder-to-builder'}
 Hard rules:
 ${dontDo}
   - Every post MUST stand alone. A reader who never heard of us should LEARN something or FEEL something — not be told what we are.
+  - Vary openings. If previous drafts in this batch opened with "we keep seeing", "we ran", "we built", "the agent X", or any other repeated frame, pick a DIFFERENT opener. A reader scrolling our feed should see variety, not a formula.
   - Banned filler phrases (instant skip if any appear in the post): "our daemon", "our runtime", "our local runtime", "our stack", "our platform", "our system", "mcp-first", "local-first" as an adjective, "multi-workspace", "keys and machines", "routing through", "on your machine, on your schedule". These read like product spec and kill engagement.
   - It's fine to say "we" when sharing an experience. Not fine when what follows is a feature list.
   - No hype. No "future of X". No "AI will change everything". No em-dashes. No hashtags. Lowercase ok. Plain text only.
@@ -215,6 +238,11 @@ async function main() {
       extraHint = ` (the previous attempt duplicated an earlier draft — pick a completely different craft-tension)`;
     }
     if (!draft) continue;
+    const offenders = detectBanned(draft.post);
+    if (offenders.length) {
+      console.log(`  [${i+1}] filtered: banned phrase '${offenders[0]}' — downgraded to skip`);
+      draft = { ...draft, shape: 'skip', post: '', confidence: 0, reason: `auto-skip: banned phrase '${offenders[0]}'` };
+    }
     const record = { seed, draft, proposed: false, ts: new Date().toISOString() };
 
     console.log(`\n  [${i+1}] shape=${draft.shape} · conf=${draft.confidence.toFixed(2)}`);
