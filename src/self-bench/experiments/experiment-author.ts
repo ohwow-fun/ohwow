@@ -547,6 +547,7 @@ export class ExperimentAuthorExperiment implements Experiment {
         modelRouter: ctx.engine.modelRouter!,
         db: ctx.db,
         workspaceId: ctx.workspaceId,
+        experimentId: this.id,
       },
       {
         purpose: 'reasoning',
