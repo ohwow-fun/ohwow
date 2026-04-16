@@ -43,6 +43,26 @@ interface FindingJson {
   durationMs: number;
 }
 
+interface DistilledInsightJson {
+  cluster_id: string;
+  experiment_id: string;
+  subject: string;
+  latest_finding_id: string;
+  verdict: string;
+  summary: string;
+  novelty_score: number;
+  novelty_reason: string;
+  novelty_detail: string | null;
+  z_score: number | null;
+  consecutive_fails: number;
+  sample_count: number;
+  first_seen_at: string | null;
+  last_seen_at: string;
+  tracked_field: string | null;
+  last_value: number | null;
+  running_mean: number | null;
+}
+
 export function registerFindingsTools(
   server: McpServer,
   client: DaemonApiClient,
@@ -97,6 +117,51 @@ export function registerFindingsTools(
           note: findings.length === 0
             ? 'No findings match these filters. Widen the filters (drop verdict or category) or wait for the next experiment tick.'
             : `${findings.length} finding(s) returned. Each is a historical record of one experiment run — use the evidence field to see raw probe output and intervention_applied to see what changed (if anything).`,
+        });
+      } catch (err) {
+        return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    },
+  );
+
+  server.tool(
+    'ohwow_list_insights',
+    '[Self-bench] List DISTILLED insights — the "what is surprising right now?" view on top of self_findings. Each row is one (experiment, subject) cluster, already deduped, scored by novelty, and ranked. novelty_score is 0..1 where 1.0 is first-seen and 0 is routine. novelty_reason is one of: first_seen / verdict_flipped / value_z / repeat_count / normal. consecutive_fails tiebreaks stuck problems above equally-novel ones. Use this instead of ohwow_list_findings when you want to know what stands out today vs what\'s noise. Examples: top 10 surprises → {limit: 10}; only unusual observations → {min_score: 0.5}; include superseded history → {status: "any"}.',
+    {
+      limit: z.number().int().positive().max(200).optional().describe('Cap on insights returned. Default 25, hard max 200.'),
+      min_score: z.number().min(0).max(1).optional().describe('Minimum novelty_score to include. 0 returns everything ranked; 0.5 filters to unusual only; 0.9 filters to extreme only. Default 0.'),
+      status: z.enum(['active', 'superseded', 'revoked', 'any']).optional().describe('Underlying finding lifecycle. Default "active".'),
+    },
+    async ({ limit, min_score, status }) => {
+      try {
+        const qs = new URLSearchParams();
+        if (limit !== undefined) qs.set('limit', String(limit));
+        if (min_score !== undefined) qs.set('min_score', String(min_score));
+        if (status) qs.set('status', status);
+        const qsStr = qs.toString() ? `?${qs.toString()}` : '';
+
+        const result = (await client.get(`/api/insights/distilled${qsStr}`)) as {
+          data?: DistilledInsightJson[];
+          count?: number;
+          limit?: number;
+          min_score?: number;
+          error?: string;
+        };
+
+        if (result.error) {
+          return errorResponse(`Couldn't list insights: ${result.error}`);
+        }
+
+        const insights = result.data ?? [];
+        return jsonResponse({
+          ok: true,
+          count: insights.length,
+          limit: result.limit,
+          min_score: result.min_score,
+          insights,
+          note: insights.length === 0
+            ? 'Nothing ranked above the score floor. Lower min_score, or wait for the next experiment tick to populate novelty data.'
+            : `${insights.length} insight(s), most surprising first. novelty_reason explains why each rose to the top; use ohwow_list_findings with the experiment_id + subject to dig into the full ledger trail.`,
         });
       } catch (err) {
         return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);

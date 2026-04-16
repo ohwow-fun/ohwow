@@ -12,16 +12,25 @@ import type { NewFindingRow } from '../experiment-types.js';
  *   from(table).select(cols).eq().order().limit() → filtered read
  */
 function buildDb(initial: Array<Record<string, unknown>> = []) {
-  const rows = [...initial];
+  // Table-aware storage. writeFinding now inserts into both
+  // self_findings (the ledger) and self_observation_baselines (novelty
+  // stats added in Piece 1). env.rows remains the self_findings slice
+  // so existing assertions keep working.
+  const tables = new Map<string, Array<Record<string, unknown>>>();
+  const findingsBucket = [...initial];
+  tables.set('self_findings', findingsBucket);
 
-  function makeBuilder() {
+  function makeBuilder(tableName: string) {
+    if (!tables.has(tableName)) tables.set(tableName, []);
+    const tableRows = tables.get(tableName)!;
     const filters: Array<{ col: string; val: unknown }> = [];
     let orderCol: string | null = null;
     let orderAsc = true;
     let limitN: number | null = null;
+    let updateFields: Record<string, unknown> | null = null;
 
     const apply = () => {
-      let out = rows.filter((r) =>
+      let out = tableRows.filter((r) =>
         filters.every((f) => r[f.col] === f.val),
       );
       if (orderCol) {
@@ -38,7 +47,15 @@ function buildDb(initial: Array<Record<string, unknown>> = []) {
 
     const builder: Record<string, unknown> = {};
     builder.select = (_cols?: string) => builder;
-    builder.eq = (col: string, val: unknown) => { filters.push({ col, val }); return builder; };
+    builder.eq = (col: string, val: unknown) => {
+      if (updateFields) {
+        const matches = tableRows.filter((r) => r[col] === val);
+        for (const m of matches) Object.assign(m, updateFields);
+        return Promise.resolve({ data: null, error: null });
+      }
+      filters.push({ col, val });
+      return builder;
+    };
     builder.order = (col: string, opts?: { ascending?: boolean }) => {
       orderCol = col;
       orderAsc = opts?.ascending !== false;
@@ -49,8 +66,12 @@ function buildDb(initial: Array<Record<string, unknown>> = []) {
       return Promise.resolve({ data: apply(), error: null });
     };
     builder.insert = (row: Record<string, unknown>) => {
-      rows.push({ ...row });
+      tableRows.push({ ...row });
       return Promise.resolve({ data: null, error: null });
+    };
+    builder.update = (fields: Record<string, unknown>) => {
+      updateFields = fields;
+      return builder;
     };
     builder.then = (resolve: (v: unknown) => void) =>
       resolve({ data: apply(), error: null });
@@ -58,8 +79,9 @@ function buildDb(initial: Array<Record<string, unknown>> = []) {
   }
 
   return {
-    db: { from: vi.fn().mockImplementation(() => makeBuilder()) },
-    rows,
+    db: { from: vi.fn().mockImplementation((table: string) => makeBuilder(table)) },
+    rows: findingsBucket,
+    tables,
   };
 }
 
@@ -98,7 +120,12 @@ describe('writeFinding', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await writeFinding(env.db as any, baseRow);
     expect(typeof env.rows[0].evidence).toBe('string');
-    expect(JSON.parse(env.rows[0].evidence as string)).toEqual({ samples: 12, toolCallRate: 0 });
+    const parsed = JSON.parse(env.rows[0].evidence as string) as Record<string, unknown>;
+    // User-supplied evidence fields must round-trip verbatim. Piece 1
+    // also injects a __novelty stanza; we assert that separately.
+    expect(parsed.samples).toBe(12);
+    expect(parsed.toolCallRate).toBe(0);
+    expect(parsed.__novelty).toMatchObject({ reason: 'first_seen', score: 1 });
   });
 
   it('stores null intervention_applied when no intervention', async () => {

@@ -21,6 +21,11 @@ import type {
   FindingStatus,
   InterventionApplied,
 } from './experiment-types.js';
+import {
+  applyNoveltyOnWrite,
+  writeBaseline,
+  type NoveltyInfo,
+} from './insight-baseline.js';
 
 interface SelfFindingRow {
   id: string;
@@ -136,6 +141,19 @@ export async function writeFinding(
   opts: { supersedeWindowMs?: number } = {},
 ): Promise<string> {
   const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  // Piece 1: novelty pass. Read the existing baseline for
+  // (experiment_id, subject), score the incoming row against it, and
+  // merge a `__novelty` stanza into evidence BEFORE insert so every
+  // persisted finding carries its own surprise score. The baseline row
+  // itself is updated after the insert.
+  const { baseline, novelty, value, trackedField } = await applyNoveltyOnWrite(db, row);
+  const evidenceOut: Record<string, unknown> = {
+    ...(row.evidence ?? {}),
+    __novelty: noveltyStanza(novelty),
+  };
+
   await db.from('self_findings').insert({
     id,
     experiment_id: row.experimentId,
@@ -144,17 +162,44 @@ export async function writeFinding(
     hypothesis: row.hypothesis,
     verdict: row.verdict,
     summary: row.summary,
-    evidence: JSON.stringify(row.evidence ?? {}),
+    evidence: JSON.stringify(evidenceOut),
     intervention_applied: row.interventionApplied
       ? JSON.stringify(row.interventionApplied)
       : null,
     ran_at: row.ranAt,
     duration_ms: row.durationMs,
     status: 'active',
-    created_at: new Date().toISOString(),
+    created_at: now,
   });
+
+  if (row.subject) {
+    await writeBaseline(
+      db,
+      baseline,
+      row.experimentId,
+      row.subject,
+      row.verdict,
+      now,
+      trackedField,
+      value,
+      novelty.consecutive_fails,
+    );
+  }
+
   await supersedeDuplicates(db, id, row, opts.supersedeWindowMs ?? DEFAULT_SUPERSEDE_WINDOW_MS);
   return id;
+}
+
+function noveltyStanza(n: NoveltyInfo): Record<string, unknown> {
+  const stanza: Record<string, unknown> = {
+    score: n.score,
+    reason: n.reason,
+    consecutive_fails: n.consecutive_fails,
+    repeat_count: n.repeat_count,
+  };
+  if (n.detail) stanza.detail = n.detail;
+  if (n.z_score !== null) stanza.z_score = n.z_score;
+  return stanza;
 }
 
 /**

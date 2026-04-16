@@ -17,6 +17,7 @@
 import { Router } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { listFindings } from '../../self-bench/findings-store.js';
+import { listDistilledInsights } from '../../self-bench/insight-distiller.js';
 import type {
   ExperimentCategory,
   FindingStatus,
@@ -78,6 +79,32 @@ export function createFindingsRouter(db: DatabaseAdapter): Router {
       });
 
       res.json({ data: findings, count: findings.length, limit });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  router.get('/api/insights/distilled', async (req, res) => {
+    try {
+      const limitRaw = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined;
+      const limit = limitRaw && limitRaw > 0 ? Math.min(limitRaw, 200) : 25;
+      const minScoreRaw = typeof req.query.min_score === 'string'
+        ? parseFloat(req.query.min_score)
+        : undefined;
+      const minScore = typeof minScoreRaw === 'number' && Number.isFinite(minScoreRaw)
+        ? Math.max(minScoreRaw, 0)
+        : 0;
+      const statusRaw = typeof req.query.status === 'string' ? req.query.status : undefined;
+      const status = statusRaw === 'any'
+        ? 'any'
+        : asStatus(statusRaw);
+
+      const insights = await listDistilledInsights(db, {
+        limit,
+        minScore,
+        status,
+      });
+      res.json({ data: insights, count: insights.length, limit, min_score: minScore });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

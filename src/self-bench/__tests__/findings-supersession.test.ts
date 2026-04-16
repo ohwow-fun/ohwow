@@ -7,14 +7,22 @@ import type { NewFindingRow } from '../experiment-types.js';
  * use: insert, select/eq/gte (chain then-able), update+eq.
  */
 function buildDb(seedRows: Array<Record<string, unknown>> = []) {
-  const rows: Array<Record<string, unknown>> = [...seedRows];
+  // Table-aware storage. writeFinding now inserts into both
+  // self_findings (the ledger) and self_observation_baselines (novelty
+  // stats added in Piece 1). Supersession assertions read self_findings
+  // explicitly via env.rows.
+  const tables = new Map<string, Array<Record<string, unknown>>>();
+  const findingsBucket = [...seedRows];
+  tables.set('self_findings', findingsBucket);
 
-  function makeBuilder() {
+  function makeBuilder(tableName: string) {
+    if (!tables.has(tableName)) tables.set(tableName, []);
+    const tableRows = tables.get(tableName)!;
     const filters: Array<{ col: string; val: unknown }> = [];
     const rangeFilters: Array<{ col: string; op: 'gte' | 'lte'; val: unknown }> = [];
     let updateFields: Record<string, unknown> | null = null;
 
-    const apply = () => rows.filter((r) =>
+    const apply = () => tableRows.filter((r) =>
       filters.every((f) => r[f.col] === f.val) &&
       rangeFilters.every((f) =>
         f.op === 'gte' ? String(r[f.col]) >= String(f.val) : String(r[f.col]) <= String(f.val)),
@@ -24,7 +32,7 @@ function buildDb(seedRows: Array<Record<string, unknown>> = []) {
     builder.select = () => builder;
     builder.eq = (col: string, val: unknown) => {
       if (updateFields) {
-        const matches = rows.filter((r) => r[col] === val);
+        const matches = tableRows.filter((r) => r[col] === val);
         for (const m of matches) Object.assign(m, updateFields);
         return Promise.resolve({ data: null, error: null });
       }
@@ -38,7 +46,7 @@ function buildDb(seedRows: Array<Record<string, unknown>> = []) {
     builder.order = () => builder;
     builder.limit = () => Promise.resolve({ data: apply(), error: null });
     builder.insert = (row: Record<string, unknown>) => {
-      rows.push({ ...row });
+      tableRows.push({ ...row });
       return Promise.resolve({ data: null, error: null });
     };
     builder.update = (fields: Record<string, unknown>) => {
@@ -51,8 +59,9 @@ function buildDb(seedRows: Array<Record<string, unknown>> = []) {
   }
 
   return {
-    db: { from: vi.fn().mockImplementation(() => makeBuilder()) },
-    rows,
+    db: { from: vi.fn().mockImplementation((table: string) => makeBuilder(table)) },
+    rows: findingsBucket,
+    tables,
   };
 }
 
