@@ -263,6 +263,16 @@ const postTweetHandler: Handler = async (content, ctx) => {
       expectedHandle: expectedHandle || undefined,
       expectedBrowserContextId: prep.browserContextId || undefined,
     });
+    // Duplicate-blocked is "the bytes are already out there" — not a
+    // real failure. Returning ok:true advances the approvals queue
+    // (the draft gets marked consumed) and prevents the infinite
+    // retry loop that hits X's duplicate-content gate on every tick.
+    if (!res.success && res.duplicateBlocked === true) {
+      return {
+        ok: true,
+        result: { dryRun, expectedHandle, duplicateBlocked: true, ...(res as unknown as Record<string, unknown>) },
+      };
+    }
     if (!res.success) {
       return { ok: false, error: res.message || 'compose failed', result: res as unknown as Record<string, unknown> };
     }

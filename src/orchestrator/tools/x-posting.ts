@@ -292,6 +292,14 @@ export interface ComposeResult {
   currentUrl?: string;
   /** For DM/article tools: the page URL or DM pair at the end of the flow. */
   landedAt?: string;
+  /**
+   * True when X rejected the post with the "Whoops! You already said
+   * that." banner. Distinct from a general failure: the content is
+   * already out there, so callers should treat the underlying work
+   * item (approved draft, agent task) as effectively done and advance
+   * the queue instead of retrying the same bytes on the next tick.
+   */
+  duplicateBlocked?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -697,7 +705,41 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     };
   }
   await wait(POST_SETTLE_MS);
+
+  // X renders "Whoops! You already said that." as an in-modal alert
+  // when the content matches a recent post from the same account.
+  // Without this check, the click-Post path would return success
+  // unconditionally and the caller would mark its draft/task done —
+  // so the SAME draft would re-enter the queue on a later tick and
+  // loop indefinitely against the duplicate-content gate.
+  const postOutcome = await readPostOutcome(page);
   const postShot = await captureScreenshot(page);
+
+  if (postOutcome === 'duplicate') {
+    await dismissComposeModal(page);
+    logger.warn('[x-posting] X blocked the post as duplicate content');
+    return {
+      success: false,
+      duplicateBlocked: true,
+      message: 'X blocked the post as duplicate content ("Whoops! You already said that."). Text is considered already-posted; caller should advance the work item.',
+      screenshotBase64: postShot || screenshotBase64,
+      tweetsTyped: 1,
+      tweetsPublished: 0,
+      currentUrl: await page.url(),
+    };
+  }
+  if (postOutcome === 'still_open') {
+    await dismissComposeModal(page);
+    return {
+      success: false,
+      message: 'Post button clicked but the compose modal did not close within the settle window. X likely rejected the content for another reason (rate limit, policy, etc.).',
+      screenshotBase64: postShot || screenshotBase64,
+      tweetsTyped: 1,
+      tweetsPublished: 0,
+      currentUrl: await page.url(),
+    };
+  }
+
   logger.info('[x-posting] Tweet published');
   return {
     success: true,
@@ -707,6 +749,58 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     tweetsPublished: 1,
     currentUrl: await page.url(),
   };
+}
+
+/**
+ * Read the post-click outcome from the compose modal. Returns:
+ *   - 'duplicate'  — X's duplicate-content banner is visible
+ *   - 'still_open' — the modal's textarea is still present (post
+ *                    failed for some other reason, e.g. rate limit)
+ *   - 'published'  — the modal closed cleanly; the post went through
+ *
+ * Defensive: any evaluate() throw resolves to 'published' so we don't
+ * flip real successes into failures on a transient CDP hiccup. The
+ * duplicate path is the interesting one; the caller treats 'still_open'
+ * as a plain failure.
+ */
+async function readPostOutcome(page: CdpPage): Promise<'duplicate' | 'still_open' | 'published'> {
+  try {
+    const result = await page.evaluate<{ duplicate: boolean; modalOpen: boolean }>(`(() => {
+      const bodyText = (document.body?.innerText || '').toLowerCase();
+      const duplicate = bodyText.includes('you already said that')
+        || bodyText.includes('whoops! you already said that');
+      const modalOpen = !!document.querySelector('[data-testid="tweetTextarea_0"]');
+      return { duplicate, modalOpen };
+    })()`);
+    if (result.duplicate) return 'duplicate';
+    if (result.modalOpen) return 'still_open';
+    return 'published';
+  } catch {
+    return 'published';
+  }
+}
+
+/**
+ * Close the compose modal so the next scheduler tick doesn't find it
+ * half-open. Escape twice (first clears focus, second closes); if X
+ * opens a discard-draft confirmation, we intentionally click through
+ * via the confirm button. Best-effort — ignore failures, the next
+ * navigation will clear state anyway.
+ */
+async function dismissComposeModal(page: CdpPage): Promise<void> {
+  try {
+    await page.pressKey('Escape');
+    await wait(200);
+    await page.pressKey('Escape');
+    await wait(200);
+    // Some X builds pop a "Save as draft / Discard" dialog on
+    // Escape. Click "Discard" so we don't leave a pending draft that
+    // next tick could accidentally re-use.
+    await clickByText(page, 'Discard', 'button, [role="button"]').catch(() => false);
+    await wait(200);
+  } catch {
+    /* best effort */
+  }
 }
 
 // ---------------------------------------------------------------------------
