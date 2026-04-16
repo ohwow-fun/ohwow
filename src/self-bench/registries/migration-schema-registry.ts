@@ -127,4 +127,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   // forgets rename-in-place semantics; Rule 2's computeFinalTables +
   // alreadyRegisteredTables dedupe is the durable fix.
   { migrationFile: '032-nudge-type-update.sql', expectedTables: ['agent_workforce_nudges_new'] },
+  { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
 ];
