@@ -125,4 +125,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   // already probed by 015-file-attachments and 009-nudges respectively.
   // Rule 2 (computeFinalTables + alreadyRegisteredTables dedupe) is the
   // durable fix so the loop stops re-adding them.
+  { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
 ];
