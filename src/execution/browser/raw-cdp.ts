@@ -58,7 +58,8 @@ export class RawCdpBrowser {
   private eventListeners = new Map<string, Array<(params: unknown, sessionId?: string) => void>>();
   private closed = false;
 
-  private constructor(private wsUrl: string) {}
+  private wsUrl: string;
+  private constructor(wsUrl: string) { this.wsUrl = wsUrl; }
 
   static async connect(cdpHttpBase = 'http://localhost:9222', timeoutMs = 5000): Promise<RawCdpBrowser> {
     const versionUrl = `${cdpHttpBase}/json/version`;
@@ -173,11 +174,14 @@ export class RawCdpBrowser {
  * click, screenshot, evaluate, url/title).
  */
 export class RawCdpPage {
-  constructor(
-    private browser: RawCdpBrowser,
-    private sessionId: string,
-    public readonly targetId: string,
-  ) {}
+  private browser: RawCdpBrowser;
+  private sessionId: string;
+  public readonly targetId: string;
+  constructor(browser: RawCdpBrowser, sessionId: string, targetId: string) {
+    this.browser = browser;
+    this.sessionId = sessionId;
+    this.targetId = targetId;
+  }
 
   async send<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     return this.browser.send<T>(method, params, this.sessionId);
