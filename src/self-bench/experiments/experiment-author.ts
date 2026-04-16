@@ -478,7 +478,22 @@ export class ExperimentAuthorExperiment implements Experiment {
       'and cadence = { everyMs, runOnBoot: false } exactly from the brief.\n' +
       '  3. probe(ctx: ExperimentContext) must be async and return ' +
       'ProbeResult { subject, summary, evidence }. Use ctx.db for queries; ' +
-      "never throw — catch and surface errors via evidence.\n" +
+      "never throw — catch and surface errors via evidence. summary MUST " +
+      'be self-contained so a human or downstream LLM reading ONLY this ' +
+      "row understands what happened. Use a three-line structure, newline " +
+      'separated:\n' +
+      "       Result: <what was measured, with the numbers — e.g. " +
+      "'scanned 2000 findings, 134 matched tier-2 paths, avg drift=0.04'>\n" +
+      "       Threshold: <the concrete cutoff your judge() uses — e.g. " +
+      "'warn if drift > 0.1, fail if > 0.5'>\n" +
+      "       Conclusion: <one sentence stating verdict vs hypothesis + " +
+      "what it means for the operator — e.g. 'drift within tolerance; " +
+      "hypothesis holds. No action needed.'>\n" +
+      '     Evidence stays machine-readable (raw numbers, ids) for ' +
+      'downstream code; summary is the narrative layer. Error paths can ' +
+      "use a shorter summary (Result: <what failed>. Conclusion: probe " +
+      "inconclusive, requires <what>.) but must still be narrative, not " +
+      'a bare "error" string.\n' +
       '  4. judge(result, _history) returns Verdict: ' +
       "'pass' | 'warning' | 'fail'.\n" +
       '  5. No intervene method. This is observation-only.\n' +
@@ -517,12 +532,24 @@ export class ExperimentAuthorExperiment implements Experiment {
       '  async probe(ctx: ExperimentContext): Promise<ProbeResult> {\n' +
       '    try {\n' +
       "      const { data } = await ctx.db.from<{ id: string }>('some_table').select('id').limit(10);\n" +
-      "      return { subject: null, summary: `${(data ?? []).length} rows`, evidence: { count: (data ?? []).length } };\n" +
+      '      const count = (data ?? []).length;\n' +
+      '      const summary = [\n' +
+      '        `Result: scanned some_table, found ${count} row(s).`,\n' +
+      "        'Threshold: warn if count < 1 (empty table signals missing ingestion).',\n" +
+      "        count < 1 ? 'Conclusion: empty table — ingestion pipeline may be stalled, check ingest probe.' : `Conclusion: table populated (${count} rows); baseline healthy.`,\n" +
+      "      ].join('\\n');\n" +
+      '      return { subject: null, summary, evidence: { count } };\n' +
       '    } catch (err) {\n' +
-      "      return { subject: null, summary: 'probe error', evidence: { error: err instanceof Error ? err.message : String(err) } };\n" +
+      '      const msg = err instanceof Error ? err.message : String(err);\n' +
+      "      const summary = `Result: probe threw (${msg}).\\nThreshold: any exception = fail.\\nConclusion: probe inconclusive; requires operator to check table/schema.`;\n" +
+      '      return { subject: null, summary, evidence: { error: msg } };\n' +
       '    }\n' +
       '  }\n' +
-      "  judge(_r: ProbeResult, _h: Finding[]): Verdict { return 'pass'; }\n" +
+      '  judge(r: ProbeResult, _h: Finding[]): Verdict {\n' +
+      "    const ev = r.evidence as { count?: number; error?: string };\n" +
+      "    if (ev.error) return 'fail';\n" +
+      "    return (ev.count ?? 0) < 1 ? 'warning' : 'pass';\n" +
+      '  }\n' +
       '}\n' +
       '```\n' +
       ' 14. Test imports the source via ' +
