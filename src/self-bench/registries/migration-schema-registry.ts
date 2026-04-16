@@ -121,4 +121,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '121-x-contact-events.sql', expectedTables: ['agent_workforce_contact_events'] },
   { migrationFile: '122-video-jobs.sql', expectedTables: ['video_jobs', 'video_job_checkpoints'] },
   { migrationFile: '032-nudge-type-update.sql', expectedTables: ['agent_workforce_nudges_new'] },
+  { migrationFile: '027-attachment-pdf-template-type.sql', expectedTables: ['agent_workforce_attachments_new'] },
 ];
