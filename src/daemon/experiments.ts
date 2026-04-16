@@ -53,6 +53,7 @@ import { RoadmapUpdaterExperiment } from '../self-bench/experiments/roadmap-upda
 import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-observer.js';
 import { ObservationProbeExperiment } from '../self-bench/experiments/observation-probe.js';
 import { ResearchIngestProbeExperiment } from '../self-bench/experiments/research-ingest-probe.js';
+import { CodePaperCompareProbeExperiment } from '../self-bench/experiments/code-paper-compare-probe.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
 import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
 import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
@@ -84,7 +85,7 @@ import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
 import { createResendSender } from '../integrations/email/resend.js';
 import { XDmSignalsRollupExperiment } from '../self-bench/experiments/x-dm-signals-rollup.js';
-import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
+import { readWorkspaceConfig, resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import path from 'node:path';
 import { dirname } from 'path';
 import { logger } from '../lib/logger.js';
@@ -103,18 +104,35 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     void refreshRuntimeConfigCache(db);
   }, RUNTIME_CONFIG_REFRESH_INTERVAL_MS);
 
-  // Phase 7-A: configure the self-commit repo root from the
-  // daemon binary path. Derives /path/to/repo from
-  // /path/to/repo/dist/index.js. Self-commit stays disabled
-  // by default regardless — the kill-switch file at
-  // ~/.ohwow/self-commit-enabled is the operator's opt-in.
+  // Phase 7-A: configure the self-commit repo root. Two sources, in
+  // priority order:
+  //   1. workspace.json's repoRoot (Phase 1 of multi-repo self-improvement).
+  //      Required when one daemon binary serves multiple workspaces that
+  //      target different repos (default → ohwow/, avenued → ohwow.fun/).
+  //   2. cwd-derived fallback — /path/to/repo from /path/to/repo/dist/index.js.
+  //      Preserves the single-repo install's behaviour without any config.
+  // Self-commit's kill switch (~/.ohwow/self-commit-disabled) is orthogonal.
   try {
-    const entryPath = process.argv[1];
-    if (entryPath) {
-      const derived = dirname(dirname(entryPath));
-      setSelfCommitRepoRoot(derived);
-      logger.debug({ repoRoot: derived }, '[daemon] self-commit repo root configured');
+    const activeWs = resolveActiveWorkspace().name;
+    const wsCfg = activeWs ? readWorkspaceConfig(activeWs) : null;
+    let resolved: string | null = null;
+    if (wsCfg?.repoRoot && wsCfg.repoRoot.trim().length > 0) {
+      resolved = wsCfg.repoRoot;
+      logger.debug(
+        { repoRoot: resolved, source: 'workspace.json' },
+        '[daemon] self-commit repo root from workspace config',
+      );
+    } else {
+      const entryPath = process.argv[1];
+      if (entryPath) {
+        resolved = dirname(dirname(entryPath));
+        logger.debug(
+          { repoRoot: resolved, source: 'cwd-derived' },
+          '[daemon] self-commit repo root from binary path',
+        );
+      }
     }
+    if (resolved) setSelfCommitRepoRoot(resolved);
   } catch (err) {
     logger.debug({ err }, '[daemon] could not configure self-commit repo root');
   }
@@ -155,6 +173,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new RoadmapObserverExperiment());
   experimentRunner.register(new ObservationProbeExperiment());
   experimentRunner.register(new ResearchIngestProbeExperiment());
+  experimentRunner.register(new CodePaperCompareProbeExperiment());
   experimentRunner.register(new GitVelocityExperiment());
   experimentRunner.register(new XOpsObserverExperiment());
   experimentRunner.register(new XShapeTunerExperiment());

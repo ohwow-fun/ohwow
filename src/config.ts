@@ -545,6 +545,17 @@ export interface WorkspaceConfig {
   xReplyEnabled?: boolean;
   xHumorEnabled?: boolean;
   xHumorIntervalMinutes?: number;
+  /**
+   * Absolute path of the git repository this workspace's self-bench loop
+   * operates on. Overrides the cwd-derived default (which assumes the
+   * daemon binary lives under the repo). Required when a single daemon
+   * binary serves multiple workspaces that each target a different repo
+   * — e.g. default=/Users/jesus/Documents/ohwow/ohwow,
+   * avenued=/Users/jesus/Documents/ohwow/ohwow.fun. When absent, the
+   * daemon falls back to the cwd-derived behaviour so existing
+   * single-repo workspaces keep working unchanged.
+   */
+  repoRoot?: string;
 }
 
 export function workspaceConfigPath(name: string): string {
