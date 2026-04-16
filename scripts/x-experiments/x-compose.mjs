@@ -75,7 +75,7 @@ function pickSeed(historyRows, usedPatterns = new Set(), usedBuckets = new Set()
   return candidates[0];
 }
 
-async function draftPost({ brandVoice, workspaceDesc, seed, allowedShapes }) {
+async function draftPost({ brandVoice, workspaceDesc, seed, allowedShapes, priorDrafts = [] }) {
   const dontDo = (brandVoice?.dont_do || []).map(d => `  - ${d}`).join('\n') || '  (none)';
   const sys = `You draft original X posts for this team (context — DO NOT regurgitate this as post content):
 ${workspaceDesc}
@@ -101,12 +101,16 @@ Allowed shapes (pick ONE that fits the seed, or skip):
 Humor rules (when shape='humor'):
   - Subtle over loud. The reader earns the laugh, not gets punched by it.
   - Smart over silly. Punchlines come from a real tension you noticed in the craft (agent hallucinations, prompt fiddling, eval theater, vibecoded demos, context-window anxieties). Inside jokes for builders who ship.
-  - NO dad jokes. NO puns on "agent" / "LLM" / "GPT". NO VC-LinkedIn-isms ("plot twist:", "POV:", "nobody: / me:"). NO setup-punchline format. NO emojis.
-  - NO hashtags, NO em-dashes, NO exclamation marks.
+  - CLARITY before cleverness. If a reader has to re-read to get it, skip. If the premise requires a logic leap that isn't obvious in one pass, skip.
+  - Banned meme templates (instant skip): "the new X does everything. except Y", "X but Y", "X walks into a Y", "nobody: / me:", "POV:", "plot twist:", "that moment when", "tell me you X without telling me".
+  - NO dad jokes. NO puns on "agent" / "LLM" / "GPT" / "AI". NO VC-LinkedIn-isms. NO setup-punchline format. NO emojis.
+  - NO hashtags, NO em-dashes, NO exclamation marks. No question marks unless genuinely rhetorical.
   - Under 200 chars. Most should land 60-140 chars. Brevity IS the joke.
   - Never at someone's expense. Never about a specific person, company, or model by name. Punch at the genre, not the players.
-  - Think: a short aside a senior builder mumbles while debugging. Not a standup bit.
-  - If you can't write one this good, skip. Mediocre humor is worse than none.
+  - Don't force "we"/"i" framing when the subject IS the agent/model/tool. Let the funnier subject lead the sentence.
+  - Each joke should punch at a DIFFERENT craft-tension: eval theater, hallucination, prompt fragility, latency, context loss, tool-use miss, context-switching, demo-vs-production gap, etc. Don't reuse the same punchline shape twice in a batch.
+  - Think: a short aside a senior builder mumbles while debugging. Not a standup bit. Not a tweet template. Not a riff on an example you've already written.
+  - If you can't write one this good, skip. Mediocre humor is worse than none. Humor is the ONE shape where the skip bar is highest — it's safer to post nothing.
 
 Test each draft against: would a builder who doesn't know us read this and learn, agree, disagree, save it, or (for humor) smile-nod? If none of those, skip.
 
@@ -123,12 +127,15 @@ Skip (shape='skip', post='', confidence=0) when:
 - The seed is too generic to say anything specific.
 - The natural post would be a pitch or hype.
 - The claim would need evidence we don't have.`;
+  const priorBlock = priorDrafts.length
+    ? `\nDrafts already written in THIS batch (do NOT repeat the angle, punchline shape, or subject — pick a different craft-tension):\n${priorDrafts.map((d, i) => `  ${i + 1}. [${d.shape}] ${d.post}`).join('\n')}\n`
+    : '';
   const prompt = `Recent intelligence brief seed:
   bucket: ${seed.bucket}
   date: ${seed.date}
   headline: ${seed.headline || '(none)'}
   emerging_pattern: ${seed.pattern}
-
+${priorBlock}
 Allowed shapes this run: ${[...allowedShapes].join(', ')}
 
 Draft ONE post.`;
@@ -169,13 +176,45 @@ async function main() {
     usedBuckets.add(seed.bucket);
 
     let draft;
-    try {
-      draft = await draftPost({ brandVoice: cfg.brand_voice, workspaceDesc: cfg.workspace_description, seed, allowedShapes: SHAPES });
-      llmSpend += 0.001;
-    } catch (e) {
-      console.log(`  [${i+1}] draft failed: ${e.message}`);
-      continue;
+    // Dedup retry loop: small models happily repeat themselves across
+    // consecutive drafts in a batch even when told not to. Reject a
+    // draft whose post shares a long substring with any prior draft
+    // and try again. Cap retries to stay within spend budget.
+    const priorPosts = drafts.map(d => d.draft.post).filter(Boolean);
+    const dupOf = (text) => {
+      const norm = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').slice(0, 120);
+      const n = norm(text);
+      for (const prev of priorPosts) {
+        const p = norm(prev);
+        if (!p || !n) continue;
+        // Long common substring ≥ 30 chars → treat as duplicate.
+        for (let k = 0; k <= p.length - 30; k++) {
+          if (n.includes(p.slice(k, k + 30))) return prev;
+        }
+      }
+      return null;
+    };
+    let attempts = 0;
+    let extraHint = '';
+    while (attempts < 3) {
+      attempts++;
+      try {
+        draft = await draftPost({
+          brandVoice: cfg.brand_voice,
+          workspaceDesc: cfg.workspace_description,
+          seed: { ...seed, pattern: seed.pattern + extraHint },
+          allowedShapes: SHAPES,
+          priorDrafts: drafts.map(d => ({ shape: d.draft.shape, post: d.draft.post })).filter(d => d.post),
+        });
+        llmSpend += 0.001;
+      } catch (e) {
+        console.log(`  [${i+1}] draft failed (attempt ${attempts}): ${e.message}`);
+        break;
+      }
+      if (!draft.post || !dupOf(draft.post)) break;
+      extraHint = ` (the previous attempt duplicated an earlier draft — pick a completely different craft-tension)`;
     }
+    if (!draft) continue;
     const record = { seed, draft, proposed: false, ts: new Date().toISOString() };
 
     console.log(`\n  [${i+1}] shape=${draft.shape} · conf=${draft.confidence.toFixed(2)}`);

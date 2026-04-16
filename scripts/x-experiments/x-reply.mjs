@@ -46,6 +46,26 @@ const MAX_REPLIES_PER_RUN = Number(process.env.MAX_REPLIES_PER_RUN || 5);
 const REPLY_BUCKETS = new Set((process.env.REPLY_BUCKETS || 'hacks,advancements,inspiration,market_signal,competitors').split(',').map(s => s.trim()).filter(Boolean));
 const REPLY_MIN_SCORE = Number(process.env.REPLY_MIN_SCORE || 0.55);
 
+// Deterministic post-filter: small models sneak pitchy phrases past the
+// system-prompt ban list. Catching them here is cheaper than smarter
+// prompting. Each match downgrades the draft to a skip.
+const BANNED_PHRASES = [
+  'with your keys',
+  'on your machine',
+  'on your schedule',
+  'local agent workspaces',
+  'our agent workspaces',
+  'our local runtime',
+  'our daemon',
+  'our stack',
+  'mcp-first',
+  'multi-workspace',
+];
+function detectBanned(text) {
+  const t = (text || '').toLowerCase();
+  return BANNED_PHRASES.filter(p => t.includes(p));
+}
+
 function today() { return new Date().toISOString().slice(0, 10); }
 function postsSidecar(workspace, date) {
   return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, `x-posts-${date}.jsonl`);
@@ -87,6 +107,9 @@ Hard rules:
 ${dontDo}
   - Never start with "we built" / "we're building" / "check out" / "try X". Those are pitches.
   - Never mention our product name unless the post is a direct, unambiguous ask ("what tools do people use for Y", "anyone running Z locally"). Even then, once, briefly.
+  - Banned phrases (instant skip if they appear as "connective tissue" to tie the reply back to us): "in local agent workspaces", "our agent workspaces", "our local runtime", "our daemon", "our stack", "local-first" as an adjective, "mcp-first", "multi-workspace", "on your machine, on your schedule", "with your keys". These are pitch-shortcuts disguised as context.
+  - Never claim domain experience we don't have. We ship a local AI runtime + agent orchestration. We do NOT run bioinformatics, legal work, medicine, fintech, education, or any specific vertical. If the post is in a vertical, speak from the general builder/runtime angle or skip — never fake domain expertise.
+  - "helped me" + feature description = pitch disguised as advice. Skip or rewrite without the feature description.
   - Do not hunt competitor-frustration posts looking to swoop in. If someone vents about zapier, shared-pain is fine; selling is not.
   - Don't post generic "great thread" / "this is huge" / "love this" filler.
   - Aggregator / news-bot / hype-spammer accounts (GitTrend, ai news, retweet bots): SKIP. Replying there is noise.
@@ -174,6 +197,11 @@ async function main() {
     } catch (e) {
       console.log(`  @${post.author} DRAFT FAILED: ${e.message}`);
       continue;
+    }
+    const offenders = detectBanned(draft.reply);
+    if (offenders.length) {
+      console.log(`  @${post.author} filtered: banned phrase '${offenders[0]}' — downgraded to skip`);
+      draft = { ...draft, shape: 'skip', reply: '', confidence: 0, reason: `auto-skip: banned phrase '${offenders[0]}'` };
     }
 
     const record = {
