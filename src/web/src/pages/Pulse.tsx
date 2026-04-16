@@ -155,14 +155,22 @@ interface PulseData {
       status: string;
       text: string;
       suggestedAction: string;
+      draftReply?: string;
       dispatchedKind?: string;
       findingId?: string;
       taskId?: string;
+      approvalId?: string;
+      shippedAt?: string;
+      sendConfirmed?: boolean;
+      realMessageId?: string;
+      confirmedAt?: string;
     }>;
     nextStepsRollup: {
       open: number;
       dispatched: number;
       shipped: number;
+      confirmed: number;
+      unconfirmed: number;
       ignored: number;
     };
     replyQueue: {
@@ -719,6 +727,12 @@ export function PulsePage() {
             <span className="text-warning">open {pipeline.nextStepsRollup.open}</span>
             <span className="text-info">dispatched {pipeline.nextStepsRollup.dispatched}</span>
             <span className="text-success">shipped {pipeline.nextStepsRollup.shipped}</span>
+            {pipeline.nextStepsRollup.confirmed > 0 && (
+              <span className="text-success font-medium">· {pipeline.nextStepsRollup.confirmed} confirmed</span>
+            )}
+            {pipeline.nextStepsRollup.unconfirmed > 0 && (
+              <span className="text-critical">unconfirmed {pipeline.nextStepsRollup.unconfirmed}</span>
+            )}
             <span className="text-neutral-500">ignored {pipeline.nextStepsRollup.ignored}</span>
           </div>
         </div>
@@ -728,7 +742,9 @@ export function PulsePage() {
           <ul className="divide-y divide-white/[0.04]">
             {pipeline.nextSteps.slice(0, 12).map(s => {
               const statusColor =
-                s.status === 'open' ? 'bg-warning'
+                s.sendConfirmed === true ? 'bg-success'
+                : s.sendConfirmed === false ? 'bg-critical'
+                : s.status === 'open' ? 'bg-warning'
                 : s.status === 'dispatched' ? 'bg-info'
                 : s.status === 'shipped' ? 'bg-success'
                 : 'bg-neutral-600';
@@ -752,13 +768,27 @@ export function PulsePage() {
                       {s.dispatchedKind && (
                         <span className="text-[10px] text-neutral-500">→ {s.dispatchedKind.replace(/_/g, ' ')}</span>
                       )}
+                      {s.sendConfirmed === true && (
+                        <span className="text-[10px] text-success uppercase tracking-wider font-medium" title={s.realMessageId}>
+                          ✓ confirmed
+                        </span>
+                      )}
+                      {s.sendConfirmed === false && (
+                        <span className="text-[10px] text-critical uppercase tracking-wider font-medium">
+                          ✗ never landed
+                        </span>
+                      )}
                     </div>
                     <p className="text-neutral-400 mt-0.5 line-clamp-2">{s.text}</p>
-                    {s.suggestedAction && (
+                    {s.draftReply ? (
+                      <p className="text-neutral-300 mt-1 italic line-clamp-2 border-l-2 border-info/30 pl-2">
+                        "{s.draftReply}"
+                      </p>
+                    ) : s.suggestedAction ? (
                       <p className="text-neutral-500 mt-0.5 italic line-clamp-1">
                         → {s.suggestedAction}
                       </p>
-                    )}
+                    ) : null}
                   </div>
                   <span className="text-[10px] text-neutral-600 flex-none tabular-nums">{relTime(s.createdAt)}</span>
                 </li>

@@ -34,6 +34,7 @@
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import {
   proposeReplyFromNextStep,
+  reconcileConfirmedNextSteps,
   reconcileShippedNextSteps,
 } from '../../lib/dm-reply-queue.js';
 import { logger } from '../../lib/logger.js';
@@ -116,17 +117,30 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
       );
     }
 
+    // Post-send confirmation: now that the reply dispatcher (and poller
+    // on its next tick) have landed real outbound messages, match them
+    // back to shipped next_steps so Pulse can show "actually delivered
+    // to X" vs just "approval applied".
+    const confirmed = await reconcileConfirmedNextSteps(ctx.db, ctx.workspaceId);
+
     const open = await this.loadOpenSteps(ctx.db, ctx.workspaceId);
     if (open.length === 0) {
+      const pieces: string[] = [];
+      if (reconciled.shipped > 0) pieces.push(`${reconciled.shipped} shipped`);
+      if (confirmed.confirmed > 0) pieces.push(`${confirmed.confirmed} confirmed`);
+      if (confirmed.unconfirmed > 0) pieces.push(`${confirmed.unconfirmed} unconfirmed`);
+      const summary = pieces.length === 0
+        ? 'no open next_step events'
+        : `no open next_step events; ${pieces.join(', ')}`;
       return {
         subject: 'dispatcher',
-        summary: reconciled.shipped > 0
-          ? `no open next_step events; ${reconciled.shipped} shipped via approval reconciliation`
-          : 'no open next_step events',
+        summary,
         evidence: {
           open_total: 0, dispatched: 0, ignored: 0, errors: 0, results: [],
           reconciled_scanned: reconciled.scanned,
           reconciled_shipped: reconciled.shipped,
+          confirmed: confirmed.confirmed,
+          unconfirmed: confirmed.unconfirmed,
         },
       };
     }
@@ -237,7 +251,18 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
   private async dispatchOne(ctx: ExperimentContext, step: OpenNextStep): Promise<DispatchResult> {
     const type = step.payload.step_type;
 
-    if (type === 'nothing' || type === 'sentiment') {
+    // Routing policy:
+    // - 'nothing'               → ignored.
+    // - 'bug_report' / 'feature_request' → proposal finding for the
+    //   loop to investigate, PLUS a reply ack so the user knows we saw
+    //   them. Keeps the conversation smooth even while backend work
+    //   kicks off in parallel.
+    // - 'question' / 'follow_up' / 'sentiment' with a draft_reply →
+    //   reply approval only. "sentiment" without a draft still ignores.
+    //
+    // Every branch that has a usable draft queues a reply — a silent
+    // pipeline is the failure mode we're routing around.
+    if (type === 'nothing') {
       await this.setStatus(ctx.db, step.eventId, step.payload, 'ignored');
       return {
         eventId: step.eventId,
@@ -247,29 +272,46 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
       };
     }
 
+    const hasDraft = typeof step.payload.draft_reply === 'string' && step.payload.draft_reply.trim().length > 0;
+
     if (type === 'bug_report' || type === 'feature_request') {
       const finding = await this.emitProposalFinding(ctx, step);
+      // Also acknowledge the user if the analyst produced a draft.
+      const reply = hasDraft ? await this.queueReplyApproval(ctx, step) : null;
       await this.setStatus(ctx.db, step.eventId, step.payload, 'dispatched', {
-        dispatched_kind: 'proposal',
+        dispatched_kind: reply ? 'proposal+ack' : 'proposal',
         finding_id: finding.id,
+        approval_id: reply?.approvalId,
+        approval_status: reply?.approvalStatus,
+        conversation_pair: reply?.conversationPair,
       });
       return {
         eventId: step.eventId,
         contactName: step.contactName,
         step_type: type,
         outcome: 'dispatched',
-        action: `proposal finding ${finding.id.slice(0, 8)}`,
+        action: reply
+          ? `proposal ${finding.id.slice(0, 8)} + ack ${reply.approvalId.slice(0, 8)}`
+          : `proposal ${finding.id.slice(0, 8)}`,
       };
     }
 
-    if (type === 'question' || type === 'follow_up') {
+    if (type === 'question' || type === 'follow_up' || (type === 'sentiment' && hasDraft)) {
       const queued = await this.queueReplyApproval(ctx, step);
       if (!queued) {
         // Approvals path unavailable (no jsonl configured, missing
-        // conversation_pair, etc.) — leave the step open so a future
-        // tick with proper wiring can still dispatch. No task
-        // fallback: we don't want dangling agent tasks that nothing
-        // closes.
+        // conversation_pair, etc.). For 'sentiment' fall through to
+        // ignore — it's optional. For 'question' / 'follow_up',
+        // surface an error so the next tick retries.
+        if (type === 'sentiment') {
+          await this.setStatus(ctx.db, step.eventId, step.payload, 'ignored');
+          return {
+            eventId: step.eventId,
+            contactName: step.contactName,
+            step_type: type,
+            outcome: 'ignored',
+          };
+        }
         return {
           eventId: step.eventId,
           contactName: step.contactName,
@@ -293,7 +335,7 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
       };
     }
 
-    // Safety net
+    // 'sentiment' without a draft: silent acknowledgement, nothing to send.
     await this.setStatus(ctx.db, step.eventId, step.payload, 'ignored');
     return {
       eventId: step.eventId,
@@ -372,7 +414,12 @@ export class NextStepDispatcherExperiment extends BusinessExperiment {
     }
 
     const typePrefix = step.payload.step_type === 'question' ? 'Reply' : 'Follow-up';
-    const replyText = step.payload.suggested_action?.trim() || step.payload.text.trim();
+    // draft_reply is the actual DM-ready text from the analyst. Fall
+    // back to suggested_action ONLY when the analyst omitted it — but
+    // never fall through to payload.text, which summarises what the
+    // USER said, not what we'd respond with.
+    const replyText = (step.payload.draft_reply ?? '').trim()
+      || step.payload.suggested_action.trim();
     if (!replyText) return null;
     const summary = `${typePrefix} to ${step.contactName ?? 'contact'}: ${step.payload.text.slice(0, 80)}`;
 

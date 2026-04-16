@@ -63,7 +63,12 @@ export interface NextStepPayload {
   step_type: NextStepType;
   urgency: NextStepUrgency;
   text: string;
+  /** High-level action the loop should take. Instruction-style: "Send
+   * a follow-up asking about the beat they lost." NOT a DM body. */
   suggested_action: string;
+  /** Actual first-person message ready to send as a DM to the contact.
+   * Empty string for non-reply step types (bug_report, nothing, etc.). */
+  draft_reply?: string;
   status: NextStepStatus;
   source_message_ids?: string[];
 }
@@ -389,6 +394,7 @@ export class ContactConversationAnalystExperiment extends BusinessExperiment {
             urgency: step.urgency,
             text: step.text,
             suggested_action: step.suggested_action,
+            draft_reply: step.draft_reply,
             status: 'open',
             source_message_ids: step.source_message_ids ?? [],
           } satisfies NextStepPayload),
@@ -446,7 +452,7 @@ export class ContactConversationAnalystExperiment extends BusinessExperiment {
 
 // ---- prompt helpers -----------------------------------------------------
 
-const ANALYST_SYSTEM_PROMPT = `You are a CRM conversation analyst. You read a recent DM thread with a user and extract zero or more actionable next-steps for the ohwow.fun team.
+const ANALYST_SYSTEM_PROMPT = `You are a CRM conversation analyst for ohwow.fun (an AI runtime). You read a recent DM thread with a user and extract zero or more actionable next-steps for the ohwow team.
 
 Output a JSON object only (no prose) with shape:
 {
@@ -456,6 +462,7 @@ Output a JSON object only (no prose) with shape:
       "urgency": "high" | "medium" | "low",
       "text": "<concise summary of what the user said / needs, 1 sentence>",
       "suggested_action": "<one concrete thing ohwow should do, 1 sentence>",
+      "draft_reply": "<actual DM-ready message we would send, first person, conversational, <= 280 chars>",
       "source_message_ids": ["<message id 1>", ...]
     }
   ]
@@ -463,14 +470,20 @@ Output a JSON object only (no prose) with shape:
 
 Rules:
 - Extract at most 3 steps. Prefer quality over quantity.
-- "bug_report": user reports something broken in ohwow.fun (UI, API, agents, builds). suggested_action must name the symptom + probable surface area.
-- "feature_request": user asks for capability we don't have. suggested_action should propose a small first step.
-- "question": user asks us something. suggested_action drafts a short, direct reply.
-- "follow_up": conversation went quiet and a nudge would help.
-- "sentiment": pure emotion / praise / complaint with no action. Only include when notable.
-- "nothing": the conversation is noise or already resolved. When all messages are noise, return an empty steps array.
+- "bug_report": user reports something broken in ohwow.fun (UI, API, agents, builds). suggested_action names the symptom + probable surface area. draft_reply acknowledges the report + says we're looking at it.
+- "feature_request": user asks for capability we don't have. suggested_action proposes a small first step. draft_reply acknowledges + asks one clarifying question if needed.
+- "question": user asks us something. suggested_action is the internal plan. draft_reply IS the answer we'd send them.
+- "follow_up": conversation went quiet and a nudge would help. suggested_action = "nudge about X". draft_reply IS the nudge (warm, not pushy, references their last topic).
+- "sentiment": pure emotion / praise / complaint with no action. draft_reply is a short human acknowledgment (or empty if no reply needed).
+- "nothing": the conversation is noise or already resolved. draft_reply MUST be empty string.
 - Never invent bugs or features the user did not actually describe.
-- text must be <= 220 chars; suggested_action <= 220 chars.`;
+- text <= 220 chars; suggested_action <= 220 chars; draft_reply <= 280 chars.
+
+draft_reply voice:
+- First person from the ohwow team. No "the team will...". Just "I'll take a look" or "Looking into it now."
+- Reference something specific the user said — proves you read them.
+- No em dashes. No exclamation marks unless they used one. No pitch CTAs ("book a demo", "jump on a call"). No em dashes. Plain language.
+- If urgency=high, be explicit that we're on it; if low, keep it casual.`;
 
 function renderAnalystPrompt(c: AnalystCandidate): string {
   const images = collectImageUrls(c.messages);
@@ -521,6 +534,7 @@ interface ParsedStep {
   urgency: NextStepUrgency;
   text: string;
   suggested_action: string;
+  draft_reply: string;
   source_message_ids?: string[];
 }
 
@@ -547,6 +561,7 @@ function parseAnalystJson(raw: string): { ok: true; steps: ParsedStep[] } | { ok
     const urgency = s.urgency;
     const text = s.text;
     const action = s.suggested_action;
+    const draft = s.draft_reply;
     if (!isNextStepType(stepType)) continue;
     if (!isUrgency(urgency)) continue;
     if (typeof text !== 'string' || text.length === 0) continue;
@@ -559,6 +574,7 @@ function parseAnalystJson(raw: string): { ok: true; steps: ParsedStep[] } | { ok
       urgency,
       text: text.slice(0, 220),
       suggested_action: action.slice(0, 220),
+      draft_reply: typeof draft === 'string' ? draft.slice(0, 280) : '',
       source_message_ids: ids,
     });
   }

@@ -206,6 +206,12 @@ export interface ReconcileResult {
   shipped: number;
 }
 
+export interface ConfirmResult {
+  scanned: number;
+  confirmed: number;
+  unconfirmed: number;
+}
+
 /**
  * Close the loop: for every next_step event whose approval has been
  * `applied`, flip its status to `shipped`. Called by NextStepDispatcher
@@ -240,6 +246,133 @@ export async function reconcileShippedNextSteps(
     );
   }
   return { scanned: pending.length, shipped };
+}
+
+/**
+ * Close the send-side loop: for each next_step already marked 'shipped'
+ * (approval applied) find a matching REAL outbound message in
+ * x_dm_messages — one whose message_id isn't the synthetic
+ * `outbound-<uuid>` the reply dispatcher writes on send. Match is by
+ * text equality after whitespace collapse — X may trim trailing spaces
+ * but otherwise round-trips DM bodies exactly.
+ *
+ * When a match lands, stamp the next_step's payload with:
+ *   send_confirmed: true
+ *   real_message_id: <X's uuid>
+ *   confirmed_at: <now>
+ *
+ * When no match is found after `unconfirmedGraceSec` seconds past the
+ * shipped_at timestamp, stamp send_confirmed: false — operator sees
+ * "applied but never landed on X" as a hard failure signal.
+ */
+export async function reconcileConfirmedNextSteps(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  opts: { unconfirmedGraceSec?: number } = {},
+): Promise<ConfirmResult> {
+  const graceSec = opts.unconfirmedGraceSec ?? 2 * 60 * 60; // 2h default
+
+  // Load shipped-but-not-yet-confirmed next_steps.
+  interface Row { id: string; payload: unknown }
+  let rows: Row[] = [];
+  try {
+    const { data } = await db
+      .from<Row>('agent_workforce_contact_events')
+      .select('id, payload')
+      .eq('workspace_id', workspaceId)
+      .eq('kind', 'next_step')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    rows = (data as Row[] | null) ?? [];
+  } catch {
+    return { scanned: 0, confirmed: 0, unconfirmed: 0 };
+  }
+
+  const pending: Array<{ id: string; payload: Record<string, unknown>; pair: string; text: string; shippedAt: string }> = [];
+  for (const row of rows) {
+    const payload = normalizePayload(row.payload);
+    if (!payload) continue;
+    if (payload.status !== 'shipped') continue;
+    if (payload.send_confirmed === true || payload.send_confirmed === false) continue;
+    const pair = typeof payload.conversation_pair === 'string' ? payload.conversation_pair : null;
+    const text = typeof payload.draft_reply === 'string' && payload.draft_reply.length > 0
+      ? payload.draft_reply
+      : typeof payload.suggested_action === 'string' ? payload.suggested_action : null;
+    const shippedAt = typeof payload.shipped_at === 'string' ? payload.shipped_at : null;
+    if (!pair || !text || !shippedAt) continue;
+    pending.push({ id: row.id, payload, pair, text, shippedAt });
+  }
+  if (pending.length === 0) return { scanned: 0, confirmed: 0, unconfirmed: 0 };
+
+  let confirmed = 0;
+  let unconfirmed = 0;
+  const now = Date.now();
+
+  for (const row of pending) {
+    // Look for a real outbound row whose text matches ours and whose
+    // observed_at is >= shippedAt. Real = message_id not starting with
+    // 'outbound-' (the synthetic prefix the reply dispatcher writes).
+    try {
+      const { data } = await db
+        .from<{ message_id: string; text: string | null; observed_at: string }>('x_dm_messages')
+        .select('message_id, text, observed_at')
+        .eq('workspace_id', workspaceId)
+        .eq('conversation_pair', row.pair)
+        .eq('direction', 'outbound')
+        .gte('observed_at', row.shippedAt)
+        .order('observed_at', { ascending: true })
+        .limit(50);
+      const candidates = (data as Array<{ message_id: string; text: string | null; observed_at: string }> | null) ?? [];
+      const match = candidates.find(c =>
+        !c.message_id.startsWith('outbound-')
+        && normalizeText(c.text ?? '') === normalizeText(row.text)
+      );
+      if (match) {
+        const merged: Record<string, unknown> = {
+          ...row.payload,
+          send_confirmed: true,
+          real_message_id: match.message_id,
+          confirmed_at: match.observed_at,
+        };
+        await db.from('agent_workforce_contact_events').update({ payload: JSON.stringify(merged) }).eq('id', row.id);
+        confirmed++;
+        continue;
+      }
+      // Not found yet. If we're inside the grace window, leave pending
+      // for the next tick; if past it, stamp unconfirmed so the
+      // operator sees the send failed silently.
+      const shippedMs = new Date(row.shippedAt).getTime();
+      if (Number.isFinite(shippedMs) && (now - shippedMs) / 1000 > graceSec) {
+        const merged: Record<string, unknown> = {
+          ...row.payload,
+          send_confirmed: false,
+          unconfirmed_at: new Date().toISOString(),
+        };
+        await db.from('agent_workforce_contact_events').update({ payload: JSON.stringify(merged) }).eq('id', row.id);
+        unconfirmed++;
+      }
+    } catch (err) {
+      logger.debug(
+        { err: err instanceof Error ? err.message : err, eventId: row.id },
+        '[dm-reply-queue] confirmation lookup failed',
+      );
+    }
+  }
+
+  if (confirmed > 0 || unconfirmed > 0) {
+    logger.info(
+      { workspaceId, scanned: pending.length, confirmed, unconfirmed },
+      '[dm-reply-queue] reconciled send confirmations',
+    );
+  }
+  return { scanned: pending.length, confirmed, unconfirmed };
+}
+
+/** Whitespace-collapse for text equality. X sometimes trims trailing
+ * blanks and normalises runs of spaces. Keep this narrow — we want
+ * equality, not semantic fuzziness. */
+function normalizeText(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 /**

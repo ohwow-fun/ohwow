@@ -369,9 +369,15 @@ export function createPulseRouter(
         status: string;
         text: string;
         suggestedAction: string;
+        draftReply?: string;
         dispatchedKind?: string;
         findingId?: string;
         taskId?: string;
+        approvalId?: string;
+        shippedAt?: string;
+        sendConfirmed?: boolean;
+        realMessageId?: string;
+        confirmedAt?: string;
       }
       const nextSteps: NextStepItem[] = [];
       for (const row of rawNextSteps) {
@@ -383,9 +389,15 @@ export function createPulseRouter(
         const status = typeof obj.status === 'string' ? obj.status : 'open';
         const text = typeof obj.text === 'string' ? obj.text : '';
         const suggestedAction = typeof obj.suggested_action === 'string' ? obj.suggested_action : '';
+        const draftReply = typeof obj.draft_reply === 'string' ? obj.draft_reply : undefined;
         const dispatchedKind = typeof obj.dispatched_kind === 'string' ? obj.dispatched_kind : undefined;
         const findingId = typeof obj.finding_id === 'string' ? obj.finding_id : undefined;
         const taskId = typeof obj.task_id === 'string' ? obj.task_id : undefined;
+        const approvalId = typeof obj.approval_id === 'string' ? obj.approval_id : undefined;
+        const shippedAt = typeof obj.shipped_at === 'string' ? obj.shipped_at : undefined;
+        const sendConfirmed = typeof obj.send_confirmed === 'boolean' ? obj.send_confirmed : undefined;
+        const realMessageId = typeof obj.real_message_id === 'string' ? obj.real_message_id : undefined;
+        const confirmedAt = typeof obj.confirmed_at === 'string' ? obj.confirmed_at : undefined;
         nextSteps.push({
           id: row.id,
           contactId: row.contact_id,
@@ -396,9 +408,15 @@ export function createPulseRouter(
           status,
           text,
           suggestedAction,
+          draftReply,
           dispatchedKind,
           findingId,
           taskId,
+          approvalId,
+          shippedAt,
+          sendConfirmed,
+          realMessageId,
+          confirmedAt,
         });
       }
 
@@ -406,6 +424,8 @@ export function createPulseRouter(
         open:       nextSteps.filter(s => s.status === 'open').length,
         dispatched: nextSteps.filter(s => s.status === 'dispatched').length,
         shipped:    nextSteps.filter(s => s.status === 'shipped').length,
+        confirmed:  nextSteps.filter(s => s.sendConfirmed === true).length,
+        unconfirmed: nextSteps.filter(s => s.sendConfirmed === false).length,
         ignored:    nextSteps.filter(s => s.status === 'ignored').length,
       };
 
