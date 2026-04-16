@@ -73,6 +73,7 @@ import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-caden
 import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
 import { FindingsGcExperiment } from '../self-bench/experiments/findings-gc.js';
 import { ExperimentCostObserverExperiment } from '../self-bench/experiments/experiment-cost-observer.js';
+import { ClassifierStabilityExperiment } from '../self-bench/experiments/classifier-stability.js';
 import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-lock-contention.js';
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
@@ -222,6 +223,11 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // experiments spending without producing non-trivial signal. Read-only
   // — defunding is an operator decision.
   experimentRunner.register(new ExperimentCostObserverExperiment());
+  // Audits intra-handle consistency of the x-authors-to-crm intent
+  // classifier. Flags handles whose `accepted` verdict flipped across
+  // runs — each flip is a concrete qualified-lead risk. Observer only;
+  // the fix lives in scripts/x-experiments/_qualify.mjs.
+  experimentRunner.register(new ClassifierStabilityExperiment());
   experimentRunner.register(new FormatDurationFuzzExperiment());
   experimentRunner.register(new TokenSimilarityFuzzExperiment());
   experimentRunner.register(new StagnationFuzzExperiment());
