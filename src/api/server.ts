@@ -62,6 +62,7 @@ import { createRagPublicRouter } from './routes/rag.js';
 import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createOrgRouter } from './routes/org.js';
+import { createAttributionRouter } from './routes/attribution.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createBrowserSessionRouter } from './routes/browser-session.js';
 import { createDesktopSessionRouter } from './routes/desktop-session.js';
@@ -218,6 +219,13 @@ export function createServer(deps: ServerDeps): {
       },
     }));
   }
+
+  // Attribution hit endpoint — public, triggered by outbound links
+  // embedding ?t=<contact.outreach_token>. Lives alongside webhooks
+  // because it too must be reachable without auth. Kill switch and
+  // redirect URL are runtime_config keys so operators can pause
+  // tracking without redeploying.
+  app.use(createAttributionRouter(db));
 
   // Maintenance: walk every synced row in the workspace and re-fire
   // reportResource for each. Used to bootstrap the cloud mirror after a
