@@ -573,4 +573,81 @@ describe('LocalScheduler', () => {
       scheduler.stop();
     });
   });
+
+  // ─── Defer Gates: Bios + Homeostasis ─────────────────────────────
+  //
+  // Regression guard for the hot-spin incident: a stuck-true defer gate
+  // combined with a past-due schedule caused recalculate() to emit
+  // setTimeout(tick, 0) on every tick, producing 216 ticks/sec and a
+  // 840 MB daemon log in 4.5 h. Bios/homeostasis defers must wait a
+  // full heartbeat before re-checking.
+
+  describe('defer gates', () => {
+    it('should NOT re-tick immediately when biosDeferCheck keeps returning true, even with a past-due schedule', async () => {
+      const pastDue = new Date(Date.now() - 60_000).toISOString();
+      const { scheduler, engine } = createScheduler({
+        agent_workforce_schedules: {
+          data: [
+            {
+              id: 'sched-1',
+              workspace_id: 'ws-test',
+              agent_id: 'agent-1',
+              workflow_id: null,
+              label: 'deferred',
+              cron: '0 9 * * *',
+              enabled: 1,
+              next_run_at: pastDue,
+              last_run_at: null,
+              task_prompt: 'Do thing',
+            },
+          ],
+        },
+      });
+      scheduler.setBiosDeferCheck(() => true);
+
+      await scheduler.start();
+
+      // Defer path taken: no fire.
+      expect(engine.executeTask).not.toHaveBeenCalled();
+
+      // Advance just under a heartbeat — tick must not re-enter.
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      expect(engine.executeTask).not.toHaveBeenCalled();
+
+      scheduler.stop();
+    });
+
+    it('should NOT re-tick immediately when homeostasis throttle is high, even with a past-due schedule', async () => {
+      const pastDue = new Date(Date.now() - 60_000).toISOString();
+      const { scheduler, engine } = createScheduler({
+        agent_workforce_schedules: {
+          data: [
+            {
+              id: 'sched-1',
+              workspace_id: 'ws-test',
+              agent_id: 'agent-1',
+              workflow_id: null,
+              label: 'throttled',
+              cron: '0 9 * * *',
+              enabled: 1,
+              next_run_at: pastDue,
+              last_run_at: null,
+              task_prompt: 'Do thing',
+            },
+          ],
+        },
+      });
+      scheduler.setHomeostasis({
+        check: () => ({ correctiveActions: [{ type: 'throttle', urgency: 0.9 }] }),
+      });
+
+      await scheduler.start();
+
+      expect(engine.executeTask).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      expect(engine.executeTask).not.toHaveBeenCalled();
+
+      scheduler.stop();
+    });
+  });
 });

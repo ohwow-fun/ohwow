@@ -35,6 +35,16 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/**', 'src/web/**', 'node_modules/**'],
+    ignores: [
+      'dist/**',
+      'src/web/**',
+      'node_modules/**',
+      // Transient smoke artifacts emitted by the self-bench experiment
+      // runner (also excluded from tsconfig in cd7d7fa). Files appear and
+      // unlink within seconds; a lint glob racing them trips ENOENT.
+      'src/self-bench/experiments/tmpl-smoke-*.ts',
+      'src/self-bench/experiments/mig-smoke-*.ts',
+      'src/self-bench/experiments/subprocess-smoke-*.ts',
+    ],
   },
 );

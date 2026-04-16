@@ -68,6 +68,8 @@ export class LocalScheduler {
   private homeostasis: { check(): { correctiveActions: Array<{ type: string; urgency: number }> } } | null = null;
   /** Bios boundary/stress check: returns true if schedule should be deferred (off-hours or human stressed). */
   private biosDeferCheck: (() => boolean) | null = null;
+  /** Last epoch-ms a defer was logged; used to coalesce spam when the gate is stuck true. */
+  private lastDeferLogMs = 0;
 
   get isRunning(): boolean {
     return this.running;
@@ -158,25 +160,30 @@ export class LocalScheduler {
       .eq('workspace_id', this.workspaceId)
       .eq('enabled', 1);
 
-    // Homeostasis gate: defer all schedule execution when system is throttling
+    // Homeostasis gate: defer all schedule execution when system is throttling.
+    // When the gate fires we cannot call recalculate() — it would find the
+    // earliest past-due next_run_at and schedule another tick with
+    // delayMs=0, producing a hot spin (216+ ticks/sec observed). Instead,
+    // wait a full HEARTBEAT_INTERVAL before re-checking the gate.
     if (this.homeostasis) {
       try {
         const state = this.homeostasis.check();
         const throttle = state.correctiveActions.find(a => a.type === 'throttle');
         if (throttle && throttle.urgency > 0.7) {
-          logger.info({ urgency: throttle.urgency }, 'scheduler: deferring all schedules due to homeostasis throttle');
-          await this.recalculate();
+          this.logDeferCoalesced({ urgency: throttle.urgency, gate: 'homeostasis' });
+          this.deferForHeartbeat();
           return;
         }
       } catch { /* homeostasis check is non-fatal */ }
     }
 
-    // Bios gate: defer if human is stressed or outside work hours
+    // Bios gate: defer if human is stressed or outside work hours.
+    // Same hot-spin protection as homeostasis gate above.
     if (this.biosDeferCheck) {
       try {
         if (this.biosDeferCheck()) {
-          logger.info('scheduler: deferring all schedules due to bios boundary/stress');
-          await this.recalculate();
+          this.logDeferCoalesced({ gate: 'bios' });
+          this.deferForHeartbeat();
           return;
         }
       } catch { /* bios check is non-fatal */ }
@@ -288,6 +295,36 @@ export class LocalScheduler {
     } finally {
       this.recalculating = false;
     }
+  }
+
+  /**
+   * Defer the next tick by a full heartbeat. Used when a gate (bios or
+   * homeostasis) rejects the current cycle — past-due next_run_at on any
+   * enabled schedule would otherwise cause recalculate() to produce a
+   * delayMs of 0 and spin.
+   */
+  private deferForHeartbeat(): void {
+    if (this.nextFireTimeout) {
+      clearTimeout(this.nextFireTimeout);
+      this.nextFireTimeout = null;
+    }
+    this.nextFireTimeout = setTimeout(() => {
+      this.tick().catch((err) => {
+        logger.error('[LocalScheduler] Tick error:', err);
+      });
+    }, HEARTBEAT_INTERVAL);
+  }
+
+  /**
+   * Log a defer once per minute even if called thousands of times. The gates
+   * can stay true for hours; verbose logging generated 840 MB of identical
+   * lines in one incident before this coalescing existed.
+   */
+  private logDeferCoalesced(ctx: Record<string, unknown>): void {
+    const now = Date.now();
+    if (now - this.lastDeferLogMs < 60_000) return;
+    this.lastDeferLogMs = now;
+    logger.info(ctx, `scheduler: deferring all schedules (${ctx.gate ?? 'unknown gate'})`);
   }
 
   /**

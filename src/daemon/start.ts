@@ -1351,24 +1351,36 @@ export async function startDaemon(): Promise<DaemonHandle> {
           logger.debug('[daemon] Wired burn-throttle -> model router');
         }
 
-        // Wire bios boundary check: defer schedules during off-hours
+        // Wire bios boundary check: defer schedules during off-hours.
+        // Boundary is refreshed every 30 min from agent_workforce_activity
+        // so a work-pattern shift (e.g. evening-heavy cycles after a daytime
+        // boot) gets picked up without a daemon restart. The previous boot-
+        // only snapshot left one instance frozen with strict 9-17 hours while
+        // the human actually worked evenings, deferring every schedule for
+        // 4.5 h straight.
         try {
           const { inferBoundary, isBoundaryActive } = await import('../bios/boundary-guardian.js');
-          // Gather recent activity timestamps for boundary inference.
-          // Real table is agent_workforce_activity — the legacy agent_activity
-          // name was never migrated here, so the query silently returned empty
-          // and every workspace fell back to the hardcoded 9-17 default.
-          const { data: activity } = await db.from('agent_workforce_activity')
-            .select('created_at')
-            .eq('workspace_id', workspaceId)
-            .order('created_at', { ascending: false })
-            .limit(200);
-          const timestamps = (activity ?? []).map((r: Record<string, unknown>) => new Date(r.created_at as string).getTime());
-          const boundary = inferBoundary(timestamps);
+          const readActivity = async (): Promise<number[]> => {
+            // Real table is agent_workforce_activity — the legacy agent_activity
+            // name was never migrated here, so the query silently returned empty
+            // and every workspace fell back to the hardcoded 9-17 default.
+            const { data: activity } = await db.from('agent_workforce_activity')
+              .select('created_at')
+              .eq('workspace_id', workspaceId)
+              .order('created_at', { ascending: false })
+              .limit(200);
+            return (activity ?? []).map((r: Record<string, unknown>) => new Date(r.created_at as string).getTime());
+          };
+          let boundary = inferBoundary(await readActivity());
           if (scheduler) {
             scheduler.setBiosDeferCheck(() => isBoundaryActive(boundary));
             logger.debug('[daemon] Wired bios boundary -> scheduler');
           }
+          setInterval(async () => {
+            try {
+              boundary = inferBoundary(await readActivity());
+            } catch { /* refresh is non-fatal */ }
+          }, 30 * 60 * 1000).unref();
         } catch { /* bios wiring is non-fatal */ }
 
         // Wire BPP modules into control plane for cloud sync
