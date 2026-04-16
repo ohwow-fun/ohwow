@@ -60,6 +60,7 @@ import { DeliverableActionSentinelExperiment } from '../self-bench/experiments/d
 import { AgentStateHygieneSentinelExperiment } from '../self-bench/experiments/agent-state-hygiene-sentinel.js';
 import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
 import { AttributionObserverExperiment } from '../self-bench/experiments/attribution-observer.js';
+import { OutreachThermostatExperiment } from '../self-bench/experiments/outreach-thermostat.js';
 import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
 import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
@@ -301,6 +302,24 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       { everyMs: dmRollup.cadence.everyMs },
       '[daemon] x-dm-signals-rollup registered',
     );
+
+    // Phase 2 (sales loop): OutreachThermostatExperiment — first
+    // autonomous proposer of cross-channel first-touches toward a
+    // weekly goal. OFF BY DEFAULT. Operator opts in via the env flag
+    // OHWOW_OUTREACH_THERMOSTAT_ENABLED=true (a config.ts plumbed
+    // `outreachThermostatEnabled` knob is a follow-up). v1 always
+    // writes to the approval queue with autoApproveAfter=Infinity —
+    // nothing sends without operator review.
+    if (process.env.OHWOW_OUTREACH_THERMOSTAT_ENABLED === 'true') {
+      const thermostat = new OutreachThermostatExperiment({
+        approvalsJsonlPath,
+      });
+      experimentRunner.register(thermostat);
+      logger.info(
+        { approvalsJsonlPath, everyMs: thermostat.cadence.everyMs },
+        '[daemon] outreach-thermostat registered (proposal-only, human-in-loop)',
+      );
+    }
   }
 
   // Phase 8-A.1: LLM provider availability — watches failure rates
