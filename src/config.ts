@@ -85,6 +85,10 @@ export interface RuntimeConfig {
   openRouterApiKey: string;
   /** OpenRouter model ID (default: deepseek/deepseek-v3.2) */
   openRouterModel: string;
+  /** fal.ai API key for hosted video/image generation */
+  falKey: string;
+  /** fal.ai model slug for text-to-video (e.g. fal-ai/seedance-1-0-pro, fal-ai/kling-video/v2.1/master/text-to-video) */
+  falVideoModel: string;
   /** Port for the Scrapling sidecar server (default: 8100) */
   scraplingPort: number;
   /** Auto-start Scrapling server on first use (default: true) */
@@ -270,6 +274,8 @@ interface ConfigFile {
   ocrModel?: string;
   openRouterApiKey?: string;
   openRouterModel?: string;
+  falKey?: string;
+  falVideoModel?: string;
   scraplingPort?: number;
   scraplingAutoStart?: boolean;
   scraplingProxy?: string;
@@ -824,6 +830,8 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     ocrModel: process.env.OHWOW_OCR_MODEL || fileConfig.ocrModel || '',
     openRouterApiKey: process.env.OPENROUTER_API_KEY || fileConfig.openRouterApiKey || '',
     openRouterModel: process.env.OPENROUTER_MODEL || fileConfig.openRouterModel || 'deepseek/deepseek-v3.2',
+    falKey: process.env.FAL_KEY || fileConfig.falKey || '',
+    falVideoModel: process.env.FAL_VIDEO_MODEL || fileConfig.falVideoModel || 'fal-ai/luma-dream-machine',
     scraplingPort: parseInt(process.env.OHWOW_SCRAPLING_PORT || '', 10) || fileConfig.scraplingPort || 8100,
     scraplingAutoStart: process.env.OHWOW_SCRAPLING_AUTO_START === 'false' ? false : (fileConfig.scraplingAutoStart !== false),
     scraplingProxy: process.env.OHWOW_SCRAPLING_PROXY || fileConfig.scraplingProxy || '',

@@ -189,6 +189,8 @@ export class OnboardingService {
       ocrModel: '',
       openRouterApiKey: '',
       openRouterModel: 'deepseek/deepseek-v3.2',
+      falKey: '',
+      falVideoModel: 'fal-ai/luma-dream-machine',
       scraplingPort: 8100,
       scraplingAutoStart: true,
       scraplingProxy: '',
