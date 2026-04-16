@@ -28,3 +28,6 @@ packages/video/out/
 packages/video/public/voice/
 packages/video/.remotion/
 packages/video/dist/
+
+# Local smoke-test harnesses
+scripts/_smoke-*.mts
