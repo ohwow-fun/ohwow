@@ -40,6 +40,43 @@ import { NARRATED_FAILURE_CANARIES } from '../self-bench/experiments/deliverable
 import { logger } from '../lib/logger.js';
 
 /**
+ * Tools that, when invoked successfully inside a ReAct loop, perform the
+ * external action themselves. The trust-output executor must skip on these
+ * to avoid double-posting (agent posts via tool, then executor posts again
+ * with the agent's narrative as the tweet text).
+ */
+const AGENT_DIRECT_POST_TOOLS = new Set([
+  'x_compose_tweet',
+  'x_compose_thread',
+  'x_compose_article',
+]);
+
+/**
+ * Did the agent's ReAct trace already perform a real X post via one of
+ * the direct-post tools? Match on the tool's own success message —
+ * composeTweetViaBrowser returns success=true for dry-runs too
+ * ("Dry run complete..."), so checking observation.success alone would
+ * over-skip and leave legitimate executor runs unfired. The published-
+ * message check is narrow: only short-circuit when the tool reported a
+ * real post landing, not a dry-run rehearsal.
+ *
+ * Exported for unit tests; intended single caller is the trust-output
+ * branch in finalizeTaskSuccess below.
+ */
+export function reactTraceShowsRealPost(reactTrace: ReActStep[]): boolean {
+  return reactTrace.some((step) =>
+    step.observations.some((obs) => {
+      if (!obs.success) return false;
+      if (!AGENT_DIRECT_POST_TOOLS.has(obs.tool)) return false;
+      const summary = (obs.resultSummary ?? '').toLowerCase();
+      return summary.includes('tweet published')
+        || summary.includes('thread published')
+        || summary.includes('article published');
+    }),
+  );
+}
+
+/**
  * Shape of a ReAct step entry. Mirrors RuntimeEngine's private
  * `LocalReActStep` interface; duplicated here because it's a narrow
  * record and keeping it inline avoids dragging an `engine.ts` type
@@ -420,13 +457,49 @@ export async function finalizeTaskSuccess(
       // agent produced a deliverable with a known action shape, execute the
       // action now so status=approved doesn't silently dead-end. Best-effort;
       // failures are recorded on the deliverable but don't fail the task.
+      //
+      // Double-post guard: the agent may have already performed the action
+      // inside its own ReAct loop (e.g. x_compose_tweet with dry_run=false).
+      // If so, calling executor.executeForTask would post AGAIN — once via
+      // the agent's tool call, then again via the deliverable handler with
+      // text=cleanContent (the agent's narrative). Detect that case via
+      // react_trace and short-circuit: mark approved deliverables as
+      // delivered with a skip note instead of re-running the handler.
       if (trustOutput && finalStatus === 'completed' && responseType === 'deliverable') {
-        try {
-          const { DeliverableExecutor } = await import('./deliverable-executor.js');
-          const executor = new DeliverableExecutor(this.db);
-          await executor.executeForTask(taskId);
-        } catch (err) {
-          logger.warn({ err, taskId }, '[RuntimeEngine] trust-output executor failed');
+        const agentAlreadyPosted = reactTraceShowsRealPost(reactTrace);
+        if (agentAlreadyPosted) {
+          try {
+            const skipNow = new Date().toISOString();
+            const skipResult = JSON.stringify({
+              ok: true,
+              skipped: true,
+              reason: 'agent posted directly via ReAct tool; executor short-circuited to prevent double-post',
+              at: skipNow,
+            });
+            await this.db.from('agent_workforce_deliverables')
+              .update({
+                status: 'delivered',
+                delivered_at: skipNow,
+                delivery_result: skipResult,
+                updated_at: skipNow,
+              })
+              .eq('task_id', taskId)
+              .eq('status', 'approved');
+            logger.info(
+              { taskId },
+              '[RuntimeEngine] trust-output executor skipped: agent already posted in ReAct loop',
+            );
+          } catch (err) {
+            logger.warn({ err, taskId }, '[RuntimeEngine] trust-output skip-marking failed');
+          }
+        } else {
+          try {
+            const { DeliverableExecutor } = await import('./deliverable-executor.js');
+            const executor = new DeliverableExecutor(this.db);
+            await executor.executeForTask(taskId);
+          } catch (err) {
+            logger.warn({ err, taskId }, '[RuntimeEngine] trust-output executor failed');
+          }
         }
       }
 
