@@ -245,34 +245,44 @@ const LetterScatterText: React.FC<{
   style: React.CSSProperties;
 }> = ({ text, style }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+
+  const lines = text.split("\n");
+  const lineOffsets = lines.reduce<number[]>((acc, line, idx) => {
+    acc.push(idx === 0 ? 0 : acc[idx - 1] + lines[idx - 1].length);
+    return acc;
+  }, []);
 
   return (
-    <div style={style}>
-      {text.split("").map((char, i) => {
-        const delay = i * 0.8;
-        const progress = Math.min(1, Math.max(0, (frame - delay) / 12));
-        const startX = noise2D("scatter-x", i * 0.5, 0) * 60;
-        const startY = noise2D("scatter-y", 0, i * 0.5) * 40;
-        const x = startX * (1 - progress);
-        const y = startY * (1 - progress);
-        const opacity = progress;
-        const rotation = (1 - progress) * (noise2D("scatter-r", i, 0) * 30);
+    <div style={{ ...style, display: "flex", flexDirection: "column", gap: 8 }}>
+      {lines.map((line, lineIdx) => (
+        <div key={lineIdx} style={{ display: "flex", flexWrap: "wrap", justifyContent: style.textAlign === "center" ? "center" : "flex-start" }}>
+          {line.split("").map((char, ci) => {
+            const i = lineOffsets[lineIdx] + ci;
+            const delay = i * 0.8;
+            const progress = Math.min(1, Math.max(0, (frame - delay) / 12));
+            const startX = noise2D("scatter-x", i * 0.5, 0) * 60;
+            const startY = noise2D("scatter-y", 0, i * 0.5) * 40;
+            const x = startX * (1 - progress);
+            const y = startY * (1 - progress);
+            const opacity = progress;
+            const rotation = (1 - progress) * (noise2D("scatter-r", i, 0) * 30);
 
-        return (
-          <span
-            key={i}
-            style={{
-              display: "inline-block",
-              opacity,
-              transform: `translate(${x}px, ${y}px) rotate(${rotation}deg)`,
-              whiteSpace: char === " " ? "pre" : undefined,
+            return (
+              <span
+                key={ci}
+                style={{
+                  display: "inline-block",
+                  opacity,
+                  transform: `translate(${x}px, ${y}px) rotate(${rotation}deg)`,
+                  whiteSpace: char === " " ? "pre" : undefined,
             }}
           >
             {char}
           </span>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 };
