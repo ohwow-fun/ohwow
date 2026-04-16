@@ -128,4 +128,5 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '123-insight-distiller.sql', expectedTables: ['self_observation_baselines', 'self_insight_feedback'] },
   { migrationFile: '124-x-dm-messages.sql', expectedTables: ['x_dm_threads', 'x_dm_observations'] },
   { migrationFile: '125-x-dm-messages-bodies.sql', expectedTables: ['x_dm_messages'] },
+  { migrationFile: '126-x-dm-signals.sql', expectedTables: ['x_dm_signals'] },
 ];
