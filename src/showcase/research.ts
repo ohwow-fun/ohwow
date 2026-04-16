@@ -40,10 +40,46 @@ export interface ProbeEvent {
 
 // ── Public helpers (kept stable for CLI / tests) ──────────────────────────
 
+// Tokens that, when they appear in a name, pin it to "company" even if the
+// surrounding words otherwise look like a Title-Case person name.
+const COMPANY_SUFFIXES = new Set([
+  'co',
+  'corp',
+  'corporation',
+  'inc',
+  'incorporated',
+  'llc',
+  'ltd',
+  'limited',
+  'gmbh',
+  'ag',
+  'sa',
+  'ab',
+  'plc',
+  'nv',
+  'bv',
+  'oy',
+  'pty',
+  'technologies',
+  'tech',
+  'labs',
+  'systems',
+  'solutions',
+  'holdings',
+  'group',
+  'capital',
+  'ventures',
+  'partners',
+  'industries',
+  'enterprises',
+]);
+
 export function guessKind(name: string): 'person' | 'company' {
   const trimmed = name.trim();
   const parts = trimmed.split(/\s+/).filter(Boolean);
   if (parts.length < 2) return 'company';
+  const normalized = parts.map(p => p.replace(/[.,]/g, '').toLowerCase());
+  if (normalized.some(p => COMPANY_SUFFIXES.has(p))) return 'company';
   const capitalized = parts.filter(p => /^[A-Z][a-z]+$/.test(p));
   return capitalized.length >= 2 ? 'person' : 'company';
 }
@@ -61,18 +97,32 @@ const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 ohwow-showcase';
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+function decodeEntities(s: string): string {
+  return s
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const cp = parseInt(hex, 16);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const cp = parseInt(dec, 10);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+    });
+}
+
+function stripHtml(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<[^>]+>/g, ' '),
+  )
     .replace(/\s+/g, ' ')
     .trim();
 }
