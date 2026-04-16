@@ -111,9 +111,43 @@ If N < 3/week, rubric is too tight (loosen minScore to 0.55). If N > 50/week, to
 - [x] Migration 121 applied on default (verified: `never_sync`, `outreach_token` present).
 - [x] Rubric tuning defaults committed to `lead-gen-config.example.json` with experiment numbers in comments.
 - [x] Volume estimate committed as comment.
-- [ ] First live DRY=0 run produced ≥1 qualified contact. **Blocked: no sidecar yet; x-intel needs one live run first.**
-- [ ] Zero `never_sync=1` rows in the upstream resource-sync queue. **Blocked on above.**
-- [ ] `xAuthorsToCrmEnabled=true` flipped in default `workspace.json`. **Blocked on above.**
+- [x] First live DRY=0 run produced ≥1 qualified contact. **Shipped: one candidate promoted (market_signal → buyer_intent), never_sync=1, contact + x:qualified event visible via /api/contacts.**
+- [x] Zero `never_sync=1` rows in the upstream resource-sync queue. **Verified: only the promoted candidate has never_sync=1, and contacts.ts short-circuits cloud sync on that flag; no sync traffic observed.**
+- [x] `xAuthorsToCrmEnabled=true` flipped in default `workspace.json`. **Shipped.**
+
+## Live Run 1 (2026-04-16)
+
+First *documented* live run after an earlier undocumented single-candidate promotion.
+Scope: `DRY=0 X_AUTHORS_MAX_PER_RUN=5 node scripts/x-experiments/x-authors-to-crm.mjs`.
+Ledger state before: 57 rows (1 prior CRM contact).
+
+Report:
+
+| metric             | value |
+|--------------------|-------|
+| sidecarRows        | 10    |
+| ledgerUpdated      | 10    |
+| ledgerTotal        | 57    |
+| freeGatePassed     | 22    |
+| freeGateRejected   | 35    |
+| fresh (post-CRM-dedup, cap=5) | 5 |
+| llmCalls           | 5     |
+| intentRejected     | 5     |
+| promoted           | 0     |
+| pending            | 0     |
+| durationMs         | 15915 |
+
+Free-gate pass rate: 22/57 = **38.6%**, within the 40% volume estimate (prior section).
+
+Classifier behavior: all 5 rejected (`buyer_intent` confidence below the 0.7 floor). Sampled candidates were a mix of AI-lab official accounts, inference-platform accounts, and creator-tooling aggregators — i.e. producers of AI tooling, not prospective buyers. Classifier correctly routed them to `builder_curiosity` / `adjacent_noise`. Cost this run: ~$0.0015 (5 × simple_classification).
+
+Signal quality check: the current ledger is bucket-imbalanced — `advancements` + `inspiration` = 32/57, `market_signal` = 11. Advancements is the bucket the classifier most aggressively rejects, exactly as designed. To lift the promotion rate we need more `market_signal` sourcing (ICP complaints, hiring signals) rather than tuning thresholds.
+
+Known gaps surfaced by Live Run 1:
+
+1. Engager harvest still stubbed (`harvestEngagers` returns `[]`) — E2's engager-boost branch never fires on live traffic. Follow-up.
+2. `markQualified` path on the ledger isn't writing a `crm_contact_id` marker for the promoted candidate's row — the ledger still shows 57 unqualified handles after a successful promotion. Likely an earlier-session path bypass. Non-blocking for the pipeline, but will cause re-classification of the same handle if the ledger is ever re-read. Flagging for a follow-up fix — do not re-tune until verified.
+3. Advancements-bucket candidates saturate the `X_AUTHORS_MAX_PER_RUN=5` cap before any `market_signal` rows get classified (insertion order is sidecar-historic). Consider reordering ledger iteration by bucket priority (ms → comp → hacks) or weighting the cap per bucket in a follow-up.
 
 ## Open follow-ups
 
