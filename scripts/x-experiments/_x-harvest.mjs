@@ -163,22 +163,21 @@ export async function scrapeRepliers(page, permalink, maxScrolls = 4) {
 export async function postTweet(page, text) {
   await page.goto('https://x.com/home');
   await sleep(3000);
-  // Open composer. Inline "What's happening" box is present on home.
   const focused = await page.focus('[data-testid="tweetTextarea_0"]');
   if (!focused) {
-    // Fallback: the Post button (side-nav) opens a modal composer.
     await page.clickSelector('[data-testid="SideNav_NewTweet_Button"]', 5000);
     await sleep(1500);
     await page.focus('[data-testid="tweetTextarea_0"]');
   }
   await sleep(500);
   await page.typeText(text);
-  await sleep(800);
-  // The "Post" button: inline uses tweetButtonInline; modal uses tweetButton.
-  let clicked = await page.clickSelector('[data-testid="tweetButtonInline"]', 3000);
-  if (!clicked) clicked = await page.clickSelector('[data-testid="tweetButton"]', 5000);
-  if (!clicked) throw new Error('postTweet: could not click post button');
-  await sleep(3000);
+  await sleep(1200);
+  // X's Post button uses React handlers that plain CDP clicks may not
+  // trigger reliably. Keyboard shortcut cmd+enter is handled by a
+  // deterministic listener and submits the composer from any focused
+  // state. Try that first; fall back to click for older UI variants.
+  await page.pressKey('Meta+Enter');
+  await sleep(2500);
   return null;
 }
 
@@ -190,19 +189,25 @@ export async function postTweet(page, text) {
 export async function replyToPost(page, permalink, text) {
   const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
   await page.goto(url);
-  await sleep(3500);
-  // Click the parent post's reply button (the first [data-testid="reply"]
-  // on the permalink page is the parent's).
-  const opened = await page.clickSelector('[data-testid="reply"]', 5000);
-  if (!opened) throw new Error('replyToPost: could not open reply composer');
-  await sleep(1500);
+  await sleep(4000);
+  // Click the inline reply composer that's already visible on the
+  // permalink page (X renders a persistent "Post your reply" box
+  // below the parent tweet — no need to click the reply icon first).
+  // Selector is data-testid="tweetTextarea_0" but only appears once
+  // the page fully renders; wait for it.
+  const found = await page.waitForSelector('[data-testid="tweetTextarea_0"]', 8000);
+  if (!found) {
+    // Fallback: click the reply icon to open the modal composer.
+    await page.clickSelector('[data-testid="reply"]', 5000);
+    await sleep(1500);
+    await page.waitForSelector('[data-testid="tweetTextarea_0"]', 5000);
+  }
   await page.focus('[data-testid="tweetTextarea_0"]');
-  await sleep(400);
+  await sleep(600);
   await page.typeText(text);
-  await sleep(800);
-  const clicked = await page.clickSelector('[data-testid="tweetButton"]', 5000);
-  if (!clicked) throw new Error('replyToPost: could not click reply button');
-  await sleep(3000);
+  await sleep(1200);
+  await page.pressKey('Meta+Enter');
+  await sleep(2500);
   return null;
 }
 

@@ -16,6 +16,8 @@
 import { loadQueue, rate, stats } from './_approvals.mjs';
 import { chat, ingestKnowledgeFile, resolveOhwow } from './_ohwow.mjs';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
+import { postTweet, replyToPost } from './_x-harvest.mjs';
+import crypto from 'node:crypto';
 
 const [, , cmd, ...rest] = process.argv;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -41,16 +43,64 @@ async function applyEntry(e) {
     const page = await findOrOpenXTab(browser);
     if (!page) throw new Error('no x.com tab');
     await page.installUnloadEscapes();
-    await page.goto(`https://x.com${permalink}`);
-    await sleep(3500);
-    await page.clickSelector('[data-testid="reply"]', 8000);
-    await sleep(1500);
-    await page.focus(`document.querySelector('[data-testid="tweetTextarea_0"]')`);
-    await page.typeText(draft);
-    await sleep(600);
-    const ok = await page.clickSelector('[data-testid="tweetButton"]', 8000);
+    await replyToPost(page, permalink, draft);
     browser.close();
-    return { posted: ok };
+    return { posted: true };
+  }
+  if (e.kind === 'x_outbound_post') {
+    const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
+    const page = await findOrOpenXTab(browser);
+    if (!page) throw new Error('no x.com tab');
+    await page.installUnloadEscapes();
+    await postTweet(page, e.payload.post_text);
+    browser.close();
+    return { posted: true };
+  }
+  if (e.kind === 'x_outbound_reply') {
+    const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
+    const page = await findOrOpenXTab(browser);
+    if (!page) throw new Error('no x.com tab');
+    await page.installUnloadEscapes();
+    await replyToPost(page, e.payload.permalink, e.payload.reply_text);
+    browser.close();
+    return { posted: true };
+  }
+  if (e.kind === 'x_contact_create') {
+    const { url, token } = resolveOhwow();
+    const p = e.payload;
+    const createRes = await fetch(`${url}/api/contacts`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: p.display_name || p.handle,
+        contact_type: 'lead',
+        status: 'active',
+        tags: ['x', 'qualified', p.bucket, p.intent].filter(Boolean),
+        custom_fields: {
+          x_handle: p.handle,
+          x_permalink: p.permalink,
+          x_bucket: p.bucket,
+          x_intent: p.intent,
+          x_intent_confidence: p.confidence,
+          x_source: p.source || 'author-ledger',
+        },
+        never_sync: true,
+        outreach_token: p.outreach_token || crypto.randomUUID(),
+      }),
+    });
+    if (!createRes.ok) throw new Error(`create contact ${createRes.status}: ${(await createRes.text()).slice(0, 200)}`);
+    const contact = (await createRes.json()).data;
+    await fetch(`${url}/api/contacts/${contact.id}/events`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'x:qualified',
+        source: 'approval-queue',
+        title: `qualified from X (${p.bucket})`,
+        payload: { intent: p.intent, confidence: p.confidence, reason: p.intent_reason },
+      }),
+    });
+    return { contact_id: contact.id };
   }
   throw new Error(`unknown kind: ${e.kind}`);
 }

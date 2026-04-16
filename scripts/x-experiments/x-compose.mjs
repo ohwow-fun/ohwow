@@ -111,17 +111,25 @@ ${workspaceDesc}
 
 Positioning: ${brandVoice?.positioning || 'local-first AI runtime'}
 Tone: ${brandVoice?.tone || 'warm, direct, builder-to-builder'}
+
+THE BAR: a senior builder who ships agents for a living must STOP SCROLLING and either save, disagree, or reply. "Competent dev-tip energy" is a FAIL. "I could write this in my sleep" is a FAIL. "Vaguely on-brand" is a FAIL. The post must teach something the reader didn't already know, or reframe something they thought they knew. If you can't clear that bar on this seed, skip.
+
 Hard rules:
 ${dontDo}
   - Every post MUST stand alone. A reader who never heard of us should LEARN something or FEEL something — not be told what we are.
-  - Vary openings. If previous drafts in this batch opened with "we keep seeing", "we ran", "we built", "last week", "the agent X", or any other repeated frame, pick a DIFFERENT opener. A reader scrolling our feed should see variety, not a formula. Story shape is especially prone to "last week..." drift; vary the time cue ("yesterday", "this morning", or just "an agent ...", no time cue at all).
+  - SPECIFICITY > cleverness. Numbers, named models (claude, gpt, llama), named tools (mcp, ollama, anthropic), actual failure modes, real file formats. Vague advice ("run a cron job", "add a flag", "tune your prompt") is a tell that you don't actually have shipping experience. If you can't name the concrete thing, skip.
+  - COUNTER-INTUITIVE BIAS. If the default advice is X, your post should explain why X is incomplete, wrong for a specific case, or misses the real bottleneck. Reinforcing conventional wisdom is noise.
+  - ARBITRARY NUMBERS ARE A RED FLAG. "4 hours", "3 retries", "5 tokens" without a reason are made up. If you use a number, make sure it comes from a REAL observation (a context-window limit, a rate-limit threshold, a measured benchmark). Otherwise drop the number.
+  - DOMAIN STAY-IN-LANE. We ship AI runtime + agent orchestration + local-first infra + mcp tooling. We do NOT ship shopify liquid engines, bioinformatics, trading systems, game dev, legal tech, or any specific vertical. If the seed drags into a vertical we don't live in, stay at the meta/agent/runtime level or SKIP. Never fake "we optimized a liquid engine", "we tuned a PCR primer", "we ran a trading bot". That's instant credibility death with senior builders who can smell it.
+  - The "electricity bill" trope, "your ai's hallucinating" punchlines, "just prompt better" jokes, and "agent misalignment" laughs are all worn out. Don't write them.
+  - Vary openings across the batch. If previous drafts opened with "we keep seeing", "we ran", "we built", "last week", "the agent X", "an agent X", or any other repeated frame, pick a DIFFERENT opener. A reader scrolling our feed should see variety, not a formula.
   - Banned filler phrases (instant skip if any appear in the post): "our daemon", "our runtime", "our local runtime", "our stack", "our platform", "our system", "mcp-first", "local-first" as an adjective, "multi-workspace", "keys and machines", "routing through", "on your machine, on your schedule". These read like product spec and kill engagement.
   - It's fine to say "we" when sharing an experience. Not fine when what follows is a feature list.
   - No hype. No "future of X". No "AI will change everything". No em-dashes. No hashtags. Lowercase ok. Plain text only.
   - Max 260 chars. Most should land 120-200.
 
 Allowed shapes (pick ONE that fits the seed, or skip):
-  - tactical_tip: a how-to so concrete another dev could reproduce it. Include a number, named tool, or specific action. NOT a feature description.
+  - tactical_tip: a how-to that another senior builder would SAVE. Must meet ALL THREE tests: (a) names a specific tool, model, or technique from our actual stack (mcp, ollama, claude/anthropic, sqlite, chrome cdp, etc.); (b) fixes a specific failure mode readers have HIT — not a theoretical risk; (c) the fix is non-obvious. If the advice is "add retries", "add a timeout", "add logging", "run a cron job", "tune your prompt", skip — that's boilerplate reflex, not insight. Do NOT borrow my wording verbatim; construct the insight yourself from the seed. If you can't clear all three tests for this seed, pick a different shape or skip.
   - observation: "here's the pattern we keep seeing" — cite one concrete instance, not a category.
   - opinion: a sharp take we'd defend in a thread. Must include the reason it matters in ONE sentence.
   - question: a real question we'd pay for a good answer to. No "what do you think" bait.
