@@ -276,3 +276,20 @@ adoption, or any real-world impact metric. This is intentionally deferred.
 68. unknown-latency
 
 **Note**: The roadmap-updater experiment is responsible for keeping this document synchronized with the live loop state. It runs every 15min and is gated by a fingerprint check to avoid unnecessary no-op updates.
+
+## 6. Missing Experiments (as of 2026-04-16T06:23Z)
+
+The following experiment files exist but are not listed in the Active Experiments section above. They should be added to the inventory to maintain accuracy:
+
+- browser-profile-guardian
+- daily-surprise-digest
+- deliverable-action-sentinel
+- git-velocity
+- google-gemini-3-1-pro-preview-latency
+- mig-smoke-1776324117308
+- migration-drift-sentinel
+- revenue-pipeline-observer
+- x-autonomy-ramp
+- x-engagement-observer
+- x-ops-observer
+- x-shape-tuner
