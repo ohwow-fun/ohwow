@@ -50,7 +50,7 @@ import {
   X_HYDRATION_WAIT_MS,
 } from './x-posting.js';
 import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
-import { typeIntoRichTextbox } from './social-cdp-helpers.js';
+import { typeIntoRichTextbox, clickFirstEnabledSubmit } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -590,53 +590,20 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
       };
     }
 
-    // Submit via element.click() to bypass CDP-coordinate overlay.
-    // X renders BOTH tweetButton and tweetButtonInline on the reply
-    // route — they're alternative entry points; one is enabled when
-    // the composer state has fillable content, the other stays
-    // disabled as an inactive sibling. Live probe (2026-04-17) showed
-    // the two in opposite states (tweetButton enabled, Inline
-    // disabled) after dispatchKeyEvent typing on /compose/post.
-    // Prior code preferred Inline unconditionally via `||`, so it
-    // always saw the disabled sibling and gave up. Fix: scan both,
-    // pick any enabled + visible one.
-    let submitted = false;
-    for (let i = 0; i < 20; i++) {
-      submitted = await page.evaluate<boolean>(`(() => {
-        const candidates = Array.from(document.querySelectorAll(
-          '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]'
-        ));
-        for (const btn of candidates) {
-          if (!(btn instanceof HTMLElement)) continue;
-          if (btn.getAttribute('aria-disabled') === 'true') continue;
-          const r = btn.getBoundingClientRect();
-          if (r.width === 0 || r.height === 0) continue;
-          if (typeof btn.click === 'function') { btn.click(); return true; }
-        }
-        return false;
-      })()`).catch(() => false);
-      if (submitted) break;
-      await wait(500);
-    }
-    if (!submitted) {
-      // Diagnostic snapshot — what's on the page at the moment we gave up?
-      const diag = await page.evaluate<{ url: string; btnCount: number; btnDisabled: string | null; textLen: number }>(
-        `(() => {
-          const btn = document.querySelector('[data-testid="tweetButtonInline"]')
-                   || document.querySelector('[data-testid="tweetButton"]');
-          const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
-          return {
-            url: location.href,
-            btnCount: document.querySelectorAll('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]').length,
-            btnDisabled: btn instanceof HTMLElement ? btn.getAttribute('aria-disabled') : null,
-            textLen: tb ? (tb.textContent || '').length : -1,
-          };
-        })()`,
-      ).catch(() => ({ url: '?', btnCount: -1, btnDisabled: '?', textLen: -1 }));
-      logger.warn(diag, '[x-reply] submit poll timed out');
+    // Submit: poll for an enabled + visible tweetButton or
+    // tweetButtonInline, then click via synthetic .click(). X renders
+    // both as sibling submit-buttons where only one is enabled after
+    // typing completes; the shared helper picks whichever is live and
+    // retries until it enables.
+    const submit = await clickFirstEnabledSubmit(page, {
+      testIds: ['tweetButton', 'tweetButtonInline'],
+      timeoutMs: 10_000,
+      logTag: 'x-reply',
+    });
+    if (!submit.clicked) {
       return {
         success: false,
-        message: `Reply submit button never became clickable within 10s. diag=${JSON.stringify(diag)}`,
+        message: `Reply submit button never became clickable within 10s. diag=${JSON.stringify(submit.diagnostic ?? {})}`,
         screenshotBase64,
         replyTyped: 1,
         replyPublished: 0,

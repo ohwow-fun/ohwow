@@ -41,6 +41,7 @@ import {
   clearTextbox,
   wait,
   confirmPostLanded,
+  clickFirstEnabledSubmit,
   HYDRATION_WAIT_MS,
   POST_SETTLE_MS,
   type ComposeResult,
@@ -475,13 +476,24 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
       };
     }
 
-    // Click Post
-    const clicked = await clickByText(page, 'Post');
-    if (!clicked) {
+    // Click Post — scoped to the dialog so we don't hit the nav-rail
+    // "Post" launcher. clickFirstEnabledSubmit polls until a Post
+    // button inside [role="dialog"] is enabled + visible. Without the
+    // enablement poll, Threads' Post button is aria-disabled=true
+    // right after typing (internal state sync is async); clicking a
+    // disabled submit registers nothing and readPostOutcome then
+    // reports still_open, which the caller interprets as rejection.
+    const submit = await clickFirstEnabledSubmit(page, {
+      textMatch: 'Post',
+      containerSelector: '[role="dialog"]',
+      timeoutMs: 10_000,
+      logTag: LOG_TAG,
+    });
+    if (!submit.clicked) {
       await dismissComposeDialog(page);
       return {
         success: false,
-        message: 'Post button was not clickable. Threads may have rejected the content.',
+        message: `Post button was not clickable within 10s. diag=${JSON.stringify(submit.diagnostic ?? {})}`,
         screenshotBase64,
         postsTyped: 1,
         postsPublished: 0,
@@ -651,12 +663,17 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       };
     }
 
-    const postClicked = await clickByText(page, 'Post');
-    if (!postClicked) {
+    const submit = await clickFirstEnabledSubmit(page, {
+      textMatch: 'Post',
+      containerSelector: '[role="dialog"]',
+      timeoutMs: 10_000,
+      logTag: LOG_TAG,
+    });
+    if (!submit.clicked) {
       await dismissComposeDialog(page);
       return {
         success: false,
-        message: 'Post button was not clickable within timeout.',
+        message: `Post all button was not clickable within 10s. diag=${JSON.stringify(submit.diagnostic ?? {})}`,
         screenshotBase64,
         postsTyped,
         postsPublished: 0,

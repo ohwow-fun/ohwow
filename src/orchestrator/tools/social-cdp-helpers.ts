@@ -485,6 +485,182 @@ export async function typeIntoRichTextbox(
 }
 
 // ---------------------------------------------------------------------------
+// Submit-button selection (shared across X + Threads)
+// ---------------------------------------------------------------------------
+
+export interface SubmitClickSpec {
+  /** data-testid values to consider, in priority order (optional). */
+  testIds?: string[];
+  /**
+   * Exact textContent match for button-role elements (e.g., 'Post'). Used
+   * for Threads' role=button divs that don't expose a testid. When
+   * specified along with `containerSelector`, candidates are scoped to
+   * inside that container.
+   */
+  textMatch?: string;
+  /**
+   * Scope selector (e.g., '[role="dialog"]') so textMatch-based lookups
+   * don't accidentally match the left-nav "Post" composer launcher.
+   */
+  containerSelector?: string;
+  /** How long to wait for a clickable button. Default 10000ms. */
+  timeoutMs?: number;
+  /** Poll interval. Default 500ms. */
+  intervalMs?: number;
+  /** Log tag for diagnostics. */
+  logTag: string;
+}
+
+export interface SubmitClickResult {
+  clicked: boolean;
+  strategy?: 'testid' | 'textMatch';
+  label?: string;
+  /** On failure: snapshot of what we saw (for debugging). */
+  diagnostic?: {
+    candidates: number;
+    disabled: number;
+    hidden: number;
+    lastUrl: string;
+  };
+}
+
+/**
+ * Wait for a submit button to be *enabled + visible*, then click it via
+ * the element's synthetic .click() (not CDP coordinate clicks, which X
+ * and Threads both overlay with transparent layers that eat the event).
+ *
+ * Why a dedicated primitive: every platform rotates their submit DOM —
+ * X renders BOTH tweetButton and tweetButtonInline as siblings where one
+ * is enabled and the other disabled; Threads wraps a "Post" text in 3
+ * stacked divs where only one has the onClick handler; the text-search
+ * approach `clickByText('Post')` picks the nav launcher instead of the
+ * dialog's Post button if called without scope. A single polling helper
+ * unifies the retry + enablement check + DOM-dispatch semantics so
+ * caller code doesn't duplicate the logic in 4 places.
+ *
+ * Polling waits for `aria-disabled != "true"` AND `rect.width > 0` —
+ * both must be true. clickSelector's coordinate click doesn't check
+ * disabled state, so a stale aria-disabled=true button would silently
+ * accept a "click" that X/Threads ignores internally.
+ */
+export async function clickFirstEnabledSubmit(
+  page: RawCdpPage,
+  spec: SubmitClickSpec,
+): Promise<SubmitClickResult> {
+  const {
+    testIds = [],
+    textMatch,
+    containerSelector,
+    timeoutMs = 10_000,
+    intervalMs = 500,
+    logTag,
+  } = spec;
+
+  // Build a JS-evaluated predicate that scans the DOM for candidates,
+  // filters to enabled + visible, and clicks the first match via the
+  // node's own .click() handler. Returns {clicked, strategy, label}
+  // or null when nothing is clickable this cycle.
+  const testIdsJson = JSON.stringify(testIds);
+  const containerJson = JSON.stringify(containerSelector ?? '');
+  const textMatchJson = JSON.stringify(textMatch ?? '');
+
+  const attemptClick = `(() => {
+    const testIds = ${testIdsJson};
+    const textMatch = ${textMatchJson};
+    const containerSel = ${containerJson};
+
+    function isUsable(el) {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return false;
+      return true;
+    }
+
+    // testid candidates — first scan.
+    for (const tid of testIds) {
+      const nodes = Array.from(document.querySelectorAll('[data-testid="' + tid + '"]'));
+      for (const n of nodes) {
+        if (!isUsable(n)) continue;
+        if (typeof n.click === 'function') { n.click(); return { clicked: true, strategy: 'testid', label: tid }; }
+      }
+    }
+
+    // textMatch candidates — scoped to container if given.
+    if (textMatch) {
+      const root = containerSel ? document.querySelector(containerSel) : document;
+      if (root) {
+        const btns = Array.from(root.querySelectorAll(
+          'button, [role="button"], div[role="button"]'
+        ));
+        for (const b of btns) {
+          const txt = (b.textContent || '').trim();
+          if (txt !== textMatch) continue;
+          if (!isUsable(b)) continue;
+          if (typeof b.click === 'function') { b.click(); return { clicked: true, strategy: 'textMatch', label: textMatch }; }
+        }
+      }
+    }
+
+    return null;
+  })()`;
+
+  const diagnosticQuery = `(() => {
+    const testIds = ${testIdsJson};
+    const textMatch = ${textMatchJson};
+    const containerSel = ${containerJson};
+    let candidates = 0;
+    let disabled = 0;
+    let hidden = 0;
+
+    function tally(el) {
+      candidates++;
+      if (!(el instanceof HTMLElement)) return;
+      if (el.getAttribute('aria-disabled') === 'true') disabled++;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) hidden++;
+    }
+    for (const tid of testIds) {
+      for (const n of document.querySelectorAll('[data-testid="' + tid + '"]')) tally(n);
+    }
+    if (textMatch) {
+      const root = containerSel ? document.querySelector(containerSel) : document;
+      if (root) {
+        for (const b of root.querySelectorAll('button, [role="button"], div[role="button"]')) {
+          if ((b.textContent || '').trim() === textMatch) tally(b);
+        }
+      }
+    }
+    return { candidates, disabled, hidden, lastUrl: location.href };
+  })()`;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const result = await page.evaluate<{ clicked: true; strategy: 'testid' | 'textMatch'; label: string } | null>(
+        attemptClick,
+      );
+      if (result?.clicked) {
+        logger.debug(
+          { strategy: result.strategy, label: result.label },
+          `[${logTag}] submit clicked`,
+        );
+        return { clicked: true, strategy: result.strategy, label: result.label };
+      }
+    } catch { /* retry */ }
+    await wait(intervalMs);
+  }
+
+  // Timed out — snapshot diagnostic for the caller's error message.
+  let diag: SubmitClickResult['diagnostic'];
+  try {
+    diag = await page.evaluate<SubmitClickResult['diagnostic']>(diagnosticQuery);
+  } catch { /* best effort */ }
+  logger.warn(diag ?? {}, `[${logTag}] submit poll timed out`);
+  return { clicked: false, diagnostic: diag };
+}
+
+// ---------------------------------------------------------------------------
 // Post-publish confirmation (shared across X + Threads)
 // ---------------------------------------------------------------------------
 

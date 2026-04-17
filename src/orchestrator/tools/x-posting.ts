@@ -64,7 +64,12 @@ import {
   ensureCdpBrowser,
   type TabOwnershipMode,
 } from '../../execution/browser/chrome-profile-router.js';
-import { confirmPostLanded, typeIntoRichTextbox, tagTabAsOwned } from './social-cdp-helpers.js';
+import {
+  confirmPostLanded,
+  typeIntoRichTextbox,
+  tagTabAsOwned,
+  clickFirstEnabledSubmit,
+} from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -744,11 +749,21 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       };
     }
 
-    const clicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
-    if (!clicked) {
+    // clickFirstEnabledSubmit polls until a button is enabled + visible
+    // before clicking. On /compose/post X renders BOTH tweetButton and
+    // tweetButtonInline; only the enabled one lets the post through.
+    // Plain clickSelector doesn't check aria-disabled — it would click
+    // a disabled button silently, then readPostOutcome reports
+    // still_open and the caller thinks X rejected the content.
+    const submit = await clickFirstEnabledSubmit(page, {
+      testIds: ['tweetButton', 'tweetButtonInline'],
+      timeoutMs: 10_000,
+      logTag: 'x-posting',
+    });
+    if (!submit.clicked) {
       return {
         success: false,
-        message: 'Post button never became clickable within 10s.',
+        message: `Post button never became clickable within 10s. diag=${JSON.stringify(submit.diagnostic ?? {})}`,
         screenshotBase64,
         tweetsTyped: 1,
         tweetsPublished: 0,
@@ -947,11 +962,15 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     };
   }
 
-  const postClicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
-  if (!postClicked) {
+  const submit = await clickFirstEnabledSubmit(page, {
+    testIds: ['tweetButton', 'tweetButtonInline'],
+    timeoutMs: 10_000,
+    logTag: 'x-posting',
+  });
+  if (!submit.clicked) {
     return {
       success: false,
-      message: 'Post all button never became clickable within 10s.',
+      message: `Post all button never became clickable within 10s. diag=${JSON.stringify(submit.diagnostic ?? {})}`,
       screenshotBase64,
       tweetsTyped,
       tweetsPublished: 0,
