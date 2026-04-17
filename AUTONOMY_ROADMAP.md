@@ -16,7 +16,7 @@ cosmetic and should not compete with money work for author-queue slots.
 
 ---
 
-## 1. Current System State (as of 2026-04-17T07:30Z, money-telos foundations landed)
+## 1. Current System State (as of 2026-04-17T08:10Z, money-telos foundations landed)
 
 ### Architecture Summary
 
@@ -147,7 +147,7 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-**Honest read of 2026-04-17T07:30Z (outcome loop live):**
+**Honest read of 2026-04-17T08:10Z (outcome loop live):**
 
 - **Outcome feedback is now wired end-to-end.** Every autonomous patch
   to a revenue-adjacent tier-2 file records a `lift_measurements` row at
@@ -293,55 +293,4 @@ step #2 wires the cap.
 
 Every lever that could move conversion (classifier, templates,
 scheduler, CRM handoff) is humans-only. The revenue bucket can prefer
-revenue-keyword proposals all day; if the one tier-2 revenue file is
-outreach-thermostat, the author is still mostly writing new observers.
-Phase 2 step #1 fixes this one file at a time.
-
-### P1 — No Post-Patch Immediate Verification (REDUCED)
-
-Originally P1. The auto-followup pre/post verdict rows now land within
-~30s of each patch (visible in every patch-author tick), giving immediate
-signal on whether the warning cleared. Synchronous in-commit reverify
-is still missing; the reduced version of this gap is "the loop sees the
-verdict, but can't block a commit on it before Layer 5 cool-off runs".
-
-### P2 — Browser Testing Is Observe-Only (UNCHANGED)
-
-`dashboard-smoke` walks all routes and emits `issues[]` with runtime
-error messages. Not `violations[]` with literal text. PatchAuthor's
-literal-in-source filter correctly skips them. Browser bugs are logged
-but never self-healed.
-
-### P3 — Deterministic Experiment Execution (UNCHANGED)
-
-No way to replay a single experiment run against a specific commit.
-Non-determinism from live DB + FS state. Replayability would let us
-validate that a patch actually fixes its finding before committing.
-
-### P4 — Real-World Impact Metrics (now = Phase 3 step #4)
-
-Moved up from "intentionally deferred" to Phase 3 as a concrete
-work item (real-revenue ingest). Without it, every money-telos
-signal above is running on proxies.
-
-## 5. Experiment Inventory
-
-_Maintained by RoadmapUpdaterExperiment from live loop state._
-
-- **adaptive-scheduler** — tier-1: creates new files only
-- **agent-cost-watcher** — tier-1: creates new files only
-- **agent-coverage-gap** — tier-1: creates new files only
-- **agent-lock-contention** — tier-1: creates new files only
-- **agent-outcomes** — tier-1: creates new files only
-- **agent-state-hygiene-sentinel** — tier-1: creates new files only
-- **analogical-reasoning-emergence-signal-v3** — tier-1: creates new files only
-- **anthropic-claude-sonnet-4-6-latency** — tier-1: creates new files only
-- **autonomous-author-quality** — tier-1: creates new files only
-- **autonomous-patch-rollback** — tier-1: creates new files only
-- **browser-profile-guardian** — tier-1: creates new files only
-- **burn-guard** — tier-1: creates new files only
-- **canaries** — tier-1: creates new files only
-- **canary-experiment** — tier-1: creates new files only
-- **classifier-stability** — tier-1: creates new files only
-- **contact-conversation-analyst** — tier-1: creates new files only
-- **content-cadence-loop-health** — tier-1:
+revenue-keyword proposals
