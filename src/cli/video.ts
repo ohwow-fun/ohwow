@@ -141,6 +141,31 @@ async function cmdLint(args: string[]): Promise<void> {
   process.exit(exitCode);
 }
 
+async function cmdBlocks(args: string[]): Promise<void> {
+  const sub = args[0];
+  if (!sub || !['list', 'get', 'add'].includes(sub)) {
+    console.error('Usage: ohwow video blocks <list|get|add> [args]');
+    process.exit(1);
+  }
+  const packageDir = resolvePackageDir();
+  const runnerPath = join(packageDir, 'scripts', 'blocks-cli.cts');
+  const exitCode = await new Promise<number>((resolvePromise, rejectPromise) => {
+    const child = spawn('npx', ['tsx', runnerPath, ...args], {
+      cwd: packageDir,
+      stdio: 'inherit',
+      env: { ...process.env },
+    });
+    child.on('error', rejectPromise);
+    child.on('close', code => resolvePromise(code ?? 0));
+  });
+  process.exit(exitCode);
+}
+
+async function cmdAdd(args: string[]): Promise<void> {
+  // Shortcut for `blocks add`.
+  await cmdBlocks(['add', ...args]);
+}
+
 async function cmdList(args: string[]): Promise<void> {
   const kind = args[0];
   if (!kind || !['primitives', 'scenes', 'transitions'].includes(kind)) {
@@ -341,6 +366,9 @@ function usage(): void {
   console.log('  ohwow video preview <spec.json> [--port=<port>]       open in Remotion Studio');
   console.log('  ohwow video lint <spec.json> [--strict]               validate shape + cross-field rules');
   console.log('  ohwow video list <primitives|scenes|transitions>      introspect the registry');
+  console.log('  ohwow video blocks list [--category=<c>]              browse the block catalog');
+  console.log('  ohwow video blocks get <id>                           show details for one block');
+  console.log('  ohwow video add <id> [--dest=<path>]                  copy a block source into your repo');
   console.log('  ohwow video workspace [--workspace=<name>] [--template=<t>] [--scenes=<k1,k2,...>]');
   console.log('                        [--brief="free-text direction"] [--voice=<v>] [--copy-model=<m>]');
   console.log('                        [--dry-run] [--preview] [--port=<port>] [--out=<path>]');
@@ -365,6 +393,10 @@ export async function runVideoCli(args: string[]): Promise<void> {
     await cmdLint(args.slice(1));
   } else if (sub === 'list') {
     await cmdList(args.slice(1));
+  } else if (sub === 'blocks') {
+    await cmdBlocks(args.slice(1));
+  } else if (sub === 'add') {
+    await cmdAdd(args.slice(1));
   } else if (sub === 'workspace') {
     await cmdWorkspace(args.slice(1));
   } else if (sub === 'cache') {
