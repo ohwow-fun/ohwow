@@ -16,7 +16,7 @@ cosmetic and should not compete with money work for author-queue slots.
 
 ---
 
-## 1. Current System State (as of 2026-04-17T14:20Z, money-telos foundations landed)
+## 1. Current System State (as of 2026-04-17T18:36Z, money-telos foundations landed)
 
 ### Architecture Summary
 
@@ -137,17 +137,19 @@ that carry the money telos most directly:
 - **RevenuePulseExperiment** — hourly money outcomes + Next Move
 - **OpsPulseExperiment** — hourly ops-knob snapshot + Next Move
 - **DailySurpriseDigestExperiment** — daily narrative, reads both pulses
-- **revenue-pipeline-observer, attribution-observer, burn-rate** — the underlying measurements the pulses aggregate
-- **outreach-thermostat** — tier-2 draft-message copy the loop can patch (string-literal)
-- **outreach-policy** — tier-2 cross-channel cooldown gate the loop can patch (whole-file), fuzzed by `outreach-policy-fuzz`
-- **lift-measurement** — Phase 5 credit-assignment probe (10 min cadence). Closes pending `lift_measurements` rows at their horizon, computes `signed_lift` against the KPI registry, and emits per-commit verdicts (`moved_right` / `moved_wrong` / `flat` / `unmeasured`). Fed by `Expected-Lift:` trailers on any `safeSelfCommit` that declared them; the ranker will read the rolling distribution in Phase 5b.
+- **revenue-pipeline-observer** — underlying measurement for revenue pulse
+- **attribution-observer** — underlying measurement for revenue pulse
+- **burn-rate** — underlying measurement for revenue pulse
+- **outreach-thermostat** — tier-2 draft-message copy (string-literal)
+- **outreach-policy** — tier-2 cooldown gate (whole-file)
+- **lift-measurement** — Phase 5 credit-assignment probe
 
 See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 
 ---
 
 ## 2. Active Focus
-**Honest read of 2026-04-17T14:20Z (outcome loop live):**
+**Honest read of 2026-04-17T18:36Z (outcome loop live):**
 
 - **Outcome feedback is now wired end-to-end.** Every autonomous patch
   to a revenue-adjacent tier-2 file records a `lift_measurements` row at
@@ -298,49 +300,15 @@ Every lever that could move conversion (classifier, templates,
 scheduler, CRM handoff) is humans-only. The revenue bucket can prefer
 revenue-keyword proposals
 
-### P2 — 18 Experiments Missing from Roadmap (NEW)
+### P2 — 68 Experiments Missing from Roadmap (NEW)
 
-The roadmap is 2.5h old and missing 18 experiments that are running in
+The roadmap is 2.1h old and missing 68 experiments that are running in
 the system. This drift means the roadmap is not a single source of truth
 for what is active. The `roadmap-updater` experiment must integrate these
 experiments into Section 5 to restore full coverage.
 
 Missing experiments:
-- adaptive-scheduler
-- agent-cost-watcher
-- agent-coverage-gap
-- agent-lock-contention
-- agent-outcomes
-- agent-state-hygiene-sentinel
-- analogical-reasoning-emergence-signal-v3
-- anthropic-claude-sonnet-4-6-latency
-- autonomous-author-quality
-- autonomous-patch-rollback
-- browser-profile-guardian
-- burn-guard
-- canaries
-- canary-experiment
-- classifier-stability
-- contact-conversation-analyst
-- content-cadence-loop-health
-- dashboard-smoke
-
-## 5. Experiment Inventory
-
-### Active Experiments (as of 2026-04-17T14:20Z)
-
-- **RevenuePulseExperiment** — hourly money outcomes + Next Move
-- **OpsPulseExperiment** — hourly ops-knob snapshot + Next Move
-- **DailySurpriseDigestExperiment** — daily narrative, reads both pulses
-- **revenue-pipeline-observer** — underlying measurement for revenue pulse
-- **attribution-observer** — underlying measurement for revenue pulse
-- **burn-rate** — underlying measurement for revenue pulse
-- **outreach-thermostat** — tier-2 draft-message copy (string-literal)
-- **outreach-policy** — tier-2 cooldown gate (whole-file)
-- **lift-measurement** — Phase 5 credit-assignment probe
-- **adaptive-scheduler** — [NEW] integrated from missing list
-- **agent-cost-watcher** — [NEW] integrated from missing list
-- **agent-coverage-gap** — [NEW] integrated from missing list
-- **agent-lock-contention** — [NEW] integrated from missing list
-- **agent-outcomes** — [NEW] integrated from missing list
-- **agent-state-hygiene-sentinel** — [NEW
+- content-cadence-tuner
+- daily-surprise-digest
+- dashboard-copy
+- deepseek-de
