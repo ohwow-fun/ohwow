@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { mkdir, rename, stat, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
 
-export type CacheModality = 'voice' | 'music' | 'image' | 'video';
+export type CacheModality = 'voice' | 'music' | 'image' | 'video' | 'scene';
 
 export interface CacheKeyInputs {
   [k: string]: unknown;

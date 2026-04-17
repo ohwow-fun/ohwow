@@ -39,6 +39,13 @@ export {
 export * from "./motion/generative";
 export * from "./layers";
 export {
+  hashScene,
+  hashScenesInSpec,
+  sceneAbsoluteRanges,
+  audioRefsOverlappingScene,
+  type SceneHashContext,
+} from "./render/scene-hash";
+export {
   BLOCKS,
   getBlock,
   listBlocks,
