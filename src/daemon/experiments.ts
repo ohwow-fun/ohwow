@@ -90,6 +90,7 @@ import {
 } from '../self-bench/runtime-config.js';
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
+import { ThreadsReplyScheduler } from '../scheduling/threads-reply-scheduler.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
@@ -103,6 +104,13 @@ import { dirname } from 'path';
 import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
 import { XDraftDistillerScheduler } from '../scheduling/x-draft-distiller.js';
+import { registerInternalHandler } from '../triggers/internal-handler-registry.js';
+import {
+  seedContentCadenceAutomation,
+  seedXDraftDistillerAutomation,
+  CONTENT_CADENCE_HANDLER,
+  X_DRAFT_DISTILLER_HANDLER,
+} from './seed-content-automations.js';
 
 export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<void> {
   const { config: _config, db, engine, workspaceId, scraplingService, modelRouter } =
@@ -305,8 +313,26 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       workspaceId,
       { approvalsJsonlPath, enabledPlatforms: ['x', 'threads'] },
     );
-    cadenceScheduler.start();
-    logger.info({ approvalsJsonlPath }, '[daemon] content-cadence-scheduler started');
+    registerInternalHandler(CONTENT_CADENCE_HANDLER, async () => {
+      await cadenceScheduler.tick();
+      return { status: 'ticked' };
+    });
+    await seedContentCadenceAutomation(db, workspaceId).catch((err) => {
+      logger.warn({ err }, '[daemon] seed-content-cadence-automation failed');
+    });
+    logger.info({ approvalsJsonlPath }, '[daemon] content-cadence automation seeded');
+
+    // ThreadsReplyScheduler — autonomous 10-min reply loop. Scans topic
+    // searches with filter=recent, runs the deterministic selector,
+    // generates a voice-calibrated draft, publishes one reply per tick
+    // (with daily cap + cooldown + dedup via posted_log). Runtime-config
+    // keys override behavior (threads_reply.enabled / daily_cap /
+    // min_cooldown_seconds / queries / topn).
+    const threadsReply = new ThreadsReplyScheduler({
+      db, engine, workspaceId, workspaceSlug,
+    });
+    threadsReply.start();
+    logger.info('[daemon] threads-reply-scheduler started');
 
     // Market-radar distiller — turns novel market:* findings into
     // candidate X post drafts (stored in x_post_drafts, operator-
