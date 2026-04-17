@@ -58,6 +58,32 @@ export interface CaptionSpec {
   durationFrames: number;
 }
 
+/**
+ * A single motion-graphic beat — one primitive (semantic 2D or R3F 3D)
+ * with its params. The motion-beats compiler reads `motion_beats` off a
+ * Scene and translates the list into the right `params` shape for the
+ * target scene kind (visualLayers for composable, primitives for
+ * r3f-scene).
+ *
+ * Keeping this flat (no nested timeline) in v1. `at` and `duration` are
+ * reserved for a future timeline phase; today all beats run for the full
+ * scene duration, layered bottom-to-top in array order.
+ */
+export interface MotionBeat {
+  /** Registered primitive name. 2D: "count-up", "grid-morph", etc. 3D: "r3f.count-up-bar", "r3f.particle-cloud", etc. */
+  primitive: string;
+  /** Primitive-specific params. Forwarded verbatim to the component. */
+  params?: Record<string, unknown>;
+  /**
+   * Reserved for timeline-based beats in a future phase. Ignored in v1.
+   */
+  at?: number;
+  /**
+   * Reserved for timeline-based beats in a future phase. Ignored in v1.
+   */
+  duration?: number;
+}
+
 export interface Scene<K extends string = SceneKind> {
   id: string;
   kind: K;
@@ -68,6 +94,22 @@ export interface Scene<K extends string = SceneKind> {
   captions?: CaptionSpec[];
   /** Raw narration text. Used by the composition to auto-generate captions when captions[] is absent. */
   narration?: string;
+  /**
+   * Plain-language description of what the scene should VISUALLY show —
+   * the LLM's intent in its own words. The compose pipeline does not use
+   * this at render time; it's carried forward as provenance so human
+   * reviewers and future resolver passes can see the intent behind the
+   * beats. Authors may set this alongside or instead of motion_beats.
+   */
+  motion_graphic_prompt?: string;
+  /**
+   * Per-scene motion-graphic beats. When present, the motion-beats
+   * compiler derives this scene's `kind` and `params` from the beats
+   * (e.g., all r3f.* beats → kind "r3f-scene" with params.primitives;
+   * 2D beats → kind "composable" with params.visualLayers). When absent,
+   * the scene's existing `kind` + `params` are used as-is.
+   */
+  motion_beats?: MotionBeat[];
   /** Optional metadata consumed by lints and tools (e.g., voiceDurationMs from the workspace author). */
   metadata?: {
     voiceDurationMs?: number;

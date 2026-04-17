@@ -573,6 +573,33 @@ export async function composeEpisode({ slug, env = {} }) {
   // 6. Spec.
   const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });
 
+  // Motion-beats compilation: translate any scene's high-level
+  // motion_beats list into concrete kind + params (visualLayers for 2D,
+  // primitives for R3F). Scenes without motion_beats pass through
+  // unchanged. Done BEFORE the video-clip guard so guard sees the
+  // compiled shape.
+  try {
+    const { compileSpecBeats } = await import('../../packages/video/src/spec/motion-beats-compiler.js');
+    const { scenes: compiledScenes, reports } = compileSpecBeats(spec.scenes);
+    spec.scenes = compiledScenes;
+    const appliedCount = reports.filter((r) => r.applied).length;
+    if (appliedCount > 0) {
+      console.log(`[compose-core] motion-beats compiler: ${appliedCount}/${reports.length} scenes compiled`);
+      for (const r of reports) {
+        if (r.applied) {
+          console.log(`  [${r.sceneId}] → kind=${r.chosenKind} · ${r.note}`);
+          if (r.droppedBeats) {
+            for (const d of r.droppedBeats) {
+              console.log(`    ⚠ dropped beat ${d.primitive}: ${d.reason}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`[compose-core] motion-beats compiler skipped: ${e.message}`);
+  }
+
   // Programmatic-only guard: the Briefing (and any series with
   // format.aspectRatio='horizontal' newsroom format) uses ONLY the
   // programmatic primitives. AI video clips (Seedance, Fal Luma) are

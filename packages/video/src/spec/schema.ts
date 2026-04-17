@@ -53,6 +53,13 @@ const TransitionSpecSchema = z
   })
   .passthrough();
 
+const MotionBeatSchema = z.object({
+  primitive: z.string().min(1),
+  params: z.record(z.string(), z.unknown()).optional(),
+  at: z.number().int().nonnegative().optional(),
+  duration: z.number().int().positive().optional(),
+});
+
 // Scenes are an open set: scene kinds register at runtime. We validate only
 // the envelope; per-kind params are validated by the scene component itself.
 const SceneSchema = z.object({
@@ -62,6 +69,8 @@ const SceneSchema = z.object({
   params: z.record(z.string(), z.unknown()).optional(),
   captions: z.array(CaptionSpecSchema).optional(),
   narration: z.string().optional(),
+  motion_graphic_prompt: z.string().optional(),
+  motion_beats: z.array(MotionBeatSchema).optional(),
   metadata: z
     .object({
       voiceDurationMs: z.number().positive().optional(),

@@ -50,7 +50,7 @@ The render pipeline auto-shrinks scene durations to match actual voice audio.
 STRUCTURE — each story splits into TWO sub-scenes so the background cuts
 mid-story. Real newsroom pacing cuts visuals every 5-8 seconds even when
 the anchor voice is continuous. We mimic that: the voiceover doesn't
-pause, but the backdrop + marker style shift.
+pause, but the backdrop + motion beats shift.
 
 Scene count:
   - 2 stories → 6 scenes: intro + 2×2 + outro
@@ -62,53 +62,38 @@ sub-scenes. Sub-scene (a) carries the lead + first beat (~35-50% of
 words). Sub-scene (b) carries specifics + implication (~50-65%).
 
 ─── Scene: INTRO (~6s, 180 frames, 10-14 words narration) ───
-Host voice sets the table. On-screen: "THE BRIEFING / APR 17" centered,
-BIG (fontSize 88, fontWeight 800). Subtle secondary line with story
-count via subtitle field (e.g., "Two moves in AI today").
+Host voice sets the table. Visual: date + story count revealed on a
+floating glass slate inside a warm particle field (ASMR intro).
   text.content: "THE BRIEFING" (upper line)
   text.subtitle: "<date> · <N> stories" (e.g., "APR 17 · TWO MOVES")
-  text.position: "center"
-  text.fontSize: 88
-  text.fontWeight: 800
-  text.fontFamily: "display"
-  text.animation: "fade-in"
-  Primitives: grid-morph + scan-line + vignette (newsroom idle, slow).
+  motion_graphic_prompt: "A chrome 'THE BRIEFING' title breathes on a
+    frosted glass slate; warm particles drift behind it."
 
-─── Scene: STORY 1a (~10-15s after audio alignment, 40-50% of story 1 words) ───
-The actor reveal. Narration: actor + artifact lead + one spec.
+─── Scene: STORY 1a (~10-15s, 40-50% of story 1 words) ───
+Actor reveal + lead fact. Visual anchors the story's ONE concrete number
+(lift %, model size, benchmark delta) as a count-up bar or sculpted
+number — semantically tied to what the voice is saying this very second.
   text.content: "01 · <ACTOR IN CAPS>" (e.g., "01 · ANTHROPIC")
-  text.position: "bottom-left"
-  text.fontSize: 48
-  text.fontWeight: 800
-  text.fontFamily: "display"
-  text.animation: "fade-in"
-  Primitives: grid-morph + light-rays + scan-line + vignette ("breaking" energy).
+  motion_graphic_prompt: "<actor> <artifact>: the headline number rises
+    from zero to <N> with chrome ASMR material."
 
 ─── Scene: STORY 1b (~15-20s, 50-60% of story 1 words) ───
-Same actor/artifact — story continues — but backdrop CUTS to a different
-primitive stack so the visual beat resets. Narration: remaining specifics
-+ implication.
+Same actor — story continues — but the motion beat CUTS to a different
+semantic primitive so the visual beat resets. If the lead was a number,
+follow-up is specs (spec-list / orbiting-tags) or a versus
+(before→after for version deltas).
   text.content: "01 · <ACTOR IN CAPS>"
-  text.position: "bottom-left"
-  text.fontSize: 48
-  text.fontWeight: 800
-  text.fontFamily: "display"
-  text.animation: "fade-in"
-  Primitives: flow-field + constellation + film-grain + vignette (tighter,
-  data-focused — the backdrop changes while voice flows over it).
+  motion_graphic_prompt: "<specifics visual — e.g., 'three specs reveal
+    one by one', 'v4.6 → v4.7 cards cross-fade'>."
 
 ─── Scene: STORY 2a, 2b (same structure as 1a/1b) ───
-Mix primitives across the sub-scenes — each should feel visually distinct.
-  S2a: aurora + bokeh + vignette + scan-line
-  S2b: geometric + grid-morph + light-rays + vignette
-  text.content: "02 · <ACTOR>"
+Each beat MUST be semantically tied to what that specific scene's voice
+is saying. If story 2 is about open weights, show a badge "OPEN WEIGHTS"
+— not a generic particle backdrop.
 
 ─── Scene: STORY 3a, 3b (OPTIONAL, only if story_count is 3) ───
-  S3a: waveform + gradient-wash + vignette
-  S3b: particle-burst + flow-field + film-grain + vignette
-  text.content: "03 / <ACTOR>"
 
-Scene 5 — OUTRO (145-170s, 750 frames, 30-45 words).
+Scene OUTRO (~25s, 750 frames, 30-45 words).
 Synthesize. ONE sentence connecting the stories OR naming the underlying trend. Then a single concrete watch-for / question / call-to-action for tomorrow. NEVER "subscribe for more" — instead name what the viewer should monitor this week.
 
 CRITICAL: Use the ACTUAL story_count when opening the outro. If story_count is 2, write "Two moves..." If 3, write "Three moves..." If 1, "One story, one thread:" — the number must match story_count exactly. Hardcoding "three" when you only covered two reveals the template to the viewer.
@@ -118,10 +103,9 @@ CRITICAL: Use the ACTUAL story_count when opening the outro. If story_count is 2
   "Three stories converge: models get smaller, regulation gets sharper, agents get paid. Tomorrow we're watching Meta — their 4.1 window opens Wednesday."
   "One headline today, but it's the one: Anthropic's Opus 4.7 ships GA. The real question: does this eat your vertical startup by Q3?"
 
-VISUAL LAYOUT: composable with dark backdrop (gradient-wash + scan-line + vignette).
-  text.content: "TOMORROW · <tomorrow's date>" on first line, single-line tease on second line if possible (use subtitle field for the tease).
-  text.position: "center", fontSize: 56, fontWeight: 700
-  Alternative: split into two halves — first half the connecting line, second half the tease.
+VISUAL LAYOUT (outro): floating "TOMORROW · <date>" on a glass slate,
+one-line tease as subtitle, warm chrome tones. Motion beat: glass-panel
+breath-cycle.
 
 TAKEAWAY TEMPLATES (use in Outro, rotate across episodes — opening clause must use the actual story count):
   1. WATCH-FOR: "Watch [specific signal] by [timeframe]."
@@ -154,21 +138,70 @@ SOURCE RULES:
 - If the seed includes @handles with relevant posts, you MAY cite them ("as @simonw noted...") — max one @handle per episode.
 - Never cite OHWOW's own product. If the seed drifts to OHWOW, skip with confidence: 0.
 
-VISUAL SPEC: output a valid VideoSpec JSON. Canvas is 1920×1080 (horizontal), not a Short. Scene kinds: text-typewriter, composable. Story scenes use composable with a bottom-left text marker (the story number + actor name in caps) and background primitives that create newsroom-ticker energy.
+VISUAL SPEC: output a valid VideoSpec JSON. Canvas is 1920×1080 (horizontal), not a Short.
+Each scene carries TWO motion-graphic fields that the compose pipeline reads:
+  - motion_graphic_prompt: plain-language intent ("a chrome 13% rises from zero next to ANTHROPIC in caps")
+  - motion_beats: the executable list of primitive beats that realize that intent
+The compose pipeline has a beats compiler that turns motion_beats into the
+right scene kind + params (2D → "composable" with visualLayers; any r3f.*
+beat → "r3f-scene" with primitives). You do NOT set kind or params.visualLayers
+directly on beat-driven scenes — the compiler fills them in.
 
-HORIZONTAL TEXT SIZING (1920px wide, 240px padding each side → 1440px text area):
-  - Intro marker: fontSize 64-72, position center, short (10-14 words)
-  - Story markers: fontSize 40-48, position bottom-left, ~15-25 chars ("01 · ANTHROPIC")
-  - Outro: fontSize 56-64, position center, two-clause structure (thread line + tease)
-  - maxWidth on any wrapping text: 1400px
-  Don't make marker text huge — it's chrome, not content.
+─── PRIMITIVE CATALOG ───
 
-PRIMITIVE MIXING by scene (differentiation matters — if every story looks the same, the format feels monotonous):
-  - Intro: grid-morph + scan-line + vignette (newsroom idle)
-  - Story 1: grid-morph + light-rays + scan-line + vignette (energetic "breaking")
-  - Story 2: flow-field + constellation + film-grain + vignette (softer, second beat)
-  - Story 3: aurora + bokeh + geometric + vignette (cooler palette shift)
-  - Outro: gradient-wash + scan-line + vignette (wind-down)
+Every beat is { "primitive": "<name>", "params": { ... } }.
+
+**2D semantic primitives** (flat, fast, compose well with backdrop layers):
+  count-up       — number animates 0→N. params: { to, from?, prefix?, suffix?, fontSize?, color? }
+  badge-reveal   — text pill pops in. params: { text, variant?: "neutral"|"delta"|"warning", subtitle? }
+  versus-card    — before/after side-by-side. params: { before: {label, value?}, after: {label, value?}, metric?, unit? }
+  benchmark-bar  — horizontal bar fills 0→value. params: { value, max?, label?, unit?, color? }
+  spec-list      — key:value rows reveal in sequence. params: { items: [{key, value}], pacing? }
+
+**2D backdrop layers** (ambient, no content — stack 2-3 behind a semantic primitive):
+  grid-morph, scan-line, vignette, light-rays, flow-field, constellation,
+  aurora, bokeh, film-grain, gradient-wash, geometric, waveform,
+  particle-burst
+
+**R3F (three.js) semantic primitives** (3D, chrome/glass/depth — ASMR gold standard):
+  r3f.count-up-bar     — extruded bar rises 0→target with chrome. params: { target, unit?, label?, fromValue?, barColor? }
+  r3f.particle-cloud   — GPU particle field, warm drift. params: { count?, color?, radius? }
+  r3f.versus-cards     — two floating cards orbit + crossfade. params: { left: {label, value?}, right: {label, value?} }
+  r3f.number-sculpture — large 3D numeral, chrome/iridescent. params: { value, label?, unit?, fontSize? }
+  r3f.glass-panel      — frosted glass slate with text. params: { text, subtitle?, width?, height? }
+  r3f.orbiting-tags    — text pills orbit a central axis. params: { tags: string[], radius?, speed?, tagSize? }
+  r3f.ribbon-trail     — bezier ribbon traces across frame. params: { color?, thickness?, turns? }
+
+**Scene-level params** (carry on the scene, not inside a beat):
+  params.text            — marker/lower-third for 2D scenes only. { content, subtitle?, position?, fontSize?, fontWeight?, fontFamily?, animation? }
+  params.background      — hex color for R3F scenes (e.g., "#0a1020")
+  params.motionProfile   — "asmr" | "crisp" | "chaotic" (Briefing defaults to "asmr")
+  params.camera          — R3F camera override. { position: [x,y,z], fov? }
+  params.environmentPreset — drei HDRI preset for R3F scenes (default "sunset")
+
+**Compiler rules you must respect:**
+- Mixing 2D and r3f.* beats in the same scene: r3f.* wins; 2D beats are DROPPED. Don't mix unless you only want the R3F ones.
+- If you want a backdrop stack behind a semantic primitive, either go ALL 2D (grid-morph + count-up + vignette) OR ALL R3F (r3f.particle-cloud + r3f.count-up-bar).
+- Text for R3F scenes lives inside r3f.glass-panel / r3f.orbiting-tags / r3f.number-sculpture primitives — NOT in params.text (ignored by r3f-scene kind).
+
+─── NARRATION → BEAT PATTERNS ───
+
+Pick the beat that visualizes what the voice is saying THIS second.
+
+| Narration pattern                              | Pick these beats                                  |
+|------------------------------------------------|---------------------------------------------------|
+| "<N>% lift" / "<N>% faster" / "<N>% of"        | r3f.count-up-bar { target: N, unit: "%" }         |
+| "from v4.6 to v4.7" / "before → after"         | r3f.versus-cards { left: {label: "4.6"}, right: {label: "4.7"} } |
+| "$<N>M raised" / "<N> tokens/sec"              | r3f.number-sculpture { value: N, unit: "M", label: "Series B" } |
+| "ships with <feature>" / "supports X, Y, Z"    | r3f.orbiting-tags { tags: ["X", "Y", "Z"] }       |
+| "open weights" / "MIT licensed" / single tag   | badge-reveal { text: "OPEN WEIGHTS", variant: "delta" } |
+| "ranks #<N> on <bench>" / benchmark result     | benchmark-bar { value: N, max: 100, label: "SWE-bench", unit: "%" } |
+| "specs: 70B params, 32k ctx, $2/M"             | spec-list { items: [{key: "Params", value: "70B"}, ...] } |
+| Announcement / title card / intro/outro slate  | r3f.glass-panel { text, subtitle }                |
+| Pure ambient / transition / backdrop only      | r3f.particle-cloud OR grid-morph + scan-line      |
+
+Beats FOLLOW the narration — if the voice in sub-scene 1a says "13%", the
+motion beat in 1a MUST be a 13 rising; not a generic particle cloud.
 
 PALETTE: mood 'electric' (bright, awake), hue around 215 (newsroom blue). Light surface (#ffffff / #0a1629 text). Body font is Inter; headline font is Merriweather (serif) for editorial feel.
 
@@ -185,9 +218,8 @@ OUTPUT STRICT JSON:
       "lead": "one-sentence lead (10-12 words)",
       "facts": "the 2-3 sentences of concrete specifics (30-45 words)",
       "implication": "one-sentence operator consequence with a timeframe (15-25 words)",
-      "source_index": 0  // index into the seed bundle's sources array
+      "source_index": 0
     }
-    // ... position 2 and optionally 3
   ],
   "intro_line": "10-14 word opener that sets the table",
   "outro_connection": "one-sentence thread connecting the stories",
@@ -195,165 +227,102 @@ OUTPUT STRICT JSON:
   "takeaway_template": "watch-for | thread-connection | naming-the-loser | provocative-question | historical-echo | migration-clock",
   "narration_full": "complete narration across all scenes, joined with paragraph breaks between stories",
   "title": "YouTube title (<=70 chars, e.g., 'AI Briefing · Apr 17 · Opus 4.7, Qwen 3.6, Cloudflare')",
-  "description": "2-3 sentences describing the three stories + #AI #DailyBriefing hashtags at end. Chapter-timestamp-friendly.",
+  "description": "2-3 sentences describing the stories + #AI #DailyBriefing hashtags at end. Chapter-timestamp-friendly.",
   "confidence": 0..1,
   "reason": "one sentence: why these specific stories matter to the target audience THIS week",
   "spec": {
     "scenes": [
       {
         "id": "intro",
-        "kind": "composable",
         "durationInFrames": 180,
-        "params": {
-          "visualLayers": [
-            { "primitive": "grid-morph", "params": { "cols": 16, "rows": 9 } },
-            { "primitive": "scan-line", "params": { "opacity": 0.25 } },
-            { "primitive": "vignette", "params": { "intensity": 0.4 } }
-          ],
-          "text": {
-            "content": "THE BRIEFING",
-            "subtitle": "APR 17 · TWO MOVES",
-            "position": "center",
-            "fontSize": 88,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "A chrome 'THE BRIEFING' title floats on a frosted glass slate; warm particles drift behind it.",
+        "motion_beats": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 220, "color": "#e3b58a", "radius": 6 } },
+          { "primitive": "r3f.glass-panel", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "width": 9, "height": 3.2 } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<intro narration>"
       },
       {
         "id": "story-1a",
-        "kind": "composable",
         "durationInFrames": 450,
-        "params": {
-          "visualLayers": [
-            { "primitive": "grid-morph", "params": { "cols": 20, "rows": 11 } },
-            { "primitive": "light-rays", "params": { "count": 8, "opacity": 0.35 } },
-            { "primitive": "scan-line", "params": { "opacity": 0.2 } },
-            { "primitive": "vignette", "params": { "intensity": 0.5 } }
-          ],
-          "text": {
-            "content": "01 · ANTHROPIC",
-            "position": "bottom-left",
-            "fontSize": 48,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "A chrome 13% count-up bar rises from zero with the ANTHROPIC label orbiting.",
+        "motion_beats": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 160, "color": "#9ec7ff", "radius": 8 } },
+          { "primitive": "r3f.count-up-bar", "params": { "target": 13, "unit": "%", "label": "SWE-bench lift", "barColor": "#e3b58a" } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<story 1 lead + first spec — 35-45% of story 1 words>"
       },
       {
         "id": "story-1b",
-        "kind": "composable",
         "durationInFrames": 600,
-        "params": {
-          "visualLayers": [
-            { "primitive": "flow-field", "params": { "count": 160, "speed": 0.6 } },
-            { "primitive": "constellation", "params": { "nodeCount": 24, "lineOpacity": 0.3 } },
-            { "primitive": "film-grain", "params": { "intensity": 0.05 } },
-            { "primitive": "vignette", "params": { "intensity": 0.5 } }
-          ],
-          "text": {
-            "content": "01 · ANTHROPIC",
-            "position": "bottom-left",
-            "fontSize": 48,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "Three specs — LONG-HORIZON, AGENTIC, CODING — orbit a central axis in chrome pills.",
+        "motion_beats": [
+          { "primitive": "r3f.orbiting-tags", "params": { "tags": ["LONG-HORIZON", "AGENTIC", "CODING"], "radius": 2.8, "tagSize": 0.42 } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<story 1 remaining specifics + implication — 55-65% of story 1 words>"
       },
       {
         "id": "story-2a",
-        "kind": "composable",
         "durationInFrames": 450,
-        "params": {
-          "visualLayers": [
-            { "primitive": "aurora", "params": { "opacity": 0.55 } },
-            { "primitive": "bokeh", "params": { "count": 18 } },
-            { "primitive": "scan-line", "params": { "opacity": 0.2 } },
-            { "primitive": "vignette", "params": { "intensity": 0.5 } }
-          ],
-          "text": {
-            "content": "02 · ALIBABA",
-            "position": "bottom-left",
-            "fontSize": 48,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "A versus card morphs from 'Qwen 3.5' to 'Qwen 3.6' with an OPEN WEIGHTS badge below.",
+        "motion_beats": [
+          { "primitive": "r3f.versus-cards", "params": { "left": { "label": "Qwen 3.5" }, "right": { "label": "Qwen 3.6" } } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<story 2 lead + first spec>"
       },
       {
         "id": "story-2b",
-        "kind": "composable",
         "durationInFrames": 600,
-        "params": {
-          "visualLayers": [
-            { "primitive": "geometric", "params": { "count": 6, "opacity": 0.25 } },
-            { "primitive": "grid-morph", "params": { "cols": 24, "rows": 13 } },
-            { "primitive": "light-rays", "params": { "count": 6, "opacity": 0.3 } },
-            { "primitive": "vignette", "params": { "intensity": 0.5 } }
-          ],
-          "text": {
-            "content": "02 · ALIBABA",
-            "position": "bottom-left",
-            "fontSize": 48,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "A large chrome 72B sculpture rotates slowly with the context-length label 'CTX 128K'.",
+        "motion_beats": [
+          { "primitive": "r3f.number-sculpture", "params": { "value": 72, "unit": "B", "label": "parameters", "fontSize": 2.4 } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<story 2 remaining specifics + implication>"
       },
       {
         "id": "outro",
-        "kind": "composable",
         "durationInFrames": 750,
-        "params": {
-          "visualLayers": [
-            { "primitive": "gradient-wash", "params": { "speed": 0.002, "opacity": 0.35 } },
-            { "primitive": "scan-line", "params": { "opacity": 0.15 } },
-            { "primitive": "vignette", "params": { "intensity": 0.6 } }
-          ],
-          "text": {
-            "content": "TOMORROW",
-            "subtitle": "APR 18 · Watch Mistral's response",
-            "position": "center",
-            "fontSize": 72,
-            "fontWeight": 800,
-            "fontFamily": "display",
-            "animation": "fade-in"
-          }
-        },
+        "motion_graphic_prompt": "A 'TOMORROW · APR 18' glass slate breathes softly while a ribbon trail crosses behind it.",
+        "motion_beats": [
+          { "primitive": "r3f.ribbon-trail", "params": { "color": "#9ec7ff", "thickness": 0.08, "turns": 2 } },
+          { "primitive": "r3f.glass-panel", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch Mistral's response", "width": 9.5, "height": 3.2 } }
+        ],
+        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
         "narration": "<outro synthesis + tease>"
       }
     ],
-    "transitions": [{ "kind": "fade", "durationInFrames": 8 }],
+    "transitions": [{ "kind": "fade", "durationInFrames": 24 }],
     "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" }
   }
 }
 
 For a 3-story episode, add story-3a and story-3b between story-2b and outro,
-following the same pattern (use waveform+gradient-wash mix for 3a, particle-burst+flow-field
-for 3b). For a 1-story degraded episode, only story-1a and story-1b (no story-2).
+following the same beat patterns (pick primitives that match that story's
+ONE concrete number / spec / version). For a 1-story degraded episode,
+only story-1a and story-1b.
 
 CRITICAL SCHEMA RULES:
-- EVERY scene's params.text MUST be an object with {content, position, fontSize, ...}. NEVER a bare string.
-- EVERY scene's params.visualLayers MUST be a non-empty array with 3-4 {primitive, params} entries. Empty array = render is a blank background.
-- Copy the scene params shape above verbatim; substitute content + narration + ACTOR name.
+- Every story sub-scene MUST carry motion_graphic_prompt + motion_beats.
+  The beat must visualize the ONE concrete number/tag in that scene's narration.
+- Intro + outro: use r3f.glass-panel for the title/slate. Add r3f.particle-cloud or r3f.ribbon-trail behind it for ASMR ambient.
+- Never mix 2D and r3f.* beats in one scene (compiler drops the 2D ones).
+- Scene omits "kind" and omits params.visualLayers — the compiler sets both.
+- Scene-level params should always include motionProfile: "asmr" for Briefing.
+- For R3F scenes, skip params.text — carry text inside r3f.glass-panel / r3f.orbiting-tags / r3f.number-sculpture instead.
+- Every scene still needs id, durationInFrames, and narration.
 
 SCENE COUNT MUST MATCH story_count:
   story_count == 1 → 4 scenes: intro, story-1a, story-1b, outro
   story_count == 2 → 6 scenes: intro, story-1a, story-1b, story-2a, story-2b, outro
   story_count == 3 → 8 scenes: intro, story-1a, story-1b, story-2a, story-2b, story-3a, story-3b, outro
 
-Each story is SPLIT across two sub-scenes (a + b) with DIFFERENT primitive
-mixes so the backdrop cuts mid-story while the voice flows continuously.
+Each story is SPLIT across two sub-scenes (a + b) with DIFFERENT motion
+beats so the visual beat cuts mid-story while the voice flows continuously.
 Sub-scene a narration = 35-45% of that story's words (lead + first spec).
 Sub-scene b narration = 55-65% (remaining specifics + implication).
 
@@ -374,15 +343,17 @@ SELF-CHECK before outputting:
 2. Each story has a DIFFERENT ANGLE — not three model-release stories, not three regulatory stories. Mix model/platform/regulation/benchmark.
 3. Story lengths: each story block 65-100 words? Not padded, not skimpy.
 4. Intro: 10-14 words, names the date + story count + tone?
-5. Outro: connects the stories (one thread) + one-line tease of tomorrow's watch? NOT "subscribe for more"?
-6. Corporate-speak: no "production-grade," "competitive landscape," "paradigm shift," "at scale," "cutting-edge," "best-in-class"? No "before your competitor does"?
+5. Outro: connects the stories + tomorrow-tease + NOT "subscribe for more"?
+6. Corporate-speak: no banned phrases? If your line could be an a16z tweet, rewrite it.
 7. Actor canonicalization: "Alibaba" not "Qwen team", "Google DeepMind" not bare "DeepMind", "Anthropic" not "the Claude team"?
-8. Total narration_full: 240-380 words (sits well in the 90-180s runtime at newsroom pace)?
-9. For each story, does the operator's next action become obvious? If the implication is vague, rewrite.
+8. Total narration_full: 240-380 words (sits in 90-180s runtime at newsroom pace)?
+9. For each story, does the operator's next action become obvious?
 10. Scene count matches story_count × 2 + 2 (intro + outro)?
-11. Every story sub-scene uses a DIFFERENT primitive mix than its sibling and neighbors?
-12. Every scene's text.position is "center" for intro/outro, "bottom-left" for story sub-scenes (the "NN · ACTOR" marker is a corner chip, not a big lower-third)?
-13. Story sub-scene marker fontSize is 48? Intro fontSize 88, outro 72?
+11. Every beat-driven scene has motion_graphic_prompt + motion_beats arrays?
+12. Every story sub-scene's beat VISUALIZES what that scene's narration is saying (ONE concrete number / tag / version → one semantic primitive)?
+13. Sub-scenes (a) and (b) use DIFFERENT primitives (cut the visual mid-story)?
+14. No scene mixes 2D and r3f.* beats in one motion_beats array?
+15. motionProfile: "asmr" set on every scene?
 
 Skip with confidence: 0 if: all candidate stories are too thin OR they're all the same angle OR they're all about OHWOW.`;
 

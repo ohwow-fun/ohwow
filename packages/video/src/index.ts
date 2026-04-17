@@ -4,6 +4,12 @@ import { Root } from "./Root";
 export * from "./spec/types";
 export * from "./spec/kinds";
 export {
+  compileSceneBeats,
+  compileSpecBeats,
+  type CompileResult,
+  type CompilerReport,
+} from "./spec/motion-beats-compiler";
+export {
   VideoSpecSchema,
   parseVideoSpec,
   safeParseVideoSpec,
