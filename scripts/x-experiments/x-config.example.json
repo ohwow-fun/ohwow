@@ -1,7 +1,10 @@
 {
   "_comment": "Example X-intel config. Copy to ~/.ohwow/workspaces/<workspace>/x-config.json and edit. The private copy is gitignored. The public example has generic placeholders only.",
+  "_comment_engagers": "Engager surfaces (people who reply to our posts or to competitor posts) are the strongest signal short of inbound DMs. Set own_handle so x-intel can scrape repliers on your own recent posts, and set harvest_engagers=true on a competitor profile to scrape its replier pool. Both feed into the market_signal bucket.",
 
   "workspace_description": "What this workspace is building. Used to prime the classifier so it knows what 'relevant' means for us.",
+
+  "own_handle": "example_handle",
 
   "brand_voice": {
     "positioning": "one-line pitch",
@@ -37,6 +40,13 @@
       "description": "Design, taste, product craft. Threads that make us want to build.",
       "keywords": ["design", "craft", "taste", "shipping", "product"],
       "auto_approve_after": 3
+    },
+    {
+      "id": "market_signal",
+      "label": "Market signal",
+      "description": "Customers or adjacent users voicing pain points, wishlists, or anti-patterns in the tools they use today. Engager surfaces route here by default.",
+      "keywords": ["wish", "i wish", "frustrated", "why doesn't", "should be", "needs to", "tired of", "outgrew"],
+      "auto_approve_after": 4
     }
   ],
 
@@ -44,10 +54,21 @@
     "home_feed": { "enabled": true, "max_scrolls": 20 },
     "searches": [
       { "query": "local-first AI agents", "bucket_hint": "advancements", "max_scrolls": 6 },
-      { "query": "MCP servers", "bucket_hint": "hacks", "max_scrolls": 6 }
+      { "query": "MCP servers", "bucket_hint": "hacks", "max_scrolls": 6 },
+      { "query": "tired of zapier", "bucket_hint": "competitors", "max_scrolls": 4 },
+      { "query": "outgrew n8n", "bucket_hint": "competitors", "max_scrolls": 3 },
+      { "query": "doing everything myself founder", "bucket_hint": "market_signal", "max_scrolls": 4 },
+      { "query": "automate my ops", "bucket_hint": "market_signal", "max_scrolls": 3 }
     ],
     "profiles": [
-      { "handle": "example_competitor", "bucket_hint": "competitors", "max_scrolls": 4 },
+      {
+        "handle": "example_competitor",
+        "bucket_hint": "competitors",
+        "max_scrolls": 4,
+        "harvest_engagers": true,
+        "engager_parent_posts": 3,
+        "engager_max_scrolls": 3
+      },
       { "handle": "example_inspiration_account", "bucket_hint": "inspiration", "max_scrolls": 4 }
     ]
   },
