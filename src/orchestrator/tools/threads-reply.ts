@@ -217,6 +217,78 @@ export function resolveThreadsSourceUrl(source: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Full-text fetcher — use after selection to enrich a candidate with the
+// full primary-post text that the feed/search scan truncated.
+// ---------------------------------------------------------------------------
+
+/**
+ * Navigate to a Threads post detail URL and return its full primary
+ * post text. Search/feed scans show truncated previews (Threads itself
+ * ships a ~180-char preview for long posts); the detail page renders
+ * the whole text in a single span[dir="auto"]. Use this for each top-N
+ * candidate right before drafting so the LLM sees the full post.
+ *
+ * Identifies the primary post by walking from the permalink anchor
+ * (a[href*="/post/<id>"]) up to the containing card, then picks the
+ * longest visible span/div[dir="auto"] inside that card — excludes
+ * replies (which live in separate cards farther down the DOM).
+ */
+export async function fetchThreadsPostFullText(
+  url: string,
+  expectedBrowserContextId?: string,
+): Promise<string | null> {
+  const m = url.match(/\/post\/([^/?#]+)/);
+  if (!m) return null;
+  const postId = m[1];
+
+  const handle = await getThreadsCdpPage(expectedBrowserContextId);
+  if (!handle) return null;
+  const { page, created } = handle;
+  try {
+    await page.goto(url);
+    await wait(HYDRATION_WAIT_MS);
+
+    const text = await page.evaluate<string | null>(`(() => {
+      const postId = ${JSON.stringify(postId)};
+      // Permalink anchor inside the primary post card.
+      const link = document.querySelector('a[href*="/post/' + postId + '"]');
+      if (!link) return null;
+      // Climb to the containing post card (has time + Reply action bar).
+      let el = link;
+      for (let i = 0; i < 14; i++) {
+        if (!el.parentElement) break;
+        el = el.parentElement;
+        const hasTime = el.querySelector('time');
+        const hasReplyBtn = Array.from(el.querySelectorAll('div, [role="button"]')).some(
+          (b) => (b.textContent || '').trim() === 'Reply',
+        );
+        const txtLen = (el.innerText || '').length;
+        if (!hasTime || !hasReplyBtn || txtLen < 20 || txtLen > 4500) continue;
+        // Found a valid card. Extract its longest text block.
+        const textNodes = Array.from(el.querySelectorAll('span[dir="auto"], div[dir="auto"]'))
+          .filter((n) => !!n.offsetParent)
+          .map((n) => (n.textContent || '').trim())
+          .filter((t) => {
+            if (t.length <= 10) return false;
+            if (t.startsWith('@')) return false;
+            if (/^\\d+[smhdwMy]\\b/.test(t)) return false;
+            if (/^(like|reply|repost|share)s?$/i.test(t)) return false;
+            return true;
+          });
+        if (textNodes.length === 0) continue;
+        textNodes.sort((a, b) => b.length - a.length);
+        return textNodes[0];
+      }
+      return null;
+    })()`).catch(() => null);
+
+    return text;
+  } finally {
+    if (created) await page.closeAndCleanup(); else page.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Scan
 // ---------------------------------------------------------------------------
 
@@ -641,19 +713,31 @@ export async function composeThreadsReplyViaBrowser(
     }
     await wait(1000);
 
-    // Confirm publish succeeded. Threads' post-submit behavior varies:
-    //   - Dialog layout: sometimes closes the dialog, sometimes keeps the
-    //     dialog open with the textbox emptied (ready for the next reply).
-    //   - Inline layout: textbox stays, content empties.
-    // Success signal is CONTENT-EMPTY, not DOM-absence — we could be
-    // staring at an empty composer for 3 seconds and still be published.
-    const stillLooksUnpublished = await page.evaluate<boolean>(`(() => {
-      const tb = document.querySelector('[role="dialog"] [role="textbox"][contenteditable="true"]')
-               || document.querySelector('[role="textbox"][contenteditable="true"]');
-      if (!tb) return false; // textbox gone — definitely published / dismissed
-      const txt = (tb.textContent || '').trim();
-      return txt.length > 0; // content remains → not submitted
-    })()`).catch(() => false);
+    // Confirm publish. Composer-clearance alone gave false negatives
+    // (observed twice — ralph42x and robin.ebers) because Threads is
+    // slow to clear the textbox on network-heavy posts. Stronger
+    // positive signal: our reply text appears in the rendered feed.
+    // Poll up to 10s for EITHER composer-clear OR text-visible.
+    const textProbe = text.trim().slice(0, 60).replace(/"/g, '\\"');
+    let publishConfirmed = false;
+    for (let i = 0; i < 20; i++) {
+      publishConfirmed = await page.evaluate<boolean>(`(() => {
+        // Signal A: composer textbox cleared.
+        const tb = document.querySelector('[role="dialog"] [role="textbox"][contenteditable="true"]')
+                 || document.querySelector('[role="textbox"][contenteditable="true"]');
+        if (!tb || ((tb.textContent || '').trim().length === 0)) return true;
+        // Signal B: our reply text is visible somewhere on the page
+        // (the feed has rendered the new post). Cheaper than waiting
+        // for Threads to finish the composer cleanup animation.
+        const body = document.body?.innerText || '';
+        if (body.includes("${textProbe}")) return true;
+        return false;
+      })()`).catch(() => false);
+      if (publishConfirmed) break;
+      await wait(500);
+    }
+
+    const stillLooksUnpublished = !publishConfirmed;
 
     if (stillLooksUnpublished) {
       return {
