@@ -17,6 +17,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   PaperPlaneRight,
@@ -214,6 +215,19 @@ export function MessagesPage() {
   // Unified selection
   const [active, setActive] = useState<ActiveConversation | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Deep-link: /ui/messages?pair=<x_conversation_pair> opens a specific
+  // CRM thread. Consumed once on mount, then cleared from the URL so a
+  // later manual selection isn't reverted on re-render.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const pair = searchParams.get('pair');
+    if (pair) {
+      setActive({ kind: 'crm', pair });
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const conversationRef = useRef<{ role: 'user' | 'assistant'; content: string }[]>([]);
   const activeTargetRef = useRef<{ type: string; id: string | null }>({ type: 'orchestrator', id: null });
