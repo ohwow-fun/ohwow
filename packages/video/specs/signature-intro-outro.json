@@ -5,11 +5,11 @@
   "width": 1920,
   "height": 1080,
   "brand": {
-    "colors": { "bg": "#000000", "text": "#ffffff", "accent": "#e3b58a" },
+    "colors": { "bg": "#000000", "text": "#ffffff", "accent": "#4de0ff" },
     "fonts": {
       "sans": "Inter, system-ui, sans-serif",
       "mono": "JetBrains Mono, monospace",
-      "display": "Merriweather, Georgia, serif"
+      "display": "Smooch Sans, Inter, sans-serif"
     },
     "glass": {
       "background": "rgba(255,255,255,0.04)",
@@ -18,7 +18,7 @@
       "backdropFilter": "blur(12px)"
     }
   },
-  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "palette": { "seedHue": 145, "harmony": "complementary", "mood": "electric" },
   "voiceovers": [],
   "transitions": [{ "kind": "fade", "durationInFrames": 8 }, { "kind": "fade", "durationInFrames": 10 }],
   "scenes": [
@@ -46,29 +46,24 @@
         "camera": { "position": [0, 0, 10], "fov": 38 },
         "motionProfile": "asmr",
         "primitives": [
-          { "primitive": "r3f.color-fog", "params": {
-            "orbs": [
-              { "color": "#e3b58a", "x": -4.5, "y": 1.8, "z": -3, "radius": 4.5 },
-              { "color": "#6b9fd4", "x": 4.2, "y": -1.4, "z": -2, "radius": 4.8 },
-              { "color": "#b472c9", "x": -2.2, "y": -2.2, "z": -3.5, "radius": 3.8 },
-              { "color": "#d86a8a", "x": 4.8, "y": 2.5, "z": -3, "radius": 3.5 },
-              { "color": "#5fb8c6", "x": 0, "y": 0.5, "z": -5, "radius": 6.2 }
-            ],
-            "opacity": 0.38,
-            "drift": 0.4,
-            "driftSpeed": 0.06
+          { "primitive": "r3f.grid-background", "params": {
+            "cellSize": 22, "cellFill": 20, "cellRadius": 4,
+            "accentColor": "#4de0ff", "accentWarm": "#4dff7a",
+            "twinkleCount": 80, "sweepEveryFrames": 55,
+            "width": 22, "height": 12
           } },
           { "primitive": "r3f.floating-title", "params": {
             "text": "THE BRIEFING",
             "subtitle": "APR 17 · TWO MOVES",
-            "titleSize": 1.2,
-            "subtitleSize": 0.38,
-            "position": [0, 0.2, 0],
-            "subtitleOffsetY": -1.0,
+            "titleSize": 2.2,
+            "subtitleSize": 0.52,
+            "position": [0, 0.3, 0],
+            "subtitleOffsetY": -1.6,
             "kineticDelayFrames": 8,
             "kineticStaggerFrames": 4,
             "subtitleDelayFrames": 60,
-            "subtitleFadeFrames": 24
+            "subtitleFadeFrames": 24,
+            "titleLetterSpacing": 0.02
           } },
           { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
         ]
@@ -84,29 +79,24 @@
         "camera": { "position": [0, 0, 10], "fov": 38 },
         "motionProfile": "asmr",
         "primitives": [
-          { "primitive": "r3f.color-fog", "params": {
-            "orbs": [
-              { "color": "#9ec7ff", "x": -4.8, "y": 1.6, "z": -3, "radius": 5.0 },
-              { "color": "#c98ee3", "x": 4.0, "y": -1.8, "z": -2.5, "radius": 4.2 },
-              { "color": "#e3b58a", "x": -2.0, "y": -2.0, "z": -3.5, "radius": 3.8 },
-              { "color": "#5fb8c6", "x": 4.5, "y": 2.2, "z": -3, "radius": 4.0 },
-              { "color": "#b472c9", "x": 0, "y": 0.2, "z": -5, "radius": 6.0 }
-            ],
-            "opacity": 0.36,
-            "drift": 0.45,
-            "driftSpeed": 0.05
+          { "primitive": "r3f.grid-background", "params": {
+            "cellSize": 22, "cellFill": 20, "cellRadius": 4,
+            "accentColor": "#4de0ff", "accentWarm": "#4dff7a",
+            "twinkleCount": 80, "sweepEveryFrames": 55,
+            "width": 22, "height": 12
           } },
           { "primitive": "r3f.floating-title", "params": {
             "text": "TOMORROW",
             "subtitle": "APR 18 · Watch Mistral's response",
-            "titleSize": 1.3,
-            "subtitleSize": 0.4,
-            "position": [0, 0.2, 0],
-            "subtitleOffsetY": -1.05,
+            "titleSize": 2.4,
+            "subtitleSize": 0.52,
+            "position": [0, 0.3, 0],
+            "subtitleOffsetY": -1.6,
             "kineticDelayFrames": 6,
             "kineticStaggerFrames": 4,
             "subtitleDelayFrames": 50,
-            "subtitleFadeFrames": 24
+            "subtitleFadeFrames": 24,
+            "titleLetterSpacing": 0.02
           } },
           { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
         ]

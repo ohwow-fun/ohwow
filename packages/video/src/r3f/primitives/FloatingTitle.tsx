@@ -24,8 +24,8 @@
  *   subtitleDelayFrames?: number — frame the subtitle fades in (default 36)
  *   subtitleFadeFrames?: number — subtitle fade duration (default 18)
  */
-import React from "react";
-import { useCurrentFrame, useVideoConfig, interpolate, spring, Easing } from "remotion";
+import React, { useMemo } from "react";
+import { useCurrentFrame, useVideoConfig, interpolate, spring, Easing, staticFile } from "remotion";
 import { Text } from "@react-three/drei";
 
 interface FloatingTitleProps {
@@ -42,18 +42,31 @@ interface FloatingTitleProps {
   subtitleDelayFrames?: number;
   subtitleFadeFrames?: number;
   maxWidth?: number;
+  /** drei Text font URL (TTF/OTF/WOFF) — defaults to Smooch Sans ExtraBold. */
+  titleFont?: string;
+  /** Separate font for subtitle (default: lighter weight Smooch Sans Bold). */
+  subtitleFont?: string;
+  /** Letter spacing for the title (default 0.02 for Smooch Sans condensed feel). */
+  titleLetterSpacing?: number;
   motionProfile?: string;
 }
 
-// Per-char advance LUT keyed by default drei SDF font at weight 800.
+// Per-char advance LUT tuned for Smooch Sans ExtraBold — a tall
+// condensed display sans. Narrower than the drei default across the
+// board, so advances are pulled in.
 function charAdvanceFraction(ch: string): number {
-  if (ch === " ") return 0.34;
+  if (ch === " ") return 0.26;
   const u = ch.toUpperCase();
-  if ("MWO".includes(u)) return 0.82;
-  if ("ABCDGHKNQRU&".includes(u)) return 0.7;
-  if ("EFLPSTVXYZ?!".includes(u)) return 0.62;
-  if ("IJ1.,'-·".includes(u)) return 0.34;
-  return 0.6;
+  // Widest glyphs (still relatively narrow in Smooch's condensed shape).
+  if ("MWO".includes(u)) return 0.58;
+  // Wide.
+  if ("ABCDGHKNQRU&".includes(u)) return 0.48;
+  // Medium.
+  if ("EFLPSTVXYZ?!".includes(u)) return 0.42;
+  // Narrow.
+  if ("IJ1.,'-·".includes(u)) return 0.22;
+  // Default for unknowns (digits, etc).
+  return 0.44;
 }
 
 export const FloatingTitle: React.FC<FloatingTitleProps> = ({
@@ -70,9 +83,22 @@ export const FloatingTitle: React.FC<FloatingTitleProps> = ({
   subtitleDelayFrames = 36,
   subtitleFadeFrames = 18,
   maxWidth = 14,
+  titleFont,
+  subtitleFont,
+  titleLetterSpacing = 0.02,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
+  // Default to Smooch Sans (the landing-page display font). Callers can
+  // override via titleFont/subtitleFont for series-specific typography.
+  const resolvedTitleFont = useMemo(
+    () => titleFont ?? staticFile("fonts/SmoochSans-ExtraBold.ttf"),
+    [titleFont],
+  );
+  const resolvedSubtitleFont = useMemo(
+    () => subtitleFont ?? staticFile("fonts/SmoochSans-Bold.ttf"),
+    [subtitleFont],
+  );
 
   // Lay out title characters horizontally.
   const chars = Array.from(text);
@@ -122,18 +148,18 @@ export const FloatingTitle: React.FC<FloatingTitleProps> = ({
         return (
           <Text
             key={`ft-${i}`}
+            font={resolvedTitleFont}
             position={[charX, position[1] + dropY, position[2]]}
             rotation={[0, 0, jitterRad]}
             fontSize={scaledSize}
             color={titleColor}
             anchorX="center"
             anchorY="middle"
-            fontWeight={800}
             fillOpacity={opacity}
-            letterSpacing={-0.015}
-            outlineWidth={scaledSize * 0.015}
+            letterSpacing={titleLetterSpacing}
+            outlineWidth={scaledSize * 0.01}
             outlineColor="#000000"
-            outlineOpacity={0.35}
+            outlineOpacity={0.4}
           >
             {ch}
           </Text>
@@ -143,19 +169,19 @@ export const FloatingTitle: React.FC<FloatingTitleProps> = ({
       {/* Subtitle — fades in after title settles, no container */}
       {subtitle && subtitleOpacity > 0.01 && (
         <Text
+          font={resolvedSubtitleFont}
           position={[position[0], position[1] + subtitleOffsetY, position[2]]}
           fontSize={subtitleSize}
           color={subtitleColor}
           anchorX="center"
           anchorY="middle"
-          fontWeight={500}
           fillOpacity={subtitleOpacity}
-          letterSpacing={0.08}
+          letterSpacing={0.18}
           maxWidth={maxWidth}
           textAlign="center"
           outlineWidth={subtitleSize * 0.02}
           outlineColor="#000000"
-          outlineOpacity={0.3}
+          outlineOpacity={0.4}
         >
           {subtitle}
         </Text>
