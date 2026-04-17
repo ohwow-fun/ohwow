@@ -162,6 +162,19 @@ export class RawCdpBrowser {
     return r.targetId;
   }
 
+  /**
+   * Close a browser tab/target by its targetId. The tab disappears from
+   * Chrome and any sessions attached to it become invalid. Best-effort:
+   * swallows errors so callers can fire-and-forget in finally blocks.
+   */
+  async closeTarget(targetId: string): Promise<void> {
+    try {
+      await this.send('Target.closeTarget', { targetId });
+    } catch {
+      /* best effort — target may already be closed */
+    }
+  }
+
   close(): void {
     this.closed = true;
     try { this.ws?.close(); } catch { /* ignore */ }
@@ -356,6 +369,31 @@ export class RawCdpPage {
       } catch {}
       return true;
     })()`);
+  }
+
+  /**
+   * Detach from the target and close the parent browser's WebSocket.
+   * Safe to call multiple times. Use in `finally` blocks to ensure
+   * cleanup after CDP operations complete.
+   */
+  close(): void {
+    try {
+      // Detach from target — best-effort, don't await
+      this.browser.send('Target.detachFromTarget', { sessionId: this.sessionId }).catch(() => {});
+    } catch { /* ignore */ }
+    this.browser.close();
+  }
+
+  /**
+   * Close this tab (remove it from Chrome entirely) and then close
+   * the parent browser's WebSocket. Use for tabs we created that
+   * should not persist after the operation completes.
+   */
+  async closeAndCleanup(): Promise<void> {
+    try {
+      await this.browser.closeTarget(this.targetId);
+    } catch { /* best effort */ }
+    this.browser.close();
   }
 }
 

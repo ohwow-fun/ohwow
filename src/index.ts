@@ -847,6 +847,9 @@ if (subcommand === 'logs') {
 } else if (subcommand === 'showcase') {
   const { runShowcaseCli } = await import('./cli/showcase.js');
   await runShowcaseCli(process.argv.slice(3));
+} else if (subcommand === 'revenue') {
+  const { runRevenueCli } = await import('./cli/revenue.js');
+  await runRevenueCli(process.argv.slice(3));
 } else if (isDaemon) {
   // Daemon mode: start services + HTTP server, no TUI
   const { startDaemon } = await import('./daemon/start.js');
@@ -868,6 +871,7 @@ if (subcommand === 'logs') {
   console.log('  ohwow logs              Tail daemon logs');
   console.log('  ohwow restart           Restart the daemon');
   console.log('  ohwow improve           Run self-improvement cycle');
+  console.log('  ohwow revenue <add|list>    Record or inspect revenue entries');
   console.log('  ohwow video <render|cache>  Render a VideoSpec JSON to MP4');
   console.log('  ohwow showcase <target>     Research a person/company and set up a tailored agent');
   console.log('  ohwow workspace         Manage workspaces (list|current|create|use)');
