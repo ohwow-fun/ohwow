@@ -83,7 +83,14 @@ export async function pickSeed({ workspace, historyDays = 2, skipFallback = fals
     if (skipFallback) return null;
 
     console.log(`[briefing-seed] x-intel empty — trying Hacker News fallback`);
-    let seed = await pickFromHackerNews({ maxAgeHours: 48, seriesSlug: SERIES });
+    // Dedup by hn_id: keep HN candidate filtering stable regardless of
+    // what the LLM names the actor/artifact. We also honor the title-
+    // hash seen-set by mapping hn_ids we've seen before.
+    let seed = await pickFromHackerNews({
+      maxAgeHours: 48,
+      seriesSlug: SERIES,
+      isSeen: (candidate) => seen.has(hash(`hn:${candidate.hn_id}`)),
+    });
 
     if (!seed) {
       console.log(`[briefing-seed] HN produced no seed — trying orchestrator deep_research`);
@@ -95,8 +102,18 @@ export async function pickSeed({ workspace, historyDays = 2, skipFallback = fals
 
     if (!seed) return null;
     // Mark the fallback seed as seen so we don't re-pick the same story
-    // on the next compose run today.
+    // on the next compose run today. For HN-sourced seeds we dedupe by
+    // hn_id (stable across LLM re-extraction); we also record the title
+    // hash for any other caller that might want it.
     markSeen(workspace, SERIES, hash(seed.title), seed.title);
+    if (seed.metadata?.hn_id) {
+      markSeen(workspace, SERIES, hash(`hn:${seed.metadata.hn_id}`), `hn:${seed.metadata.hn_id}`);
+    }
+    // Also mark HN candidates the fallback tried-and-failed to fetch,
+    // so we don't retry the same JS-rendered / dead URLs on every run.
+    for (const failedId of seed.metadata?.failed_hn_ids || []) {
+      markSeen(workspace, SERIES, hash(`hn:${failedId}`), `hn:${failedId}:fetch-failed`);
+    }
     return seed;
   }
 

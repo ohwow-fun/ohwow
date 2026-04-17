@@ -44,6 +44,40 @@ async function fetchArticleText(url) {
 }
 
 /**
+ * Fetch the HN comment thread text. When the linked article itself is
+ * JS-rendered and returns empty, the HN discussion is usually rich
+ * enough to anchor a real summary (top commenters paraphrase the
+ * announcement and cite specifics).
+ */
+async function fetchHnCommentsText(hnId, maxComments = 8) {
+  try {
+    const r = await fetch(`https://hacker-news.firebaseio.com/v0/item/${hnId}.json`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) return "";
+    const item = await r.json();
+    const kids = (item.kids || []).slice(0, maxComments);
+    if (!kids.length) return "";
+    const comments = await Promise.all(
+      kids.map(async (k) => {
+        try {
+          const cr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${k}.json`, {
+            signal: AbortSignal.timeout(5000),
+          });
+          if (!cr.ok) return "";
+          const c = await cr.json();
+          if (!c.text) return "";
+          return c.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        } catch { return ""; }
+      }),
+    );
+    return comments.filter(Boolean).slice(0, maxComments).join("\n\n---\n\n");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Ask the configured LLM to turn a candidate (title + URL + article text)
  * into a structured {actor, artifact, summary, published_at, citations}
  * object, or {actor: null} if the article doesn't qualify.
@@ -92,8 +126,16 @@ Extract the Briefing seed. Return strict JSON only.`;
 /**
  * Top-level: poll HN, try the top N candidates one at a time until
  * LLM synthesis produces a valid seed. Returns a SeriesSeed or null.
+ *
+ * isSeen(candidate) is an optional predicate the adapter can pass so
+ * HN candidates already used by this series are filtered out before
+ * LLM synthesis. Dedup by hn_id is stable across ranking changes.
  */
-export async function pickFromHackerNews({ maxAgeHours = 48, seriesSlug = "briefing" } = {}) {
+export async function pickFromHackerNews({
+  maxAgeHours = 48,
+  seriesSlug = "briefing",
+  isSeen = () => false,
+} = {}) {
   let candidates;
   try {
     candidates = await fetchRankedNewsCandidates({ maxAgeHours });
@@ -105,16 +147,43 @@ export async function pickFromHackerNews({ maxAgeHours = 48, seriesSlug = "brief
     console.log(`[hn-fallback] no AI-relevant HN stories in last ${maxAgeHours}h`);
     return null;
   }
-  console.log(`[hn-fallback] ${candidates.length} AI candidates; trying top ${Math.min(MAX_CANDIDATES_TO_LLM, candidates.length)}`);
 
-  for (const candidate of candidates.slice(0, MAX_CANDIDATES_TO_LLM)) {
+  // Filter out candidates already used for this series.
+  const unseen = candidates.filter((c) => !isSeen(c));
+  const skipped = candidates.length - unseen.length;
+  if (skipped > 0) {
+    console.log(`[hn-fallback] ${skipped} candidates already seen — ${unseen.length} remaining`);
+  }
+  if (!unseen.length) {
+    console.log(`[hn-fallback] all AI candidates have been used — exhausted`);
+    return null;
+  }
+  console.log(`[hn-fallback] ${unseen.length} fresh AI candidates; trying top ${Math.min(MAX_CANDIDATES_TO_LLM, unseen.length)}`);
+
+  const failedIds = [];
+
+  for (const candidate of unseen.slice(0, MAX_CANDIDATES_TO_LLM)) {
     console.log(`[hn-fallback] trying: "${candidate.title}" (${candidate.domain}, hn=${candidate.hn_score}, age=${candidate.age_hours}h, trusted=${candidate.trusted})`);
-    const articleText = await fetchArticleText(candidate.url);
-    const articleLen = articleText?.length || 0;
+    let articleText = await fetchArticleText(candidate.url);
+    let articleLen = articleText?.length || 0;
+
+    // JS-rendered sites (qwen.ai, openai.com's SPA, etc.) return <200
+    // chars from a plain fetch. Fall back to HN discussion text, which
+    // usually summarizes the announcement.
     if (articleLen < 200) {
-      console.log(`  article fetch returned ${articleLen} chars — skipping`);
-      continue;
+      console.log(`  article fetch returned ${articleLen} chars — trying HN comments`);
+      const commentsText = await fetchHnCommentsText(candidate.hn_id);
+      if (commentsText && commentsText.length > 200) {
+        articleText = `[ARTICLE UNAVAILABLE — falling back to HN discussion thread]\n${commentsText}`;
+        articleLen = articleText.length;
+        console.log(`  got ${articleLen} chars of HN discussion`);
+      } else {
+        console.log(`  HN comments also thin (${commentsText.length} chars) — skipping candidate`);
+        failedIds.push(candidate.hn_id);
+        continue;
+      }
     }
+
     let parsed;
     try {
       const { raw, model } = await synthesize(candidate, articleText);
@@ -159,6 +228,7 @@ export async function pickFromHackerNews({ maxAgeHours = 48, seriesSlug = "brief
         domain: candidate.domain,
         trusted_domain: candidate.trusted,
         fetched_at: new Date().toISOString(),
+        failed_hn_ids: failedIds,
       },
     };
   }
