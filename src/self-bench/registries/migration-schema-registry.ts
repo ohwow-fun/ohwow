@@ -108,6 +108,11 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '131-research-citations-ledger.sql', expectedTables: ['research_citations_ledger'] },
   { migrationFile: '133-posted-log.sql', expectedTables: ['posted_log'] },
   { migrationFile: '134-lift-measurements.sql', expectedTables: ['lift_measurements'] },
+  { migrationFile: '135-calendar-email.sql', expectedTables: ['calendar_accounts', 'calendar_events', 'email_accounts', 'email_messages', 'email_drafts'] },
+  { migrationFile: '136-deals-pipeline.sql', expectedTables: ['deal_stages', 'deals', 'deal_activities'] },
+  { migrationFile: '137-documents.sql', expectedTables: ['document_templates', 'documents'] },
+  { migrationFile: '138-support-tickets.sql', expectedTables: ['support_tickets', 'ticket_comments', 'analytics_snapshots'] },
+  { migrationFile: '139-bookkeeping-time.sql', expectedTables: ['expense_categories', 'expenses', 'time_entries'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —

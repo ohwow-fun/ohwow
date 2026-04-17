@@ -20,6 +20,13 @@ import { registerAgentManagementTools } from './tools/agents.js';
 import { registerPermissionRequestTools } from './tools/permission-requests.js';
 import { registerFailingTriggersTools } from './tools/failing-triggers.js';
 import { registerFindingsTools } from './tools/findings.js';
+import { registerCalendarTools } from './tools/calendar.js';
+import { registerEmailTools } from './tools/email.js';
+import { registerBriefingTools } from './tools/briefing.js';
+import { registerDealTools } from './tools/deals.js';
+import { registerDocumentTools } from './tools/documents.js';
+import { registerTicketTools } from './tools/tickets.js';
+import { registerBookkeepingTools } from './tools/bookkeeping.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -37,4 +44,11 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerPermissionRequestTools(server, client);
   registerFailingTriggersTools(server, client);
   registerFindingsTools(server, client);
+  registerCalendarTools(server, client);
+  registerEmailTools(server, client);
+  registerBriefingTools(server, client);
+  registerDealTools(server, client);
+  registerDocumentTools(server, client);
+  registerTicketTools(server, client);
+  registerBookkeepingTools(server, client);
 }
