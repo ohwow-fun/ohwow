@@ -23,7 +23,7 @@
  */
 import React from "react";
 import { useCurrentFrame, useVideoConfig } from "remotion";
-import { Text, MeshTransmissionMaterial } from "@react-three/drei";
+import { Text } from "@react-three/drei";
 import { getMotionProfile } from "../../motion/asmr";
 
 interface GlassPanelProps {
@@ -69,7 +69,10 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
   // two don't overlap even when main text wraps.
   const textSize = height * 0.28;
   const subtitleSize = height * 0.13;
-  const bandHeight = height * 0.88;
+  // Backing plane LARGER than the glass so transmission never refracts
+  // pure HDRI environment through the edges of the slab.
+  const bandWidth = width * 1.08;
+  const bandHeight = height * 1.08;
   const textY = height * 0.18;
   const subtitleY = -height * 0.32;
 
@@ -80,40 +83,33 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
           against instead of HDRI transmission. Nearly opaque so the
           env map's marina/studio imagery doesn't bleed through onto
           the caption area. */}
-      <mesh position={[0, 0, -depth * 0.25]}>
-        <planeGeometry args={[width * 0.96, bandHeight]} />
+      <mesh position={[0, 0, -depth * 0.6]}>
+        <planeGeometry args={[bandWidth, bandHeight]} />
         <meshStandardMaterial
           color={tint}
-          roughness={0.5}
-          metalness={0.1}
-          transparent
-          opacity={0.97}
+          roughness={0.55}
+          metalness={0.08}
+          transparent={false}
         />
       </mesh>
 
-      {/* The glass slab itself. transmission dialed DOWN (0.7 → 0.38)
-          so we still get the caustic-y glass character for edges but
-          the HDRI imagery doesn't render as a literal background
-          photo through the center. */}
+      {/* Glossy "glass overlay" — we dropped MeshTransmissionMaterial
+          because it samples the HDRI envMap directly and rendered the
+          drei sunset preset's marina imagery as literal background
+          through the panel. meshPhysicalMaterial with clearcoat gives
+          us the wet-glossy feel without refracting the environment. */}
       <mesh>
         <boxGeometry args={[width, height, depth]} />
-        <MeshTransmissionMaterial
-          backside
-          samples={4}
-          resolution={256}
-          transmission={0.38}
-          roughness={0.18}
-          thickness={0.5}
-          ior={1.45}
-          chromaticAberration={0.015}
-          anisotropy={0.08}
-          distortion={0.08}
-          distortionScale={0.3}
-          temporalDistortion={0.01}
-          clearcoat={0.85}
-          attenuationDistance={0.8}
-          attenuationColor={tint}
+        <meshPhysicalMaterial
           color={tint}
+          transparent
+          opacity={0.14}
+          roughness={0.2}
+          metalness={0.0}
+          clearcoat={0.9}
+          clearcoatRoughness={0.1}
+          envMapIntensity={0.3}
+          reflectivity={0.35}
         />
       </mesh>
 
