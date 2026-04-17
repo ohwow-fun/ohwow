@@ -54,6 +54,12 @@ const REVIEW_MODEL = 'google/gemini-2.5-flash-lite';
 const VOICE_LEAD_FRAMES = 5;
 const VOICE_TAIL_FRAMES = 20;
 const SCENE_MIN_FRAMES = 90;
+// Signature cold-open: a 2-second r3f.logo-reveal ritual that plays
+// before the host's first word. Injected at position 0 by the pipeline
+// (not drafted by the LLM) so every horizontal episode opens with the
+// same brand beat. Voiceover startFrame shifts by this amount so audio
+// aligns with the intro scene that follows.
+const COLD_OPEN_FRAMES = 60;
 // Hard cap on how many scenes per episode may be handed to the custom-
 // scene codegen LLM. Keeps token spend bounded; beats cover the rest.
 const MAX_CODEGEN_SCENES_PER_EPISODE = 1;
@@ -276,8 +282,27 @@ function enrichVisualLayers(scene, primitivePalette) {
  * provenance. Aspect ratio is driven by the series config (vertical Shorts
  * vs horizontal playlist video).
  */
+function buildColdOpenScene() {
+  return {
+    id: 'cold-open',
+    kind: 'r3f-scene',
+    durationInFrames: COLD_OPEN_FRAMES,
+    params: {
+      background: '#000000',
+      camera: { position: [0, 0, 8], fov: 40 },
+      motionProfile: 'asmr',
+      primitives: [
+        { primitive: 'r3f.logo-reveal', params: { size: 3.0, durationInFrames: COLD_OPEN_FRAMES } },
+      ],
+    },
+  };
+}
+
 function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series }) {
-  let scenes = (draft.spec?.scenes || []).map((s) => enrichVisualLayers({
+  // Strip any LLM-emitted "cold-open" scene — the pipeline injects it
+  // at position 0 below, so a draft-provided one would double up.
+  const rawScenes = (draft.spec?.scenes || []).filter((s) => s?.id !== 'cold-open');
+  let scenes = rawScenes.map((s) => enrichVisualLayers({
     ...s,
     durationInFrames: s.durationInFrames || 240,
   }, kit.primitivePalette || []));
@@ -285,13 +310,24 @@ function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series }) {
     scenes = alignSceneDurations(scenes, audioDurationMs);
   }
 
+  // Inject the signature cold-open at position 0 for horizontal series.
+  // Done AFTER voice alignment so the cold-open's fixed 60-frame
+  // duration isn't rescaled against narration char counts (it has none).
+  const isHorizontal = series?.format?.aspectRatio === 'horizontal';
+  const coldOpenFrames = isHorizontal ? COLD_OPEN_FRAMES : 0;
+  if (isHorizontal) {
+    scenes = [buildColdOpenScene(), ...scenes];
+  }
+
+  // Voiceover starts after the cold-open. VOICE_LEAD_FRAMES is a small
+  // additional pad so the intro scene's kinetic title has a beat to
+  // settle before narration begins.
   const voiceovers = voiceoverRef
-    ? [{ src: voiceoverRef, startFrame: VOICE_LEAD_FRAMES, volume: 0.9 }]
+    ? [{ src: voiceoverRef, startFrame: coldOpenFrames + VOICE_LEAD_FRAMES, volume: 0.9 }]
     : [];
   const mood = draft.spec?.palette?.mood || kit.ambientMoodDefault;
   const ambientSrc = pickAmbientTrack(mood);
 
-  const isHorizontal = series?.format?.aspectRatio === 'horizontal';
   const width = isHorizontal ? 1920 : 1080;
   const height = isHorizontal ? 1080 : 1920;
   const idPrefix = isHorizontal ? 'yt-video' : 'yt-short';
@@ -368,13 +404,27 @@ function captureKeyFrames(videoPath, spec, outputDir) {
   return screenshots;
 }
 
-async function visualSelfReview({ screenshots, draft, series }) {
+async function visualSelfReview({ screenshots, draft, series, spec }) {
   if (!screenshots.length) return { pass: true, notes: 'no keyframes' };
   const apiKey = readOpenRouterKey();
   if (!apiKey) return { pass: true, notes: 'no API key for review' };
 
+  const width = spec?.width || (series?.format?.aspectRatio === 'horizontal' ? 1920 : 1080);
+  const height = spec?.height || (series?.format?.aspectRatio === 'horizontal' ? 1080 : 1920);
+  const isHorizontal = width >= height;
+  const formatLabel = isHorizontal ? 'horizontal YouTube video' : 'YouTube Short';
+  const readabilityContext = isHorizontal
+    ? 'desktop + large-mobile at 16:9'
+    : 'mobile at 9:16';
+  const compositionRules = isHorizontal
+    ? 'Composition rules: full-frame cinematic (this is a regular YouTube video, NOT a Short — no bottom chin, no right-side action bar in the render). The entire 1920×1080 frame is visual real-estate. A corner logo mark, lower-third captions, or a centered title are all fair game. Do NOT penalize for missing Shorts-style overlay zones. Text edges should breathe from the frame edge (~5% safe margin) but the center and corners are the composition.'
+    : 'Composition rules: vertical 1080×1920 Short. Safe zones matter: the bottom ~15% is covered by the YouTube title bar and the right ~20% is covered by the action buttons (like/share/subscribe). Keep critical text and subjects out of those zones — concentrate them in the upper-center 60% of the frame.';
+  const brandContext = isHorizontal
+    ? `This is The Briefing signature — the intro and outro should be a canvas grid backdrop with neon cyan/lime accents, a large Smooch Sans title floating (no container), and a small ohwow ring in the upper-right corner. Judge brand fit against that signature, not against a generic Shorts aesthetic.`
+    : `Does this look like ${series.displayName}?`;
+
   const content = [
-    { type: 'text', text: `Review these keyframes from a ${series.displayName} YouTube Short.\nIntended narration: "${draft.narration_full}"\nTitle: "${draft.title}"` },
+    { type: 'text', text: `Review these keyframes from a ${series.displayName} ${formatLabel} (${width}×${height}).\nIntended narration: "${draft.narration_full}"\nTitle: "${draft.title}"` },
   ];
   for (const ss of screenshots) {
     try {
@@ -384,7 +434,11 @@ async function visualSelfReview({ screenshots, draft, series }) {
     } catch {}
   }
 
-  const sys = `You're a quality reviewer for a ${series.displayName} YouTube Short at 1080x1920. Evaluate: text readability on mobile, visual quality, composition (title bar at bottom 15%, action buttons on right 20%), content coherence with the narration, brand consistency (does it feel like ${series.displayName}?).
+  const sys = `You're a quality reviewer for a ${series.displayName} ${formatLabel} at ${width}×${height}. Evaluate: text readability on ${readabilityContext}, visual quality, composition, content coherence with the narration, brand consistency.
+
+${compositionRules}
+
+Brand fit: ${brandContext}
 
 Output STRICT JSON: {
   "pass": true/false,
@@ -694,7 +748,7 @@ export async function composeEpisode({ slug, env = {} }) {
     const ssDir = path.join(briefDir, 'keyframes');
     const screenshots = captureKeyFrames(videoPath, spec, ssDir);
     if (screenshots.length) {
-      visualReview = await visualSelfReview({ screenshots, draft, series });
+      visualReview = await visualSelfReview({ screenshots, draft, series, spec });
       fs.writeFileSync(path.join(briefDir, 'visual-review.json'), JSON.stringify(visualReview, null, 2));
       console.log(`[compose-core] visual review: pass=${visualReview.pass} score=${visualReview.score ?? '?'}`);
     }
