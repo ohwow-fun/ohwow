@@ -1,56 +1,86 @@
 #!/usr/bin/env node
 /**
- * Publish an already-rendered Briefing episode to YouTube.
+ * Stage / publish / delete a Briefing episode on YouTube Studio.
  *
- * Pair for _render-briefing-dryrun.mjs: that script stops at an mp4,
- * this one takes an mp4 + the compiled spec, derives a broadcast-style
- * title + description from the scene narrations, runs the Studio
- * upload wizard via src/integrations/youtube, and records the action
- * in the existing approval queue (kind yt_short_draft_briefing, same
- * schema compose-core uses).
+ * Three subcommands, dispatched by flag:
  *
- * Why separate from compose-core: compose-core runs the full seed →
- * LLM → render → voice → propose → upload chain for autonomous
- * episodes. This script publishes a human-authored / already-rendered
- * briefing without re-running the LLM or render stages, which is the
- * right shape for dogfooding + early days while the series is still
- * human-gated (ops-runbook.md — 10-20 episodes minimum before
- * auto-approve).
+ *   (default)            → STAGE: upload mp4 + thumbnail, walk wizard
+ *                          through visibility, close dialog. Leaves a
+ *                          draft in Studio Content → Drafts. Prints
+ *                          the real videoId + edit URL for human review.
  *
- * Flags:
- *   --mp4=<path>        mp4 to upload. Default packages/video/out/briefing-dryrun-v4.mp4
- *   --spec=<path>       compiled spec to derive title/description. Default briefing-dryrun.compiled.json
- *   --publish           actually click Save. Without this, dry-run (close dialog, no publish)
- *   --public            request public visibility. Gated: requires ≥5 prior applied unlisted briefing rows
- *   --yes               skip interactive TTY confirm on --publish
- *   --identity=<id>     pin channel (handle or UC-id). Default: whatever Studio tab is logged in
- *   --title=<str>       override derived title
- *   --description=<str> override derived description
+ *   --publish-draft=<id> → PUBLISH-DRAFT: reopen the wizard on the
+ *                          existing draft, advance to Visibility,
+ *                          click Save. Commits to the channel at the
+ *                          draft's saved visibility (default unlisted).
+ *
+ *   --delete-draft=<id>  → DELETE-DRAFT: edit page → overflow menu →
+ *                          Delete → confirm. Removes the draft.
+ *
+ * Why this shape (stage → human inspect → publish-draft or delete):
+ * after commit 4829995 we learned that uploadShort's dryRun leaves a
+ * draft behind — the wizard's fake "wouldBeUrl" and the message
+ * "nothing committed to the channel" were both wrong. Drafts are
+ * auto-saved by Studio at each wizard step. So rather than trying to
+ * render a perfect preview without side effects, we lean in: the draft
+ * IS the preview, and the approval loop is approve-in-Studio →
+ * publish-draft.
+ *
+ * Options:
+ *   --mp4=<path>         video to upload. Default packages/video/out/briefing-dryrun-v4.mp4
+ *   --spec=<path>        compiled spec for title/description. Default briefing-dryrun.compiled.json
+ *   --thumbnail=<path>   override thumbnail. Default: ffmpeg frame-grab at 5s, cached
+ *                        under ~/.ohwow/media/thumbnails/briefing-<sha256>.jpg
+ *   --no-thumbnail       skip custom thumbnail (lets Studio auto-pick a frame)
+ *   --visibility=<v>     private|unlisted|public. Default: series registry (unlisted).
+ *                        --public still requires ≥5 prior applied unlisted rows.
+ *   --yes                skip interactive confirm (needed in non-TTY)
+ *   --identity=<id>      pin channel (handle or UC-id)
+ *   --title=<str>        override derived title
+ *   --description=<str>  override derived description
  *
  * Exit codes:
- *   0 success (upload or dry-run)
- *   1 preflight failure (mp4/spec missing, account flag set, visibility gate)
+ *   0 success
+ *   1 preflight (file missing, account flag set, visibility gate)
  *   2 user declined confirm
- *   3 upload wizard failed mid-flight (stage timeline printed)
+ *   3 wizard / delete / publish failed
  *
- * Run: node --import tsx scripts/yt-experiments/_publish-briefing.mjs [--publish]
+ * Run: node --import tsx scripts/yt-experiments/_publish-briefing.mjs
  */
+import { execSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 
 import { loadQueue, propose, rate } from '../x-experiments/_approvals.mjs';
 import { resolveOhwow } from '../x-experiments/_ohwow.mjs';
 
-// Typed YT library — tsx loader resolves .js → .ts from src/.
-import { ensureYTStudio, uploadShort } from '../../src/integrations/youtube/index.ts';
+import {
+  deleteDraft,
+  ensureYTStudio,
+  findDraftIdByTitle,
+  publishDraft,
+  uploadShort,
+} from '../../src/integrations/youtube/index.ts';
 import { getSeries } from '../../src/integrations/youtube/series/registry.js';
 
 const VIDEO_PKG = path.resolve('packages/video');
 const DEFAULT_MP4 = path.join(VIDEO_PKG, 'out/briefing-dryrun-v4.mp4');
 const DEFAULT_SPEC = path.join(VIDEO_PKG, 'specs/briefing-dryrun.compiled.json');
+const THUMB_DIR = path.join(os.homedir(), '.ohwow', 'media', 'thumbnails');
 const UNLISTED_BEFORE_PUBLIC = 5;
+// 5s mark = post-cold-open (60 frames @ 30fps = 2s) + mid-intro — title has
+// sprung in, subtitle is visible, anchor has started. Most representative
+// frame of the episode without being a blank cold-open.
+const THUMB_SEEK_SECONDS = 5.0;
+const THUMB_WIDTH = 1280;
+const THUMB_HEIGHT = 720;
 
+// ---------------------------------------------------------------------------
+// Arg parsing
+// ---------------------------------------------------------------------------
 function parseArgs(argv) {
   const out = { flags: new Set(), kv: {} };
   for (const a of argv) {
@@ -64,8 +94,9 @@ function parseArgs(argv) {
   return out;
 }
 
-// Pull YYYY-MM-DD out of spec.id, which compose-core + render-dryrun
-// both stamp with `briefing-<YYYYMMDD>-<variant>`.
+// ---------------------------------------------------------------------------
+// Title / description derivation
+// ---------------------------------------------------------------------------
 function deriveDateLabel(specId, fallback = new Date()) {
   const m = /(\d{4})(\d{2})(\d{2})/.exec(specId || '');
   const d = m ? new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : fallback;
@@ -77,9 +108,6 @@ function titleCase(s) {
   return s.toLowerCase().replace(/\b([a-z])/g, (_, c) => c.toUpperCase());
 }
 
-// Human-authored hook lives on the intro scene's floating-title subtitle.
-// Strip any leading "APR 17 · " date prefix that the spec author wrote
-// into the visual (we don't want it twice in the title).
 function deriveHook(spec) {
   const intro = spec.scenes?.find((s) => s.id === 'intro');
   if (!intro) return null;
@@ -95,9 +123,8 @@ function deriveTitle(spec, dateLabel) {
   return hook ? `The Briefing · ${dateLabel} · ${hook}` : `The Briefing · ${dateLabel}`;
 }
 
-// Non-greedy sentence terminator that won't split on decimals
-// ("Opus 4.7" → keep together) by requiring whitespace-or-end
-// after the terminator.
+// Sentence splitter that won't break on decimals ("Opus 4.7" stays whole)
+// by requiring whitespace/end after the terminator.
 const SENTENCE_RE = /(.*?[.!?])(?=\s|$)/s;
 
 function firstNSentences(text, n) {
@@ -131,6 +158,39 @@ function deriveDescription(spec, series) {
   return parts.join('\n').trim();
 }
 
+// ---------------------------------------------------------------------------
+// Thumbnail generation (ffmpeg frame-grab, cached by mp4 sha256)
+// ---------------------------------------------------------------------------
+function sha256File(filePath) {
+  const h = crypto.createHash('sha256');
+  h.update(fs.readFileSync(filePath));
+  return h.digest('hex');
+}
+
+function generateThumbnail(mp4Path) {
+  fs.mkdirSync(THUMB_DIR, { recursive: true });
+  const hash = sha256File(mp4Path).slice(0, 16);
+  const thumbPath = path.join(THUMB_DIR, `briefing-${hash}.jpg`);
+  if (fs.existsSync(thumbPath)) return thumbPath;
+  execSync(
+    `ffmpeg -y -ss ${THUMB_SEEK_SECONDS} -i "${mp4Path}" -vframes 1 -vf "scale=${THUMB_WIDTH}:${THUMB_HEIGHT}" -q:v 2 "${thumbPath}"`,
+    { timeout: 20_000, stdio: 'pipe' },
+  );
+  if (!fs.existsSync(thumbPath)) {
+    throw new Error(`thumbnail generation failed; ffmpeg produced no file at ${thumbPath}`);
+  }
+  return thumbPath;
+}
+
+// ---------------------------------------------------------------------------
+// Approval queue helpers
+// ---------------------------------------------------------------------------
+function findApprovalByVideoId(queue, series, videoId) {
+  return queue.findLast((e) =>
+    e.kind === series.approvalKind && e.payload?.videoId === videoId,
+  ) ?? null;
+}
+
 function countPriorAppliedUnlisted(queue, series) {
   return queue.filter((e) =>
     e.kind === series.approvalKind
@@ -150,70 +210,176 @@ async function confirmTty(prompt) {
   }
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
+// ---------------------------------------------------------------------------
+// Subcommand: PUBLISH-DRAFT
+// ---------------------------------------------------------------------------
+async function cmdPublishDraft({ videoId, args }) {
+  const series = getSeries('briefing');
+  const { workspace } = resolveOhwow();
+  const queue = loadQueue(workspace);
+  const row = findApprovalByVideoId(queue, series, videoId);
+  const visibility = (args.kv.visibility || row?.payload?.visibility || series.defaultVisibility).toLowerCase();
+
+  if (visibility === 'public') {
+    const prior = countPriorAppliedUnlisted(queue, series);
+    if (prior < UNLISTED_BEFORE_PUBLIC) {
+      console.error(
+        `[publish-draft] --visibility=public refused: need ≥${UNLISTED_BEFORE_PUBLIC} applied unlisted rows, found ${prior}.`,
+      );
+      process.exit(1);
+    }
+  }
+
+  console.error('[publish-draft] plan:');
+  console.error(`  videoId       ${videoId}`);
+  console.error(`  visibility    ${visibility}`);
+  console.error(`  approvalRow   ${row?.id ?? '(no matching row found)'}`);
+
+  if (!args.flags.has('yes')) {
+    const ok = await confirmTty(`[publish-draft] publish draft ${videoId} as ${visibility}? Type 'y': `);
+    if (!ok) {
+      console.error('[publish-draft] declined.');
+      process.exit(2);
+    }
+  }
+
+  const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
+  try {
+    const result = await publishDraft(session.page, {
+      videoId,
+      channelId: session.health.channelId,
+      visibility,
+    });
+    if (row) {
+      rate({ id: row.id, status: 'applied', notes: `published draft. url=${result.videoUrl ?? '(none)'}` });
+    }
+    console.error(`[publish-draft] ok. url=${result.videoUrl ?? '(none surfaced)'}`);
+    console.log(JSON.stringify({ ok: true, videoId, url: result.videoUrl, visibility }, null, 2));
+  } catch (err) {
+    if (row) rate({ id: row.id, status: 'rejected', notes: `publish-draft error: ${err?.message ?? err}` });
+    console.error(`[publish-draft] error: ${err?.message ?? err}`);
+    process.exit(3);
+  } finally {
+    if (session.ownsBrowser) session.browser.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: DELETE-DRAFT
+// ---------------------------------------------------------------------------
+async function cmdDeleteDraft({ videoId, args }) {
+  const series = getSeries('briefing');
+  const { workspace } = resolveOhwow();
+  const queue = loadQueue(workspace);
+  const row = findApprovalByVideoId(queue, series, videoId);
+
+  console.error('[delete-draft] plan:');
+  console.error(`  videoId       ${videoId}`);
+  console.error(`  approvalRow   ${row?.id ?? '(no matching row found)'}`);
+
+  if (!args.flags.has('yes')) {
+    const ok = await confirmTty(`[delete-draft] permanently delete draft ${videoId}? Type 'y': `);
+    if (!ok) {
+      console.error('[delete-draft] declined.');
+      process.exit(2);
+    }
+  }
+
+  const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
+  try {
+    await deleteDraft(session.page, { videoId });
+    if (row) rate({ id: row.id, status: 'rejected', notes: 'draft deleted' });
+    console.error(`[delete-draft] ok.`);
+    console.log(JSON.stringify({ ok: true, videoId, deleted: true }, null, 2));
+  } catch (err) {
+    console.error(`[delete-draft] error: ${err?.message ?? err}`);
+    process.exit(3);
+  } finally {
+    if (session.ownsBrowser) session.browser.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: STAGE (default)
+// ---------------------------------------------------------------------------
+async function cmdStage({ args }) {
   const mp4Path = path.resolve(args.kv.mp4 || DEFAULT_MP4);
   const specPath = path.resolve(args.kv.spec || DEFAULT_SPEC);
-  const publish = args.flags.has('publish');
-  const wantPublic = args.flags.has('public');
-  const autoYes = args.flags.has('yes');
-  const identity = args.kv.identity || undefined;
 
-  if (!fs.existsSync(mp4Path)) {
-    console.error(`[publish] mp4 not found: ${mp4Path}`);
-    process.exit(1);
-  }
-  if (!fs.existsSync(specPath)) {
-    console.error(`[publish] spec not found: ${specPath}`);
-    process.exit(1);
-  }
+  if (!fs.existsSync(mp4Path)) { console.error(`[stage] mp4 not found: ${mp4Path}`); process.exit(1); }
+  if (!fs.existsSync(specPath)) { console.error(`[stage] spec not found: ${specPath}`); process.exit(1); }
 
   const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
   const series = getSeries('briefing');
   const dateLabel = deriveDateLabel(spec.id);
   const title = (args.kv.title || deriveTitle(spec, dateLabel)).slice(0, 100);
   const description = args.kv.description || deriveDescription(spec, series);
+  const visibility = (args.kv.visibility || series.defaultVisibility).toLowerCase();
 
-  const { workspace } = resolveOhwow();
-  const queue = loadQueue(workspace);
-  const priorUnlisted = countPriorAppliedUnlisted(queue, series);
-  const visibility = wantPublic ? 'public' : series.defaultVisibility;
-
-  if (wantPublic && priorUnlisted < UNLISTED_BEFORE_PUBLIC) {
-    console.error(
-      `[publish] --public refused: need ≥${UNLISTED_BEFORE_PUBLIC} applied unlisted briefings in the queue, found ${priorUnlisted}.`,
-    );
-    console.error('[publish] ship unlisted runs first. Ops-runbook policy.');
-    process.exit(1);
+  // Thumbnail: explicit path > auto-generated frame-grab > skip
+  let thumbnailPath = null;
+  if (args.kv.thumbnail) {
+    thumbnailPath = path.resolve(args.kv.thumbnail);
+    if (!fs.existsSync(thumbnailPath)) {
+      console.error(`[stage] thumbnail not found: ${thumbnailPath}`);
+      process.exit(1);
+    }
+  } else if (!args.flags.has('no-thumbnail')) {
+    console.error('[stage] generating thumbnail via ffmpeg frame-grab…');
+    thumbnailPath = generateThumbnail(mp4Path);
+    console.error(`[stage]   thumbnail: ${thumbnailPath} (${(fs.statSync(thumbnailPath).size / 1024).toFixed(1)} KB)`);
   }
 
-  console.error('[publish] plan:');
-  console.error(`  workspace     ${workspace}`);
+  console.error('[stage] plan:');
   console.error(`  mp4           ${mp4Path}  (${(fs.statSync(mp4Path).size / 1024 / 1024).toFixed(1)} MB)`);
-  console.error(`  spec          ${specPath}`);
   console.error(`  title         ${title}`);
-  console.error(`  visibility    ${visibility}${wantPublic ? `  (gate ok: ${priorUnlisted}/${UNLISTED_BEFORE_PUBLIC})` : ''}`);
-  console.error(`  identity      ${identity ?? '(reuse active Studio tab)'}`);
-  console.error(`  mode          ${publish ? 'PUBLISH' : 'dry-run (wizard walked, dialog cancelled)'}`);
-  console.error('  description:');
-  for (const line of description.split('\n')) console.error(`    ${line}`);
+  console.error(`  visibility    ${visibility}  (saved with draft; publish-draft uses this unless overridden)`);
+  console.error(`  thumbnail     ${thumbnailPath ?? '(Studio auto-pick)'}`);
 
-  // Session preflight runs first so we catch account flags / login
-  // issues before we write an approval row.
-  console.error('[publish] ensuring Studio session…');
-  const session = await ensureYTStudio({ identity, throwOnChallenge: true });
+  const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
   const flags = session.health.accountFlags || {};
   if (flags.hasUnacknowledgedCopyrightTakedown || flags.hasUnacknowledgedTouStrike) {
-    console.error('[publish] account flags set — refusing to upload. Resolve in Studio first.');
-    console.error(`  flags: ${JSON.stringify(flags)}`);
+    console.error('[stage] account flags set — refusing. Resolve in Studio first.');
     if (session.ownsBrowser) session.browser.close();
     process.exit(1);
   }
-  console.error(`[publish] session ok. channel=${session.health.channelId ?? '(unknown)'} ` +
-    `handle=${session.health.channelHandle ?? '(n/a)'}`);
+  console.error(`[stage] session ok. channel=${session.health.channelId ?? '(unknown)'}`);
 
-  // Record the proposed action. Non-blocking — we mark it applied/rejected
-  // after the wizard returns. bucketBy:'series' matches compose-core.
+  // Walk the wizard as stage-as-draft (dryRun:true leaves the draft
+  // behind — that's the whole point here).
+  let wizardResult;
+  try {
+    wizardResult = await uploadShort(session.page, {
+      filePath: mp4Path,
+      title,
+      description,
+      thumbnailPath: thumbnailPath ?? undefined,
+      visibility,
+      dryRun: true,
+      onStage: (ev) => process.stderr.write(
+        `  [stage] ${ev.stage} ${ev.ok ? 'ok' : 'FAIL'} ${ev.durationMs}ms${ev.error ? ' — ' + ev.error : ''}\n`,
+      ),
+    });
+  } catch (err) {
+    console.error(`[stage] wizard error: ${err?.message ?? err}`);
+    if (session.ownsBrowser) session.browser.close();
+    process.exit(3);
+  }
+
+  // Find the real videoId from the Content page (the wizard sidebar URL
+  // is unreliable — see drafts.ts findDraftIdByTitle comment).
+  console.error('[stage] resolving real draft videoId from Content page…');
+  const { workspace } = resolveOhwow();
+  let videoId = null;
+  try {
+    videoId = await findDraftIdByTitle(session.page, {
+      channelId: session.health.channelId,
+      titleContains: title.slice(0, 40),
+    });
+  } catch (err) {
+    console.error(`[stage] videoId lookup error: ${err?.message ?? err}`);
+  }
+
   const entry = propose({
     kind: series.approvalKind,
     summary: `${series.displayName} · ${title.slice(0, 60)}`,
@@ -227,80 +393,59 @@ async function main() {
       mp4Path,
       specPath,
       specId: spec.id,
+      thumbnailPath,
+      videoId,
+      wouldBeUrlFromSidebar: wizardResult.videoUrl,
       channelId: session.health.channelId,
-      source: '_publish-briefing.mjs',
-      publishMode: publish ? 'live' : 'dry-run',
+      source: '_publish-briefing.mjs stage',
     },
   });
-  console.error(`[publish] approval row: ${entry.id} status=${entry.status}`);
 
-  if (!publish) {
-    console.error('[publish] dry-run: exercising wizard without Save, then closing dialog.');
-    try {
-      const result = await uploadShort(session.page, {
-        filePath: mp4Path, title, description, visibility,
-        dryRun: true,
-        onStage: (ev) => process.stderr.write(
-          `  [stage] ${ev.stage} ${ev.ok ? 'ok' : 'FAIL'} ${ev.durationMs}ms${ev.error ? ' — ' + ev.error : ''}\n`,
-        ),
-      });
-      rate({ id: entry.id, status: 'rejected', notes: 'dry-run — wizard walked, dialog cancelled' });
-      console.error(`[publish] dry-run ok. wouldBeUrl=${result.videoUrl ?? '(none surfaced)'}`);
-      console.log(JSON.stringify({ ok: true, dryRun: true, wouldBeUrl: result.videoUrl, approvalId: entry.id }, null, 2));
-    } catch (err) {
-      rate({ id: entry.id, status: 'rejected', notes: `dry-run error: ${err?.message ?? err}` });
-      console.error(`[publish] dry-run wizard error: ${err?.message ?? err}`);
-      process.exit(3);
-    } finally {
-      if (session.ownsBrowser) session.browser.close();
-    }
+  if (session.ownsBrowser) session.browser.close();
+
+  console.error(`[stage] approval row: ${entry.id} status=${entry.status}`);
+  console.error(`[stage] real videoId: ${videoId ?? '(lookup failed — inspect Studio Content → Drafts)'}`);
+  const editUrl = videoId ? `https://studio.youtube.com/video/${videoId}/edit` : '(n/a)';
+  console.error(`[stage] edit URL:     ${editUrl}`);
+  console.error('[stage] next steps:');
+  if (videoId) {
+    console.error(`  inspect in Studio, then:`);
+    console.error(`  publish →  node --import tsx scripts/yt-experiments/_publish-briefing.mjs --publish-draft=${videoId}`);
+    console.error(`  reject  →  node --import tsx scripts/yt-experiments/_publish-briefing.mjs --delete-draft=${videoId}`);
+  } else {
+    console.error(`  videoId lookup failed. Open Studio Content → Drafts and act manually.`);
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    staged: true,
+    videoId,
+    editUrl,
+    approvalId: entry.id,
+    title,
+    visibility,
+    wouldBeUrlFromSidebar: wizardResult.videoUrl,
+  }, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.kv['publish-draft']) {
+    await cmdPublishDraft({ videoId: args.kv['publish-draft'], args });
     return;
   }
-
-  if (!autoYes) {
-    const ok = await confirmTty(`[publish] upload to channel ${session.health.channelId ?? '(unknown)'} as ${visibility}? Type 'y' to confirm: `);
-    if (!ok) {
-      rate({ id: entry.id, status: 'rejected', notes: 'operator declined confirm' });
-      console.error('[publish] declined. No upload.');
-      if (session.ownsBrowser) session.browser.close();
-      process.exit(2);
-    }
-  } else if (!process.stdin.isTTY) {
-    console.error('[publish] --yes + non-TTY: skipping confirm.');
+  if (args.kv['delete-draft']) {
+    await cmdDeleteDraft({ videoId: args.kv['delete-draft'], args });
+    return;
   }
-
-  try {
-    const result = await uploadShort(session.page, {
-      filePath: mp4Path, title, description, visibility,
-      dryRun: false,
-      onStage: (ev) => process.stderr.write(
-        `  [stage] ${ev.stage} ${ev.ok ? 'ok' : 'FAIL'} ${ev.durationMs}ms${ev.error ? ' — ' + ev.error : ''}\n`,
-      ),
-    });
-    rate({
-      id: entry.id,
-      status: 'applied',
-      notes: `published. url=${result.videoUrl ?? '(none)'}`,
-    });
-    console.error(`[publish] ok. url=${result.videoUrl ?? '(none surfaced — check Studio)'}`);
-    console.log(JSON.stringify({
-      ok: true,
-      dryRun: false,
-      url: result.videoUrl,
-      visibility: result.visibility,
-      approvalId: entry.id,
-      title,
-    }, null, 2));
-  } catch (err) {
-    rate({ id: entry.id, status: 'rejected', notes: `wizard error: ${err?.message ?? err}` });
-    console.error(`[publish] upload error: ${err?.message ?? err}`);
-    process.exit(3);
-  } finally {
-    if (session.ownsBrowser) session.browser.close();
-  }
+  await cmdStage({ args });
 }
 
 main().catch((err) => {
-  console.error('[publish] fatal', err);
+  console.error('[publish-briefing] fatal', err);
   process.exit(1);
 });

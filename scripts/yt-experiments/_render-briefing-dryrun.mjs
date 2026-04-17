@@ -14,11 +14,12 @@
  * Run: node --import tsx scripts/yt-experiments/_render-briefing-dryrun.mjs
  *
  * Flags (all optional):
- *   --publish   after render, chain to _publish-briefing.mjs (dry-run of
- *               the upload wizard by default — add --yes --publish to live)
- *   --yes       passthrough to publish step
- *   --public    passthrough (requires 5 prior unlisted applied runs)
- *   --identity  passthrough
+ *   --stage     after render, chain to _publish-briefing.mjs to stage
+ *               the rendered mp4 as a Studio draft (with thumbnail).
+ *               Prints the draft's videoId + edit URL so the operator
+ *               can inspect in Studio and either publish-draft or delete-draft.
+ *   --yes       passthrough (skips TTY confirm)
+ *   --identity  passthrough (pins channel handle / UC-id)
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -225,12 +226,12 @@ function renderVideo(specPath, outPath) {
   console.log(`[dryrun] done. video=${videoMs}ms voice=${totalVoiceMs}ms (${voiceovers.length} clips)`);
   console.log(`[dryrun] open ${VIDEO_OUT}`);
 
-  if (process.argv.includes('--publish')) {
-    const passthrough = ['--publish'];
-    for (const f of ['--public', '--yes']) if (process.argv.includes(f)) passthrough.push(f);
+  if (process.argv.includes('--stage') || process.argv.includes('--publish')) {
+    const passthrough = [];
+    if (process.argv.includes('--yes')) passthrough.push('--yes');
     const identity = process.argv.find((a) => a.startsWith('--identity='));
     if (identity) passthrough.push(identity);
-    console.log(`[dryrun] chaining to _publish-briefing.mjs ${passthrough.join(' ')}`);
+    console.log(`[dryrun] chaining to _publish-briefing.mjs (stage) ${passthrough.join(' ')}`);
     await new Promise((resolve, reject) => {
       const child = spawn('node', [
         '--import', 'tsx',
