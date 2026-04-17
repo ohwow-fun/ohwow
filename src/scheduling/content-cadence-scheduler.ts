@@ -84,15 +84,19 @@ const GOAL_METRIC = 'x_posts_per_week';
 /** Trailing window for weekly count. */
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Default tick interval — every hour. */
-const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
+/** Default tick interval — every 15 minutes. Kept below half the
+ *  MIN_POST_GAP_MS window so the scheduler always checks at least once
+ *  inside each gap and doesn't idle past an open slot. */
+const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
 
 /**
  * Minimum gap between consecutive posts (in ms). Prevents rapid-fire
  * posting when the daemon restarts repeatedly (each restart fires an
- * immediate tick). 2 hours keeps the feed looking organic.
+ * immediate tick). 30 min matches the target cadence of "one post per
+ * 30 minutes" — tighter than before, but the cooldown still catches
+ * duplicate restarts inside a single window.
  */
-const MIN_POST_GAP_MS = 2 * 60 * 60 * 1000;
+const MIN_POST_GAP_MS = 30 * 60 * 1000;
 
 export interface ContentCadenceSchedulerOptions {
   /**
