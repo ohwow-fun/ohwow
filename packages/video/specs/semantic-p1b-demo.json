@@ -1,0 +1,190 @@
+{
+  "id": "semantic-p1b-demo",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": { "bg": "#0a1020", "text": "#f4f7fb", "accent": "#e3b58a" },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "voiceovers": [],
+  "transitions": [{ "kind": "fade", "durationInFrames": 24 }],
+  "scenes": [
+    {
+      "id": "s1-number-sculpture",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Thirty five billion parameters.",
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": "sunset",
+        "fog": { "color": "#0a1020", "near": 8, "far": 22 },
+        "camera": { "position": [0, 0.4, 10], "fov": 38 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 500, "spread": 9, "color": "#f0c89b", "size": 0.035, "swirlSpeed": 0.04, "seed": 11 } },
+          { "primitive": "r3f.number-sculpture", "params": { "value": "35B", "label": "parameters", "color": "#f4eadb", "size": 1.4, "depth": 0.4 } }
+        ]
+      }
+    },
+    {
+      "id": "s2-countup-bar",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Ninety three tasks solved.",
+      "params": {
+        "background": "#080c1a",
+        "environmentPreset": "sunset",
+        "fog": { "color": "#080c1a", "near": 6, "far": 18 },
+        "camera": { "position": [0, 1.5, 7.5], "fov": 45 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 400, "spread": 9, "color": "#f4eadb", "size": 0.04, "swirlSpeed": 0.05, "seed": 3 } },
+          { "primitive": "r3f.count-up-bar", "params": { "target": 93, "max": 100, "unit": "", "label": "tasks solved", "color": "#f4eadb", "durationFrames": 90 } }
+        ]
+      }
+    },
+    {
+      "id": "s3-versus-3d",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Opus four point six passes to Opus four point seven.",
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": "sunset",
+        "fog": { "color": "#0a1020", "near": 8, "far": 22 },
+        "camera": { "position": [0, 0, 9], "fov": 48 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 350, "spread": 10, "color": "#e3b58a", "size": 0.035, "swirlSpeed": 0.03, "seed": 7 } },
+          { "primitive": "r3f.versus-cards", "params": {
+              "before": { "label": "SWE-bench score", "value": "82%" },
+              "after":  { "label": "SWE-bench score", "value": "93%" },
+              "label": "Opus 4.6 → 4.7",
+              "transitionAt": 35, "transitionDuration": 85 } }
+        ]
+      }
+    },
+    {
+      "id": "s4-versus-2d",
+      "kind": "composable",
+      "durationInFrames": 140,
+      "narration": "Same story in two D form.",
+      "params": {
+        "visualLayers": [
+          { "primitive": "gradient-wash", "params": { "colors": ["#0f1628", "#05090f"], "speed": 0.002, "opacity": 0.7 } },
+          { "primitive": "grid-morph", "params": { "cols": 24, "rows": 13, "color": "#1a2336", "speed": 0.35 } },
+          { "primitive": "vignette", "params": { "intensity": 0.55 } },
+          { "primitive": "versus-card", "params": {
+              "before": { "label": "Opus 4.6", "value": "82%" },
+              "after":  { "label": "Opus 4.7", "value": "93%" },
+              "label": "SWE-bench coding",
+              "transitionAt": 15, "transitionDuration": 80 } }
+        ]
+      }
+    },
+    {
+      "id": "s5-benchmark-bar",
+      "kind": "composable",
+      "durationInFrames": 130,
+      "narration": "Seventy five percent accuracy.",
+      "params": {
+        "visualLayers": [
+          { "primitive": "gradient-wash", "params": { "colors": ["#14202e", "#08101a"], "speed": 0.002, "opacity": 0.7 } },
+          { "primitive": "constellation", "params": { "nodeCount": 32, "color": "#3e5068", "speed": 0.15, "lineOpacity": 0.22 } },
+          { "primitive": "vignette", "params": { "intensity": 0.5 } },
+          { "primitive": "benchmark-bar", "params": { "value": 75, "max": 100, "unit": "%", "label": "accuracy · long-context recall", "color": "#e3b58a", "durationFrames": 80 } }
+        ]
+      }
+    },
+    {
+      "id": "s6-spec-list",
+      "kind": "composable",
+      "durationInFrames": 170,
+      "narration": "Runs on a laptop. GGUF quantized. Forty tokens per second.",
+      "params": {
+        "visualLayers": [
+          { "primitive": "gradient-wash", "params": { "colors": ["#0b1320", "#05080f"], "speed": 0.0015, "opacity": 0.7 } },
+          { "primitive": "grid-morph", "params": { "cols": 20, "rows": 11, "color": "#19223a", "speed": 0.3 } },
+          { "primitive": "vignette", "params": { "intensity": 0.55 } },
+          { "primitive": "spec-list", "params": {
+              "heading": "Qwen 3.6 · 35B open-weights",
+              "pacing": 18, "startAt": 10,
+              "items": [
+                { "key": "Parameters", "value": "35B", "accent": true },
+                { "key": "Quantization", "value": "20.9 GB GGUF" },
+                { "key": "Throughput", "value": "40+ tok/s" },
+                { "key": "Hardware", "value": "RTX 3060 12 GB" }
+              ] } }
+        ]
+      }
+    },
+    {
+      "id": "s7-glass-panel",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Open weights available today on Hugging Face.",
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": "sunset",
+        "fog": { "color": "#0a1020", "near": 8, "far": 20 },
+        "camera": { "position": [0, 0, 7], "fov": 42 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 400, "spread": 9, "color": "#f0c89b", "size": 0.04, "swirlSpeed": 0.04, "seed": 13 } },
+          { "primitive": "r3f.glass-panel", "params": { "width": 5.8, "height": 2.6, "depth": 0.2, "text": "OPEN WEIGHTS", "subtitle": "Qwen 3.6 · Hugging Face · available today", "tint": "#e3d8ff" } }
+        ]
+      }
+    },
+    {
+      "id": "s8-orbiting-tags",
+      "kind": "r3f-scene",
+      "durationInFrames": 160,
+      "narration": "Tool ecosystem orbits the model.",
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": "warehouse",
+        "fog": { "color": "#0a1020", "near": 8, "far": 22 },
+        "camera": { "position": [0, 0.8, 6.2], "fov": 48 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 300, "spread": 9, "color": "#d8e8ff", "size": 0.028, "swirlSpeed": 0.02, "seed": 17 } },
+          { "primitive": "r3f.number-sculpture", "params": { "value": "Qwen", "color": "#f4eadb", "size": 0.7, "depth": 0.15 } },
+          { "primitive": "r3f.orbiting-tags", "params": {
+              "tags": ["vLLM", "llama.cpp", "MLX", "Ollama", "HF Transformers", "Unsloth", "Cursor"],
+              "radius": 3.1, "speed": 0.25, "tagSize": 0.36,
+              "color": "#f0c89b" } }
+        ]
+      }
+    },
+    {
+      "id": "s9-ribbon",
+      "kind": "r3f-scene",
+      "durationInFrames": 140,
+      "narration": "A thread of light, end of brief.",
+      "params": {
+        "background": "#060a14",
+        "environmentPreset": "night",
+        "fog": { "color": "#060a14", "near": 5, "far": 18 },
+        "camera": { "position": [0, 0, 6.5], "fov": 50 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 350, "spread": 8, "color": "#f0c89b", "size": 0.03, "swirlSpeed": 0.03, "seed": 21 } },
+          { "primitive": "r3f.ribbon-trail", "params": { "thickness": 0.08, "color": "#f0c89b", "flowSpeed": 0.4 } }
+        ]
+      }
+    }
+  ]
+}

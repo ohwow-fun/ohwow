@@ -11,6 +11,9 @@ import { CountUpBar } from "./primitives/CountUpBar";
 import { ParticleCloud } from "./primitives/ParticleCloud";
 import { VersusCards } from "./primitives/VersusCards";
 import { NumberSculpture } from "./primitives/NumberSculpture";
+import { GlassPanel } from "./primitives/GlassPanel";
+import { OrbitingTags } from "./primitives/OrbitingTags";
+import { RibbonTrail } from "./primitives/RibbonTrail";
 
 let registered = false;
 
@@ -24,6 +27,9 @@ export function registerR3FPrimitives(): void {
   registerR3FPrimitive("r3f.particle-cloud", ParticleCloud as R3FPrimitive);
   registerR3FPrimitive("r3f.versus-cards", VersusCards as R3FPrimitive);
   registerR3FPrimitive("r3f.number-sculpture", NumberSculpture as R3FPrimitive);
+  registerR3FPrimitive("r3f.glass-panel", GlassPanel as R3FPrimitive);
+  registerR3FPrimitive("r3f.orbiting-tags", OrbitingTags as R3FPrimitive);
+  registerR3FPrimitive("r3f.ribbon-trail", RibbonTrail as R3FPrimitive);
   registered = true;
 }
 

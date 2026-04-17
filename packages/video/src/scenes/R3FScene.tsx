@@ -20,6 +20,7 @@
 import React, { Suspense } from "react";
 import { ThreeCanvas } from "@remotion/three";
 import { useCurrentFrame, useVideoConfig } from "remotion";
+import { Environment } from "@react-three/drei";
 import { asmrEasingDeep, getMotionProfile } from "../motion/asmr";
 import { r3fRegistry } from "./r3f-registry";
 // Side-effect import: registers all r3f.* primitives at module load.
@@ -43,6 +44,14 @@ interface R3FSceneParams {
   background?: string;
   fog?: FogSpec;
   motionProfile?: string;
+  /**
+   * drei Environment preset for PBR reflections. Chrome/glass materials
+   * need something to reflect off or they render black. Default: "sunset"
+   * for a warm golden-hour feel that matches the ASMR palette.
+   * Options: city, sunset, warehouse, studio, apartment, dawn, forest, lobby, night, park
+   * null disables env lighting (use for scenes that intentionally want flat shading).
+   */
+  environmentPreset?: "city" | "sunset" | "warehouse" | "studio" | "apartment" | "dawn" | "forest" | "lobby" | "night" | "park" | null;
 }
 
 export const R3FScene: React.FC<{
@@ -69,9 +78,12 @@ export const R3FScene: React.FC<{
         {params.fog && (
           <fog attach="fog" args={[params.fog.color, params.fog.near, params.fog.far]} />
         )}
-        <ambientLight intensity={0.35} />
-        <directionalLight position={[5, 8, 5]} intensity={0.9} />
-        <pointLight position={[-4, 2, 6]} intensity={0.4} color="#ffcc88" />
+        {params.environmentPreset !== null && (
+          <Environment preset={params.environmentPreset ?? "sunset"} background={false} />
+        )}
+        <ambientLight intensity={0.25} />
+        <directionalLight position={[5, 8, 5]} intensity={0.8} />
+        <pointLight position={[-4, 2, 6]} intensity={0.35} color="#ffcc88" />
         {primitives.map((entry, i) => {
           const Prim = r3fRegistry.get(entry.primitive);
           if (!Prim) {
