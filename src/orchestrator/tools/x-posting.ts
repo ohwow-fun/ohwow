@@ -1274,6 +1274,25 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
 // DMs: list inbox
 // ---------------------------------------------------------------------------
 
+/**
+ * Leave a DM tab in a clean, reusable state before detaching. All DM
+ * helpers (list / read / send) navigate to /i/chat* for their work;
+ * without this, the tab persists in Chrome on that URL (because
+ * page.close() only detaches CDP, it doesn't close the target). Over
+ * days of hourly poller ticks, /i/chat tabs accumulate and clutter
+ * the debug Chrome.
+ *
+ * Neutralize by navigating to /home first, then detach. Next DM op
+ * finds this tab (via the 'any' ownership mode DM helpers use) and
+ * reuses it — so max one DM-repurposed tab per daemon lifetime
+ * instead of one per tick. Best-effort: swallow errors so the
+ * finally block can't raise.
+ */
+async function neutralizeAndCloseDmTab(page: CdpPage): Promise<void> {
+  try { await page.goto('https://x.com/home'); } catch { /* best effort */ }
+  try { page.close(); } catch { /* best effort */ }
+}
+
 export interface DmThreadSummary {
   pair: string;
   primaryName: string | null;
@@ -1335,7 +1354,7 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
     screenshotBase64: await captureScreenshot(page),
   };
   } finally {
-    page.close();
+    await neutralizeAndCloseDmTab(page);
   }
 }
 
@@ -1505,7 +1524,7 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
     currentUrl,
   };
   } finally {
-    page.close();
+    await neutralizeAndCloseDmTab(page);
   }
 }
 
@@ -1615,7 +1634,7 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
     landedAt: landedPair,
   };
   } finally {
-    page.close();
+    await neutralizeAndCloseDmTab(page);
   }
 }
 
