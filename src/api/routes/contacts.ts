@@ -117,6 +117,25 @@ export function createContactsRouter(
     }
   });
 
+  // Get single contact by id, scoped to the caller's workspace so an
+  // attacker who guesses an id from another workspace can't read PII.
+  router.get('/api/contacts/:id', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const { data, error } = await db.from('agent_workforce_contacts')
+        .select('*')
+        .eq('id', req.params.id)
+        .eq('workspace_id', workspaceId)
+        .maybeSingle();
+
+      if (error) { res.status(500).json({ error: error.message }); return; }
+      if (!data) { res.status(404).json({ error: 'contact not found' }); return; }
+      res.json({ data });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
   // Update contact
   router.put('/api/contacts/:id', async (req, res) => {
     try {
