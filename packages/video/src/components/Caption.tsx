@@ -59,10 +59,10 @@ export const Caption: React.FC<CaptionProps> = ({
   const words = text.split(" ");
 
   // ─── Horizontal: Netflix-style floating caption ──────────────────────
-  // No box. Full-width container + text-align:center = guaranteed centering.
-  // Heavy text-shadow (layered black halos) keeps text legible on any
-  // primitive backdrop — grid-morph, aurora, flow-field — without the box
-  // feeling like a overlay-addon.
+  // No box. Full-viewport flex container centers the inline text block
+  // reliably regardless of Remotion's bundle quirks. Text-align:center
+  // alone was producing visibly-off-center output in the rendered MP4.
+  // Heavy text-shadow keeps readability on any primitive backdrop.
   if (isHorizontal) {
     const fontSize = 56;
     const textShadow = [
@@ -78,36 +78,46 @@ export const Caption: React.FC<CaptionProps> = ({
           left: 0,
           right: 0,
           bottom: 120,
-          textAlign: "center",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
           padding: "0 160px",
-          fontFamily: fonts.sans,
-          fontSize,
-          fontWeight: 800,
-          lineHeight: 1.25,
-          color: colors.text,
-          textShadow,
           opacity,
           transform: `translateY(${y}px)`,
+          pointerEvents: "none",
         }}
       >
-        {words.map((word, i) => {
-          const clean = word.replace(/[.,!?]/g, "").toLowerCase();
-          const isHighlighted = highlight.some(
-            (h) => clean === h.toLowerCase()
-          );
-          return (
-            <span
-              key={i}
-              style={{
-                color: isHighlighted ? colors.accent : colors.text,
-                fontWeight: 800,
-              }}
-            >
-              {word}
-              {i < words.length - 1 ? " " : ""}
-            </span>
-          );
-        })}
+        <div
+          style={{
+            fontFamily: fonts.sans,
+            fontSize,
+            fontWeight: 800,
+            lineHeight: 1.25,
+            color: colors.text,
+            textShadow,
+            textAlign: "center",
+            maxWidth: "100%",
+          }}
+        >
+          {words.map((word, i) => {
+            const clean = word.replace(/[.,!?]/g, "").toLowerCase();
+            const isHighlighted = highlight.some(
+              (h) => clean === h.toLowerCase()
+            );
+            return (
+              <span
+                key={i}
+                style={{
+                  color: isHighlighted ? colors.accent : colors.text,
+                  fontWeight: 800,
+                }}
+              >
+                {word}
+                {i < words.length - 1 ? " " : ""}
+              </span>
+            );
+          })}
+        </div>
       </div>
     );
   }
