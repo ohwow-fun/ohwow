@@ -247,6 +247,21 @@ export interface RuntimeConfig {
   xHumorEnabled: boolean;
   /** Cadence for the humor scheduler in minutes. Default: 60 (hourly). */
   xHumorIntervalMinutes: number;
+
+  /**
+   * Master kill switch for the YouTube Shorts engine. When false, every
+   * per-series automation is paused regardless of its own toggle. Env:
+   * OHWOW_YT_SHORTS_ENABLED. Default: false.
+   */
+  ytShortsEnabled: boolean;
+  /** Per-series kill switch for The Briefing. Env: OHWOW_YT_BRIEFING_ENABLED. Default: false. */
+  ytBriefingEnabled: boolean;
+  /** Per-series kill switch for Tomorrow Broke. Env: OHWOW_YT_TOMORROW_BROKE_ENABLED. Default: false. */
+  ytTomorrowBrokeEnabled: boolean;
+  /** Per-series kill switch for Mind Wars. Env: OHWOW_YT_MIND_WARS_ENABLED. Default: false. */
+  ytMindWarsEnabled: boolean;
+  /** Per-series kill switch for Operator Mode. Env: OHWOW_YT_OPERATOR_MODE_ENABLED. Default: false. */
+  ytOperatorModeEnabled: boolean;
 }
 
 interface ConfigFile {
@@ -310,6 +325,11 @@ interface ConfigFile {
   xReplyEnabled?: boolean;
   xHumorEnabled?: boolean;
   xHumorIntervalMinutes?: number;
+  ytShortsEnabled?: boolean;
+  ytBriefingEnabled?: boolean;
+  ytTomorrowBrokeEnabled?: boolean;
+  ytMindWarsEnabled?: boolean;
+  ytOperatorModeEnabled?: boolean;
   openclaw?: Partial<import('./integrations/openclaw/types.js').OpenClawConfig>;
   turboQuantBits?: 0 | 2 | 3 | 4;
   llamaCppUrl?: string;
@@ -545,6 +565,16 @@ export interface WorkspaceConfig {
   xReplyEnabled?: boolean;
   xHumorEnabled?: boolean;
   xHumorIntervalMinutes?: number;
+  /** Per-workspace override: master kill switch for the YouTube Shorts engine. */
+  ytShortsEnabled?: boolean;
+  /** Per-workspace override: enable The Briefing series. */
+  ytBriefingEnabled?: boolean;
+  /** Per-workspace override: enable Tomorrow Broke series. */
+  ytTomorrowBrokeEnabled?: boolean;
+  /** Per-workspace override: enable Mind Wars series. */
+  ytMindWarsEnabled?: boolean;
+  /** Per-workspace override: enable Operator Mode series. */
+  ytOperatorModeEnabled?: boolean;
   /**
    * Absolute path of the git repository this workspace's self-bench loop
    * operates on. Overrides the cwd-derived default (which assumes the
@@ -704,6 +734,11 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   if (typeof ws.xHumorIntervalMinutes === 'number' && ws.xHumorIntervalMinutes > 0) {
     next.xHumorIntervalMinutes = ws.xHumorIntervalMinutes;
   }
+  if (typeof ws.ytShortsEnabled === 'boolean') next.ytShortsEnabled = ws.ytShortsEnabled;
+  if (typeof ws.ytBriefingEnabled === 'boolean') next.ytBriefingEnabled = ws.ytBriefingEnabled;
+  if (typeof ws.ytTomorrowBrokeEnabled === 'boolean') next.ytTomorrowBrokeEnabled = ws.ytTomorrowBrokeEnabled;
+  if (typeof ws.ytMindWarsEnabled === 'boolean') next.ytMindWarsEnabled = ws.ytMindWarsEnabled;
+  if (typeof ws.ytOperatorModeEnabled === 'boolean') next.ytOperatorModeEnabled = ws.ytOperatorModeEnabled;
   return next;
 }
 
@@ -886,6 +921,15 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     xReplyEnabled: process.env.OHWOW_X_REPLY_ENABLED === 'true' || fileConfig.xReplyEnabled === true,
     xHumorEnabled: process.env.OHWOW_X_HUMOR_ENABLED === 'true' || fileConfig.xHumorEnabled === true,
     xHumorIntervalMinutes: parseInt(process.env.OHWOW_X_HUMOR_INTERVAL_MIN || '', 10) || fileConfig.xHumorIntervalMinutes || 60,
+    // YouTube Shorts engine kill switches. Master must be true AND the
+    // per-series flag must be true for an automation to fire. Mirror of
+    // the xIntelEnabled pattern. Default: all false — the five-series
+    // pipeline is off out of the box.
+    ytShortsEnabled: process.env.OHWOW_YT_SHORTS_ENABLED === 'true' || fileConfig.ytShortsEnabled === true,
+    ytBriefingEnabled: process.env.OHWOW_YT_BRIEFING_ENABLED === 'true' || fileConfig.ytBriefingEnabled === true,
+    ytTomorrowBrokeEnabled: process.env.OHWOW_YT_TOMORROW_BROKE_ENABLED === 'true' || fileConfig.ytTomorrowBrokeEnabled === true,
+    ytMindWarsEnabled: process.env.OHWOW_YT_MIND_WARS_ENABLED === 'true' || fileConfig.ytMindWarsEnabled === true,
+    ytOperatorModeEnabled: process.env.OHWOW_YT_OPERATOR_MODE_ENABLED === 'true' || fileConfig.ytOperatorModeEnabled === true,
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',

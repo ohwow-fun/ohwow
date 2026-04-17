@@ -251,6 +251,11 @@ export class OnboardingService {
       xReplyEnabled: false,
       xHumorEnabled: false,
       xHumorIntervalMinutes: 60,
+      ytShortsEnabled: false,
+      ytBriefingEnabled: false,
+      ytTomorrowBrokeEnabled: false,
+      ytMindWarsEnabled: false,
+      ytOperatorModeEnabled: false,
       chromeDefaultProfile: 'Default',
     };
 

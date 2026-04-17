@@ -187,3 +187,46 @@ describe('isFirstRun', () => {
     expect(isFirstRun(TEST_CONFIG)).toBe(false);
   });
 });
+
+describe('YouTube Shorts kill switches', () => {
+  const YT_ENV_VARS = [
+    'OHWOW_YT_SHORTS_ENABLED',
+    'OHWOW_YT_BRIEFING_ENABLED',
+    'OHWOW_YT_TOMORROW_BROKE_ENABLED',
+    'OHWOW_YT_MIND_WARS_ENABLED',
+    'OHWOW_YT_OPERATOR_MODE_ENABLED',
+  ] as const;
+
+  beforeEach(() => {
+    for (const v of YT_ENV_VARS) delete process.env[v];
+  });
+
+  afterEach(() => {
+    for (const v of YT_ENV_VARS) delete process.env[v];
+  });
+
+  it('all five flags default off when unset', () => {
+    const cfg = loadConfig(TEST_CONFIG);
+    expect(cfg.ytShortsEnabled).toBe(false);
+    expect(cfg.ytBriefingEnabled).toBe(false);
+    expect(cfg.ytTomorrowBrokeEnabled).toBe(false);
+    expect(cfg.ytMindWarsEnabled).toBe(false);
+    expect(cfg.ytOperatorModeEnabled).toBe(false);
+  });
+
+  it('env vars flip individual series on', () => {
+    process.env.OHWOW_YT_SHORTS_ENABLED = 'true';
+    process.env.OHWOW_YT_BRIEFING_ENABLED = 'true';
+    const cfg = loadConfig(TEST_CONFIG);
+    expect(cfg.ytShortsEnabled).toBe(true);
+    expect(cfg.ytBriefingEnabled).toBe(true);
+    expect(cfg.ytTomorrowBrokeEnabled).toBe(false);
+  });
+
+  it('file-config flag flips on without env', () => {
+    writeFileSync(TEST_CONFIG, JSON.stringify({ ytMindWarsEnabled: true }));
+    const cfg = loadConfig(TEST_CONFIG);
+    expect(cfg.ytMindWarsEnabled).toBe(true);
+    expect(cfg.ytShortsEnabled).toBe(false);
+  });
+});
