@@ -2,26 +2,43 @@
  * reply-copy-generator.ts — draft a reply to a scanned post in a
  * calibrated conversational voice.
  *
- * Voice spec (locked in 2026-04-17 with operator review):
- *   - One observation + one concrete mechanism. Not a two-step lecture.
- *   - Specific mechanisms beat abstract principles ("context rot" >
- *     "coherence failure"). Name the thing.
- *   - Sound like you've done the work, not explained the work. Skip
- *     "table stakes", "at the end of the day", consultant openers.
- *   - Reciprocate the post's energy — question gets a statement, a
- *     statement gets a question.
- *   - No em dashes. No "please". No sign-offs. No hashtags.
- *   - Length: ≤240 chars (X), ≤280 chars (Threads). Leave room.
- *   - Never pitch. Never name the product. Never self-reference.
+ * Voice spec (first-principles only — deliberately no canonical
+ * example drafts. Examples anchor the model on phrasing it then
+ * copies wholesale or ablates into tics. Revised 2026-04-17 after
+ * observing first-person narrative slippage like "I've lost so
+ * many threads trying to switch models..." / "You end up spending
+ * more time reconciling agent decisions than writing the original
+ * prompt").
  *
- * Calibration examples (the winning drafts from the Apr-17 review):
- *   "Confidence without a verifier is the default failure mode of LLM
- *    agents right now."
- *   "Compaction is the quiet one. Most long-running agents I've seen
- *    die from context rot, not lack of checkpoints."
- *   "What kind of office work are you trying to offload first? The
- *    hardest part is usually scoping which bottleneck the agent
- *    actually owns."
+ * STANCE principles:
+ *   - Observational, not narrative. The voice notices and opines,
+ *     it does not claim to have lived through specific events.
+ *   - Curious, not corrective. Opens a question or reframe; does not
+ *     restate the author's point back at them.
+ *   - Reciprocates energy. Questions invite statements, statements
+ *     invite questions or contrasting claims.
+ *
+ * CRAFT principles:
+ *   - One observation + one concrete mechanism. Not a two-step lecture.
+ *   - Specific beats abstract. Name the thing that causes the effect,
+ *     not the category label.
+ *   - Adds a dimension the post did not already cover. Agreement
+ *     alone is dead air; mild dissent or a reframe earns the read.
+ *
+ * FORBIDDEN (structural, not stylistic):
+ *   - First-person: I, me, my, mine, we, us, our, I've, I'm, I'd.
+ *     These turn opinions into claims about the author's private
+ *     experience — the voice does not have private experience.
+ *   - Fake-experience phrasing: "I've seen", "my experience",
+ *     "when I tried", "I lost", "in practice I", "I've been", "I ran
+ *     into", "we found". Same reason as first-person.
+ *   - Self-reference, pitches, product names (unless the post named
+ *     them first). Sign-offs. Hashtags. Em dashes. "Please".
+ *     Trailing period. Corporate softeners ("great take",
+ *     "happy to"), lecture openers ("at the end of the day",
+ *     "here's the thing", "the key is").
+ *
+ * LENGTH: 80-200 chars typical. Hard cap 240 X / 280 Threads.
  */
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
@@ -54,66 +71,62 @@ const THREADS_MAX = 280;
 function buildSystemPrompt(platform: 'x' | 'threads'): string {
   const cap = platform === 'x' ? X_MAX : THREADS_MAX;
   return [
-    'You draft replies to social posts in a specific voice. A thoughtful',
-    'builder would actually write them: real observations, not marketing.',
+    'You draft replies to social posts in a specific voice.',
+    'These are first-principles rules — follow them structurally. Do NOT',
+    'imitate example replies (none are given, deliberately).',
     '',
-    'STANCE (who you are writing as):',
-    '  - A peer, not an expert. Someone who ships, not someone explaining',
-    '    the field.',
-    '  - Hedging allowed, but only the human kind. "I guess it\'s the",',
-    '    "probably", "it feels like", "might be" — these read as someone',
-    '    thinking out loud. "I think", "maybe", "in my opinion",',
-    '    "perhaps" read like a submission to a journal. Use the first,',
-    '    avoid the second.',
-    '  - Lived-in. If you assert something, it should feel like you could',
-    '    justify it from experience, not recite it from an article.',
-    '  - Curious, not corrective. Never lecture, restate the author\'s',
-    '    point back at them, or imply they missed something obvious.',
+    'STANCE:',
+    '  - Observational, not narrative. The voice notices and opines,',
+    '    but never claims to have personally experienced specific events.',
+    '  - Curious + exploring, not corrective. Open a question or reframe;',
+    '    never restate the author\'s point back at them or imply they',
+    '    missed something obvious.',
+    '  - Peer-to-peer. Same level as the author — not an expert teaching,',
+    '    not a fan praising.',
+    '  - Reciprocate energy. A question invites a statement back; a',
+    '    statement invites a question or a contrasting claim. Match',
+    '    register (dry / playful / technical) without copying phrasing.',
     '',
-    'CRAFT (how the reply is built):',
-    '  - Compress to one idea, not two. The best replies are a single',
-    '    observation with a concrete mechanism, not a problem statement',
-    '    plus a lecture.',
-    '  - Specific beats abstract. Name the thing that actually causes the',
-    '    failure or effect, not the category label. If two mechanisms are',
-    '    in tension, name that tension — do not paper over it.',
-    '  - Reciprocate energy. A question in the post invites a statement',
-    '    back. A statement invites a question or a contrasting claim.',
-    '    Match the author\'s register — dry stays dry, playful stays',
-    '    playful, without borrowing their exact phrasing.',
-    '  - The reply should add a dimension the post did not already cover.',
-    '    Agreement alone is dead air; mild dissent or a reframe is why',
-    '    anyone reads a reply.',
+    'CRAFT:',
+    '  - Compress to one idea + one concrete mechanism. Not a two-step',
+    '    lecture, not a question + answer combo.',
+    '  - Specific beats abstract. Name the actual cause, not its category.',
+    '  - Add a dimension the post did not already cover. Agreement alone',
+    '    is dead air; mild dissent or a reframe is why anyone reads a reply.',
     '',
     'FORBIDDEN:',
+    '  - FIRST-PERSON pronouns: I, me, my, mine, we, us, our, I\'ve, I\'m,',
+    '    I\'d, I\'ll, I was. These make the voice sound like a marketer',
+    '    dropping fake experience. The voice does not have private',
+    '    experience to share.',
+    '  - FAKE-EXPERIENCE phrasing: "I\'ve seen", "my experience",',
+    '    "when I tried", "I lost", "in practice I", "I ran into",',
+    '    "we found", "when we", "we ended up", "I spent". Same reason.',
+    '    Opinions and observations land; personal narrative does not.',
     '  - Pitches of any kind. No products, tools, companies named unless',
-    '    the post named them first. You are a person, not a marketer.',
+    '    the post named them first.',
     '  - Corporate softeners: "happy to discuss", "great take/point",',
     '    "this is interesting", "love this", "100%".',
     '  - Lecture openers: "at the end of the day", "table stakes",',
     '    "the real question is", "here\'s the thing", "the key is",',
-    '     "honestly", "tbh".',
+    '    "honestly", "tbh".',
     '  - Em dashes (— or –). Use periods, commas, semicolons, line breaks.',
     '  - "Please". Hashtags. Links. Sign-offs.',
     '  - Emojis, unless the post itself used them AND one fits naturally.',
     '  - A trailing period at the end of the reply. Internal sentence',
     '    periods are fine; just no final ".".',
-    '  - Drift/tic vocabulary that has been overused recently. Currently',
-    '    blocklisted (use sparingly, prefer other mechanisms):',
-    '       "scope ownership", "context rot".',
-    '    These are fine words individually; use them only when they are',
-    '    the single most precise term, not as a default reach.',
+    '  - Drift/tic vocabulary overused recently, use sparingly:',
+    '    "scope ownership", "context rot". Use only when they are the',
+    '    single most precise term, never as a default reach.',
     '',
-    `LENGTH: cap ${cap} characters. Aim 80-200. Shorter is usually better;`,
-    'leave room rather than max it out.',
+    `LENGTH: cap ${cap} characters. Aim 80-200. Shorter usually better.`,
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
-    '  - The post is a pitch, link-drop, affiliate, or promo — no genuine',
-    '    reply lands there without looking like another marketer.',
-    '  - Combative flame-bait ("Tool A > Tool B 💀"). Engagement feeds it.',
-    '  - Pure restatement with nothing to grip: reply would be generic.',
+    '  - The post is a pitch, link-drop, affiliate, or promo.',
+    '  - Combative flame-bait. Engagement feeds it.',
+    '  - Pure restatement with nothing to grip.',
     '  - You would have to misread the post to reply usefully.',
-    '    It is always better to say nothing than to post something generic.',
+    '    Better to say nothing than to post something generic.',
     '',
     'OUTPUT (JSON, nothing else):',
     '  {',
@@ -180,6 +193,41 @@ export function voiceCheck(text: string, platform: 'x' | 'threads'): { ok: boole
   if (/#\w/.test(text)) reasons.push('hashtag');
   if (/\bhttps?:\/\//.test(text)) reasons.push('link');
   if (/\.\s*$/.test(text)) reasons.push('trailingPeriod');
+
+  // First-person markers. The voice is observational, not narrative:
+  // opinions + mechanisms, never personal experience claims. These
+  // patterns are the tell that the model slipped into "builder voice"
+  // and started inventing fake lived-through moments.
+  //
+  // Word-boundary '\bI\b' matches the pronoun but not words containing
+  // 'i' like 'interesting'. Case-sensitive on purpose — lowercase 'i'
+  // isn't the pronoun in English-legitimate writing.
+  const firstPersonPatterns: Array<[RegExp, string]> = [
+    [/\bI\b/, 'firstPerson:I'],
+    [/\bI'(?:ve|m|d|ll|s|re)\b/i, 'firstPerson:I-contraction'],
+    [/\bme\b/i, 'firstPerson:me'],
+    [/\bmy\b/i, 'firstPerson:my'],
+    [/\bmine\b/i, 'firstPerson:mine'],
+    [/\bwe\b/i, 'firstPerson:we'],
+    [/\bus\b/i, 'firstPerson:us'],
+    [/\bour\b/i, 'firstPerson:our'],
+  ];
+  for (const [re, label] of firstPersonPatterns) {
+    if (re.test(text)) reasons.push(label);
+  }
+
+  // Fake-experience phrasing. Catches common second-person narrative
+  // that reads as recycled "you know when you..." experience-mining.
+  const fakeExperiencePatterns: Array<[RegExp, string]> = [
+    [/\byou end up\b/i, 'fakeExperience:you-end-up'],
+    [/\byou (?:find|found)\b/i, 'fakeExperience:you-found'],
+    [/\bin (?:my|our) experience\b/i, 'fakeExperience:my-experience'],
+    [/\bwhen (?:you|i) tr(?:y|ied)\b/i, 'fakeExperience:when-you-try'],
+  ];
+  for (const [re, label] of fakeExperiencePatterns) {
+    if (re.test(text)) reasons.push(label);
+  }
+
   // Corporate softeners
   const softeners = ['great take', 'this is interesting', 'happy to', 'at the end of the day', 'table stakes', 'the real question is', "here's the thing", 'the key is'];
   for (const s of softeners) {
@@ -258,19 +306,55 @@ export async function generateReplyCopy(
     parsed.alternates = parsed.alternates.map((a) => a.replace(/\.\s*$/, ''));
   }
 
-  const check = voiceCheck(parsed.draft, input.platform);
-  if (!check.ok) {
-    logger.info(
-      { reasons: check.reasons, draft: parsed.draft.slice(0, 80) },
-      '[reply-copy] draft tripped voice check',
-    );
+  // Voice-check is a gate, not a warning. If a draft contains
+  // first-person / fake-experience / softeners / etc., an alternate
+  // that passes gets promoted to primary; if no alternate passes,
+  // the whole candidate gets SKIP'd so the scheduler moves on to
+  // the next target. Previously the failing draft was published
+  // anyway with just a log line, which is how the 10:28 "I've lost
+  // so many threads" reply escaped.
+  const primaryCheck = voiceCheck(parsed.draft, input.platform);
+  if (primaryCheck.ok) {
+    return {
+      ok: true,
+      draft: parsed.draft,
+      alternates: parsed.alternates,
+      rationale: parsed.rationale,
+      modelUsed: llm.data.model_used,
+    };
   }
 
+  logger.info(
+    { reasons: primaryCheck.reasons, draft: parsed.draft.slice(0, 80) },
+    '[reply-copy] primary draft tripped voice check; scanning alternates',
+  );
+
+  // Try alternates in order; first passing one becomes the primary.
+  for (const alt of parsed.alternates ?? []) {
+    const altCheck = voiceCheck(alt, input.platform);
+    if (altCheck.ok) {
+      logger.info(
+        { chars: alt.length },
+        '[reply-copy] promoted alternate draft after primary voice-check failure',
+      );
+      return {
+        ok: true,
+        draft: alt,
+        alternates: (parsed.alternates ?? []).filter((a) => a !== alt),
+        rationale: parsed.rationale,
+        modelUsed: llm.data.model_used,
+      };
+    }
+  }
+
+  logger.info(
+    { primaryReasons: primaryCheck.reasons, alternatesCount: parsed.alternates?.length ?? 0 },
+    '[reply-copy] all drafts tripped voice check; skipping candidate',
+  );
   return {
     ok: true,
-    draft: parsed.draft,
-    alternates: parsed.alternates,
-    rationale: parsed.rationale,
+    draft: 'SKIP',
+    rationale: `voice check failed: ${primaryCheck.reasons.join(', ')}`,
     modelUsed: llm.data.model_used,
   };
 }
