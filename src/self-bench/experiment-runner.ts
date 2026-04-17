@@ -40,6 +40,7 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
+import type { ScraplingService } from '../execution/scrapling/index.js';
 import type {
   Experiment,
   ExperimentCadence,
@@ -325,6 +326,12 @@ export interface ExperimentRunnerOptions {
    * Clock override for tests. Production passes Date.now.
    */
   now?: () => number;
+  /**
+   * Shared Scrapling service, threaded into ctx for probes that
+   * fetch external URLs. Optional so tests can omit it; probes that
+   * require it null-check and emit a fail verdict when absent.
+   */
+  scraplingService?: ScraplingService;
 }
 
 export class ExperimentRunner implements ExperimentScheduler {
@@ -348,6 +355,7 @@ export class ExperimentRunner implements ExperimentScheduler {
   private chainDepth = 0;
   private readonly tickIntervalMs: number;
   private readonly now: () => number;
+  private readonly scraplingService?: ScraplingService;
   /**
    * Wall-clock ms recorded at start(). Exposed via ExperimentContext
    * so history-aggregating probes can treat restart as a state
@@ -364,6 +372,7 @@ export class ExperimentRunner implements ExperimentScheduler {
   ) {
     this.tickIntervalMs = opts.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS;
     this.now = opts.now ?? Date.now;
+    this.scraplingService = opts.scraplingService;
   }
 
   /**
@@ -770,6 +779,7 @@ export class ExperimentRunner implements ExperimentScheduler {
         readRecentFindings(this.db, id, limit),
       scheduler: this,
       runnerStartedAtMs: this.startedAtMs || undefined,
+      scraplingService: this.scraplingService,
     };
     if (experimentId) {
       ctx.scoreSurprise = makeScoreSurprise(this.db, experimentId);
