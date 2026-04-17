@@ -758,7 +758,16 @@ export function PulsePage() {
                       <span className="text-[10px] uppercase tracking-wider text-neutral-500">
                         {urgencyPrefix} {s.stepType.replace(/_/g, ' ')}
                       </span>
-                      <span className="text-neutral-300 font-medium truncate">{s.contactName ?? 'Unknown'}</span>
+                      {s.contactId ? (
+                        <Link
+                          to={`/contacts/${s.contactId}`}
+                          className="text-neutral-300 font-medium truncate hover:text-white hover:underline"
+                        >
+                          {s.contactName ?? 'Unknown'}
+                        </Link>
+                      ) : (
+                        <span className="text-neutral-300 font-medium truncate">{s.contactName ?? 'Unknown'}</span>
+                      )}
                       <span className={`text-[10px] uppercase tracking-wider ${
                         s.status === 'open' ? 'text-warning'
                         : s.status === 'dispatched' ? 'text-info'
@@ -851,8 +860,8 @@ export function PulsePage() {
                   : r.status === 'applied' ? 'text-success'
                   : r.status === 'rejected' ? 'text-critical'
                   : 'text-neutral-500';
-                return (
-                  <li key={r.approvalId} className="flex items-start gap-3 py-2 text-xs">
+                const rowInner = (
+                  <>
                     <span className={`inline-block w-1.5 h-1.5 rounded-full mt-1.5 flex-none ${color}`} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
@@ -862,6 +871,20 @@ export function PulsePage() {
                       <p className="text-neutral-500 truncate mt-0.5">"{r.textPreview}"</p>
                     </div>
                     <span className="text-[10px] text-neutral-600 flex-none tabular-nums">{relTime(r.ts)}</span>
+                  </>
+                );
+                return r.conversationPair ? (
+                  <li key={r.approvalId} className="text-xs">
+                    <Link
+                      to={`/messages?pair=${encodeURIComponent(r.conversationPair)}`}
+                      className="flex items-start gap-3 py-2 hover:bg-white/[0.02] -mx-2 px-2 rounded"
+                    >
+                      {rowInner}
+                    </Link>
+                  </li>
+                ) : (
+                  <li key={r.approvalId} className="flex items-start gap-3 py-2 text-xs">
+                    {rowInner}
                   </li>
                 );
               })}
