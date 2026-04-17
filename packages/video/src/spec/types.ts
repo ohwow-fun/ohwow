@@ -62,12 +62,17 @@ export interface Scene<K extends string = SceneKind> {
   id: string;
   kind: K;
   durationInFrames: number;
-  /** Visual params — shape depends on kind. Scenes fall back to baked-in defaults when omitted. */
+  /** Visual params. Shape depends on kind. Scenes fall back to baked-in defaults when omitted. */
   params?: Record<string, unknown>;
   /** If provided, composition renders these as subtitle overlays at global time = scene start + caption.startFrame. */
   captions?: CaptionSpec[];
   /** Raw narration text. Used by the composition to auto-generate captions when captions[] is absent. */
   narration?: string;
+  /** Optional metadata consumed by lints and tools (e.g., voiceDurationMs from the workspace author). */
+  metadata?: {
+    voiceDurationMs?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface VideoSpec {
