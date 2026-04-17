@@ -1,0 +1,44 @@
+{
+  "slug": "briefing",
+  "displayName": "The Briefing",
+  "colors": {
+    "bg": "#f4f7fb",
+    "surface": "#ffffff",
+    "accent": "#2563eb",
+    "accentDeep": "#1d4ed8",
+    "text": "#0a1629",
+    "textMuted": "#475569",
+    "textDim": "rgba(10, 22, 41, 0.5)",
+    "tickerBg": "#0a1629",
+    "tickerText": "#f8fafc",
+    "ruleLine": "#cbd5e1"
+  },
+  "fonts": {
+    "sans": "Inter, system-ui, -apple-system, sans-serif",
+    "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+    "display": "Merriweather, Georgia, serif"
+  },
+  "headlineFont": "Merriweather, Georgia, serif",
+  "glass": {
+    "background": "rgba(255, 255, 255, 0.85)",
+    "border": "1px solid rgba(10, 22, 41, 0.1)",
+    "borderRadius": 6,
+    "backdropFilter": "blur(8px)"
+  },
+  "ambientMoodDefault": "electric",
+  "sceneKindAllowlist": [
+    "text-typewriter",
+    "quote-card",
+    "composable",
+    "stats-counter"
+  ],
+  "primitivePalette": [
+    "grid-morph",
+    "scan-line",
+    "light-rays",
+    "vignette"
+  ],
+  "motionStyle": "crisp",
+  "paletteHue": 215,
+  "paletteHarmony": "complementary"
+}

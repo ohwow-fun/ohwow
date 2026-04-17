@@ -1,0 +1,42 @@
+{
+  "slug": "mind-wars",
+  "displayName": "Mind Wars",
+  "colors": {
+    "bg": "#0a0a0a",
+    "surface": "#141414",
+    "accent": "#d4af37",
+    "accentDeep": "#8c7521",
+    "accentSoft": "#e8cf7a",
+    "text": "#f5f3eb",
+    "textMuted": "#a39b82",
+    "textDim": "rgba(245, 243, 235, 0.4)",
+    "ruleLine": "rgba(212, 175, 55, 0.3)"
+  },
+  "fonts": {
+    "sans": "Inter, system-ui, -apple-system, sans-serif",
+    "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+    "display": "'Playfair Display', Georgia, serif"
+  },
+  "headlineFont": "'Playfair Display', Georgia, serif",
+  "glass": {
+    "background": "rgba(20, 20, 20, 0.9)",
+    "border": "1px solid rgba(212, 175, 55, 0.35)",
+    "borderRadius": 4,
+    "backdropFilter": "blur(16px)"
+  },
+  "ambientMoodDefault": "contemplative",
+  "sceneKindAllowlist": [
+    "quote-card",
+    "composable",
+    "text-typewriter"
+  ],
+  "primitivePalette": [
+    "constellation",
+    "vignette",
+    "film-grain",
+    "gradient-wash"
+  ],
+  "motionStyle": "measured",
+  "paletteHue": 45,
+  "paletteHarmony": "analogous"
+}

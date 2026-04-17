@@ -1,0 +1,46 @@
+{
+  "slug": "operator-mode",
+  "displayName": "Operator Mode",
+  "colors": {
+    "bg": "#0f1512",
+    "surface": "#1a2420",
+    "accent": "#22c55e",
+    "accentDeep": "#15803d",
+    "accentBright": "#4ade80",
+    "text": "#e5f1ea",
+    "textMuted": "#8aa59b",
+    "textDim": "rgba(229, 241, 234, 0.45)",
+    "codeBg": "#0b1410",
+    "ruleLine": "rgba(34, 197, 94, 0.3)"
+  },
+  "fonts": {
+    "sans": "Montserrat, system-ui, sans-serif",
+    "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+    "display": "Montserrat, system-ui, sans-serif"
+  },
+  "headlineFont": "Montserrat, system-ui, sans-serif",
+  "glass": {
+    "background": "rgba(26, 36, 32, 0.85)",
+    "border": "1px solid rgba(34, 197, 94, 0.25)",
+    "borderRadius": 8,
+    "backdropFilter": "blur(12px)"
+  },
+  "ambientMoodDefault": "warm",
+  "sceneKindAllowlist": [
+    "text-typewriter",
+    "composable",
+    "stats-counter",
+    "terminal-log",
+    "workflow-steps"
+  ],
+  "primitivePalette": [
+    "grid-morph",
+    "flow-field",
+    "glow-orb",
+    "vignette",
+    "scan-line"
+  ],
+  "motionStyle": "crisp",
+  "paletteHue": 145,
+  "paletteHarmony": "analogous"
+}

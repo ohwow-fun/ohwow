@@ -1,0 +1,40 @@
+{
+  "slug": "bot-beats",
+  "displayName": "Bot Beats",
+  "colors": {
+    "bg": "#0b0018",
+    "surface": "#1a0833",
+    "accent": "#ff3df1",
+    "accentDeep": "#b80cb0",
+    "accentYellow": "#fde047",
+    "accentCyan": "#22d3ee",
+    "text": "#fff7ff",
+    "textMuted": "#d4b2ff",
+    "textDim": "rgba(255, 247, 255, 0.5)"
+  },
+  "fonts": {
+    "sans": "Poppins, system-ui, sans-serif",
+    "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+    "display": "Poppins, system-ui, sans-serif"
+  },
+  "headlineFont": "Poppins, system-ui, sans-serif",
+  "glass": {
+    "background": "rgba(26, 8, 51, 0.7)",
+    "border": "2px solid rgba(255, 61, 241, 0.5)",
+    "borderRadius": 16,
+    "backdropFilter": "blur(8px)"
+  },
+  "ambientMoodDefault": "electric",
+  "primitivePalette": [
+    "particle-burst",
+    "grid-morph",
+    "glow-orb",
+    "pulse-ring",
+    "aurora",
+    "ripple"
+  ],
+  "motionStyle": "chaotic",
+  "paletteHue": 300,
+  "paletteHarmony": "triadic",
+  "_note": "Series 5 — deferred to v2. Needs Lyria-in-render pipeline before shipping."
+}
