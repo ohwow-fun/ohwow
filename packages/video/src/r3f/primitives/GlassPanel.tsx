@@ -22,7 +22,7 @@
  *   idleFloat?: boolean — gentle Y oscillation (default true)
  */
 import React from "react";
-import { useCurrentFrame, useVideoConfig } from "remotion";
+import { useCurrentFrame, useVideoConfig, interpolate, spring, Easing } from "remotion";
 import { Text } from "@react-three/drei";
 import { getMotionProfile } from "../../motion/asmr";
 
@@ -39,6 +39,17 @@ interface GlassPanelProps {
   subtitleColor?: string;
   idleFloat?: boolean;
   motionProfile?: string;
+  /**
+   * When true, the main text animates in letter-by-letter with a
+   * staggered drop-from-above + spring settle. Leaves the subtitle
+   * alone (subtitle just fades in). Designed for the intro/outro
+   * hero moment so each letter has kinetic weight.
+   */
+  kineticType?: boolean;
+  /** Frame offset at which the kinetic reveal begins (default 0). */
+  kineticDelayFrames?: number;
+  /** Frames between successive letter entries (default 3). */
+  kineticStaggerFrames?: number;
 }
 
 export const GlassPanel: React.FC<GlassPanelProps> = ({
@@ -54,6 +65,9 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
   subtitleColor = "#1a2238",
   idleFloat = true,
   motionProfile,
+  kineticType = false,
+  kineticDelayFrames = 0,
+  kineticStaggerFrames = 3,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -73,8 +87,11 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
   // pure HDRI environment through the edges of the slab.
   const bandWidth = width * 1.08;
   const bandHeight = height * 1.08;
-  const textY = height * 0.18;
-  const subtitleY = -height * 0.32;
+  // Title and subtitle packed closer vertically so the panel doesn't
+  // feel empty between them. Title sits just above center; subtitle
+  // just below, with its own inset band.
+  const textY = height * 0.1;
+  const subtitleY = -height * 0.26;
 
   return (
     <group position={[position[0], position[1] + yFloat, position[2]]} rotation={rotation}>
@@ -113,8 +130,11 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
         />
       </mesh>
 
-      {/* Main text on the front face */}
-      {text && (
+      {/* Main text on the front face. When kineticType is on, each
+          character drops from above + overshoots + settles with its
+          own staggered delay — otherwise the whole string shows
+          as a single Text element (original behavior). */}
+      {text && !kineticType && (
         <Text
           position={[0, subtitle ? textY : 0, depth / 2 + 0.02]}
           fontSize={textSize}
@@ -128,6 +148,19 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
         >
           {text}
         </Text>
+      )}
+      {text && kineticType && (
+        <KineticTitle
+          text={text}
+          position={[0, subtitle ? textY : 0, depth / 2 + 0.02]}
+          fontSize={textSize}
+          color={textColor}
+          frame={frame}
+          fps={fps}
+          delayFrames={kineticDelayFrames}
+          staggerFrames={kineticStaggerFrames}
+          maxWidth={width * 0.92}
+        />
       )}
 
       {/* Subtitle with its own inset backing band — sits in the lower
@@ -152,6 +185,109 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
           </Text>
         </>
       )}
+    </group>
+  );
+};
+
+/**
+ * Kinetic title — renders each character of `text` as its own drei Text
+ * element and animates each one with a staggered drop-from-above spring
+ * so the reveal feels physical, not synthetic.
+ *
+ * We lay out characters horizontally by estimating per-char width from
+ * the fontSize (drei Text doesn't expose measured bounds before render).
+ * For display-uppercase strings this approximation lands tight enough.
+ */
+// Advance LUT by character, as a fraction of fontSize. Tuned for drei's
+// default SDF font at weight 800. Buckets balance setup cost vs. fidelity.
+function charAdvanceFraction(ch: string): number {
+  if (ch === " ") return 0.32;
+  const u = ch.toUpperCase();
+  // Very wide glyphs.
+  if ("MWO".includes(u)) return 0.78;
+  // Wide.
+  if ("ABCDGHKNQRU&".includes(u)) return 0.68;
+  // Medium.
+  if ("EFLPSTVXYZ?!".includes(u)) return 0.6;
+  // Narrow.
+  if ("IJ1.,'-·".includes(u)) return 0.32;
+  // Default for unknowns (digits, punctuation not listed).
+  return 0.58;
+}
+
+const KineticTitle: React.FC<{
+  text: string;
+  position: [number, number, number];
+  fontSize: number;
+  color: string;
+  frame: number;
+  fps: number;
+  delayFrames: number;
+  staggerFrames: number;
+  maxWidth: number;
+}> = ({ text, position, fontSize, color, frame, fps, delayFrames, staggerFrames, maxWidth }) => {
+  // Per-char advance LUT. A flat average cram wide letters (M, O, W) next
+  // to narrow ones (I, T) — use buckets instead. Values are fractions of
+  // fontSize based on the default drei SDF font metrics. Caller should
+  // upper-case the string for best results (the LUT is uppercase-tuned).
+  const chars = Array.from(text);
+  const advances = chars.map((c) => fontSize * charAdvanceFraction(c));
+  const totalWidth = advances.reduce((a, b) => a + b, 0);
+  // If the natural layout would overflow maxWidth, scale everything down
+  // uniformly so we don't clip. Keeps the reveal looking right regardless
+  // of text length.
+  const fitScale = totalWidth > maxWidth ? maxWidth / totalWidth : 1;
+  const scaledFontSize = fontSize * fitScale;
+  const scaledAdvances = advances.map((a) => a * fitScale);
+  // Start x at left edge so characters flow right from there.
+  const startX = position[0] - (totalWidth * fitScale) / 2;
+
+  // Each character has its own spring progress keyed to its order.
+  return (
+    <group>
+      {chars.map((ch, i) => {
+        const charLocalX =
+          startX +
+          scaledAdvances.slice(0, i).reduce((a, b) => a + b, 0) +
+          scaledAdvances[i] / 2;
+        const revealFrame = delayFrames + i * staggerFrames;
+        const progress = spring({
+          frame: frame - revealFrame,
+          fps,
+          config: { damping: 12, mass: 0.6, stiffness: 140 },
+        });
+        // Drop from above: y starts +1 unit higher and eases to target.
+        const dropY = interpolate(progress, [0, 1], [fontSize * 1.2, 0], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
+        const opacity = interpolate(progress, [0, 0.35, 1], [0, 0.6, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+          easing: Easing.out(Easing.cubic),
+        });
+        // Tiny per-character rotation jitter on arrival — deterministic so
+        // each run of the same text looks identical across episodes.
+        const seeded = (i * 9301 + 49297) % 233280;
+        const jitterRad = ((seeded / 233280) - 0.5) * 0.12 * (1 - progress);
+        if (opacity <= 0.01) return null;
+        return (
+          <Text
+            key={`kc-${i}`}
+            position={[charLocalX, position[1] + dropY, position[2]]}
+            rotation={[0, 0, jitterRad]}
+            fontSize={scaledFontSize}
+            color={color}
+            anchorX="center"
+            anchorY="middle"
+            fontWeight={800}
+            fillOpacity={opacity}
+            letterSpacing={-0.01}
+          >
+            {ch}
+          </Text>
+        );
+      })}
     </group>
   );
 };

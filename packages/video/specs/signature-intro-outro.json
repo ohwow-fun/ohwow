@@ -1,0 +1,74 @@
+{
+  "id": "signature-intro-outro",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": { "bg": "#0a1020", "text": "#f4f7fb", "accent": "#e3b58a" },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "voiceovers": [],
+  "transitions": [{ "kind": "fade", "durationInFrames": 8 }, { "kind": "fade", "durationInFrames": 10 }],
+  "scenes": [
+    {
+      "id": "cold-open",
+      "kind": "r3f-scene",
+      "durationInFrames": 60,
+      "params": {
+        "background": "#06080f",
+        "environmentPreset": "night",
+        "camera": { "position": [0, 0, 8], "fov": 40 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.logo-reveal", "params": { "size": 3.0, "particleCount": 160, "durationInFrames": 60 } }
+        ]
+      }
+    },
+    {
+      "id": "intro",
+      "kind": "r3f-scene",
+      "durationInFrames": 180,
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": null,
+        "camera": { "position": [0, 0.2, 9], "fov": 40 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.tuning-rings", "params": { "radius": 2.8, "gap": 1.0, "thickness": 0.02, "innerSpeed": 0.12, "outerSpeed": -0.08, "opacity": 0.55, "depthOffset": -1.8 } },
+          { "primitive": "r3f.particle-cloud", "params": { "count": 220, "color": "#e3b58a", "spread": 9, "size": 0.28 } },
+          { "primitive": "r3f.glass-panel", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "width": 8.8, "height": 3.0, "kineticType": true, "kineticDelayFrames": 6, "kineticStaggerFrames": 4 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.1, 2.3, 0], "size": 0.7, "opacity": 0.9 } }
+        ]
+      }
+    },
+    {
+      "id": "outro",
+      "kind": "r3f-scene",
+      "durationInFrames": 180,
+      "params": {
+        "background": "#0a1020",
+        "environmentPreset": null,
+        "camera": { "position": [0, 0.2, 9], "fov": 40 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.tuning-rings", "params": { "radius": 2.8, "gap": 1.0, "thickness": 0.02, "innerSpeed": -0.08, "outerSpeed": 0.12, "opacity": 0.55, "depthOffset": -1.8 } },
+          { "primitive": "r3f.ribbon-trail", "params": { "color": "#9ec7ff", "thickness": 0.06 } },
+          { "primitive": "r3f.glass-panel", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch Mistral's response", "width": 9.2, "height": 3.0, "kineticType": true, "kineticDelayFrames": 4, "kineticStaggerFrames": 4 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.1, 2.3, 0], "size": 0.7, "opacity": 0.9 } }
+        ]
+      }
+    }
+  ]
+}
