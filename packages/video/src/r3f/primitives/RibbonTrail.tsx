@@ -25,12 +25,16 @@ interface RibbonTrailProps {
   segments?: number;
 }
 
+// Default path keeps the ribbon entirely BEHIND z=0 so it sits as a
+// backdrop texture rather than crossing in front of foreground panels /
+// sculptures. Scenes that want the ribbon to weave around a primitive
+// can override `path` with their own z-range.
 const DEFAULT_PATH: Array<[number, number, number]> = [
-  [-5, -1.5, -1],
-  [-2.5, 0.8, 0.5],
-  [0, -0.4, -0.6],
-  [2.5, 0.9, 0.6],
-  [5, -0.8, -0.2],
+  [-5, -1.5, -2.5],
+  [-2.5, 0.8, -1.2],
+  [0, -0.4, -2.0],
+  [2.5, 0.9, -1.2],
+  [5, -0.8, -2.5],
 ];
 
 export const RibbonTrail: React.FC<RibbonTrailProps> = ({

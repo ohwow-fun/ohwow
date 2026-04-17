@@ -42,7 +42,11 @@ const CardMesh: React.FC<{
   label: string;
   value?: string;
   accentColor: string;
-}> = ({ position, tint, brightness, label, value, accentColor }) => {
+  /** Text color for the label + value. Caller must pick contrast against tint. */
+  foreground: string;
+  /** Outline color that survives against either dark or light card. */
+  outline: string;
+}> = ({ position, tint, brightness, label, value, accentColor, foreground, outline }) => {
   return (
     <group position={position}>
       {/* Card body — tall rounded box */}
@@ -61,12 +65,12 @@ const CardMesh: React.FC<{
         <Text
           position={[0, 0.3, 0.08]}
           fontSize={0.8}
-          color="#ffffff"
+          color={foreground}
           anchorX="center"
           anchorY="middle"
           fontWeight={800}
           outlineWidth={0.015}
-          outlineColor="#0a1629"
+          outlineColor={outline}
         >
           {value}
         </Text>
@@ -75,12 +79,15 @@ const CardMesh: React.FC<{
       {/* Label — smaller text below */}
       <Text
         position={[0, value ? -0.6 : 0, 0.08]}
-        fontSize={0.3}
-        color="#c8d4e8"
+        fontSize={0.42}
+        color={foreground}
         anchorX="center"
         anchorY="middle"
         maxWidth={2.1}
         textAlign="center"
+        fontWeight={700}
+        outlineWidth={0.01}
+        outlineColor={outline}
       >
         {label}
       </Text>
@@ -139,7 +146,7 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         </Text>
       )}
 
-      {/* Left card: before */}
+      {/* Left card: before (dark tint → light foreground text) */}
       <CardMesh
         position={[-1.85, 0, 0]}
         tint="#2a333f"
@@ -147,6 +154,8 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         label={leftCard.label}
         value={leftCard.value}
         accentColor="#5e6d82"
+        foreground="#f4f7fb"
+        outline="#0a1629"
       />
 
       {/* Central divider: a thin luminous bar */}
@@ -159,7 +168,7 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         />
       </mesh>
 
-      {/* Right card: after */}
+      {/* Right card: after (light tint → dark foreground text for contrast) */}
       <CardMesh
         position={[1.85, 0, 0]}
         tint="#f4eadb"
@@ -167,6 +176,8 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         label={rightCard.label}
         value={rightCard.value}
         accentColor="#f0c89b"
+        foreground="#0a1629"
+        outline="#f4eadb"
       />
     </group>
   );

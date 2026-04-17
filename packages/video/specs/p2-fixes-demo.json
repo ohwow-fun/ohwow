@@ -1,0 +1,64 @@
+{
+  "id": "p2-fixes-demo",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": { "bg": "#0a1020", "text": "#f4f7fb", "accent": "#e3b58a" },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "voiceovers": [],
+  "transitions": [{ "kind": "none" }, { "kind": "none" }, { "kind": "none" }],
+  "scenes": [
+    {
+      "id": "fix-particle-cloud",
+      "durationInFrames": 120,
+      "narration": "Warm particle cloud backdrop.",
+      "motion_beats": [
+        { "primitive": "r3f.particle-cloud", "params": { "count": 600, "color": "#e3b58a", "spread": 7 } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.2, 8], "fov": 45 }, "motionProfile": "asmr" }
+    },
+    {
+      "id": "fix-glass-panel",
+      "durationInFrames": 120,
+      "narration": "Glass panel without marina photo leak.",
+      "motion_beats": [
+        { "primitive": "r3f.particle-cloud", "params": { "count": 220, "color": "#e3b58a", "spread": 9 } },
+        { "primitive": "r3f.glass-panel", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "width": 9, "height": 3.2 } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.4, 10], "fov": 40 }, "motionProfile": "asmr" }
+    },
+    {
+      "id": "fix-versus-cards",
+      "durationInFrames": 120,
+      "narration": "Versus cards with readable right side.",
+      "motion_beats": [
+        { "primitive": "r3f.versus-cards", "params": { "left": { "label": "ELEVENLABS" }, "right": { "label": "VOXTRAL" } } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.2, 8], "fov": 42 }, "motionProfile": "asmr" }
+    },
+    {
+      "id": "fix-ribbon-behind-glass",
+      "durationInFrames": 120,
+      "narration": "Ribbon sits behind the glass not in front.",
+      "motion_beats": [
+        { "primitive": "r3f.ribbon-trail", "params": { "color": "#9ec7ff", "thickness": 0.08 } },
+        { "primitive": "r3f.glass-panel", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch response", "width": 9.5, "height": 3.2 } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.4, 10], "fov": 40 }, "motionProfile": "asmr" }
+    }
+  ]
+}

@@ -77,32 +77,37 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
     <group position={[position[0], position[1] + yFloat, position[2]]} rotation={rotation}>
       {/* Frosted contrast band BEHIND the glass — sits just behind the
           glass front face, gives the text something solid to read
-          against instead of pure HDRI transmission. */}
+          against instead of HDRI transmission. Nearly opaque so the
+          env map's marina/studio imagery doesn't bleed through onto
+          the caption area. */}
       <mesh position={[0, 0, -depth * 0.25]}>
         <planeGeometry args={[width * 0.96, bandHeight]} />
         <meshStandardMaterial
           color={tint}
-          roughness={0.4}
-          metalness={0.15}
+          roughness={0.5}
+          metalness={0.1}
           transparent
-          opacity={0.82}
+          opacity={0.97}
         />
       </mesh>
 
-      {/* The glass slab itself */}
+      {/* The glass slab itself. transmission dialed DOWN (0.7 → 0.38)
+          so we still get the caustic-y glass character for edges but
+          the HDRI imagery doesn't render as a literal background
+          photo through the center. */}
       <mesh>
         <boxGeometry args={[width, height, depth]} />
         <MeshTransmissionMaterial
           backside
           samples={4}
           resolution={256}
-          transmission={0.7}
-          roughness={0.12}
+          transmission={0.38}
+          roughness={0.18}
           thickness={0.5}
           ior={1.45}
           chromaticAberration={0.015}
           anisotropy={0.08}
-          distortion={0.1}
+          distortion={0.08}
           distortionScale={0.3}
           temporalDistortion={0.01}
           clearcoat={0.85}

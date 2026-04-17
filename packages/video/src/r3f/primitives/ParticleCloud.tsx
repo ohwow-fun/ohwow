@@ -35,27 +35,61 @@ function seededRandom(seed: number): () => number {
   };
 }
 
+/**
+ * Build a soft radial-gradient sprite on the fly. Each particle renders
+ * as this sprite instead of a hard square pixel, so the cloud reads as
+ * warm, glowing mist rather than a pixelated starfield.
+ *
+ * Cached in module scope so every scene shares one texture.
+ */
+let _softSpriteTexture: THREE.CanvasTexture | null = null;
+function getSoftSprite(): THREE.CanvasTexture {
+  if (_softSpriteTexture) return _softSpriteTexture;
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, "rgba(255,255,255,1)");
+    grad.addColorStop(0.35, "rgba(255,255,255,0.65)");
+    grad.addColorStop(0.7, "rgba(255,255,255,0.15)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+  }
+  _softSpriteTexture = new THREE.CanvasTexture(canvas);
+  _softSpriteTexture.needsUpdate = true;
+  return _softSpriteTexture;
+}
+
 export const ParticleCloud: React.FC<ParticleCloudProps> = ({
-  count = 800,
+  count = 400,
   spread = 6,
   color = "#f4eadb",
-  size = 0.04,
+  // Much larger default — starfield dots were ~0.04 which renders as hard
+  // pixels. Big, soft, sparse reads as warm ASMR mist, not a star map.
+  size = 0.35,
   swirlSpeed = 0.08,
   seed = 1,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Generate deterministic particle positions once.
+  // Generate deterministic particle positions once. We weight the radial
+  // distribution so particles cluster gently toward the center with
+  // softer density at the edges — feels less uniform/starfield-y.
   const positions = useMemo(() => {
     const arr = new Float32Array(count * 3);
     const rand = seededRandom(seed);
     for (let i = 0; i < count; i++) {
-      // Uniform distribution in a cube; slightly biased toward the camera
-      // via a z-bias so foreground particles read larger.
-      arr[i * 3 + 0] = (rand() * 2 - 1) * spread;
-      arr[i * 3 + 1] = (rand() * 2 - 1) * spread * 0.7;
-      arr[i * 3 + 2] = (rand() * 2 - 1) * spread;
+      // Gaussian-ish via pair-sum; gives density fall-off from center.
+      const gx = ((rand() + rand() + rand()) / 3 - 0.5) * 2;
+      const gy = ((rand() + rand() + rand()) / 3 - 0.5) * 2;
+      const gz = ((rand() + rand() + rand()) / 3 - 0.5) * 2;
+      arr[i * 3 + 0] = gx * spread;
+      arr[i * 3 + 1] = gy * spread * 0.7;
+      arr[i * 3 + 2] = gz * spread;
     }
     return arr;
   }, [count, spread, seed]);
@@ -66,6 +100,8 @@ export const ParticleCloud: React.FC<ParticleCloudProps> = ({
   // Slow swirl around Y axis — deterministic per-frame.
   const t = frame / fps;
   const rotY = t * swirlSpeed;
+
+  const sprite = useMemo(() => getSoftSprite(), []);
 
   return (
     <group ref={groupRef} rotation={[0, rotY, 0]}>
@@ -87,6 +123,7 @@ export const ParticleCloud: React.FC<ParticleCloudProps> = ({
           opacity={0.85}
           depthWrite={false}
           blending={THREE.AdditiveBlending}
+          map={sprite}
         />
       </points>
     </group>
