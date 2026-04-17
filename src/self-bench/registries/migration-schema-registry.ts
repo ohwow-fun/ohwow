@@ -109,6 +109,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '133-posted-log.sql', expectedTables: ['posted_log'] },
   { migrationFile: '134-lift-measurements.sql', expectedTables: ['lift_measurements'] },
   { migrationFile: '135-calendar-email.sql', expectedTables: ['calendar_accounts', 'calendar_events', 'email_accounts', 'email_messages', 'email_drafts'] },
+  { migrationFile: '135-x-post-drafts.sql', expectedTables: ['x_post_drafts'] },
   { migrationFile: '136-deals-pipeline.sql', expectedTables: ['deal_stages', 'deals', 'deal_activities'] },
   { migrationFile: '137-documents.sql', expectedTables: ['document_templates', 'documents'] },
   { migrationFile: '138-support-tickets.sql', expectedTables: ['support_tickets', 'ticket_comments', 'analytics_snapshots'] },
