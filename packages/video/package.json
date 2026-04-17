@@ -10,7 +10,8 @@
     "render": "remotion render src/index.ts SpecDriven",
     "render:demo": "remotion render src/index.ts SpecDriven out/ohwow-demo.mp4 --props=./specs/ohwow-demo.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:catalog": "tsx scripts/gen-catalog.cts"
   },
   "dependencies": {
     "@remotion/animation-utils": "^4.0.445",
