@@ -190,6 +190,39 @@ when they're failing tests.
   (split, outcome, winner) is the biggest remaining structural gap
   (`Phase 2`).
 - x-authors-to-crm classifier + CRM handoff stay tier-3.
+- **Live state note:** 69 experiments are missing from the roadmap
+  (e.g., `content-cadence-tuner`, `daily-surprise-digest`,
+  `dashboard-copy`, `deepseek-deepseek-v3-2-latency`,
+  `deliverable-action-sentinel`, `device-audit`,
+  `error-classification-fuzz`, `experiment-proposal-generator`,
+  `findings-gc`, `format-duration-fuzz`, `git-velocity`,
+  `google-gemini-2-5-flash-latency`,
+  `google-gemini-3-1-pro-preview-latency`, `handler-schema-drift`,
+  `intervention-audit`, `ledger-health`, `list-completeness-summary`,
+  `list-handlers-fuzz`, `loop-cadence-probe`, `mig-smoke-1776324117308`,
+  `mig-smoke-1776428209741`, `migration-drift-sentinel`,
+  `migration-schema-probe`, `model-health`, `next-step-dispatcher`,
+  `observation-probe`, `ops-pulse`, `outreach-copy-fuzz`,
+  `patch-loop-health`, `prose-invariant-drift`, `provider-availability`,
+  `pseudo-rgb-d-slam-observation-drift`, `qwen-qwen3-5-35b-a3b-latency`,
+  `reasoning-alignment-drift-under-rl-fine-tuning`, `revenue-pulse`,
+  `rl-fine-tuning-reasoning-drift`, `roadmap-observer`,
+  `roadmap-shape-probe`, `scrape-diff-probe`, `sitemap-drift`,
+  `source-copy-lint`, `stagnation-fuzz`, `stale-task-cleanup`,
+  `stale-threshold-tuner`, `string-literal-patch`,
+  `subprocess-smoke-1776373235416`, `subprocess-smoke-1776389032972`,
+  `test-coverage-probe`, `throughput-daily`,
+  `tmpl-smoke-1776361920501`, `token-similarity-fuzz`,
+  `toolchain-lint`, `toolchain-test-probe`, `toolchain-tests`,
+  `toolchain-typecheck`, `trigger-stability`,
+  `unforgettable-generalization-drift-probe`,
+  `unforgettable-generalization-signal`,
+  `unforgettable-generalization-signal-probe`, `unknown-latency`,
+  `vitest-health-probe`, `x-autonomy-ramp`,
+  `x-dm-dispatch-config-fuzz`, `x-dm-signals-rollup`,
+  `x-engagement-observer`, `x-ops-observer`, `x-shape-tuner`,
+  `xiaomi-mimo-v2-flash-latency`, `xiaomi-mimo-v2-pro-latency`).
+  These need to be integrated into the roadmap for full coverage.
 
 ## 3. Next Steps
 ### Phase 5d — ranker learns weights from lift distribution
