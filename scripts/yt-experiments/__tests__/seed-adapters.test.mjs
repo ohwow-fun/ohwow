@@ -115,21 +115,21 @@ describe("briefing seed adapter", () => {
       },
     ]);
     const pick = getSeedAdapter("briefing");
-    const seed = await pick({ workspace: WS, historyDays: 2 });
+    const seed = await pick({ workspace: WS, historyDays: 2, skipFallback: true });
     expect(seed).toBeNull();
   });
 
-  it("returns null when the bucket has no advancements rows", async () => {
+  it("returns null when the bucket has no advancements rows (fallback skipped)", async () => {
     const today = new Date().toISOString().slice(0, 10);
     seedHistory([
       { date: today, bucket: "hacks", headline: "tactical win", emerging_patterns: ["x"], highlights: [] },
     ]);
     const pick = getSeedAdapter("briefing");
-    const seed = await pick({ workspace: WS, historyDays: 2 });
+    const seed = await pick({ workspace: WS, historyDays: 2, skipFallback: true });
     expect(seed).toBeNull();
   });
 
-  it("dedupes across runs — same headline returns null on second pick", async () => {
+  it("dedupes across runs — same headline returns null on second pick (fallback skipped)", async () => {
     const today = new Date().toISOString().slice(0, 10);
     seedHistory([
       {
@@ -141,8 +141,8 @@ describe("briefing seed adapter", () => {
       },
     ]);
     const pick = getSeedAdapter("briefing");
-    const first = await pick({ workspace: WS, historyDays: 2 });
-    const second = await pick({ workspace: WS, historyDays: 2 });
+    const first = await pick({ workspace: WS, historyDays: 2, skipFallback: true });
+    const second = await pick({ workspace: WS, historyDays: 2, skipFallback: true });
     expect(first).not.toBeNull();
     expect(second).toBeNull();
   });

@@ -17,13 +17,47 @@ import {
   markSeen,
   hash,
 } from "./_common.mjs";
+import { researchViaOrchestrator } from "./_researcher-fallback.mjs";
+import { pickFromHackerNews } from "./_hn-fallback.mjs";
 
 const SERIES = "briefing";
 
-export async function pickSeed({ workspace, historyDays = 2 } = {}) {
-  const rows = loadHistory(workspace, historyDays);
-  if (!rows.length) return null;
+const RESEARCH_PROMPT = `Find the single most important EXTERNAL AI announcement from the last 48 hours that a time-poor founder or operator needs to know about.
 
+CRITICAL CONTEXT: You (the researcher) are part of OHWOW.FUN. The workspace's local knowledge base contains OHWOW's own documents (show bibles, product marketing, etc.). Those are NOT news. Ignore any local-knowledge result that mentions OHWOW, local-first runtime, multi-workspace daemon, or any variant of our own product. We want news ABOUT THE AI INDUSTRY, not about ourselves. The answer must be about an external company, lab, or project — NEVER OHWOW.
+
+
+HARD RULES:
+1. Your ONLY deliverable is a single JSON object. No prose, no questions, no offers to "continue checking". Return the JSON and stop.
+2. Every field must be grounded in a source you actually fetched. If scrape_search / scrape_url returns nothing usable, your JSON is {"actor": null} — nothing else.
+3. Do NOT fabricate pricing, dates, model versions, or URLs. If the search tools didn't return real data, return {"actor": null}.
+4. A source URL is REQUIRED. If you can't produce a URL you verified via scrape_url, return {"actor": null}.
+
+CRITERIA for a qualifying story:
+- Named actor: a specific company, lab, open-source project, or research group (not "the AI industry")
+- Specific artifact: a named model version, product, paper, dataset, or regulation (not a vague trend)
+- Real consequence: something that changes a builder's or operator's calculations this week
+- Verifiably happened within the last 48 hours
+
+SOURCE PRIORITY: official blog posts (Anthropic, OpenAI, Google DeepMind, Mistral, Meta AI, xAI), GitHub release pages for major OSS AI projects, arXiv for landmark papers, Hacker News front page (verify via the linked source, not the HN comments), regulatory dockets. Prefer 2+ independent citations.
+
+AVOID: rumors, speculation, stories older than 48 hours, generic think-pieces, vendor marketing dressed as news, anything reducing to "AI is moving fast."
+
+OUTPUT SCHEMA (return exactly this shape):
+{
+  "actor": "Company/Lab/Project name" | null,
+  "artifact": "Specific thing (e.g., 'Claude 4.7 Opus', 'gpt-4.5-preview', 'EU AI Act Article 6')",
+  "summary": "2-3 sentences: what shipped, what's new, why it matters to builders",
+  "published_at": "ISO-8601 date of the announcement (YYYY-MM-DD)",
+  "citations": [
+    {"url": "https://...", "text": "one-line description of what this source proves"}
+  ]
+}
+
+If no qualifying story exists, return {"actor": null} and stop.`;
+
+export async function pickSeed({ workspace, historyDays = 2, skipFallback = false } = {}) {
+  const rows = loadHistory(workspace, historyDays);
   const seen = loadSeen(workspace, SERIES);
 
   const candidates = rows
@@ -36,7 +70,35 @@ export async function pickSeed({ workspace, historyDays = 2 } = {}) {
     }))
     .filter((c) => !seen.has(c.h));
 
-  if (!candidates.length) return null;
+  // Primary source (x-intel) empty → two-tier fallback:
+  //   Tier 1: Hacker News direct poll + LLM synthesis. Fast (~10s), no
+  //     agent-runtime dependency, no Anthropic key required. Covers 80%
+  //     of "what's the big AI news right now" because HN's front page is
+  //     highly correlated with what matters to builders.
+  //   Tier 2: orchestrator deep_research. Only useful when an Anthropic
+  //     key is configured (deep_research's web search is gated on it);
+  //     otherwise it falls through to local knowledge which isn't news.
+  //     Kept as a last resort for when HN misses.
+  if (!candidates.length) {
+    if (skipFallback) return null;
+
+    console.log(`[briefing-seed] x-intel empty — trying Hacker News fallback`);
+    let seed = await pickFromHackerNews({ maxAgeHours: 48, seriesSlug: SERIES });
+
+    if (!seed) {
+      console.log(`[briefing-seed] HN produced no seed — trying orchestrator deep_research`);
+      seed = await researchViaOrchestrator({
+        researchPrompt: RESEARCH_PROMPT,
+        seriesSlug: SERIES,
+      });
+    }
+
+    if (!seed) return null;
+    // Mark the fallback seed as seen so we don't re-pick the same story
+    // on the next compose run today.
+    markSeen(workspace, SERIES, hash(seed.title), seed.title);
+    return seed;
+  }
 
   // Prefer today's row over older rows. x-intel writes dated rows; newest = most operator-relevant.
   candidates.sort((a, b) => (b.row.date > a.row.date ? 1 : b.row.date < a.row.date ? -1 : 0));
