@@ -150,6 +150,15 @@ export const ShellScriptConfigSchema = z.object({
   workspace_slug: z.string().optional(),
 });
 
+export const RunInternalConfigSchema = z.object({
+  /** Name of the handler to invoke. Must be registered via registerInternalHandler() on daemon boot. */
+  handler_name: z.string().min(1),
+  /** Arbitrary config payload passed to the handler. */
+  config: z.record(z.string(), z.unknown()).optional(),
+  /** Wall-clock timeout in seconds. Default inherits from action-executor STEP_TIMEOUT_MS. */
+  timeout_seconds: z.number().int().positive().optional(),
+});
+
 // ============================================================================
 // DERIVED TYPES
 // ============================================================================
@@ -171,6 +180,7 @@ export type AgentPromptConfig = z.infer<typeof AgentPromptConfigSchema>;
 export type A2ACallConfig = z.infer<typeof A2ACallConfigSchema>;
 export type GenerateChartConfig = z.infer<typeof GenerateChartConfigSchema>;
 export type ShellScriptConfig = z.infer<typeof ShellScriptConfigSchema>;
+export type RunInternalConfig = z.infer<typeof RunInternalConfigSchema>;
 
 // ============================================================================
 // ACTION CONFIG MAP
@@ -195,6 +205,7 @@ export interface ActionConfigMap {
   a2a_call: A2ACallConfig;
   generate_chart: GenerateChartConfig;
   shell_script: ShellScriptConfig;
+  run_internal: RunInternalConfig;
 }
 
 export type ActionType = keyof ActionConfigMap;
@@ -218,4 +229,5 @@ export const ACTION_CONFIG_SCHEMAS: Record<ActionType, z.ZodType> = {
   a2a_call: A2ACallConfigSchema,
   generate_chart: GenerateChartConfigSchema,
   shell_script: ShellScriptConfigSchema,
+  run_internal: RunInternalConfigSchema,
 };

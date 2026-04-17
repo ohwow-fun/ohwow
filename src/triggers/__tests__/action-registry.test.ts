@@ -49,7 +49,7 @@ describe('createDefaultRegistry', () => {
       'webhook_forward', 'transform_data', 'conditional', 'run_workflow',
       'create_task', 'send_notification', 'fill_pdf', 'save_attachment',
       'take_screenshot', 'agent_prompt', 'a2a_call', 'generate_chart',
-      'shell_script',
+      'shell_script', 'run_internal',
     ];
 
     for (const type of expectedTypes) {
