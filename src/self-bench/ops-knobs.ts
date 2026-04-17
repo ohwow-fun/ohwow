@@ -98,10 +98,17 @@ export const OPS_KNOBS: readonly OpsKnob[] = [
   },
   {
     key: 'burn.daily_cap_cents',
-    description: 'Hard cap on daily LLM spend. Null = no cap currently enforced (placeholder for future budget guard).',
+    description: 'Hard cap on daily LLM spend. Null = no cap; env var OHWOW_BURN_DAILY_CAP_CENTS or runtime-config burn.daily_cap_cents activates the BurnGuardExperiment throttle.',
     unit: 'cents',
     saneRange: [1000, 50000],
-    read: async () => null,
+    read: async () => {
+      const env = process.env.OHWOW_BURN_DAILY_CAP_CENTS;
+      if (env && env.trim() !== '') {
+        const parsed = Number(env);
+        if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+      }
+      return null;
+    },
   },
 ];
 

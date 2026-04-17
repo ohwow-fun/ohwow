@@ -137,11 +137,15 @@ interface ProposalCandidate {
  * always on — the money telos shouldn't need per-workspace wiring.
  */
 export function rankProposals(proposals: ProposalCandidate[]): {
-  picked: ProposalCandidate;
+  picked: ProposalCandidate | null;
   rationale: NonNullable<AuthorEvidence['sorting_rationale']>;
 } {
   const priorityList = getRuntimeConfig<string[]>('strategy.priority_experiments', []);
   const roadmapList = getRuntimeConfig<string[]>('strategy.roadmap_priorities', []);
+  // Burn guard: when BurnGuardExperiment flips burn.above_cap, we
+  // shed the fifo bucket entirely. Priority / roadmap / revenue
+  // buckets keep running so money-adjacent work is preserved.
+  const throttleFifo = getRuntimeConfig<boolean>('burn.above_cap', false) === true;
 
   const priorityBucket: ProposalCandidate[] = [];
   const roadmapBucket: ProposalCandidate[] = [];
@@ -211,6 +215,15 @@ export function rankProposals(proposals: ProposalCandidate[]): {
       },
     };
   }
+  if (throttleFifo) {
+    // Cap breached and nothing in the money buckets. Skip fifo
+    // entirely; the caller handles the null pick by emitting a
+    // pass finding noting the throttle rather than authoring.
+    return {
+      picked: null,
+      rationale: { bucket: 'fifo', matched: 'throttled:burn.above_cap', ...counts },
+    };
+  }
   return {
     picked: fifo[0],
     rationale: { bucket: 'fifo', matched: null, ...counts },
@@ -253,10 +266,26 @@ export class ExperimentAuthorExperiment implements Experiment {
       };
     }
 
-    // Rank by strategist + roadmap signals, falling back to FIFO.
-    // See rankProposals() above — a workspace with no strategy wired
-    // degrades cleanly to the pre-ranker FIFO behaviour.
+    // Rank by strategist + roadmap + revenue signals, falling back
+    // to FIFO. See rankProposals() above. When burn.above_cap is
+    // true and all money buckets are empty, picked === null —
+    // intentional throttle: no authoring this tick, nothing to claim.
     const { picked, rationale } = rankProposals(proposals);
+
+    if (picked === null) {
+      const throttledEvidence: AuthorEvidence = {
+        scanned_proposals: proposals.length,
+        unclaimed_count: proposals.length,
+        selected_brief: null,
+        commit_result: null,
+        sorting_rationale: rationale,
+      };
+      return {
+        subject: null,
+        summary: 'author throttled by burn-guard (burn.above_cap=true); no priority/roadmap/revenue work available this tick',
+        evidence: throttledEvidence,
+      };
+    }
 
     const evidence: AuthorEvidence = {
       scanned_proposals: proposals.length,

@@ -294,7 +294,7 @@ describe('rankProposals — revenue bucket', () => {
     const plain = makeCandidate('plain-proposal', '2026-04-14T09:00:00Z');
     const revenue = makeCandidate('outreach-reply-rate-probe', '2026-04-14T12:00:00Z');
     const { picked, rationale } = rankProposals([plain, revenue]);
-    expect(picked.brief.slug).toBe('outreach-reply-rate-probe');
+    expect(picked?.brief.slug).toBe('outreach-reply-rate-probe');
     expect(rationale.bucket).toBe('revenue');
     expect(rationale.matched).toBe('outreach');
     expect(rationale.revenue_count).toBe(1);
@@ -306,7 +306,7 @@ describe('rankProposals — revenue bucket', () => {
     const priority = makeCandidate('must-ship-first', '2026-04-14T14:00:00Z');
     const revenue = makeCandidate('outreach-tuner', '2026-04-14T09:00:00Z');
     const { picked, rationale } = rankProposals([priority, revenue]);
-    expect(picked.brief.slug).toBe('must-ship-first');
+    expect(picked?.brief.slug).toBe('must-ship-first');
     expect(rationale.bucket).toBe('priority');
   });
 
@@ -315,7 +315,7 @@ describe('rankProposals — revenue bucket', () => {
     const roadmap = makeCandidate('x-ops-tuner', '2026-04-14T14:00:00Z');
     const revenue = makeCandidate('outreach-tuner', '2026-04-14T09:00:00Z');
     const { picked, rationale } = rankProposals([roadmap, revenue]);
-    expect(picked.brief.slug).toBe('x-ops-tuner');
+    expect(picked?.brief.slug).toBe('x-ops-tuner');
     expect(rationale.bucket).toBe('roadmap');
   });
 
@@ -325,7 +325,7 @@ describe('rankProposals — revenue bucket', () => {
     });
     const plain = makeCandidate('plain-proposal', '2026-04-14T08:00:00Z');
     const { picked, rationale } = rankProposals([byHypothesis, plain]);
-    expect(picked.brief.slug).toBe('generic-probe');
+    expect(picked?.brief.slug).toBe('generic-probe');
     expect(rationale.bucket).toBe('revenue');
   });
 
