@@ -28,6 +28,7 @@ import { registerDocumentTools } from './tools/documents.js';
 import { registerTicketTools } from './tools/tickets.js';
 import { registerBookkeepingTools } from './tools/bookkeeping.js';
 import { registerXDraftTools } from './tools/x-drafts.js';
+import { registerApprovalTools } from './tools/approvals.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -53,4 +54,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerTicketTools(server, client);
   registerBookkeepingTools(server, client);
   registerXDraftTools(server, client);
+  registerApprovalTools(server, client);
 }
