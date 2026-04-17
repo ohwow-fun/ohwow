@@ -254,7 +254,7 @@ export async function scanXPostsViaBrowser(input: ScanXInput): Promise<ScanXResu
     };
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) {
     return {
       success: false,
@@ -453,7 +453,7 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     }
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) {
     return {
       success: false,

@@ -61,6 +61,7 @@ import {
   openProfileWindow,
   findExistingTabForHost,
   closeTabById,
+  markTabOwned,
 } from '../browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
@@ -154,16 +155,20 @@ export const xPostingExecutor: ToolExecutor = {
       || profiles[0];
 
     // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
-    // Reuse an existing x.com tab when one is already open (either from a
-    // previous cadence fire or the user). Only call openProfileWindow — which
-    // unconditionally creates a new tab — when no reusable tab exists.
-    // `freshTargetId` is set ONLY when we opened a new tab; the finally block
-    // closes it after compose so tabs don't leak across cadence fires.
+    // Reuse an existing x.com tab when one is already open (from a prior
+    // cadence fire). DM tools can reuse any tab the operator has open so
+    // they land in the right conversation; compose/scan/reply tools
+    // restrict reuse to agent-owned tabs so we never hijack a tab the
+    // human is actively using. `freshTargetId` is set ONLY when we
+    // opened a new tab; the finally block closes it after compose so
+    // tabs don't leak across fires.
+    const dmToolNames = new Set(['x_send_dm', 'x_list_dms', 'x_delete_reply', 'x_delete_tweet']);
+    const ownershipMode = dmToolNames.has(toolName) ? 'any' : 'ours';
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
       await ensureDebugChrome({ preferredProfile: target.directory });
-      const existing = await findExistingTabForHost('x.com');
+      const existing = await findExistingTabForHost('x.com', { ownershipMode });
       if (existing) {
         expectedBrowserContextId = existing.browserContextId ?? undefined;
       } else {
@@ -173,6 +178,7 @@ export const xPostingExecutor: ToolExecutor = {
         });
         expectedBrowserContextId = opened.browserContextId ?? undefined;
         freshTargetId = opened.targetId;
+        markTabOwned(opened.targetId);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

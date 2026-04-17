@@ -58,7 +58,8 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
-import { confirmPostLanded, typeIntoRichTextbox } from './social-cdp-helpers.js';
+import { markTabOwned, isTabOwned, type TabOwnershipMode } from '../../execution/browser/chrome-profile-router.js';
+import { confirmPostLanded, typeIntoRichTextbox, tagTabAsOwned } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -361,8 +362,17 @@ export type CdpPage = RawCdpPage;
  * one — callers surface the error to the operator rather than posting
  * from the wrong session.
  */
-export async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise<CdpPage | null> {
+export async function getCdpPage(
+  urlHint?: string,
+  expectedContextId?: string,
+  ownershipMode: TabOwnershipMode = 'any',
+): Promise<CdpPage | null> {
   let browser: RawCdpBrowser | null = null;
+  // 'ours' hides tabs we didn't create, so the human's x.com sessions
+  // stay fully off-limits to the caller. 'any' is the legacy behavior
+  // (compose/scan inherits 'ours' through caller threading; DM tools
+  // keep 'any' so operator-opened DM conversations still work).
+  const isUsable = (tid: string) => ownershipMode === 'any' || isTabOwned(tid);
   try {
     browser = await RawCdpBrowser.connect(CDP_URL, 5000);
     const targets = await browser.getTargets();
@@ -386,7 +396,7 @@ export async function getCdpPage(urlHint?: string, expectedContextId?: string): 
       && !u.includes('/compose/articles');
 
     if (expectedContextId) {
-      const inContext = pageTargets.filter((t) => t.browserContextId === expectedContextId);
+      const inContext = pageTargets.filter((t) => t.browserContextId === expectedContextId && isUsable(t.targetId));
       // Prefer clean tabs first; fall through to specialty tabs only if necessary.
       let target = urlHint ? inContext.find((t) => t.url.includes(urlHint) && isCleanXUrl(t.url)) : undefined;
       if (!target) target = inContext.find((t) => isCleanXUrl(t.url));
@@ -397,12 +407,14 @@ export async function getCdpPage(urlHint?: string, expectedContextId?: string): 
       if (!target) {
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, 'https://x.com/home');
+          markTabOwned(newTargetId);
           logger.info(
-            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8) },
+            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             '[x-posting] opened new x.com tab in target profile context',
           );
           const page = await browser.attachToPage(newTargetId);
           await page.installUnloadEscapes();
+          await tagTabAsOwned(page);
           return page;
         } catch (err) {
           logger.warn(
@@ -424,17 +436,18 @@ export async function getCdpPage(urlHint?: string, expectedContextId?: string): 
     }
 
     // Fallback: no context hint. Apply the same clean-tab preference.
+    const candidates = pageTargets.filter((t) => isUsable(t.targetId));
     let target = urlHint
-      ? pageTargets.find((t) => t.url.includes(urlHint) && isCleanXUrl(t.url))
+      ? candidates.find((t) => t.url.includes(urlHint) && isCleanXUrl(t.url))
       : undefined;
-    if (!target) target = pageTargets.find((t) => isCleanXUrl(t.url));
-    if (!target) target = urlHint ? pageTargets.find((t) => t.url.includes(urlHint)) : undefined;
-    if (!target) target = pageTargets.find((t) => t.url.startsWith('https://x.com'));
-    if (!target) target = pageTargets.find((t) => t.url.startsWith('https://twitter.com'));
+    if (!target) target = candidates.find((t) => isCleanXUrl(t.url));
+    if (!target) target = urlHint ? candidates.find((t) => t.url.includes(urlHint)) : undefined;
+    if (!target) target = candidates.find((t) => t.url.startsWith('https://x.com'));
+    if (!target) target = candidates.find((t) => t.url.startsWith('https://twitter.com'));
     if (!target) {
       logger.warn(
-        { pageUrls: pageTargets.slice(0, 6).map((t) => t.url) },
-        '[x-posting] no x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',
+        { pageUrls: pageTargets.slice(0, 6).map((t) => t.url), ownershipMode },
+        '[x-posting] no usable x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',
       );
       browser.close();
       return null;
@@ -662,7 +675,7 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     };
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no x.com tab open in any profile window, or debug Chrome is down. Open x.com in the target profile window and retry.' };
 
   try {
@@ -864,7 +877,7 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     }
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
@@ -981,7 +994,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   if (!title) return { success: false, message: 'title is required' };
   if (!body || body.length < 100) return { success: false, message: 'body must be at least 100 chars for an article' };
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {

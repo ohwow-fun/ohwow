@@ -161,6 +161,8 @@ async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHan
     fallbackUrl: THREADS_HOME,
     expectedContextId,
     logTag: LOG_TAG,
+    // Compose + reply paths must not touch a human's Threads tab.
+    ownershipMode: 'ours',
   });
 }
 

@@ -13,7 +13,24 @@
  */
 
 import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import { markTabOwned, isTabOwned, type TabOwnershipMode } from '../../execution/browser/chrome-profile-router.js';
 import { logger } from '../../lib/logger.js';
+
+/**
+ * Tag a tab as agent-owned at the DOM level. Sets window.name and
+ * sessionStorage so even if the in-memory registry is lost (daemon
+ * restart), the tab can be identified as ours on future inspection.
+ * Best-effort; swallows errors.
+ */
+export async function tagTabAsOwned(page: RawCdpPage): Promise<void> {
+  try {
+    await page.evaluate(`(() => {
+      try { window.name = 'ohwow-owned'; } catch {}
+      try { sessionStorage.setItem('ohwow:owned', '1'); } catch {}
+      return true;
+    })()`);
+  } catch { /* best effort */ }
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -52,8 +69,19 @@ export async function getCdpPageForPlatform(opts: {
   fallbackUrl: string;
   expectedContextId?: string;
   logTag: string;
+  /**
+   * Ownership gate: 'ours' filters reuse candidates to agent-owned tabs
+   * only (tabs registered via markTabOwned). Defaults to 'any' to keep
+   * existing callers working; compose/scan/reply paths should opt in
+   * to 'ours' so they never touch a tab the human is actively using.
+   */
+  ownershipMode?: TabOwnershipMode;
 }): Promise<CdpPageHandle | null> {
-  const { urlMatcher, fallbackUrl, expectedContextId, logTag } = opts;
+  const { urlMatcher, fallbackUrl, expectedContextId, logTag, ownershipMode = 'any' } = opts;
+  // Tabs we create during this call are auto-added to the ownership
+  // registry + DOM-tagged with window.name='ohwow-owned', so subsequent
+  // 'ours' lookups recognize them.
+  const isUsable = (targetId: string) => ownershipMode === 'any' || isTabOwned(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
     browser = await RawCdpBrowser.connect(CDP_URL, 5000);
@@ -67,17 +95,19 @@ export async function getCdpPageForPlatform(opts: {
 
     if (expectedContextId) {
       const inContext = pageTargets.filter((t) => t.browserContextId === expectedContextId);
-      const target = inContext.find((t) => urlMatcher(t.url));
+      const target = inContext.find((t) => urlMatcher(t.url) && isUsable(t.targetId));
 
       if (!target) {
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, fallbackUrl);
+          markTabOwned(newTargetId);
           logger.info(
-            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8) },
+            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             `[${logTag}] opened new tab in target profile context`,
           );
           const page = await browser.attachToPage(newTargetId);
           await page.installUnloadEscapes();
+          await tagTabAsOwned(page);
           return { page, created: true };
         } catch (err) {
           logger.warn(
@@ -99,10 +129,10 @@ export async function getCdpPageForPlatform(opts: {
     }
 
     // Fallback: URL-only heuristic
-    const target = pageTargets.find((t) => urlMatcher(t.url));
+    const target = pageTargets.find((t) => urlMatcher(t.url) && isUsable(t.targetId));
     if (!target) {
       logger.warn(
-        { pageUrls: pageTargets.slice(0, 6).map((t) => t.url) },
+        { pageUrls: pageTargets.slice(0, 6).map((t) => t.url), ownershipMode },
         `[${logTag}] no matching tab in CDP; refusing to hijack an unrelated tab`,
       );
       browser.close();

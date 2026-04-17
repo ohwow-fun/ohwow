@@ -27,6 +27,7 @@ import {
   openProfileWindow,
   findExistingTabForHost,
   closeTabById,
+  markTabOwned,
 } from '../browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
@@ -114,15 +115,17 @@ export const threadsPostingExecutor: ToolExecutor = {
       || profiles[0];
 
     // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
-    // Reuse an existing threads.com tab when one is already open. Only call
-    // openProfileWindow — which unconditionally creates a new tab — when no
-    // reusable tab exists. `freshTargetId` is set ONLY when we opened a new
-    // tab; the finally block closes it after compose so tabs don't leak.
+    // Restrict reuse to agent-owned tabs only (ownershipMode: 'ours') so
+    // we never hijack a threads.com tab the human is actively using.
+    // If no owned tab exists, openProfileWindow creates a fresh one and
+    // we mark it owned so subsequent ticks reuse it. `freshTargetId` is
+    // set ONLY when we opened the tab ourselves in THIS call; the
+    // finally block closes it after compose so tabs don't leak.
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
       await ensureDebugChrome({ preferredProfile: target.directory });
-      const existing = await findExistingTabForHost('threads.com');
+      const existing = await findExistingTabForHost('threads.com', { ownershipMode: 'ours' });
       if (existing) {
         expectedBrowserContextId = existing.browserContextId ?? undefined;
       } else {
@@ -132,6 +135,7 @@ export const threadsPostingExecutor: ToolExecutor = {
         });
         expectedBrowserContextId = opened.browserContextId ?? undefined;
         freshTargetId = opened.targetId;
+        markTabOwned(opened.targetId);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

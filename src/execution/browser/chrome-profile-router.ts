@@ -455,15 +455,24 @@ export async function connectAndPinCdpPage(
  */
 export async function findExistingTabForHost(
   hostMatch: string,
-  port: number = DEFAULT_CDP_PORT,
+  opts: { ownershipMode?: TabOwnershipMode; port?: number } = {},
 ): Promise<{ targetId: string; browserContextId: string | null } | null> {
+  const { ownershipMode = 'any', port = DEFAULT_CDP_PORT } = opts;
   let browser: RawCdpBrowser | null = null;
   try {
     browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
     const targets = await browser.getTargets();
     const needle = hostMatch.toLowerCase();
-    const match = targets.find((t) => t.type === 'page' && t.url.toLowerCase().includes(needle));
-    if (!match) return null;
+    // In 'ours' mode, only agent-owned tabs are candidates. A human who
+    // opens x.com/home in the same debug Chrome is invisible here — their
+    // targetId is never in the registry.
+    const matches = targets.filter((t) =>
+      t.type === 'page'
+      && t.url.toLowerCase().includes(needle)
+      && (ownershipMode === 'any' || isTabOwned(t.targetId)),
+    );
+    if (matches.length === 0) return null;
+    const [match] = matches;
     return { targetId: match.targetId, browserContextId: match.browserContextId };
   } catch {
     return null;
@@ -481,6 +490,7 @@ export async function closeTabById(
   targetId: string,
   port: number = DEFAULT_CDP_PORT,
 ): Promise<void> {
+  releaseTabOwnership(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
     browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
@@ -494,6 +504,58 @@ export async function closeTabById(
     try { browser?.close(); } catch { /* ignore */ }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Tab ownership registry — Layer 1 of shared-browser cooperation.
+// ---------------------------------------------------------------------------
+//
+// The human operator and the autonomous agents share the same debug Chrome
+// at :9222. Without ownership tracking, agents' `findExistingTabForHost`
+// calls return ANY matching tab — including ones the human is actively using
+// — and the compose/scan/reply flow clobbers those tabs with a navigation.
+//
+// This registry is the first defense: when we create a tab for agent use,
+// we add its targetId to `ownedTargets`. Tools that should never touch a
+// human's tab call `findExistingTabForHost(host, { ownershipMode: 'ours' })`
+// which filters to registry entries only. Tabs the human opened never enter
+// the registry and are therefore invisible to ownership-gated lookups.
+//
+// Lifetime: in-memory, per-daemon-process. A daemon restart clears the
+// registry — by design. After a restart, any pre-existing tab is treated
+// as potentially the human's (safer); new tabs opened by the fresh
+// daemon become ours from birth. The DOM-level marker (window.name set
+// to 'ohwow-owned' by callers) survives restart and could be used to
+// rehydrate the registry later, but we skip that for now: cheaper to
+// just open fresh tabs and let orphans age out.
+
+const ownedTargets = new Set<string>();
+
+/** Mark a targetId as agent-owned. Call this right after creating a tab. */
+export function markTabOwned(targetId: string): void {
+  ownedTargets.add(targetId);
+}
+
+/** Drop ownership — call this before closing a tab or when releasing it back. */
+export function releaseTabOwnership(targetId: string): void {
+  ownedTargets.delete(targetId);
+}
+
+/** True if the targetId is in the registry (i.e., we created this tab). */
+export function isTabOwned(targetId: string): boolean {
+  return ownedTargets.has(targetId);
+}
+
+/** Snapshot of all owned target IDs. Useful for diagnostics + dashboards. */
+export function listOwnedTargets(): string[] {
+  return Array.from(ownedTargets);
+}
+
+/** How strict the tab search should be about ownership. */
+export type TabOwnershipMode =
+  /** Only consider tabs we created (safe: never touches human tabs). */
+  | 'ours'
+  /** Accept any matching tab, regardless of ownership (legacy, DM tools). */
+  | 'any';
 
 // Re-export everything callers typically need so chrome-lifecycle stays
 // an implementation detail for most consumers.
