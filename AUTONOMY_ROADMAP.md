@@ -16,7 +16,7 @@ cosmetic and should not compete with money work for author-queue slots.
 
 ---
 
-## 1. Current System State (as of 2026-04-16T22:15Z, money-telos foundations landed)
+## 1. Current System State (as of 2026-04-17T04:00Z, money-telos foundations landed)
 
 ### Architecture Summary
 
@@ -147,7 +147,7 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-**Honest read of 2026-04-16T23:00Z (outcome loop live):**
+**Honest read of 2026-04-17T04:00Z (outcome loop live):**
 
 - **Outcome feedback is now wired end-to-end.** Every autonomous patch
   to a revenue-adjacent tier-2 file records a `lift_measurements` row at
@@ -311,8 +311,4 @@ _Maintained by RoadmapUpdaterExperiment from live loop state._
 - **canary-experiment** — tier-1: creates new files only
 - **classifier-stability** — tier-1: creates new files only
 - **contact-conversation-analyst** — tier-1: creates new files only
-- **content-cadence-loop-health** — tier-1: creates new files only
-- **content-cadence-tuner** — tier-1: creates new files only
-- **daily-surprise-digest** — tier-1: creates new files only
-- **dashboard-copy** — tier-1: creates new files only
-- **deepseek-deepseek-v3-2-latency** — tier-1: creates new files only
+- **content-cadence-loop-health** — tier-1:
