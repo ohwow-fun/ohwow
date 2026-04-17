@@ -44,6 +44,7 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
+import { parseSqliteTimestamp } from '../lib/sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { scanXPostsViaBrowser } from '../orchestrator/tools/x-reply.js';
 import { pickReplyTargets, tweetToCandidate } from '../orchestrator/tools/reply-target-selector.js';
@@ -339,7 +340,11 @@ export class XReplyScheduler {
       const rows = Array.isArray(data) ? data : [];
       const latest = rows.find((r) => r.source?.startsWith('reply_to:'));
       if (!latest) return null;
-      const last = Date.parse(latest.posted_at);
+      // parseSqliteTimestamp normalizes SQLite's no-TZ string to UTC.
+      // Raw Date.parse would treat it as local, flip the sign, and
+      // lock the cooldown indefinitely (observed 2026-04-17 at
+      // sinceLastSec=-15269).
+      const last = parseSqliteTimestamp(latest.posted_at);
       if (isNaN(last)) return null;
       return Math.floor((Date.now() - last) / 1000);
     } catch {

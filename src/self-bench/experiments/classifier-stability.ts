@@ -36,6 +36,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { logger } from '../../lib/logger.js';
+import { parseSqliteTimestamp } from '../../lib/sqlite-time.js';
 import {
   BusinessExperiment,
   type BusinessExperimentOptions,
@@ -173,7 +174,7 @@ export class ClassifierStabilityExperiment extends BusinessExperiment {
     const sinceMs = Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
     const inWindow = rows.filter((r) => {
       if (typeof r.handle !== 'string' || r.handle.length === 0) return false;
-      const ts = r.ts ? Date.parse(r.ts) : NaN;
+      const ts = r.ts ? parseSqliteTimestamp(r.ts) : NaN;
       return Number.isFinite(ts) && ts >= sinceMs;
     });
 

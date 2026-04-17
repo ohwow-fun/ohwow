@@ -20,6 +20,7 @@ import type {
   ProbeResult,
   Verdict,
 } from '../experiment-types.js';
+import { parseSqliteTimestamp } from '../../lib/sqlite-time.js';
 
 const HISTORY_LIMIT = 12;
 /** Staleness multiple on cadence.everyMs before we flag. */
@@ -75,12 +76,12 @@ export class LoopCadenceProbeExperiment implements Experiment {
     // just restarted and the long-cadence peer hasn't had a chance to
     // fire yet. That's not stale — that's cold. Suppress the flag.
     const witnessMs = rows.reduce(
-      (acc, r) => (r.last_ran_at ? Math.max(acc, Date.parse(r.last_ran_at)) : acc),
+      (acc, r) => (r.last_ran_at ? Math.max(acc, parseSqliteTimestamp(r.last_ran_at)) : acc),
       0,
     );
     for (const r of rows) {
       if (!r.stale || !r.last_ran_at) continue;
-      const dueAt = Date.parse(r.last_ran_at) + r.declared_every_ms;
+      const dueAt = parseSqliteTimestamp(r.last_ran_at) + r.declared_every_ms;
       if (witnessMs < dueAt) r.stale = false;
     }
     const stalePeers = rows.filter((r) => r.stale).map((r) => r.experiment_id);
@@ -108,7 +109,7 @@ export function summarizePeer(
   now: number,
 ): PeerCadence {
   const timestamps = history
-    .map((h) => Date.parse(h.ranAt))
+    .map((h) => parseSqliteTimestamp(h.ranAt))
     .filter((t) => Number.isFinite(t))
     .sort((a, b) => a - b);
   if (timestamps.length === 0) {

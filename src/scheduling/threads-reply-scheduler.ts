@@ -31,6 +31,7 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
+import { parseSqliteTimestamp } from '../lib/sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { scanThreadsPostsViaBrowser, fetchThreadsPostFullText } from '../orchestrator/tools/threads-reply.js';
 import { pickReplyTargets, threadToCandidate } from '../orchestrator/tools/reply-target-selector.js';
@@ -320,7 +321,9 @@ export class ThreadsReplyScheduler {
       const rows = Array.isArray(data) ? data : [];
       const latest = rows.find((r) => r.source?.startsWith('reply_to:'));
       if (!latest) return null;
-      const last = Date.parse(latest.posted_at);
+      // SQLite posted_at lacks a TZ suffix; raw Date.parse treats it
+      // as local time and flips the sign. See src/lib/sqlite-time.ts.
+      const last = parseSqliteTimestamp(latest.posted_at);
       if (isNaN(last)) return null;
       return Math.floor((Date.now() - last) / 1000);
     } catch {

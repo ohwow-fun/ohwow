@@ -57,6 +57,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../../lib/logger.js';
+import { parseSqliteTimestamp } from '../../lib/sqlite-time.js';
 import {
   BusinessExperiment,
   type BusinessExperimentOptions,
@@ -192,7 +193,7 @@ function pickChannel(
   const now = Date.now();
   const recentReach = contactEvents
     .filter((e) => e.kind === 'x:reached' || e.kind === 'dm:sent' || e.kind === 'email:sent')
-    .map((e) => Date.parse(e.occurred_at ?? e.created_at ?? ''))
+    .map((e) => parseSqliteTimestamp(e.occurred_at ?? e.created_at ?? ''))
     .filter((t) => Number.isFinite(t) && now - t < cooldownMs);
 
   // DM is the most intimate / highest-signal channel — prefer it when
@@ -398,12 +399,12 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
         .filter((e) => e.kind === 'x:qualified')
         .sort((a, b) => (a.occurred_at ?? '') < (b.occurred_at ?? '') ? -1 : 1)[0];
       if (!qualifiedEvent) continue;
-      const qualifiedAtMs = Date.parse(qualifiedEvent.occurred_at ?? qualifiedEvent.created_at ?? '');
+      const qualifiedAtMs = parseSqliteTimestamp(qualifiedEvent.occurred_at ?? qualifiedEvent.created_at ?? '');
       if (!Number.isFinite(qualifiedAtMs)) continue;
       if (now.getTime() - qualifiedAtMs < firstTouchMinAgeMs) continue;
       const hasHit = events.some((e) => {
         if (!e.kind || !HIT_EVENT_KINDS.has(e.kind)) return false;
-        const t = Date.parse(e.occurred_at ?? e.created_at ?? '');
+        const t = parseSqliteTimestamp(e.occurred_at ?? e.created_at ?? '');
         if (!Number.isFinite(t)) return false;
         return t >= qualifiedAtMs && now.getTime() - t < cooldownMs;
       });

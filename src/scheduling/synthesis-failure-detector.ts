@@ -46,6 +46,7 @@
 import { EventEmitter } from 'node:events';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
+import { parseSqliteTimestamp } from '../lib/sqlite-time.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -267,7 +268,7 @@ export function qualifyTask(
   if (output.length >= 50) return { eligible: false, reason: 'has substantive output' };
 
   if (row.created_at) {
-    const createdAtMs = Date.parse(row.created_at);
+    const createdAtMs = parseSqliteTimestamp(row.created_at);
     if (!Number.isNaN(createdAtMs)) {
       const ageMs = Date.now() - createdAtMs;
       if (ageMs > maxAgeDays * 24 * 3600 * 1000) {

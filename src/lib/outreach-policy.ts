@@ -42,6 +42,7 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from './logger.js';
+import { parseSqliteTimestamp } from './sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 
 export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'any';
@@ -147,7 +148,7 @@ export async function isContactInCooldown(
   let latestMs = -Infinity;
   for (const r of rows) {
     if (!r.kind || !COOLDOWN_EVENT_KINDS.has(r.kind)) continue;
-    const ts = Date.parse(r.occurred_at ?? r.created_at ?? '');
+    const ts = parseSqliteTimestamp(r.occurred_at ?? r.created_at ?? '');
     if (!Number.isFinite(ts)) continue;
     if (ts < cutoffMs) continue;
     if (ts > latestMs) { latestMs = ts; latest = r; }
