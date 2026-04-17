@@ -226,12 +226,19 @@ export async function replyToPost(page, permalink, text) {
 
 export function filterPosts(posts, filters) {
   return posts.filter(p => {
+    // Engager-sourced rows (repliers scraped from our own posts or competitor
+    // threads) are deliberately replies with often-zero engagement; exempting
+    // them from drop_replies_to_others + min_engagement is the whole point of
+    // the engager surface. Retweet + language filters still apply.
+    const isEngager = !!p._engagerSource;
     if (filters.drop_retweets && p.isRetweet) return false;
-    if (filters.drop_replies_to_others && p.replyingTo) return false;
+    if (!isEngager && filters.drop_replies_to_others && p.replyingTo) return false;
     if (filters.language && p.lang && p.lang !== filters.language) return false;
-    const m = filters.min_engagement || {};
-    if ((m.likes ?? 0) > p.likes) return false;
-    if ((m.replies ?? 0) > p.replies) return false;
+    if (!isEngager) {
+      const m = filters.min_engagement || {};
+      if ((m.likes ?? 0) > p.likes) return false;
+      if ((m.replies ?? 0) > p.replies) return false;
+    }
     return true;
   });
 }
