@@ -14,7 +14,16 @@ export {
   TransitionSpecSchema,
   SceneSchema,
 } from "./spec/schema";
-export { registerSceneKind, renderScene } from "./scenes/registry";
+export {
+  lintVideoSpec,
+  formatLintIssue,
+  formatLintResult,
+  type LintIssue,
+  type LintResult,
+  type LintSeverity,
+  type LintOptions,
+} from "./spec/lint";
+export { registerSceneKind, hasSceneKind, listSceneKinds, renderScene } from "./scenes/registry";
 export {
   registerTransition,
   unregisterTransition,

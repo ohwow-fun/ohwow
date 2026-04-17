@@ -41,6 +41,14 @@ export function registerSceneKind(kind: string, component: SceneComponent): void
   registry.set(kind, component);
 }
 
+export function hasSceneKind(kind: string): boolean {
+  return registry.has(kind);
+}
+
+export function listSceneKinds(): string[] {
+  return Array.from(registry.keys());
+}
+
 export function renderScene(scene: Scene): React.ReactElement {
   const Comp = registry.get(scene.kind);
   if (!Comp) {
