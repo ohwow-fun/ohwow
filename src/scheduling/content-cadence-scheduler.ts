@@ -147,8 +147,6 @@ export const THREADS_SLOT: PlatformSlot = {
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Default tick interval — every 15 minutes. */
-const DEFAULT_INTERVAL_MS = 15 * 60 * 1000;
-
 /** Minimum gap between consecutive posts per platform (ms). */
 const MIN_POST_GAP_MS = 30 * 60 * 1000;
 
@@ -167,8 +165,6 @@ export interface ContentCadenceSchedulerOptions {
 }
 
 export class ContentCadenceScheduler {
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private running = false;
   private executing = false;
   private readonly options: ContentCadenceSchedulerOptions;
   private cachedExecutor: DeliverableExecutor | null = null;
@@ -193,31 +189,10 @@ export class ContentCadenceScheduler {
     return this.cachedExecutor;
   }
 
-  get isRunning(): boolean {
-    return this.running;
-  }
-
-  start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
-    if (this.running) return;
-    this.running = true;
-    void this.tick();
-    this.timer = setInterval(() => void this.tick(), intervalMs);
-    logger.info(
-      { intervalMs, platforms: this.platformSlots.map((s) => s.platform) },
-      '[ContentCadenceScheduler] started',
-    );
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    this.running = false;
-    logger.info('[ContentCadenceScheduler] stopped');
-  }
-
-  /** Single tick — runs each enabled platform slot sequentially. */
+  /** Single tick — runs each enabled platform slot sequentially.
+   *  Reentrancy-guarded: if the automation scheduler overlaps (e.g.
+   *  tick runs longer than the cron interval), the second call is a
+   *  no-op rather than racing the first. */
   async tick(): Promise<void> {
     if (this.executing) return;
     this.executing = true;

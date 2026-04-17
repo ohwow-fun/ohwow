@@ -34,7 +34,6 @@ import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
 
 export const MARKET_SUBJECT_PREFIX = 'market:';
 
-const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_MIN_SCORE = 0.7;
 const DEFAULT_LIMIT = 5;
 const TWEET_CHAR_CAP = 280;
@@ -42,8 +41,6 @@ const MAX_COST_CENTS = 50;
 const EXPERIMENT_ID_TAG = 'x-draft-distiller';
 
 export interface XDraftDistillerOptions {
-  /** Tick interval; default 1h. */
-  intervalMs?: number;
   /** Minimum novelty_score to consider. */
   minScore?: number;
   /** How many insights to pull per tick. */
@@ -53,8 +50,6 @@ export interface XDraftDistillerOptions {
 }
 
 export class XDraftDistillerScheduler {
-  private timer: NodeJS.Timeout | null = null;
-  private readonly intervalMs: number;
   private readonly minScore: number;
   private readonly limit: number;
   private readonly draftTweetFn: (insight: DistilledInsight) => Promise<string | null>;
@@ -65,31 +60,9 @@ export class XDraftDistillerScheduler {
     private readonly workspaceId: string,
     opts: XDraftDistillerOptions = {},
   ) {
-    this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.minScore = opts.minScore ?? DEFAULT_MIN_SCORE;
     this.limit = opts.limit ?? DEFAULT_LIMIT;
     this.draftTweetFn = opts.draftTweet ?? ((insight) => this.defaultDraft(insight));
-  }
-
-  start(): void {
-    if (this.timer) return;
-    // Fire once on start so a fresh daemon gets drafts quickly if
-    // novel insights already exist in the ledger.
-    void this.tick().catch((err) =>
-      logger.warn({ err }, '[x-draft-distiller] initial tick failed'),
-    );
-    this.timer = setInterval(() => {
-      void this.tick().catch((err) =>
-        logger.warn({ err }, '[x-draft-distiller] tick failed'),
-      );
-    }, this.intervalMs);
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
   }
 
   async tick(): Promise<{ considered: number; drafted: number; skipped: number }> {
