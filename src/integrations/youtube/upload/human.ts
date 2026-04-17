@@ -202,7 +202,11 @@ export async function humanClickSelector(
   selector: string,
   opts: HumanClickOptions & { filter?: string; label?: string } = {},
 ): Promise<void> {
-  const filter = opts.filter ?? 'true';
+  // Default must be a callable expression. `'true'` evaluates as `(true)(el)`
+  // which throws TypeError in-page; RawCdpPage.evaluate swallows it and returns
+  // undefined, making every caller without an explicit filter look like the
+  // element isn't visible.
+  const filter = opts.filter ?? '(() => true)';
   const coords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
     for (const el of document.querySelectorAll(${JSON.stringify(selector)})) {
       if (el.offsetParent === null) continue;
