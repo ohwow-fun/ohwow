@@ -37,6 +37,7 @@ import {
   getCdpPageForPlatform,
   captureScreenshot,
   clickByText,
+  clearTextbox,
   wait,
   HYDRATION_WAIT_MS,
   POST_SETTLE_MS,
@@ -56,7 +57,7 @@ export const THREADS_POSTING_TOOL_DEFINITIONS: Tool[] = [
       properties: {
         text: {
           type: 'string',
-          description: 'The post text, verbatim):, up to 500 characters. Will be typed exactly as provided.',
+          description: 'The post text, verbatim, up to 500 characters. Will be typed exactly as provided.',
         },
         dry_run: {
           type: 'boolean',
@@ -275,9 +276,17 @@ async function assertSignedInAs(page: RawCdpPage, expected: string): Promise<Com
 
 /**
  * Open the Threads compose dialog by clicking the Create nav button.
+ * Dismisses any existing dialog first to ensure a clean slate.
  * Returns true if the dialog appeared within timeout.
  */
 async function openComposeDialog(page: RawCdpPage): Promise<boolean> {
+  // Dismiss any stale dialog (leftover from a previous session/crash)
+  const hasStaleDialog = await page.evaluate<boolean>(`!!document.querySelector('[role="dialog"]')`);
+  if (hasStaleDialog) {
+    await dismissComposeDialog(page);
+    await wait(500);
+  }
+
   // Click the Create button (SVG in the nav)
   const clicked = await page.evaluate<boolean>(`(() => {
     const svg = document.querySelector('svg[aria-label="Create"]');
@@ -430,6 +439,13 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
     };
   }
 
+  // Clear any residual text (e.g., from a saved draft or a stale dialog)
+  await clearTextbox(page, SEL_TEXTBOX);
+  await wait(200);
+
+  // Re-focus after clear (selectAll+delete may have moved focus)
+  await focusComposeTextbox(page, 0);
+
   // Warmup: space + backspace to avoid first-keystroke-dropped glitch
   await page.typeText(' ');
   await page.pressKey('Backspace');
@@ -549,6 +565,11 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       screenshotBase64: await captureScreenshot(page),
     };
   }
+
+  // Clear any residual text from drafts
+  await clearTextbox(page, SEL_TEXTBOX);
+  await wait(200);
+  await focusComposeTextbox(page, 0);
 
   await page.typeText(' ');
   await page.pressKey('Backspace');

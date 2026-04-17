@@ -188,16 +188,29 @@ export async function clickByText(
 }
 
 /**
- * Clear all text from a contenteditable / textbox by selecting all and
- * deleting. Useful before typing fresh content or before dismissing a
- * compose modal.
+ * Clear all text from a contenteditable / textbox. Uses the Selection
+ * API to select all content, then a real Backspace key event to delete.
+ * This fires React's input handlers correctly — `execCommand('delete')`
+ * and `innerHTML = ''` bypass React's event system and leave the
+ * component's internal state out of sync (verified on Threads 2026-04-16).
  */
 export async function clearTextbox(page: RawCdpPage, selector: string): Promise<void> {
-  await page.evaluate(`(() => {
-    const el = document.querySelector(${JSON.stringify(selector)});
-    if (el) { el.focus(); document.execCommand('selectAll'); document.execCommand('delete'); }
-    return true;
-  })()`).catch(() => {});
+  try {
+    const hasContent = await page.evaluate<boolean>(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el || !el.textContent?.trim()) return false;
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return sel.toString().length > 0;
+    })()`);
+    if (hasContent) {
+      await page.pressKey('Backspace');
+    }
+  } catch { /* best effort */ }
 }
 
 // ---------------------------------------------------------------------------
