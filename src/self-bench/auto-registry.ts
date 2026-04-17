@@ -44,6 +44,8 @@ import { MigrationSchemaProbeExperiment } from './experiments/migration-schema-p
 import { MIGRATION_SCHEMA_REGISTRY } from './registries/migration-schema-registry.js';
 import { ToolchainTestProbeExperiment } from './experiments/toolchain-test-probe.js';
 import { TOOLCHAIN_TEST_REGISTRY } from './registries/toolchain-test-registry.js';
+import { ScrapeDiffProbeExperiment } from './experiments/scrape-diff-probe.js';
+import { SCRAPE_DIFF_REGISTRY } from './registries/scrape-diff-registry.js';
 
 /**
  * Array of zero-arg experiment factories. daemon/start.ts iterates this
@@ -57,5 +59,9 @@ export const autoRegisteredExperiments: Array<() => Experiment> = [
   // Toolchain test probes — one factory per registry row.
   ...TOOLCHAIN_TEST_REGISTRY.map(
     (config) => () => new ToolchainTestProbeExperiment(config),
+  ),
+  // Market-radar scrape-diff probes — one factory per registry row.
+  ...SCRAPE_DIFF_REGISTRY.map(
+    (config) => () => new ScrapeDiffProbeExperiment(config),
   ),
 ];
