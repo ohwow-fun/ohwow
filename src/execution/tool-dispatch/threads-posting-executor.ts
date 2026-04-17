@@ -65,6 +65,11 @@ async function readSetting(ctx: ToolExecutionContext, key: string): Promise<stri
   }
 }
 
+async function readLiveMode(ctx: ToolExecutionContext): Promise<boolean> {
+  const raw = await readSetting(ctx, 'deliverable_executor_live');
+  return raw === 'true' || raw === '1';
+}
+
 export const threadsPostingExecutor: ToolExecutor = {
   canHandle(toolName: string): boolean {
     return THREADS_TOOL_NAMES.has(toolName);
@@ -139,7 +144,13 @@ export const threadsPostingExecutor: ToolExecutor = {
     const expectedHandle = expectedHandleRaw ? expectedHandleRaw.replace(/^@/, '') : undefined;
 
     // ---- 4. Dispatch to the matching composer ----
-    const dryRun = input.dry_run !== false;
+    // Dry-run default flips with runtime_settings.deliverable_executor_live.
+    // Mirrors xPostingExecutor: live flag on → agent tool-calls that
+    // omit dry_run publish for real (cadence path); live flag off →
+    // default stays dry_run=true for chat safety. Explicit input.dry_run
+    // always wins.
+    const liveFlag = await readLiveMode(ctx);
+    const dryRun = typeof input.dry_run === 'boolean' ? input.dry_run : !liveFlag;
     let result: {
       success: boolean;
       message: string;

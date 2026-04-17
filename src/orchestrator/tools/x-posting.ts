@@ -58,7 +58,7 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
-import { confirmPostLanded } from './social-cdp-helpers.js';
+import { confirmPostLanded, typeIntoRichTextbox } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -688,10 +688,24 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       };
     }
 
-    await page.typeText(' ');
-    await page.pressKey('Backspace');
-
-    await page.typeText(text);
+    // Type via cascading strategy helper. If Input.insertText silently
+    // drops characters (which happens when X rotates composer frameworks),
+    // this falls through to execCommand then per-char dispatchKeyEvent
+    // and verifies ≥50% of the expected chars land before proceeding.
+    const typing = await typeIntoRichTextbox(page, '[data-testid="tweetTextarea_0"]', text);
+    if (!typing.ok) {
+      return {
+        success: false,
+        message: `Tweet text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). All three typing strategies dropped the text.`,
+        screenshotBase64: await captureScreenshot(page),
+        tweetsTyped: 0,
+        tweetsPublished: 0,
+      };
+    }
+    logger.info(
+      { strategy: typing.strategy, observedLen: typing.observedLen, expectedLen: typing.expectedLen },
+      '[x-posting] typing strategy that landed',
+    );
     await wait(400);
 
     const screenshotBase64 = await captureScreenshot(page);

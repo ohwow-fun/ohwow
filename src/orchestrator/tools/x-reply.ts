@@ -50,6 +50,7 @@ import {
   X_HYDRATION_WAIT_MS,
 } from './x-posting.js';
 import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
+import { typeIntoRichTextbox } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -551,53 +552,26 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     }
     await wait(400);
 
-    // Clear any residual content before typing.
-    await page.evaluate(`(() => {
-      const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
-      if (!(tb instanceof HTMLElement)) return false;
-      tb.focus();
-      document.execCommand('selectAll', false);
-      document.execCommand('delete', false);
-      return true;
-    })()`).catch(() => {});
-    await wait(300);
-
-    // Type char-by-char via CDP Input.dispatchKeyEvent. X's reply
-    // composer uses DraftJS which rejects both Input.insertText (what
-    // page.typeText does) and document.execCommand('insertText').
-    // Per-character keyDown/keyUp events with a text payload are the
-    // only variant DraftJS accepts — empirically confirmed 2026-04-17
-    // after three other typing strategies returned textLen=0.
-    for (const ch of text) {
-      // Newlines need explicit Enter dispatch
-      if (ch === '\n') {
-        await page.pressKey('Enter');
-        continue;
-      }
-      await (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send(
-        'Input.dispatchKeyEvent',
-        { type: 'keyDown', text: ch },
-      );
-      await (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send(
-        'Input.dispatchKeyEvent',
-        { type: 'keyUp', text: ch },
-      );
-    }
-    await wait(600);
-
-    const typedLen = await page.evaluate<number>(`(() => {
-      const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
-      return tb ? (tb.textContent || '').length : -1;
-    })()`).catch(() => -1);
-
-    if (typedLen < Math.max(5, Math.floor(text.length * 0.5))) {
+    // Type via cascading strategy helper. X's reply composer has
+    // rotated which input path it honors across releases — historically
+    // execCommand worked, then dispatchKeyEvent, now neither reliably;
+    // the helper tries Input.insertText → execCommand → per-char
+    // dispatchKeyEvent and keeps the first one that registers ≥50% of
+    // the expected characters. Logs which strategy won so we can
+    // retire the dead paths later.
+    const typing = await typeIntoRichTextbox(page, '[data-testid="tweetTextarea_0"]', text);
+    if (!typing.ok) {
       return {
         success: false,
-        message: `Reply text did not register (expected ~${text.length}ch, got ${typedLen}ch). DraftJS editor did not accept dispatchKeyEvent stream.`,
+        message: `Reply text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). Tried insertText, execCommand, and dispatchKeyEvent — none accepted the text.`,
         screenshotBase64: await captureScreenshot(page),
         currentUrl: await page.url(),
       };
     }
+    logger.info(
+      { strategy: typing.strategy, observedLen: typing.observedLen, expectedLen: typing.expectedLen },
+      '[x-reply] typing strategy that landed',
+    );
 
     const screenshotBase64 = await captureScreenshot(page);
 

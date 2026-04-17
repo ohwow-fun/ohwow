@@ -95,6 +95,11 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
 };
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
+async function readLiveMode(ctx: ToolExecutionContext): Promise<boolean> {
+  const raw = await readSetting(ctx, 'deliverable_executor_live');
+  return raw === 'true' || raw === '1';
+}
+
 async function readSetting(ctx: ToolExecutionContext, key: string): Promise<string | null> {
   try {
     const { data } = await ctx.db
@@ -179,7 +184,15 @@ export const xPostingExecutor: ToolExecutor = {
     const expectedHandle = expectedHandleRaw ? expectedHandleRaw.replace(/^@/, '') : undefined;
 
     // ---- 4. Dispatch to the matching composer ----
-    const dryRun = input.dry_run !== false; // default dry_run=true
+    // Dry-run default flips with runtime_settings.deliverable_executor_live.
+    // When the operator has enabled live delivery, agent tool-calls that
+    // omit dry_run publish for real (this is the cadence post path — the
+    // agent inherits intent from the task's deferred_action and would
+    // never publish otherwise). When the live flag is off, default stays
+    // dry_run=true so chat-driven tool-calls remain safe by accident.
+    // Explicit input.dry_run=true/false always wins over the default.
+    const liveFlag = await readLiveMode(ctx);
+    const dryRun = typeof input.dry_run === 'boolean' ? input.dry_run : !liveFlag;
     let result: {
       success: boolean;
       message: string;

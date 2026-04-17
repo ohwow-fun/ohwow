@@ -259,6 +259,142 @@ export async function clearTextbox(page: RawCdpPage, selector: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// Rich-text typing (DraftJS / ProseMirror / contenteditable)
+// ---------------------------------------------------------------------------
+
+/**
+ * Type `text` into a rich-text editor (X DraftJS, Threads contenteditable,
+ * etc.) using a cascading fallback of three strategies. Rich-text editors
+ * reject different input methods depending on their framework + version;
+ * any one strategy has proven to silently drop characters on at least
+ * one surface we use. The cascade tries each in order until the DOM
+ * reports >= 50% of the expected characters inside the target selector.
+ *
+ * Strategies, in order:
+ *   1. CDP Input.insertText — the fastest; fires `input` events React
+ *      state-syncs on. Works on Threads, X home-feed compose, X article.
+ *   2. document.execCommand('insertText') — works on X reply composer
+ *      per _x-harvest.mjs (the inline status-page reply composer uses
+ *      a ProseMirror-derivative that strips Input.insertText but honors
+ *      the execCommand path). Also recovers several Threads edge cases.
+ *   3. CDP Input.dispatchKeyEvent per-character — the slowest; used as
+ *      last resort. Was the primary strategy in 179ee75 but observed
+ *      100% 0ch failure rate against X reply composer 2026-04-17.
+ *
+ * Before strategies: a warmup (typeText(' ') + Backspace) to kick the
+ * editor's input pipeline into an accepting state — mirrors the Threads
+ * reply path that publishes reliably. Strategy 1 is re-run AFTER the
+ * warmup even though the warmup itself uses typeText under the hood,
+ * because the warmup only sends a single space; the real text still
+ * needs its own insertText call.
+ *
+ * Returns `{ok, strategy, observedLen}` so callers can log which path
+ * won and surface the right failure message when all three fail.
+ */
+export interface TypeTextResult {
+  ok: boolean;
+  strategy: 'insertText' | 'execCommand' | 'dispatchKeyEvent' | 'none';
+  observedLen: number;
+  expectedLen: number;
+}
+
+export async function typeIntoRichTextbox(
+  page: RawCdpPage,
+  selector: string,
+  text: string,
+): Promise<TypeTextResult> {
+  const expected = text.length;
+  const minAccept = Math.max(5, Math.floor(expected * 0.5));
+
+  async function measureLen(): Promise<number> {
+    try {
+      return await page.evaluate<number>(`(() => {
+        const tb = document.querySelector(${JSON.stringify(selector)});
+        return tb ? (tb.textContent || '').length : -1;
+      })()`);
+    } catch { return -1; }
+  }
+
+  async function clearAndFocus(): Promise<void> {
+    try {
+      await page.evaluate(`(() => {
+        const tb = document.querySelector(${JSON.stringify(selector)});
+        if (!(tb instanceof HTMLElement)) return false;
+        tb.focus();
+        document.execCommand('selectAll', false);
+        document.execCommand('delete', false);
+        return true;
+      })()`);
+    } catch { /* best effort */ }
+    await wait(150);
+  }
+
+  // Warmup: seed the editor's input pipeline. Also re-establishes focus
+  // on React-composer targets that lose keyboard routing across awaits.
+  try {
+    await page.typeText(' ');
+    await page.pressKey('Backspace');
+  } catch { /* best effort */ }
+  await wait(100);
+
+  // Strategy 1: CDP Input.insertText (single call, whole string).
+  await clearAndFocus();
+  try {
+    await page.typeText(text);
+  } catch { /* fall through */ }
+  await wait(400);
+  let observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'insertText', observedLen: observed, expectedLen: expected };
+  }
+
+  // Strategy 2: document.execCommand('insertText'). Escape for JS string
+  // literal embedding — backslashes first, then quotes + newlines.
+  await clearAndFocus();
+  const escaped = text
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '');
+  try {
+    await page.evaluate(`(() => {
+      const tb = document.querySelector(${JSON.stringify(selector)});
+      if (!(tb instanceof HTMLElement)) return false;
+      tb.focus();
+      return document.execCommand('insertText', false, '${escaped}');
+    })()`);
+  } catch { /* fall through */ }
+  await wait(400);
+  observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'execCommand', observedLen: observed, expectedLen: expected };
+  }
+
+  // Strategy 3: CDP Input.dispatchKeyEvent per-character. Slowest, last
+  // resort. Was the primary path historically but started failing with
+  // 0ch against X's current reply composer.
+  await clearAndFocus();
+  const send = (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send.bind(page);
+  for (const ch of text) {
+    if (ch === '\n') {
+      try { await page.pressKey('Enter'); } catch { /* continue */ }
+      continue;
+    }
+    try {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch });
+    } catch { /* continue */ }
+  }
+  await wait(500);
+  observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'dispatchKeyEvent', observedLen: observed, expectedLen: expected };
+  }
+
+  return { ok: false, strategy: 'none', observedLen: observed, expectedLen: expected };
+}
+
+// ---------------------------------------------------------------------------
 // Post-publish confirmation (shared across X + Threads)
 // ---------------------------------------------------------------------------
 
