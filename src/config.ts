@@ -197,7 +197,7 @@ export interface RuntimeConfig {
    * x.com on the configured chromeCdpPort. Default: false.
    */
   xIntelEnabled: boolean;
-  /** Cadence for XIntelScheduler in minutes. Default: 180 (every 3h). */
+  /** Cadence for the x-intel automation in minutes. Default: 180 (every 3h). Translated to cron at seed time. */
   xIntelIntervalMinutes: number;
   /**
    * Opt-in for the X forecast scorer — daily companion to x-intel that

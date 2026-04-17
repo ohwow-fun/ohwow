@@ -18,7 +18,6 @@ import { LogTailWatcher } from '../scheduling/log-tail-watcher.js';
 import { ImprovementScheduler } from '../scheduling/improvement-scheduler.js';
 import { consolidateReflection } from '../oneiros/reflection-consolidator.js';
 import { runLlmCall } from '../execution/llm-organ.js';
-import { XIntelScheduler } from '../scheduling/x-intel-scheduler.js';
 import { SynthesisFailureDetector } from '../scheduling/synthesis-failure-detector.js';
 import { SynthesisAutoLearner, isAutoLearningEnabled } from '../scheduling/synthesis-auto-learner.js';
 import { RuntimeSkillLoader } from '../orchestrator/runtime-skill-loader.js';
@@ -33,7 +32,11 @@ import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { resolveActiveWorkspace } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { registerExperiments } from './experiments.js';
-import { seedXIntelAutomation } from './seed-x-intel-automation.js';
+import {
+  seedXIntelAutomation,
+  seedXForecastAutomation,
+  seedXHumorAutomation,
+} from './seed-x-automations.js';
 import type { DaemonContext } from './context.js';
 
 /** Convert `xIntelIntervalMinutes` config into a cron expression the
@@ -70,23 +73,19 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
     logger.warn(`[daemon] Scheduler failed: ${err instanceof Error ? err.message : err}`);
   });
 
-  // X intelligence pipeline: opt-in per workspace via xIntelEnabled.
-  // Now seeded as a native ohwow automation (trigger_type='schedule')
-  // so LocalScheduler.tickAutomationSchedules drives it — last_fired_at
-  // persists in the DB across daemon restarts, the dashboard can
-  // toggle/edit it like any user-authored flow, and the trigger watchdog
-  // picks up stuck runs via consecutive_failures. The shell_script
-  // dispatcher preserves the original env contract + heartbeat files.
-  //
-  // XForecast and XHumor still run as hand-coded schedulers below —
-  // migrating them is a separate pass (same pattern, different seed).
+  // X schedulers (intel + chain, forecast, humor): opt-in via
+  // xIntelEnabled. All three now land as native ohwow automations
+  // (trigger_type='schedule') so LocalScheduler.tickAutomationSchedules
+  // drives them — last_fired_at persists in the DB across restarts, the
+  // dashboard can toggle/edit them like any user-authored flow, and the
+  // trigger watchdog picks up stuck runs via consecutive_failures. The
+  // shell_script dispatcher preserves the original env contract + the
+  // heartbeat files that external monitors watch.
   if (config.xIntelEnabled) {
     const repoRoot = process.env.OHWOW_REPO_ROOT || process.cwd();
     const workspaceSlug = resolveActiveWorkspace().name;
 
     await seedXIntelAutomation(db, workspaceId, {
-      // Convert interval minutes into a cron expression. 180min → "0 */3 * * *".
-      // Sub-hourly intervals fall back to "*/<N> * * * *".
       cron: cronForIntervalMinutes(config.xIntelIntervalMinutes),
       authorsToCrm: config.xAuthorsToCrmEnabled,
       compose: config.xComposeEnabled,
@@ -99,44 +98,27 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
       '[daemon] x-intel automation seeded',
     );
 
-    // Forecast scorer — read-only cadence that scores predictions emitted
-    // by x-intel. Still hand-coded; the Phase 0 heartbeat rehydrate
-    // (XIntelScheduler.start) keeps it restart-safe until it too moves
-    // to an automation.
     if (config.xForecastEnabled) {
-      const xForecast = new XIntelScheduler({
-        workspaceSlug,
-        dataDir,
-        repoRoot,
-        runOnBoot: false,
-        scriptRelPath: 'scripts/x-experiments/x-forecast-scorer.mjs',
-        heartbeatName: 'x-forecast-last-run.json',
-        logTag: '[XForecastScheduler]',
+      await seedXForecastAutomation(db, workspaceId, {
+        cron: cronForIntervalMinutes(config.xForecastIntervalMinutes),
+      }).catch((err) => {
+        logger.warn({ err }, '[daemon] seed-x-forecast-automation failed');
       });
-      xForecast.start(config.xForecastIntervalMinutes * 60 * 1000);
       logger.info(
         { workspaceSlug, intervalMin: config.xForecastIntervalMinutes },
-        '[daemon] x-forecast-scheduler started',
+        '[daemon] x-forecast automation seeded',
       );
     }
 
-    // Humor scheduler — runs x-compose with SHAPES=humor on an hourly
-    // cadence, independent of x-intel. Same migration path pending.
     if (config.xHumorEnabled) {
-      const xHumor = new XIntelScheduler({
-        workspaceSlug,
-        dataDir,
-        repoRoot,
-        runOnBoot: false,
-        scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
-        heartbeatName: 'x-humor-last-run.json',
-        logTag: '[XHumorScheduler]',
-        env: { SHAPES: 'humor', MAX_DRAFTS: '1', DRY: '0' },
+      await seedXHumorAutomation(db, workspaceId, {
+        cron: cronForIntervalMinutes(config.xHumorIntervalMinutes),
+      }).catch((err) => {
+        logger.warn({ err }, '[daemon] seed-x-humor-automation failed');
       });
-      xHumor.start(config.xHumorIntervalMinutes * 60 * 1000);
       logger.info(
         { workspaceSlug, intervalMin: config.xHumorIntervalMinutes },
-        '[daemon] x-humor-scheduler started',
+        '[daemon] x-humor automation seeded',
       );
     }
   }
