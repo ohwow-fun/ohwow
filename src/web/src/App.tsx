@@ -38,7 +38,6 @@ import { PodcastPage } from './pages/Podcast';
 import { EyePage } from './pages/Eye';
 import { PulsePage } from './pages/Pulse';
 import { MarketingPage } from './pages/Marketing';
-import { ConversationsPage } from './pages/Conversations';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -81,8 +80,8 @@ export function App() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
           <Route path="messages" element={<MessagesPage />} />
-          <Route path="conversations" element={<ConversationsPage />} />
-          <Route path="conversations/:pair" element={<ConversationsPage />} />
+          <Route path="conversations" element={<Navigate to="/messages" replace />} />
+          <Route path="conversations/:pair" element={<Navigate to="/messages" replace />} />
           <Route path="workflows" element={<WorkflowsHub />} />
           <Route path="webhook-events" element={<WebhookEventsPage />} />
           <Route path="goals" element={<GoalsPage />} />

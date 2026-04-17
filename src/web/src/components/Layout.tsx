@@ -63,8 +63,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/marketing', label: 'Marketing', icon: Megaphone, group: 'manage' },
   { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'manage' },
   // Connect
-  { path: '/conversations', label: 'Conversations', icon: ChatCircleDots, group: 'connect' },
-  { path: '/messaging', label: 'Messaging', icon: ChatCircle, group: 'connect' },
+  { path: '/messaging', label: 'Messaging', icon: ChatCircleDots, group: 'connect' },
   { path: '/peers', label: 'Peers', icon: ShareNetwork, group: 'connect' },
   { path: '/team', label: 'Team', icon: UsersThree, group: 'connect' },
   { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'connect' },
