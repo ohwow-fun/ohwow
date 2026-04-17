@@ -40,7 +40,15 @@ import {
 } from '../lift-measurements-store.js';
 import { readKpi } from '../kpi-registry.js';
 
-const CADENCE: ExperimentCadence = { everyMs: 10 * 60 * 1000, runOnBoot: true };
+// 2min cadence — picked so a commit's 1h horizon (the short-window
+// triangulation rung added alongside the 24h / 168h ones) closes
+// within 30 ticks instead of 6, making the first moved_right /
+// moved_wrong verdict visible to the strategist within ~30 minutes
+// instead of a full day. The probe is observational (no LLM, no
+// CDP, one DB batch of <=50 rows), so the steady-state cost is a
+// handful of SQL reads per tick — trivial against the daemon's
+// budget and well within the 60s runner tick.
+const CADENCE: ExperimentCadence = { everyMs: 2 * 60 * 1000, runOnBoot: true };
 const PENDING_BATCH_LIMIT = 50;
 const SUMMARY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SYSTEMIC_WRONG_THRESHOLD = 3;
