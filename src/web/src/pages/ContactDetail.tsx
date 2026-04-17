@@ -150,13 +150,16 @@ function formatKind(raw: string | null | undefined): string {
   return stripped;
 }
 
-/** Funnel stage derived from the highest-tier event present in the timeline. */
-function deriveStage(events: TimelineEvent[]): { stage: string; color: string } {
+/** Funnel stage derived from the highest-tier signal present.
+ *  Mirrors the Pulse funnel ordering. "contacted" is inferred from an
+ *  outbound DM in the thread (same rule the Pulse backend uses). */
+function deriveStage(events: TimelineEvent[], hasOutboundDm: boolean): { stage: string; color: string } {
   const kinds = new Set(events.map(e => e.kind ?? e.event_type ?? ''));
   if (kinds.has('plan:paid'))      return { stage: 'paid',      color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
   if (kinds.has('trial:started'))  return { stage: 'trial',     color: 'bg-violet-500/20 text-violet-300 border-violet-500/40' };
   if (kinds.has('demo:booked'))    return { stage: 'demo',      color: 'bg-blue-500/20 text-blue-300 border-blue-500/40' };
   if (kinds.has('x:reached'))      return { stage: 'engaged',   color: 'bg-sky-500/20 text-sky-300 border-sky-500/40' };
+  if (hasOutboundDm)               return { stage: 'contacted', color: 'bg-teal-500/20 text-teal-300 border-teal-500/40' };
   if (kinds.has('x:qualified'))    return { stage: 'qualified', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
   return { stage: 'lead', color: 'bg-neutral-500/20 text-neutral-300 border-neutral-500/40' };
 }
@@ -252,12 +255,12 @@ export function ContactDetailPage() {
   if (!contact) return <div className="p-6 text-neutral-400">Contact not found</div>;
 
   const events = timeline ?? [];
-  const stage = deriveStage(events);
   const tags = asArray(contact.tags).filter((t): t is string => typeof t === 'string');
   const lastSeen = thread?.thread.lastSeenAt ?? contact.updated_at;
 
   const inbound  = thread?.messages.filter(m => m.direction === 'inbound').length  ?? 0;
   const outbound = thread?.messages.filter(m => m.direction === 'outbound').length ?? 0;
+  const stage = deriveStage(events, outbound > 0);
   const openSteps = thread?.nextSteps.filter(s => s.status === 'open' || s.status === 'dispatched').length ?? 0;
   const pendingApprovals = thread?.approvals.pending.length ?? 0;
 

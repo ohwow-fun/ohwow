@@ -108,6 +108,7 @@ interface PulseData {
     funnel: {
       leads: FunnelStage;
       qualified: FunnelStage;
+      contacted: FunnelStage;
       reached: FunnelStage;
       demos: FunnelStage;
       trials: FunnelStage;
@@ -324,7 +325,8 @@ function Funnel({ funnel }: { funnel: PulseData['pipeline']['funnel'] }) {
   const rows: FunnelRow[] = [
     { key: 'leads',     label: 'CRM leads',       total: funnel.leads.total,      h24: funnel.leads.h24,      color: 'bg-neutral-400' },
     { key: 'qualified', label: 'Qualified',       total: funnel.qualified.total,  h24: funnel.qualified.h24,  color: 'bg-info' },
-    { key: 'reached',   label: 'Reached',         total: funnel.reached.total,    h24: funnel.reached.h24,    color: 'bg-sky-400' },
+    { key: 'contacted', label: 'Contacted',       total: funnel.contacted.total,  h24: funnel.contacted.h24,  color: 'bg-teal-400' },
+    { key: 'reached',   label: 'Engaged',         total: funnel.reached.total,    h24: funnel.reached.h24,    color: 'bg-sky-400' },
     { key: 'demos',     label: 'Demo booked',     total: funnel.demos.total,      h24: funnel.demos.h24,      color: 'bg-violet-400' },
     { key: 'trials',    label: 'Trial started',   total: funnel.trials.total,     h24: funnel.trials.h24,     color: 'bg-amber-400' },
     { key: 'paid',      label: 'Paid',            total: funnel.paid.total,       h24: funnel.paid.h24,       color: 'bg-success' },
@@ -337,7 +339,7 @@ function Funnel({ funnel }: { funnel: PulseData['pipeline']['funnel'] }) {
         <div>
           <p className="text-[11px] text-neutral-500 uppercase tracking-wider">Sales funnel</p>
           <p className="text-[10px] text-neutral-600 mt-0.5">
-            Lead → Qualified → Reached → Demo → Trial → Paid · counts = all time · <span className="text-success">24h delta shown in green</span>
+            Lead → Qualified → Contacted → Engaged → Demo → Trial → Paid · counts = all time · <span className="text-success">24h delta shown in green</span>
           </p>
         </div>
         <Link to="/contacts" className="text-xs text-neutral-400 hover:text-white transition-colors">Browse contacts →</Link>

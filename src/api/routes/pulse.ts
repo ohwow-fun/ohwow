@@ -196,9 +196,31 @@ export function createPulseRouter(
         return row?.c ?? 0;
       };
 
+      // "Contacted" = distinct contacts we've sent at least one outbound DM to.
+      // Derived from x_dm_messages.direction='outbound' joined to contacts by
+      // x_dm_threads.contact_id. This is the step WE take — the loop's own
+      // outreach action — as opposed to x:reached which is the attribution
+      // click-through (they engaged with a tracked link).
+      const contactedSql = (sinceClause: string) => `
+        SELECT COUNT(DISTINCT t.contact_id) AS c
+          FROM x_dm_messages m
+          JOIN x_dm_threads t
+            ON t.workspace_id = m.workspace_id
+           AND t.conversation_pair = m.conversation_pair
+         WHERE m.workspace_id = ?
+           AND m.direction = 'outbound'
+           AND t.contact_id IS NOT NULL
+           ${sinceClause}
+      `;
+      const contactedCount = (sinceClause = ''): number => {
+        const row = rawDb.prepare(contactedSql(sinceClause)).get(workspaceId) as { c: number } | undefined;
+        return row?.c ?? 0;
+      };
+
       const funnel = {
         leads:      { total: contactCount('', []), h24: contactCount("AND created_at > datetime('now','-24 hours')", []) },
         qualified:  { total: eventCount('x:qualified'),    h24: eventCount('x:qualified',    "AND COALESCE(occurred_at, created_at) > datetime('now','-24 hours')") },
+        contacted:  { total: contactedCount(),             h24: contactedCount("AND m.observed_at > datetime('now','-24 hours')") },
         reached:    { total: eventCount('x:reached'),      h24: eventCount('x:reached',      "AND COALESCE(occurred_at, created_at) > datetime('now','-24 hours')") },
         demos:      { total: eventCount('demo:booked'),    h24: eventCount('demo:booked',    "AND COALESCE(occurred_at, created_at) > datetime('now','-24 hours')") },
         trials:     { total: eventCount('trial:started'),  h24: eventCount('trial:started',  "AND COALESCE(occurred_at, created_at) > datetime('now','-24 hours')") },
