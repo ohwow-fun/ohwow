@@ -46,21 +46,23 @@ export async function detectChallenge(page: RawCdpPage): Promise<YTChallenge | n
   }
 
   // --- URL-based detection (fast path) ------------------------------------
+  // Order matters — more specific checks first so e.g. a /signin/challenge
+  // URL doesn't get misclassified as a generic "signed out".
   const u = url.toLowerCase();
-  if (/\/accounts\.google\.com\/(serviceLogin|signin)/i.test(u) || /accounts\.google\.com\/v\d+\/signin/.test(u)) {
-    return {
-      kind: 'unknown',
-      detail: 'redirected to Google sign-in',
-      url,
-      remediation: 'the profile is signed out — sign back into YouTube in the Chrome profile, then retry',
-    };
-  }
   if (u.includes('/signin/challenge/') || u.includes('signin/v2/challenge')) {
     return {
       kind: 'two_factor',
       detail: 'Google 2FA / verification challenge',
       url,
       remediation: '2-step verification needed — complete the challenge in the browser, then retry',
+    };
+  }
+  if (/\/accounts\.google\.com\/servicelogin/.test(u) || /accounts\.google\.com\/v\d+\/signin/.test(u)) {
+    return {
+      kind: 'unknown',
+      detail: 'redirected to Google sign-in',
+      url,
+      remediation: 'the profile is signed out — sign back into YouTube in the Chrome profile, then retry',
     };
   }
   if (u.includes('consent.google') || u.includes('consent.youtube') || u.includes('/consent?')) {
