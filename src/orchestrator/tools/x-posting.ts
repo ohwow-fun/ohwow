@@ -372,9 +372,24 @@ export async function getCdpPage(urlHint?: string, expectedContextId?: string): 
       return null;
     }
 
+    // X has several specialty routes (DM chat, compose modal) that
+    // render different DOM than the main timeline/status pages and
+    // resist programmatic navigation away. Prefer "clean" tabs first
+    // (home / status / search / profile) over these specialty routes.
+    const isCleanXUrl = (u: string) =>
+      /^https:\/\/(x|twitter)\.com\//.test(u)
+      && !u.includes('/i/chat')
+      && !u.includes('/i/messages')
+      && !u.includes('/compose/post')
+      && !u.includes('/compose/tweet')
+      && !u.includes('/compose/articles');
+
     if (expectedContextId) {
       const inContext = pageTargets.filter((t) => t.browserContextId === expectedContextId);
-      let target = urlHint ? inContext.find((t) => t.url.includes(urlHint)) : undefined;
+      // Prefer clean tabs first; fall through to specialty tabs only if necessary.
+      let target = urlHint ? inContext.find((t) => t.url.includes(urlHint) && isCleanXUrl(t.url)) : undefined;
+      if (!target) target = inContext.find((t) => isCleanXUrl(t.url));
+      if (!target) target = urlHint ? inContext.find((t) => t.url.includes(urlHint)) : undefined;
       if (!target) target = inContext.find((t) => t.url.startsWith('https://x.com'));
       if (!target) target = inContext.find((t) => t.url.startsWith('https://twitter.com'));
 
@@ -407,10 +422,12 @@ export async function getCdpPage(urlHint?: string, expectedContextId?: string): 
       return page;
     }
 
-    // Fallback: no context hint
+    // Fallback: no context hint. Apply the same clean-tab preference.
     let target = urlHint
-      ? pageTargets.find((t) => t.url.includes(urlHint))
+      ? pageTargets.find((t) => t.url.includes(urlHint) && isCleanXUrl(t.url))
       : undefined;
+    if (!target) target = pageTargets.find((t) => isCleanXUrl(t.url));
+    if (!target) target = urlHint ? pageTargets.find((t) => t.url.includes(urlHint)) : undefined;
     if (!target) target = pageTargets.find((t) => t.url.startsWith('https://x.com'));
     if (!target) target = pageTargets.find((t) => t.url.startsWith('https://twitter.com'));
     if (!target) {

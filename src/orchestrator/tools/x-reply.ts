@@ -468,8 +468,28 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
       return { success: false, message: `X redirected to login (${currentUrl}).`, currentUrl };
     }
 
-    // Click the reply button on the primary tweet. The detail page shows
-    // the target tweet's action bar with a data-testid="reply" button.
+    // Poll for the article to hydrate. Raw wait isn't always enough when
+    // we just navigated from another x.com route (e.g. DM chat) — React
+    // needs up to ~8s to render the tweet detail. Without this, the
+    // Reply button query returns null even though the URL is correct.
+    let articleReady = false;
+    for (let i = 0; i < 16; i++) {
+      articleReady = await page.evaluate<boolean>(
+        `!!document.querySelector('article[data-testid="tweet"] [data-testid="reply"]')`,
+      ).catch(() => false);
+      if (articleReady) break;
+      await wait(500);
+    }
+    if (!articleReady) {
+      return {
+        success: false,
+        message: `Tweet article did not hydrate within 8s at ${await page.url()}.`,
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
+
+    // Click the reply button on the primary tweet.
     const replyOpen = await clickReplyButton(page);
     if (!replyOpen) {
       return {
@@ -479,10 +499,48 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
         currentUrl: await page.url(),
       };
     }
-    await wait(900);
 
-    // Reply composer is same textarea as compose.
-    const focused = await focusByTestid(page, 'tweetTextarea_0');
+    // Poll for the reply composer's textarea to mount AND be focusable.
+    // The click navigates to /compose/post which can take 1-3s to render
+    // depending on route transitions from earlier state (chat → compose
+    // is slow). 900ms raw wait was not enough — measured textLen=0 at
+    // submit-time because keystrokes were going nowhere yet.
+    let composerReady = false;
+    for (let i = 0; i < 20; i++) {
+      composerReady = await page.evaluate<boolean>(`(() => {
+        const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+        if (!(tb instanceof HTMLElement)) return false;
+        const r = tb.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      })()`).catch(() => false);
+      if (composerReady) break;
+      await wait(500);
+    }
+    if (!composerReady) {
+      return {
+        success: false,
+        message: 'Reply composer textarea did not mount within 10s.',
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
+    // Extra settle — React often needs one more paint after the
+    // textarea is mounted before keystrokes register.
+    await wait(500);
+
+    // Click + focus the textarea. .focus() alone sometimes doesn't hand
+    // keyboard routing to React's composer when we arrived via the Reply
+    // button navigation (vs a fresh /compose/post goto). A synthetic
+    // click dispatches the mousedown/mouseup React listens for, which
+    // establishes real input focus.
+    const focused = await page.evaluate<boolean>(`(() => {
+      const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+      if (!(tb instanceof HTMLElement)) return false;
+      tb.scrollIntoView({ block: 'center' });
+      if (typeof tb.click === 'function') tb.click();
+      tb.focus();
+      return document.activeElement === tb || tb.contains(document.activeElement);
+    })()`).catch(() => false);
     if (!focused) {
       return {
         success: false,
@@ -491,12 +549,55 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
         currentUrl: await page.url(),
       };
     }
-
-    // Warm the input so React's first keystroke isn't swallowed.
-    await page.typeText(' ');
-    await page.pressKey('Backspace');
-    await page.typeText(text);
     await wait(400);
+
+    // Clear any residual content before typing.
+    await page.evaluate(`(() => {
+      const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+      if (!(tb instanceof HTMLElement)) return false;
+      tb.focus();
+      document.execCommand('selectAll', false);
+      document.execCommand('delete', false);
+      return true;
+    })()`).catch(() => {});
+    await wait(300);
+
+    // Type char-by-char via CDP Input.dispatchKeyEvent. X's reply
+    // composer uses DraftJS which rejects both Input.insertText (what
+    // page.typeText does) and document.execCommand('insertText').
+    // Per-character keyDown/keyUp events with a text payload are the
+    // only variant DraftJS accepts — empirically confirmed 2026-04-17
+    // after three other typing strategies returned textLen=0.
+    for (const ch of text) {
+      // Newlines need explicit Enter dispatch
+      if (ch === '\n') {
+        await page.pressKey('Enter');
+        continue;
+      }
+      await (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send(
+        'Input.dispatchKeyEvent',
+        { type: 'keyDown', text: ch },
+      );
+      await (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send(
+        'Input.dispatchKeyEvent',
+        { type: 'keyUp', text: ch },
+      );
+    }
+    await wait(600);
+
+    const typedLen = await page.evaluate<number>(`(() => {
+      const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+      return tb ? (tb.textContent || '').length : -1;
+    })()`).catch(() => -1);
+
+    if (typedLen < Math.max(5, Math.floor(text.length * 0.5))) {
+      return {
+        success: false,
+        message: `Reply text did not register (expected ~${text.length}ch, got ${typedLen}ch). DraftJS editor did not accept dispatchKeyEvent stream.`,
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
 
     const screenshotBase64 = await captureScreenshot(page);
 
@@ -515,21 +616,50 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
       };
     }
 
-    // In the reply modal, the submit button's testid is still "tweetButton".
-    // X labels it "Reply" but the testid is stable.
-    const clicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
-    if (!clicked) {
-      // Fall back to clicking by the visible text "Reply".
-      const fallback = await clickByText(page, 'Reply');
-      if (!fallback) {
-        return {
-          success: false,
-          message: 'Reply submit button never became clickable within 10s.',
-          screenshotBase64,
-          replyTyped: 1,
-          replyPublished: 0,
-        };
-      }
+    // Submit via element.click() to bypass CDP-coordinate overlay.
+    // X uses different submit testids depending on layout:
+    //   - tweetButton        full-page /compose/post
+    //   - tweetButtonInline  inline modal reply composer (most common
+    //                         when you click Reply on a post detail page)
+    // Try inline first (the reply path), fall back to the primary.
+    let submitted = false;
+    for (let i = 0; i < 20; i++) {
+      submitted = await page.evaluate<boolean>(`(() => {
+        const btn = document.querySelector('[data-testid="tweetButtonInline"]')
+                 || document.querySelector('[data-testid="tweetButton"]');
+        if (!(btn instanceof HTMLElement)) return false;
+        if (btn.getAttribute('aria-disabled') === 'true') return false;
+        const r = btn.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return false;
+        if (typeof btn.click === 'function') { btn.click(); return true; }
+        return false;
+      })()`).catch(() => false);
+      if (submitted) break;
+      await wait(500);
+    }
+    if (!submitted) {
+      // Diagnostic snapshot — what's on the page at the moment we gave up?
+      const diag = await page.evaluate<{ url: string; btnCount: number; btnDisabled: string | null; textLen: number }>(
+        `(() => {
+          const btn = document.querySelector('[data-testid="tweetButtonInline"]')
+                   || document.querySelector('[data-testid="tweetButton"]');
+          const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+          return {
+            url: location.href,
+            btnCount: document.querySelectorAll('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]').length,
+            btnDisabled: btn instanceof HTMLElement ? btn.getAttribute('aria-disabled') : null,
+            textLen: tb ? (tb.textContent || '').length : -1,
+          };
+        })()`,
+      ).catch(() => ({ url: '?', btnCount: -1, btnDisabled: '?', textLen: -1 }));
+      logger.warn(diag, '[x-reply] submit poll timed out');
+      return {
+        success: false,
+        message: `Reply submit button never became clickable within 10s. diag=${JSON.stringify(diag)}`,
+        screenshotBase64,
+        replyTyped: 1,
+        replyPublished: 0,
+      };
     }
     // Confirm publish via polling — composer-close alone gave false
     // negatives when X is slow. Accept EITHER composer-closed OR our
@@ -592,22 +722,23 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
  * because X renders the target tweet first in the detail stack.
  */
 async function clickReplyButton(page: CdpPage): Promise<boolean> {
+  // Use element.click() via evaluate, not page.clickSelector. Same
+  // class of bug as Threads: X overlays transparent layers above
+  // action buttons that intercept CDP coordinate clicks without
+  // forwarding to React's handler. Synthetic .click() bypasses the
+  // overlay and dispatches on the actual target. Empirically required
+  // for the reply-open flow to mount the composer.
   try {
-    const tagged = await page.evaluate<boolean>(`(() => {
+    return await page.evaluate<boolean>(`(() => {
       const btn = document.querySelector('article[data-testid="tweet"] [data-testid="reply"]');
       if (!(btn instanceof HTMLElement)) return false;
-      btn.setAttribute('data-x-reply-target', '1');
       btn.scrollIntoView({ block: 'center' });
-      return true;
+      if (typeof btn.click === 'function') {
+        btn.click();
+        return true;
+      }
+      return false;
     })()`);
-    if (!tagged) return false;
-    const clicked = await page.clickSelector('[data-x-reply-target="1"]', 5000);
-    await page.evaluate(`(() => {
-      const el = document.querySelector('[data-x-reply-target="1"]');
-      if (el) el.removeAttribute('data-x-reply-target');
-      return true;
-    })()`).catch(() => {});
-    return clicked;
   } catch {
     return false;
   }
