@@ -64,6 +64,11 @@ describe('selectors.ts', () => {
       // vs read intent at the call site — accept the alias.
       'VIDEO_TITLE_READ and META_TITLE_BOX both point at "#title-textarea #textbox"',
       'VIDEO_DESCRIPTION_READ and META_DESCRIPTION_BOX both point at "#description-textarea #textbox"',
+      // Both the Create-menu mount-wait and the edit-page overflow-menu
+      // item set use tp-yt-paper-item — Studio reuses the same Polymer
+      // primitive for every popover menu. Callers filter by visibility +
+      // text, so the shared tag is fine.
+      'VIDEO_OVERFLOW_MENU_ITEMS and UPLOAD_MENU_ITEM_READY both point at "tp-yt-paper-item"',
     ]);
     const unexpected = dupes.filter((d) => !allowed.has(d));
     expect(unexpected).toEqual([]);

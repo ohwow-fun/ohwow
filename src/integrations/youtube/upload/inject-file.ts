@@ -1,5 +1,5 @@
 /**
- * Inject a file into Studio's upload <input type="file"> via
+ * Inject a file into a Studio <input type="file"> via
  * CDP DOM.setFileInputFiles. Bypasses the native picker entirely.
  *
  * Two strategies tried in order:
@@ -8,6 +8,9 @@
  *   2. Runtime.evaluate + DOM.requestNode to grab the input as a
  *      DOM node id via its object — handles Shadow DOM cases (Studio
  *      occasionally renders the input inside a custom element tree).
+ *
+ * Used by both the main video upload (SEL.UPLOAD_FILE_INPUT) and the
+ * thumbnail picker (SEL.THUMBNAIL_FILE_INPUT).
  */
 
 import fs from 'node:fs';
@@ -15,9 +18,13 @@ import type { RawCdpPage } from '../../../execution/browser/raw-cdp.js';
 import { YTUploadError } from '../errors.js';
 import { SEL } from '../selectors.js';
 
-export async function injectFile(page: RawCdpPage, filePath: string): Promise<void> {
+export async function injectFile(
+  page: RawCdpPage,
+  filePath: string,
+  selector: string = SEL.UPLOAD_FILE_INPUT,
+): Promise<void> {
   if (!fs.existsSync(filePath)) {
-    throw new YTUploadError('inject_file', `video file not found: ${filePath}`, { filePath });
+    throw new YTUploadError('inject_file', `file not found: ${filePath}`, { filePath });
   }
 
   await page.send('DOM.enable');
@@ -25,17 +32,15 @@ export async function injectFile(page: RawCdpPage, filePath: string): Promise<vo
 
   const qsa = await page.send<{ nodeIds: number[] }>('DOM.querySelectorAll', {
     nodeId: doc.root.nodeId,
-    selector: SEL.UPLOAD_FILE_INPUT,
+    selector,
   });
   if (qsa.nodeIds.length > 0) {
     await page.send('DOM.setFileInputFiles', { files: [filePath], nodeId: qsa.nodeIds[0] });
     return;
   }
 
-  // Shadow DOM fallback — evaluate without returnByValue to get an objectId,
-  // then requestNode to convert to a DOM nodeId.
   const objResult = await page.send<{ result: { objectId?: string } }>('Runtime.evaluate', {
-    expression: `document.querySelector(${JSON.stringify(SEL.UPLOAD_FILE_INPUT)})`,
+    expression: `document.querySelector(${JSON.stringify(selector)})`,
     returnByValue: false,
   });
   if (objResult.result?.objectId) {
@@ -44,5 +49,5 @@ export async function injectFile(page: RawCdpPage, filePath: string): Promise<vo
     return;
   }
 
-  throw new YTUploadError('inject_file', 'could not locate file input in upload dialog');
+  throw new YTUploadError('inject_file', `could not locate file input for selector ${selector}`);
 }

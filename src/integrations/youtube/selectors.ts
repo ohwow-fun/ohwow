@@ -55,6 +55,31 @@ export const SEL = {
   DIALOG_PROCESSING_CLOSE:
     'ytcp-prechecks-warning-dialog #close-button button, tp-yt-paper-dialog [aria-label="Close"]',
 
+  // --- Thumbnail (Details step of wizard + edit page) --------------------
+  // Hidden input inside <ytcp-thumbnail-uploader>. accept="image/jpeg,image/png".
+  // Writable via DOM.setFileInputFiles — same mechanism as the main upload input.
+  // Present on both the upload wizard's Details step and the per-video edit page.
+  THUMBNAIL_FILE_INPUT: 'ytcp-thumbnail-uploader input[type="file"]',
+  // Visible "Upload file" button inside the thumbnail editor — useful to
+  // detect whether the thumbnail slot has mounted before injecting.
+  THUMBNAIL_SELECT_BUTTON: 'ytcp-thumbnail-uploader #select-button',
+
+  // --- Per-video edit page (studio.youtube.com/video/{id}/edit) ----------
+  // Top-right page-level overflow menu. Opens a tp-yt-paper-listbox with
+  // text-items: Download / Delete / Promote / Brainstorm video ideas.
+  // Match the Delete item by its textContent, not by the unstable id.
+  VIDEO_OVERFLOW_MENU_BUTTON: '#overflow-menu-button',
+  VIDEO_OVERFLOW_MENU_ITEMS: 'tp-yt-paper-item',
+
+  // --- Delete confirmation modal ----------------------------------------
+  // Studio gates a delete behind a modal with a checkbox ("I understand…")
+  // and a destructive confirm button. These selectors are best-effort and
+  // validated live during deleteDraft — update if the modal reshapes.
+  DELETE_CONFIRM_CHECKBOX:
+    'ytcp-checkbox-lit, tp-yt-paper-checkbox, input[type="checkbox"]',
+  DELETE_CONFIRM_BUTTON:
+    'ytcp-button#confirm-button, ytcp-button[test-id="confirm-button"], ytcp-button[label*="Delete" i], ytcp-button[label*="forever" i]',
+
   // --- Video URL extraction (surfaces in sidebar after upload) -----------
   SHORTS_LINK: 'a[href*="youtube.com/shorts/"]',
   WATCH_LINK: 'a[href*="youtu.be/"], a[href*="youtube.com/watch"]',

@@ -43,6 +43,17 @@ export {
 
 export { type Visibility } from './upload/visibility.js';
 
+export { uploadThumbnail } from './upload/thumbnail.js';
+
+export {
+  publishDraft,
+  deleteDraft,
+  findDraftIdByTitle,
+  type PublishDraftOptions,
+  type PublishDraftResult,
+  type DeleteDraftOptions,
+} from './drafts.js';
+
 export {
   channelSummary,
   analyticsOverview,

@@ -12,9 +12,12 @@
  * success state on failure — e.g. upload completed to YouTube but the
  * final Save click was blocked by a consent popup.
  *
- * dryRun: true stops AFTER url_extracted and AFTER cancelUpload (so
- * the dialog is left closed, nothing has been committed to the channel).
- * Used by yt-dry-run.mjs to validate the full path without publishing.
+ * dryRun: true walks every wizard stage up through url_extracted, then
+ * closes the dialog. The file + metadata have been uploaded by that
+ * point — Studio auto-saves them as a draft in Content → Drafts. The
+ * returned videoId is real and stable; the draft is not public, but it
+ * exists and must be explicitly cleaned up (see drafts.ts). This mode
+ * was misleadingly documented for a long time; see README for details.
  */
 
 import type { RawCdpPage } from '../../../execution/browser/raw-cdp.js';
@@ -24,6 +27,7 @@ import { YTChallengeError, YTUploadError } from '../errors.js';
 import { closeAnyOpenDialog, openUploadDialog } from './open-dialog.js';
 import { fillDescription, fillTitle, setNotMadeForKids } from './fill-metadata.js';
 import { injectFile } from './inject-file.js';
+import { uploadThumbnail } from './thumbnail.js';
 import { clickSave, dismissProcessingDialog, extractVideoUrl, selectVisibility, type Visibility } from './visibility.js';
 import { advanceToStep } from './wizard.js';
 
@@ -33,6 +37,7 @@ export type UploadStage =
   | 'processing_started'
   | 'title_filled'
   | 'description_filled'
+  | 'thumbnail_attached'
   | 'not_for_kids_set'
   | 'step_advanced'
   | 'visibility_set'
@@ -53,6 +58,12 @@ export interface UploadShortOptions {
   filePath: string;
   title: string;
   description?: string;
+  /**
+   * Custom thumbnail (JPEG/PNG, target 1280×720, ≤2MB). Attached on the
+   * Details step after description. Omit to keep Studio's auto-generated
+   * frame-grab thumbnail.
+   */
+  thumbnailPath?: string;
   visibility?: Visibility;
   /** When true, stop before clicking Save and close the dialog. */
   dryRun?: boolean;
@@ -122,20 +133,25 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
   await stage('dialog_open', undefined, () => openUploadDialog(page));
   await stage('file_injected', { filePath: opts.filePath }, () => injectFile(page, opts.filePath));
 
-  // After file injection, Studio spins up processing. Give it a beat
-  // to mount progress UI + auto-populate title from filename. We wait
-  // on the metadata step's title box (which is our signal that the
-  // wizard has moved past "just selecting a file").
+  // After file injection, Studio spins up processing AND async-autofills
+  // the title textbox from the filename. We must wait for that autofill
+  // to LAND before fillTitle runs — otherwise Studio overwrites our
+  // title a few hundred ms later and the saved draft keeps the filename.
+  // This is what went wrong on 2026-04-17: title_filled landed in 9ms
+  // because the textbox existed, but Studio's autofill reverted it.
   await stage('processing_started', undefined, async () => {
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
-      const present = await page.evaluate<boolean>(
-        `(() => !!document.querySelector('#title-textarea #textbox'))()`,
+      const state = await page.evaluate<{ present: boolean; hasContent: boolean }>(
+        `(() => {
+          const el = document.querySelector('#title-textarea #textbox');
+          return { present: !!el, hasContent: el ? (el.textContent || '').trim().length > 0 : false };
+        })()`,
       );
-      if (present) return;
+      if (state.hasContent) return;
       await sleep(250);
     }
-    throw new YTUploadError('processing_started', 'title box never mounted after file injection');
+    throw new YTUploadError('processing_started', 'title box never populated by Studio autofill');
   });
 
   await assertNoChallenge();
@@ -143,6 +159,11 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
   await stage('title_filled', { title: opts.title }, () => fillTitle(page, opts.title));
   if (opts.description) {
     await stage('description_filled', { length: opts.description.length }, () => fillDescription(page, opts.description!));
+  }
+  if (opts.thumbnailPath) {
+    await stage('thumbnail_attached', { thumbnailPath: opts.thumbnailPath }, () =>
+      uploadThumbnail(page, opts.thumbnailPath!),
+    );
   }
   await stage('not_for_kids_set', undefined, () => setNotMadeForKids(page));
 

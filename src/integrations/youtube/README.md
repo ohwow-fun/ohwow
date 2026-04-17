@@ -49,17 +49,34 @@ await withCdpLane(workspaceId, async () => {
 }, { label: 'yt:upload' });
 ```
 
-## Dry-run contract
+## Stage-as-draft contract (the mode formerly misnamed "dry-run")
 
-`uploadShort(page, { dryRun: true })` runs every wizard stage up to
+`uploadShort(page, { dryRun: true })` walks every wizard stage up to
 and including visibility selection + URL extraction, then closes the
-dialog. Nothing is committed to the channel. The returned
-`UploadResult` has `dryRun: true` and the `wouldBeUrl` the visibility
-pane surfaced.
+dialog. **The video is not published**, but Studio has auto-saved the
+uploaded file + metadata as a draft — it shows up in Content → Drafts
+with the `videoId` returned as `wouldBeUrl`.
 
-This is the ONLY mode used by `yt-dry-run.mjs`. It's safe to run on a
-real channel — we verified end-to-end that the channel video list
-stays empty across three consecutive dry-runs.
+The option name is kept as `dryRun` for backwards compat with every
+existing caller, but the honest semantics are "stage as draft":
+
+- The file has been uploaded to YouTube.
+- Title, description, not-for-kids, and visibility selection were
+  written into the draft.
+- The draft does NOT appear on the public channel video list.
+- It DOES appear in Studio Content → Drafts and requires explicit
+  cleanup (`deleteDraft`) or promotion (`publishDraft`).
+- The returned `videoId` is real and stable — use it to drive the
+  promote/delete flow.
+
+The original comment in this README was wrong. It claimed "channel
+video list stays empty across three consecutive dry-runs" — that
+check only covered the public video list, not the draft list. Fixed
+2026-04.
+
+`yt-dry-run.mjs` still uses this mode for wizard-path validation.
+Operators who run it against a live channel should periodically
+`deleteDraft` the leftovers — drafts accumulate otherwise.
 
 ## CLIs
 
