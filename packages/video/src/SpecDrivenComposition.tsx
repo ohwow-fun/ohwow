@@ -178,7 +178,12 @@ const CaptionLayer: React.FC<{ spec: VideoSpec; totalFrames: number }> = ({
 
   spec.scenes.forEach((scene, i) => {
     const sceneStart = starts[i];
-    const caps = scene.captions?.length
+    // A scene that explicitly sets captions — even to an empty array —
+    // opts out of auto-caption generation from its narration. This lets
+    // signature intro/outro scenes that carry their own on-frame title
+    // text (e.g. r3f.floating-title) suppress captions that would
+    // otherwise collide with the floating subtitle.
+    const caps = scene.captions !== undefined
       ? scene.captions
       : autoCaptions(
           (scene as { narration?: string }).narration ?? "",
@@ -225,7 +230,7 @@ export const SpecDrivenComposition: React.FC<VideoSpec> = (rawSpec) => {
     <AbsoluteFill>
       {music && (
         <Sequence from={music.startFrame} durationInFrames={totalFrames - music.startFrame}>
-          <Audio src={resolveSrc(music.src)} volume={music.volume ?? 1} />
+          <Audio src={resolveSrc(music.src)} volume={music.volume ?? 1} loop />
         </Sequence>
       )}
       <AudioLayer refs={voiceovers} totalFrames={totalFrames} />
