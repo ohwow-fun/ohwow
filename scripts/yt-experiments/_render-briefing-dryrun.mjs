@@ -12,6 +12,13 @@
  * voice: alloy, briefing prosody prompt).
  *
  * Run: node --import tsx scripts/yt-experiments/_render-briefing-dryrun.mjs
+ *
+ * Flags (all optional):
+ *   --publish   after render, chain to _publish-briefing.mjs (dry-run of
+ *               the upload wizard by default — add --yes --publish to live)
+ *   --yes       passthrough to publish step
+ *   --public    passthrough (requires 5 prior unlisted applied runs)
+ *   --identity  passthrough
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -217,4 +224,22 @@ function renderVideo(specPath, outPath) {
   const videoMs = Math.round((spec.scenes.reduce((a, s) => a + s.durationInFrames, 0) / fps) * 1000);
   console.log(`[dryrun] done. video=${videoMs}ms voice=${totalVoiceMs}ms (${voiceovers.length} clips)`);
   console.log(`[dryrun] open ${VIDEO_OUT}`);
+
+  if (process.argv.includes('--publish')) {
+    const passthrough = ['--publish'];
+    for (const f of ['--public', '--yes']) if (process.argv.includes(f)) passthrough.push(f);
+    const identity = process.argv.find((a) => a.startsWith('--identity='));
+    if (identity) passthrough.push(identity);
+    console.log(`[dryrun] chaining to _publish-briefing.mjs ${passthrough.join(' ')}`);
+    await new Promise((resolve, reject) => {
+      const child = spawn('node', [
+        '--import', 'tsx',
+        'scripts/yt-experiments/_publish-briefing.mjs',
+        `--mp4=${VIDEO_OUT}`,
+        `--spec=${SPEC_OUT}`,
+        ...passthrough,
+      ], { stdio: 'inherit' });
+      child.on('exit', (code) => code === 0 ? resolve() : reject(new Error(`publish exit ${code}`)));
+    });
+  }
 })().catch((e) => { console.error('[dryrun]', e); process.exit(1); });
