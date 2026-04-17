@@ -70,6 +70,7 @@ import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-s
 import { RevenuePulseExperiment } from '../self-bench/experiments/revenue-pulse.js';
 import { OpsPulseExperiment } from '../self-bench/experiments/ops-pulse.js';
 import { OutreachCopyFuzzExperiment } from '../self-bench/experiments/outreach-copy-fuzz.js';
+import { OutreachPolicyFuzzExperiment } from '../self-bench/experiments/outreach-policy-fuzz.js';
 import { BurnGuardExperiment } from '../self-bench/experiments/burn-guard.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
@@ -218,6 +219,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new RevenuePulseExperiment());
   experimentRunner.register(new OpsPulseExperiment());
   experimentRunner.register(new OutreachCopyFuzzExperiment());
+  experimentRunner.register(new OutreachPolicyFuzzExperiment());
   experimentRunner.register(new BurnGuardExperiment());
   experimentRunner.register(new RoadmapShapeProbeExperiment());
   experimentRunner.register(new VitestHealthProbeExperiment());

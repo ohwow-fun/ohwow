@@ -117,15 +117,17 @@ cosmetic and should not compete with money work for author-queue slots.
 | Tier | Paths | What autonomous code can do |
 |------|-------|----------------------------|
 | tier-1 | `src/self-bench/experiments/`, `src/self-bench/__tests__/`, `auto-registry.ts`, migration/toolchain registries | Create NEW files only. Never modify existing. |
-| tier-2 (whole-file) | `src/lib/format-duration.ts`, `src/lib/token-similarity.ts`, `src/lib/stagnation.ts`, `src/lib/error-classification.ts`, `AUTONOMY_ROADMAP.md`, `roadmap/gaps.md`, `roadmap/iteration-log.md` | Replace entire file. 1 top-level symbol changed (L4 gate). |
+| tier-2 (whole-file) | `src/lib/format-duration.ts`, `src/lib/token-similarity.ts`, `src/lib/stagnation.ts`, `src/lib/error-classification.ts`, `src/lib/outreach-policy.ts`, `AUTONOMY_ROADMAP.md`, `roadmap/gaps.md`, `roadmap/iteration-log.md` | Replace entire file. 1 top-level symbol changed (L4 gate). |
 | tier-2 (string-literal) | `src/web/src/pages/`, `src/web/src/components/ErrorBoundary.tsx`, `src/self-bench/experiments/outreach-thermostat.ts` | Only string literal / JSX text node values may differ. Structure/imports/identifiers frozen (L4 gate). |
-| tier-3 | Everything else — including nearly all of the sales loop (x-authors-to-crm, classifier, templates, scheduler, CRM ops) | Humans only. |
+| tier-3 | Everything else — including most of the sales loop (x-authors-to-crm, classifier, templates, scheduler, CRM ops) | Humans only. |
 
-**Note on tier-2 balance**: the current tier-2 set is heavy on cosmetic surfaces
-(pages/, ErrorBoundary). Only one file (`outreach-thermostat.ts`) is in the
-revenue-adjacent path. Widening tier-2 into the sales loop is a Phase 2 priority —
-without it, the loop can see revenue problems (via RevenuePulse) but cannot act on
-them autonomously.
+**Note on tier-2 balance**: the tier-2 set now carries two revenue-adjacent
+files: `outreach-thermostat.ts` (draft-message copy, string-literal) and
+`outreach-policy.ts` (cooldown gate, whole-file, landed 2026-04-16 with the
+`outreach-policy-fuzz` invariant probe). Together they give the loop both
+copy knobs and policy knobs in the outreach path. Further widening — into
+x-authors-to-crm, classifier thresholds, and outreach cadence config — is
+still queued as Phase 1 continuation work.
 
 ### Key Experiments Running
 
@@ -136,7 +138,8 @@ that carry the money telos most directly:
 - **OpsPulseExperiment** — hourly ops-knob snapshot + Next Move
 - **DailySurpriseDigestExperiment** — daily narrative, reads both pulses
 - **revenue-pipeline-observer, attribution-observer, burn-rate** — the underlying measurements the pulses aggregate
-- **outreach-thermostat** — the one tier-2 revenue-adjacent file the loop can patch today
+- **outreach-thermostat** — tier-2 draft-message copy the loop can patch (string-literal)
+- **outreach-policy** — tier-2 cross-channel cooldown gate the loop can patch (whole-file), fuzzed by `outreach-policy-fuzz`
 
 See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 

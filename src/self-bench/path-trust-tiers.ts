@@ -144,6 +144,19 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'error boundary fallback copy — structure is a single render method, copy-only edits safe',
   },
+  // Phase 1 of the revenue-path widening: outreach-policy is the one
+  // gate every outbound channel consults before sending. DEFAULT_COOLDOWN_HOURS,
+  // the per-channel resolver, and COOLDOWN_EVENT_KINDS are exactly the
+  // knobs the revenue bucket should be able to heal autonomously. Pure
+  // helpers + DB reads, well-covered contract; fuzzed by
+  // outreach-policy-fuzz which emits affected_files on any invariant
+  // regression (range, positivity, override handling, core event kinds).
+  {
+    prefix: 'src/lib/outreach-policy.ts',
+    tier: 'tier-2',
+    rationale:
+      'cooldown policy gate for every outbound channel — tier-2 whole-file so the loop can autonomously tune cooldown hours + event-kind set, fuzzed by outreach-policy-fuzz',
+  },
   // Cross-domain tier-2: outreach-thermostat's draft-message template is
   // the copy surface the operator rejects most often (see Phase 2
   // context-pack's operator-rejections section). The Layer 4 string-
