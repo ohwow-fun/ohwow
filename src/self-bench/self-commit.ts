@@ -85,6 +85,7 @@ import {
   ROADMAP_INDEX_REL,
   ROADMAP_LOG_REL,
 } from './experiments/roadmap-shape-probe.js';
+import type { ExpectedLift } from './lift-measurements-store.js';
 
 export interface SelfCommitFile {
   /** Path relative to the repo root. */
@@ -166,6 +167,30 @@ export interface SelfCommitOptions {
    */
   citesResearchPapers?: string[];
   /**
+   * Phase 5 — Expected-Lift trailers. One or more (kpi, direction,
+   * horizon) tuples naming what the author claims this commit will
+   * move. Each lands as a separate `Expected-Lift: <kpi> <dir> <h>h`
+   * trailer and, when a liftBaselineRecorder is also provided, causes
+   * a lift_measurements baseline row to be inserted on successful
+   * commit. Capped at 5 lifts per commit to stop pathological
+   * drafts from ballooning the trailer block.
+   *
+   * Advisory for the commit pipeline: safeSelfCommit does not gate
+   * on it. A commit with no Expected-Lift still lands — it just
+   * doesn't get outcome-measured.
+   */
+  expectedLifts?: ExpectedLift[];
+  /**
+   * Phase 5 — callback invoked after a successful commit with one
+   * input per entry in opts.expectedLifts. Takes a callback (not a
+   * DatabaseAdapter ref) so self-commit.ts stays free of the DB dep,
+   * matching the findingResolver pattern. Errors are swallowed — a
+   * failed baseline insert must not undo a landed commit. Caller is
+   * expected to bind this with the workspace's db + workspaceId and
+   * to read the baseline KPI value via kpi-registry.
+   */
+  liftBaselineRecorder?: (input: LiftBaselineRecorderInput) => Promise<void>;
+  /**
    * Callback that resolves a finding id to its {verdict, ranAt,
    * evidence} tuple. Takes a callback (not a DatabaseAdapter ref)
    * so self-commit.ts stays free of the DB dep and stays trivially
@@ -174,6 +199,16 @@ export interface SelfCommitOptions {
    * fixesFindingId is set.
    */
   findingResolver?: (id: string) => Promise<FindingLookup | null>;
+}
+
+/** Input shape for the liftBaselineRecorder callback. */
+export interface LiftBaselineRecorderInput {
+  commitSha: string;
+  expected: ExpectedLift;
+  /** ISO timestamp; pass-through to lift_measurements.baseline_at. */
+  baselineAt: string;
+  /** Experiment id that authored the commit. */
+  sourceExperimentId: string;
 }
 
 /**
@@ -869,7 +904,31 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   const researchTrailer = researchPapers.length > 0
     ? researchPapers.map((p) => `Cites-Research-Paper: ${p}`).join('\n') + '\n'
     : '';
-  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}${citesTrailer}${researchTrailer}`;
+  // Expected-Lift trailers — one per KPI × horizon pair. Capped at 5
+  // so a malformed list can't balloon the message. Each line is
+  // `Expected-Lift: <kpi_id> <direction> <horizon>h` — space-delimited,
+  // newline-stripped per field, and the kpi_id/direction/horizon are
+  // validated downstream against kpi-registry before a baseline lands,
+  // so a typo here produces a grep-able trailer but no ledger row.
+  const expectedLiftsList = Array.isArray(opts.expectedLifts)
+    ? opts.expectedLifts
+        .filter(
+          (l): l is ExpectedLift =>
+            l != null &&
+            typeof l.kpiId === 'string' &&
+            l.kpiId.length > 0 &&
+            (l.direction === 'up' || l.direction === 'down' || l.direction === 'any') &&
+            Number.isFinite(l.horizonHours) &&
+            l.horizonHours > 0,
+        )
+        .slice(0, 5)
+    : [];
+  const liftTrailer = expectedLiftsList.length > 0
+    ? expectedLiftsList
+        .map((l) => `Expected-Lift: ${l.kpiId.replace(/\s+/g, '-')} ${l.direction} ${Math.floor(l.horizonHours)}h`)
+        .join('\n') + '\n'
+    : '';
+  const fullMessage = `${opts.commitMessage}\n\nSelf-authored by experiment: ${opts.experimentId}\n\nCo-Authored-By: ohwow-self-bench <self@ohwow.local>\n${fixesTrailer}${citesTrailer}${researchTrailer}${liftTrailer}`;
   const fileArgs = opts.files.map((f) => `"${f.path}"`).join(' ');
   try {
     runInRepo(`git add -N -- ${fileArgs}`, repoRoot);
@@ -891,6 +950,38 @@ export async function safeSelfCommit(opts: SelfCommitOptions): Promise<SelfCommi
   try {
     commitSha = runInRepo('git rev-parse HEAD', repoRoot).trim();
   } catch { /* shouldn't happen but not fatal — commit already landed */ }
+
+  // 8b. Phase 5 baseline: record a lift_measurements row per
+  //     expectedLift the caller passed. Best-effort — a failed recorder
+  //     never undoes the commit. Keeps self-commit.ts DB-free by
+  //     delegating the actual KPI read + insert to the caller's
+  //     closure (which has db + workspaceId bound).
+  if (
+    commitSha
+    && expectedLiftsList.length > 0
+    && typeof opts.liftBaselineRecorder === 'function'
+  ) {
+    const baselineAt = new Date().toISOString();
+    for (const expected of expectedLiftsList) {
+      try {
+        await opts.liftBaselineRecorder({
+          commitSha,
+          expected,
+          baselineAt,
+          sourceExperimentId: opts.experimentId,
+        });
+      } catch (err) {
+        logger.warn(
+          {
+            err: err instanceof Error ? err.message : err,
+            commitSha,
+            kpiId: expected.kpiId,
+          },
+          '[self-commit] lift baseline recorder threw; commit still landed',
+        );
+      }
+    }
+  }
 
   // 9. Push intentionally skipped — local commits only until the loop
   // is proven stable. A human push (or a future push-enablement

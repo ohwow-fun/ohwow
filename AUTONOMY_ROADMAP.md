@@ -140,6 +140,7 @@ that carry the money telos most directly:
 - **revenue-pipeline-observer, attribution-observer, burn-rate** — the underlying measurements the pulses aggregate
 - **outreach-thermostat** — tier-2 draft-message copy the loop can patch (string-literal)
 - **outreach-policy** — tier-2 cross-channel cooldown gate the loop can patch (whole-file), fuzzed by `outreach-policy-fuzz`
+- **lift-measurement** — Phase 5 credit-assignment probe (10 min cadence). Closes pending `lift_measurements` rows at their horizon, computes `signed_lift` against the KPI registry, and emits per-commit verdicts (`moved_right` / `moved_wrong` / `flat` / `unmeasured`). Fed by `Expected-Lift:` trailers on any `safeSelfCommit` that declared them; the ranker will read the rolling distribution in Phase 5b.
 
 See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 
