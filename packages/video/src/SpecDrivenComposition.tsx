@@ -40,6 +40,109 @@ const AudioLayer: React.FC<{ refs: AudioRef[]; totalFrames: number }> = ({
 );
 
 /**
+ * Smoothstep (cubic ease-in-out). Linear ramps at the edges of a duck make
+ * the envelope audibly "clip" into and out of steady state; smoothstep's
+ * zero-derivative endpoints round those corners so a large dynamic swing
+ * (e.g. 0.9 → 0.12) still sounds like a compressor, not a volume knob being
+ * yanked.
+ */
+function smoothstep(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Sidechain-style ducking. Returns a frame-indexed volume function where the
+ * music sits at `baseVolume` during silent gaps and dips to `duckedVolume`
+ * whenever any voiceover window is active. Attack/release ramps are eased
+ * with smoothstep so the envelope is clean even across a wide dynamic range.
+ *
+ * Frames passed to the returned function are Sequence-relative (i.e., 0 at
+ * the start of the music Sequence); internally we shift by `musicStartFrame`
+ * so voice windows can be compared in absolute-composition time.
+ *
+ * Voice windows that lack a durationFrames are skipped — without an explicit
+ * end frame we can't honor a release ramp, and defaulting to "active until
+ * composition end" would leave music ducked for the whole tail.
+ */
+function buildMusicVolume(params: {
+  baseVolume: number;
+  duckedVolume: number;
+  attackFrames: number;
+  releaseFrames: number;
+  musicStartFrame: number;
+  voiceWindows: Array<{ start: number; end: number }>;
+}): (f: number) => number {
+  const { baseVolume, duckedVolume, attackFrames, releaseFrames, musicStartFrame, voiceWindows } = params;
+  if (voiceWindows.length === 0 || duckedVolume >= baseVolume) {
+    return () => baseVolume;
+  }
+  return (f: number): number => {
+    const absoluteFrame = musicStartFrame + f;
+    let target = baseVolume;
+    for (const { start, end } of voiceWindows) {
+      let duckAmount = 0;
+      if (absoluteFrame >= start - attackFrames && absoluteFrame < start) {
+        duckAmount = attackFrames === 0
+          ? 1
+          : smoothstep((absoluteFrame - (start - attackFrames)) / attackFrames);
+      } else if (absoluteFrame >= start && absoluteFrame < end) {
+        duckAmount = 1;
+      } else if (absoluteFrame >= end && absoluteFrame < end + releaseFrames) {
+        duckAmount = releaseFrames === 0
+          ? 0
+          : smoothstep(1 - (absoluteFrame - end) / releaseFrames);
+      }
+      if (duckAmount > 0) {
+        const vol = baseVolume + (duckedVolume - baseVolume) * duckAmount;
+        if (vol < target) target = vol;
+      }
+    }
+    return target;
+  };
+}
+
+const MusicLayer: React.FC<{
+  music: AudioRef;
+  voiceovers: AudioRef[];
+  totalFrames: number;
+}> = ({ music, voiceovers, totalFrames }) => {
+  const baseVolume = music.volume ?? 1;
+  // Duck to a fixed target in the 0.08-0.12 band regardless of base, so the
+  // voice sits on top by the same headroom margin even when music is loud.
+  // Capped by 40% of base so a very quiet base (e.g. 0.2) doesn't mean
+  // ducking UP.
+  const duckedVolume = Math.min(0.12, baseVolume * 0.4);
+  const voiceWindows = voiceovers
+    .filter((v) => typeof v.durationFrames === "number")
+    .map((v) => ({
+      start: v.startFrame,
+      end: v.startFrame + (v.durationFrames as number),
+    }));
+  const volumeFn = buildMusicVolume({
+    baseVolume,
+    duckedVolume,
+    // Longer ramps than a typical sidechain because we're traversing a much
+    // wider dynamic range (up to ~8x). 15 frames in / 30 out at 30fps ≈
+    // 500ms attack, 1s release — musical without letting voice onsets peek
+    // through the head of the duck.
+    attackFrames: 15,
+    releaseFrames: 30,
+    musicStartFrame: music.startFrame,
+    voiceWindows,
+  });
+  return (
+    <Sequence
+      from={music.startFrame}
+      durationInFrames={Math.max(1, totalFrames - music.startFrame)}
+    >
+      <Audio src={resolveSrc(music.src)} volume={volumeFn} loop />
+    </Sequence>
+  );
+};
+
+/**
  * Compute the composition-time frame offset where each scene visually begins,
  * accounting for transition overlap. Used to place captions at absolute time.
  */
@@ -229,9 +332,7 @@ export const SpecDrivenComposition: React.FC<VideoSpec> = (rawSpec) => {
   return (
     <AbsoluteFill>
       {music && (
-        <Sequence from={music.startFrame} durationInFrames={totalFrames - music.startFrame}>
-          <Audio src={resolveSrc(music.src)} volume={music.volume ?? 1} loop />
-        </Sequence>
+        <MusicLayer music={music} voiceovers={voiceovers} totalFrames={totalFrames} />
       )}
       <AudioLayer refs={voiceovers} totalFrames={totalFrames} />
 

@@ -1,0 +1,143 @@
+{
+  "id": "briefing-dryrun-20260417-v4",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brandKitRef": "briefing",
+  "brand": {
+    "colors": {
+      "bg": "#f4f7fb",
+      "surface": "#ffffff",
+      "accent": "#2563eb",
+      "accentDeep": "#1d4ed8",
+      "text": "#0a1629",
+      "textMuted": "#475569",
+      "textDim": "rgba(10, 22, 41, 0.5)",
+      "tickerBg": "#0a1629",
+      "tickerText": "#f8fafc",
+      "ruleLine": "#cbd5e1"
+    },
+    "fonts": {
+      "sans": "Inter, system-ui, -apple-system, sans-serif",
+      "mono": "JetBrains Mono, SF Mono, Menlo, monospace",
+      "display": "Smooch Sans, Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255, 255, 255, 0.85)",
+      "border": "1px solid rgba(10, 22, 41, 0.1)",
+      "borderRadius": 6,
+      "backdropFilter": "blur(8px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "music": { "src": "audio/ohwow-tracks/ohwow-anthem-01.mp3", "startFrame": 0, "volume": 0.9 },
+  "voiceovers": [],
+  "transitions": [{ "kind": "fade", "durationInFrames": 15 }],
+  "scenes": [
+    {
+      "id": "cold-open",
+      "kind": "r3f-scene",
+      "durationInFrames": 60,
+      "captions": [],
+      "params": {
+        "background": "#000000",
+        "camera": { "position": [0, 0, 8], "fov": 40 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.logo-reveal", "params": { "size": 3.0, "durationInFrames": 60 } }
+        ]
+      }
+    },
+    {
+      "id": "intro",
+      "kind": "r3f-scene",
+      "durationInFrames": 270,
+      "narration": "It's Thursday, April seventeenth. Two moves from the frontier labs that will land on your stack this quarter. Here's what matters.",
+      "captions": [],
+      "params": {
+        "background": "#000000",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.grid-background", "params": { "cellSize": 22, "cellFill": 20, "cellRadius": 4, "accentColor": "#4de0ff", "accentWarm": "#4dff7a", "twinkleCount": 80, "sweepEveryFrames": 55, "width": 22, "height": 12 } },
+          { "primitive": "r3f.floating-title", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "titleSize": 2.2, "subtitleSize": 0.52, "position": [0, 0.3, 0], "subtitleOffsetY": -1.6, "kineticDelayFrames": 8, "kineticStaggerFrames": 4, "subtitleDelayFrames": 60, "subtitleFadeFrames": 24, "titleLetterSpacing": 0.02 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
+        ]
+      }
+    },
+    {
+      "id": "story-1a",
+      "kind": "r3f-scene",
+      "durationInFrames": 420,
+      "narration": "First, Anthropic shipped Opus 4.7 to general availability. The headline number: an eighteen-percent lift on SWE-bench Verified over last month's 4.6, with the biggest jumps on multi-step tasks.",
+      "params": {
+        "background": "#000000",
+        "motionProfile": "asmr",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "primitives": [
+          { "primitive": "r3f.count-up-bar", "params": { "target": 18, "unit": "%", "label": "SWE-bench lift", "barColor": "#4de0ff" } }
+        ]
+      }
+    },
+    {
+      "id": "story-1b",
+      "kind": "r3f-scene",
+      "durationInFrames": 600,
+      "narration": "The gain isn't benchmark noise. In agentic coding, 4.7 holds a plan across dozens of tool calls without drift, where 4.6 lost the thread around call twelve. If you loop Claude inside a coding agent in production, your ceiling just moved. The upgrade is a one-line model swap.",
+      "params": {
+        "background": "#000000",
+        "motionProfile": "asmr",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "primitives": [
+          { "primitive": "r3f.orbiting-tags", "params": { "tags": ["LONG-HORIZON", "AGENTIC", "CODING"], "radius": 2.8, "tagSize": 0.42, "color": "#1e4e6e", "textColor": "#bfe9ff" } }
+        ]
+      }
+    },
+    {
+      "id": "story-2a",
+      "kind": "r3f-scene",
+      "durationInFrames": 420,
+      "narration": "Second, Alibaba's Qwen team dropped Qwen 3.7 under an open-weights license. Coming off 3.6, the step up is a fresh seventy-two-billion-parameter checkpoint with a new training mix and a sharper long-context recipe.",
+      "params": {
+        "background": "#000000",
+        "motionProfile": "asmr",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "primitives": [
+          { "primitive": "r3f.versus-cards", "params": { "left": { "label": "Qwen 3.6" }, "right": { "label": "Qwen 3.7" } } }
+        ]
+      }
+    },
+    {
+      "id": "story-2b",
+      "kind": "r3f-scene",
+      "durationInFrames": 540,
+      "narration": "One-twenty-eight K context, open weights, Apache-2 license. If your roadmap includes a regulated customer who can't send data to a closed API, this is the first 2026 drop that clears the bar on all three fronts. Expect Llama to answer within a month.",
+      "params": {
+        "background": "#000000",
+        "motionProfile": "asmr",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "primitives": [
+          { "primitive": "r3f.number-sculpture", "params": { "value": 72, "unit": "B", "label": "parameters", "fontSize": 2.4 } }
+        ]
+      }
+    },
+    {
+      "id": "outro",
+      "kind": "r3f-scene",
+      "durationInFrames": 660,
+      "narration": "Two moves, one thread. The frontier is compressing, and the open-weights tier just caught up on the benchmarks that matter for real applications. The watch list: Mistral. They've been quiet since February. If they drop their own open-weights refresh by Friday, the closed-source moat thins again. See you tomorrow.",
+      "captions": [],
+      "params": {
+        "background": "#000000",
+        "camera": { "position": [0, 0, 10], "fov": 38 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.grid-background", "params": { "cellSize": 22, "cellFill": 20, "cellRadius": 4, "accentColor": "#4de0ff", "accentWarm": "#4dff7a", "twinkleCount": 80, "sweepEveryFrames": 55, "width": 22, "height": 12 } },
+          { "primitive": "r3f.floating-title", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch Mistral's response", "titleSize": 2.4, "subtitleSize": 0.52, "position": [0, 0.3, 0], "subtitleOffsetY": -1.6, "kineticDelayFrames": 6, "kineticStaggerFrames": 4, "subtitleDelayFrames": 50, "subtitleFadeFrames": 24, "titleLetterSpacing": 0.02 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
+        ]
+      }
+    }
+  ]
+}
