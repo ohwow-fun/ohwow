@@ -117,6 +117,7 @@ const REVENUE_PROXIMAL_PATH_PREFIXES = [
   'src/self-bench/experiments/x-dm-signals-rollup',
   'src/lib/outreach-policy',
   'src/lib/posted-text-log',
+  'src/lib/x-dm-dispatch-config',
   'scripts/x-experiments/',
 ] as const;
 

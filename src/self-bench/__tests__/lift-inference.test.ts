@@ -35,6 +35,19 @@ describe('inferExpectedLifts', () => {
     expect(horizons).toEqual([1, 24]);
   });
 
+  it('matches x-dm-dispatch-config.ts with outbound_dm + reply_ratio horizons', () => {
+    const lifts = inferExpectedLifts(['src/lib/x-dm-dispatch-config.ts']);
+    const ids = lifts.map((l) => l.kpiId).sort();
+    expect(ids).toContain('outbound_dm_24h');
+    expect(ids).toContain('reply_ratio_24h');
+    // outbound_dm gets 1h + 24h (fastest-moving KPI, short-horizon triangulation).
+    const outboundHorizons = lifts
+      .filter((l) => l.kpiId === 'outbound_dm_24h')
+      .map((l) => l.horizonHours)
+      .sort((a, b) => a - b);
+    expect(outboundHorizons).toEqual([1, 24]);
+  });
+
   it('emits a 1h horizon on qualified_events_24h for qualifier-pipeline patches', () => {
     const lifts = inferExpectedLifts(['scripts/x-experiments/x-authors-to-crm.mjs']);
     const qualifiedHorizons = lifts

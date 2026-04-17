@@ -157,6 +157,18 @@ const DEFAULT_REGISTRY: PathTierEntry[] = [
     rationale:
       'cooldown policy gate for every outbound channel — tier-2 whole-file so the loop can autonomously tune cooldown hours + event-kind set, fuzzed by outreach-policy-fuzz',
   },
+  // Phase 1 continuation: DM dispatch cadence + batch-size knobs
+  // extracted from x-dm-reply-dispatcher.ts. Pure constants file, no
+  // DB or CDP access, so whole-file rewrites are safe. Fuzzed by
+  // x-dm-dispatch-config-fuzz (interval in [30s, 10min], max-per-tick
+  // in [1, 20]). A tune here moves outbound_dm_24h fastest — the
+  // revenue bucket's shortest-horizon KPI.
+  {
+    prefix: 'src/lib/x-dm-dispatch-config.ts',
+    tier: 'tier-2',
+    rationale:
+      'DM dispatcher cadence + batch cap — tier-2 whole-file so the loop can tune send rate, fuzzed by x-dm-dispatch-config-fuzz',
+  },
   // Cross-domain tier-2: outreach-thermostat's draft-message template is
   // the copy surface the operator rejects most often (see Phase 2
   // context-pack's operator-rejections section). The Layer 4 string-

@@ -49,6 +49,10 @@ import { withCdpLane } from '../execution/browser/cdp-lane.js';
 import { logger } from '../lib/logger.js';
 import { isContactInCooldown } from '../lib/outreach-policy.js';
 import {
+  DM_DISPATCH_INTERVAL_MS,
+  DM_DISPATCH_MAX_PER_TICK,
+} from '../lib/x-dm-dispatch-config.js';
+import {
   sendDmViaBrowser,
   type ComposeResult,
   type SendDmInput,
@@ -59,13 +63,14 @@ import {
   type ApprovalEntry,
 } from './approval-queue.js';
 
-/** Default tick interval. Kept shorter than the poller (hourly) so an
- * operator approval → actual send round-trip is bounded. */
-const DEFAULT_INTERVAL_MS = 2 * 60 * 1000;
-/** Cap on how many approvals we drain per tick. Each send holds the
- * CDP lane for ~5s and navigates, so we prefer smaller batches over
- * starving other schedulers for a tick. */
-const MAX_SENDS_PER_TICK = 5;
+/**
+ * Default tick interval and per-tick batch cap live in
+ * src/lib/x-dm-dispatch-config.ts — tier-2 tunables the autonomous
+ * loop can heal under whole-file policy without touching this file's
+ * DB + CDP control flow.
+ */
+const DEFAULT_INTERVAL_MS = DM_DISPATCH_INTERVAL_MS;
+const MAX_SENDS_PER_TICK = DM_DISPATCH_MAX_PER_TICK;
 /** Kind filter we read from the approvals queue. */
 const APPROVAL_KIND = 'x_dm_outbound';
 

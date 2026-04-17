@@ -61,6 +61,22 @@ export const LIFT_HEURISTICS: readonly LiftHeuristic[] = Object.freeze([
       { kpiId: 'qualified_events_24h', direction: 'up', horizonHours: 168 },
     ],
   },
+  // x-dm-dispatch-config.ts — interval + batch knobs for the DM
+  // dispatcher. A tune here moves outbound_dm_24h fastest of any tier-2
+  // target (it literally sets how many DMs ship per tick), with
+  // reply_ratio_24h as the downstream check that the higher rate is
+  // actually productive (not just spamming). No qualified_events
+  // horizon — the dispatcher doesn't touch qualification.
+  {
+    description:
+      'x-dm-dispatch-config.ts — interval + batch knobs for DM dispatcher',
+    pathMatches: /src\/lib\/x-dm-dispatch-config\.ts$/,
+    lifts: [
+      { kpiId: 'outbound_dm_24h', direction: 'up', horizonHours: 1 },
+      { kpiId: 'outbound_dm_24h', direction: 'up', horizonHours: 24 },
+      { kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 24 },
+    ],
+  },
   // x-authors-to-crm / qualifier scripts — pipeline upstream of the
   // lead flip. Moving these tends to show up in active_leads + qualified
   // events; attribution to revenue takes even longer than the outreach
