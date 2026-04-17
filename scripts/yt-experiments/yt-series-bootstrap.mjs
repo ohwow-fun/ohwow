@@ -46,9 +46,18 @@ async function daemonRequest(method, route, body) {
   return res.json();
 }
 
+function asArray(resp) {
+  if (Array.isArray(resp)) return resp;
+  if (Array.isArray(resp?.data)) return resp.data;
+  if (Array.isArray(resp?.projects)) return resp.projects;
+  if (Array.isArray(resp?.agents)) return resp.agents;
+  if (Array.isArray(resp?.goals)) return resp.goals;
+  return [];
+}
+
 async function ensureProject(series) {
   const list = await daemonRequest('GET', '/api/projects');
-  const existing = (list.projects || list || []).find((p) => p.name === series.displayName);
+  const existing = asArray(list).find((p) => p.name === series.displayName);
   if (existing) {
     console.log(`  project "${series.displayName}" exists (id=${existing.id})`);
     return existing;
@@ -57,14 +66,15 @@ async function ensureProject(series) {
     name: series.displayName,
     description: `OHWOW.FUN YouTube series — ${series.tagline}`,
   });
-  console.log(`  project "${series.displayName}" created (id=${created.id || created.project?.id})`);
-  return created;
+  const id = created.data?.id || created.id || created.project?.id;
+  console.log(`  project "${series.displayName}" created (id=${id})`);
+  return created.data || created;
 }
 
 async function ensureAgent(series, role, baseSystemPrompt) {
   const name = `${series.slug}-${role}`;
-  const list = await daemonRequest('GET', '/api/agents').catch(() => ({ agents: [] }));
-  const existing = (list.agents || list || []).find((a) => a.name === name);
+  const list = await daemonRequest('GET', '/api/agents').catch(() => ({ data: [] }));
+  const existing = asArray(list).find((a) => a.name === name);
   if (existing) {
     console.log(`  agent "${name}" exists (id=${existing.id})`);
     return existing;
@@ -75,24 +85,32 @@ async function ensureAgent(series, role, baseSystemPrompt) {
     editor: `Checks tone, banned phrases, format, and loop landing for ${series.displayName}.`,
   };
   const systemPrompt = `You are the ${role} for ${series.displayName}. ${descriptions[role]}\n\n${baseSystemPrompt}`;
+  // Tool names must match the orchestrator's toolRegistry (see
+  // src/orchestrator/tools/*.ts). Web browsing lives under scrape_*;
+  // knowledge RAG lives under search_knowledge / get_knowledge_document.
+  const toolsAllowlist =
+    role === 'researcher'
+      ? ['scrape_search', 'scrape_url', 'search_knowledge', 'get_knowledge_document']
+      : role === 'writer'
+      ? ['search_knowledge', 'get_knowledge_document']
+      : ['search_knowledge', 'get_knowledge_document', 'scrape_url'];
   const body = {
     name,
-    systemPrompt,
-    displayName: `${series.displayName} ${role}`.replace(/\b\w/g, (c) => c.toUpperCase()),
-    description: descriptions[role],
     role,
-    toolAllowlist: role === 'researcher'
-      ? ['web_search', 'knowledge_search', 'http_fetch']
-      : role === 'writer'
-      ? ['knowledge_search']
-      : ['knowledge_search', 'http_fetch'],
-    webSearchEnabled: role === 'researcher',
+    system_prompt: systemPrompt,
+    display_name: `${series.displayName} ${role.replace(/\b\w/g, (c) => c.toUpperCase())}`,
+    description: descriptions[role],
     enabled: true,
-    scheduled: false,
+    config: {
+      tools_mode: 'allowlist',
+      tools_enabled: toolsAllowlist,
+      web_search_enabled: role === 'researcher',
+    },
   };
   const created = await daemonRequest('POST', '/api/agents', body);
-  console.log(`  agent "${name}" created (id=${created.id || created.agent?.id})`);
-  return created;
+  const id = created.data?.id || created.id || created.agent?.id;
+  console.log(`  agent "${name}" created (id=${id})`);
+  return created.data || created;
 }
 
 async function ensureGoal(series, kpiId) {
@@ -114,15 +132,15 @@ async function ensureGoal(series, kpiId) {
   const metricPart = kpiId.replace(/^yt_[^_]+_(7d_)?/, '').replace(/_$/, '');
   const unit = Object.entries(unitByMetric).find(([k]) => metricPart.endsWith(k))?.[1] || 'count';
   const title = kpiId.replace(/^yt_/, '').replace(/_/g, ' ');
-  const list = await daemonRequest('GET', '/api/goals').catch(() => ({ goals: [] }));
-  const existing = (list.goals || list || []).find((g) => g.target_metric === kpiId);
+  const list = await daemonRequest('GET', '/api/goals').catch(() => ({ data: [] }));
+  const existing = asArray(list).find((g) => g.target_metric === kpiId);
   if (existing) {
     console.log(`  goal "${title}" exists (id=${existing.id})`);
     return existing;
   }
   try {
     const created = await daemonRequest('POST', '/api/goals', {
-      title,
+      name: title,
       description: `Tracked automatically by yt-metrics-poller.`,
       target_metric: kpiId,
       target_value: 0,
@@ -131,8 +149,9 @@ async function ensureGoal(series, kpiId) {
       status: 'active',
       priority: 'normal',
     });
-    console.log(`  goal "${title}" created (id=${created.id || created.goal?.id})`);
-    return created;
+    const id = created.data?.id || created.id || created.goal?.id;
+    console.log(`  goal "${title}" created (id=${id})`);
+    return created.data || created;
   } catch (e) {
     console.log(`  goal "${title}" could not be created: ${e.message}`);
     return null;
@@ -151,12 +170,14 @@ async function uploadShowBible(series) {
   const { ingestKnowledgeFile } = await import('../x-experiments/_ohwow.mjs');
   try {
     const body = fs.readFileSync(biblePath, 'utf8');
-    const result = await ingestKnowledgeFile(
-      `${series.slug}-showbible.md`,
+    const result = await ingestKnowledgeFile({
+      title: `${series.displayName} — Show Bible`,
+      filename: `${series.slug}-showbible.md`,
       body,
-      `${series.displayName} — Show Bible`,
-    );
-    console.log(`  show bible uploaded as knowledge (id=${result.id || '?'})`);
+      replace: true,
+    });
+    const id = result?.data?.id || result?.id || '?';
+    console.log(`  show bible uploaded as knowledge (id=${id})`);
     return result;
   } catch (e) {
     console.log(`  show bible upload failed: ${e.message}`);
