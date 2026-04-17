@@ -67,6 +67,7 @@ describe('fetchXPost', () => {
         name: 'Shann3',
         is_blue_verified: true,
         profile_image_url_https: 'https://example.com/pic.png',
+        highlighted_label: { description: 'Lunar Strategy' },
       },
       mediaDetails: [
         { type: 'photo', media_url_https: 'https://example.com/img.png', display_url: 'pic.x.com/x', expanded_url: 'https://x.com/1' },
@@ -79,6 +80,7 @@ describe('fetchXPost', () => {
     expect(result!.permalink).toBe('https://x.com/shannholmberg/status/2044523795206029525');
     expect(result!.author.handle).toBe('shannholmberg');
     expect(result!.author.is_blue_verified).toBe(true);
+    expect(result!.author.business_label).toBe('Lunar Strategy');
     expect(result!.metrics.likes).toBe(186);
     expect(result!.metrics.replies).toBe(16);
     expect(result!.text).toBe('what is the AI knowledge layer and how does it work\n\n');

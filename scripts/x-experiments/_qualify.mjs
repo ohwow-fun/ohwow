@@ -75,25 +75,63 @@ export function freeGates(rubric, row) {
  *
  * The caller is expected to have already decided via freeGates() that
  * this call is worth spending.
+ *
+ * **Row MUST carry `post_text`** (the contact's actual tweet body, from
+ * ohwow_fetch_x_post / fetch-tweet) for a meaningful classification. When
+ * it's missing, this function returns `adjacent_noise` with
+ * reason='no_post_text' WITHOUT calling the LLM — because with only
+ * handle + tags + bucket the model has nothing to ground on and will
+ * hallucinate a buyer_intent reason that matches the ICP blurb. That was
+ * the 11th-pass Shann³ misqualification: classifier returned "Builder
+ * mentions tired of Zapier..." for a post that was actually about AI
+ * knowledge layers; the "Zapier" language came from the ICP description,
+ * not her words.
+ *
+ * Author business_label (from `user.highlighted_label.description` on
+ * the syndication payload — e.g. "Lunar Strategy") is included in the
+ * prompt when present. The model is instructed to route agency/firm
+ * labels through the disqualifier path directly, because they're a
+ * stronger signal than any post text tone.
  */
 export async function classifyIntent(row, rubric, llmFn, { extractJson } = {}) {
   const icp = rubric?.icp || {};
+  const postText = typeof row?.post_text === 'string' ? row.post_text.trim() : '';
+  const businessLabel = typeof row?.business_label === 'string' && row.business_label.length > 0
+    ? row.business_label
+    : null;
+
+  // Without post text we can't responsibly classify. Return adjacent_noise
+  // with a named reason so the upstream classifier audit log records the
+  // miss — re-qualification can retry once post text is fetchable.
+  if (!postText) {
+    return {
+      intent: 'adjacent_noise',
+      confidence: 0,
+      reason: 'no_post_text: classifier needs the tweet body to avoid hallucinating an ICP match',
+    };
+  }
+
   const prompt = [
     `You classify buyer intent for inbound outreach.`,
     ``,
     `Who we sell to:`,
     `${icp.description || 'builders and founders shipping AI-adjacent products'}`,
     ``,
-    icp.disqualifiers?.length ? `Hard disqualifiers: ${icp.disqualifiers.join(', ')}` : '',
+    icp.disqualifiers?.length ? `Hard disqualifiers (route these to adjacent_noise regardless of post tone): ${icp.disqualifiers.join('; ')}` : '',
+    ``,
+    businessLabel ? `This account's X business-label is "${businessLabel}". If that label names an agency, growth firm, services shop, or any org that sells to our ICP rather than being our ICP, return adjacent_noise with reason='agency_or_vendor: <label>'.` : '',
     ``,
     `Classify the X author below into exactly one of:`,
-    `- buyer_intent: likely to buy/try our product soon`,
-    `- builder_curiosity: engaged builder, not actively in-market`,
-    `- adjacent_noise: off-ICP, bot, low-signal, or disqualified`,
+    `- buyer_intent: this specific post contains a pain / problem / "I wish there was" signal aligned with our ICP. Quote the exact phrase from the post in the reason.`,
+    `- builder_curiosity: the post shows engagement with our space but is not a buying signal (teaching, hot take, general musing).`,
+    `- adjacent_noise: off-ICP, content-marketing / thought-leadership voice, agency / vendor account, bot, low-signal, or hits a disqualifier.`,
+    ``,
+    `CRITICAL: base the decision on what the author WROTE in the post below. Do NOT infer pain from the ICP description or tags. If the post doesn't literally contain an ICP-pain phrase, it is not buyer_intent.`,
     ``,
     `Author:`,
     `  handle: ${row.handle}`,
     `  display_name: ${row.display_name || '(none)'}`,
+    businessLabel ? `  business_label: ${businessLabel}` : '',
     `  bucket: ${row.bucket || '(none)'}`,
     `  score: ${row.score ?? 0}`,
     `  replies observed: ${row.replies ?? 0}`,
@@ -101,7 +139,12 @@ export async function classifyIntent(row, rubric, llmFn, { extractJson } = {}) {
     `  tags: ${(row.tags || []).join(', ') || '(none)'}`,
     `  sources: ${(row.sources || []).join(', ') || '(none)'}`,
     ``,
-    `Reply with strict JSON: {"intent":"buyer_intent|builder_curiosity|adjacent_noise","confidence":0..1,"reason":"<=25 words"}`,
+    `Post (verbatim):`,
+    `"""`,
+    postText,
+    `"""`,
+    ``,
+    `Reply with strict JSON: {"intent":"buyer_intent|builder_curiosity|adjacent_noise","confidence":0..1,"reason":"<=25 words; for buyer_intent include an exact quoted phrase from the post"}`,
   ].filter(Boolean).join('\n');
 
   const out = await llmFn({ purpose: 'simple_classification', prompt });

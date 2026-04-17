@@ -22,6 +22,16 @@ export interface XPostAuthor {
   name: string | null;
   is_blue_verified: boolean;
   profile_image_url: string | null;
+  /**
+   * The business/affiliate label X surfaces next to the name. Syndication
+   * maps this from `user.highlighted_label.description` — examples seen in
+   * the wild: "Lunar Strategy", "Stripe", "Anthropic". Strong signal that
+   * an account is affiliated with an org (agency, company, employer), so
+   * the intent classifier can route agency-badged accounts to the
+   * disqualifier path instead of hallucinating buyer_intent from the ICP
+   * blurb. null when the account has no label.
+   */
+  business_label: string | null;
 }
 
 export interface XPostMedia {
@@ -132,11 +142,18 @@ function mapSyndicationResponse(raw: Record<string, unknown>, id: string): XPost
       name: (user.name as string) ?? null,
       is_blue_verified: Boolean(user.is_blue_verified),
       profile_image_url: (user.profile_image_url_https as string) ?? null,
+      business_label: extractBusinessLabel(user),
     },
     metrics,
     media,
     truncated,
   };
+}
+
+function extractBusinessLabel(user: Record<string, unknown>): string | null {
+  const label = user.highlighted_label as { description?: unknown } | undefined;
+  const desc = label?.description;
+  return typeof desc === 'string' && desc.length > 0 ? desc : null;
 }
 
 function numOrNull(v: unknown): number | null {

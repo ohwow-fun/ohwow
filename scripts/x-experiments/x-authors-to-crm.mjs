@@ -63,6 +63,35 @@ async function harvestEngagers(/* cfg */) {
   return [];
 }
 
+/**
+ * Pull the tweet body + author business-label for an author's latest
+ * observed permalink via the daemon's /api/x/tweet route (which wraps
+ * cdn.syndication.twimg.com). Returns null shape on any failure so the
+ * caller treats the author as "unclassifiable without post text" rather
+ * than wedging the whole run.
+ *
+ * Why this exists: the pre-11th-pass classifier prompt had zero post
+ * content, so the LLM hallucinated buyer_intent reasons that matched
+ * the ICP blurb. With post_text + business_label in hand, the classifier
+ * has something to ground on and the agency disqualifier can actually
+ * fire.
+ */
+async function fetchPostContext(url, token, permalink) {
+  if (!permalink) return { post_text: null, business_label: null };
+  try {
+    const q = `/api/x/tweet/lookup?permalink=${encodeURIComponent(permalink)}`;
+    const res = await fetch(`${url}${q}`, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) return { post_text: null, business_label: null };
+    const { data } = await res.json();
+    return {
+      post_text: typeof data?.text === 'string' ? data.text : null,
+      business_label: typeof data?.author?.business_label === 'string' ? data.author.business_label : null,
+    };
+  } catch {
+    return { post_text: null, business_label: null };
+  }
+}
+
 async function fetchExistingHandles(url, token) {
   // Fetch all contacts and pluck custom_fields.x_handle. The route now
   // supports custom_field_key/value filtering for targeted lookups, but
@@ -282,6 +311,8 @@ async function main() {
       score: row.score,
       touches: row.touches,
       free_gate_reason: reason,
+      post_text_fetched: false,
+      business_label: null,
       intent: null,
       confidence: null,
       intent_reason: null,
@@ -295,8 +326,16 @@ async function main() {
 
     try {
       let intent;
+      // Enrich the ledger row with the actual tweet body + author's
+      // business_label BEFORE classification. Without these the prompt
+      // has nothing to ground on and the model hallucinates ICP-matching
+      // reasons — see _qualify.mjs classifyIntent docstring.
+      const ctx = await fetchPostContext(url, token, row.permalink);
+      const enriched = { ...row, post_text: ctx.post_text, business_label: ctx.business_label };
+      audit.post_text_fetched = Boolean(ctx.post_text);
+      audit.business_label = ctx.business_label;
       try {
-        intent = await classifyIntent(row, cfg, llmFn, { extractJson });
+        intent = await classifyIntent(enriched, cfg, llmFn, { extractJson });
         audit.intent = intent.intent;
         audit.confidence = intent.confidence;
         audit.intent_reason = intent.reason;

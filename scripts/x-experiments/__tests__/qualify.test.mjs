@@ -67,10 +67,12 @@ describe('acceptsIntent', () => {
 });
 
 describe('classifyIntent', () => {
+  const grounded = { handle: 'a', bucket: 'market_signal', post_text: 'tired of zapier, need something smarter for my solo ops' };
+
   it('parses the llm JSON into a normalized verdict', async () => {
     const llmFn = async () => '{"intent":"buyer_intent","confidence":0.85,"reason":"asking about pricing"}';
     const extractJson = (t) => JSON.parse(t);
-    const out = await classifyIntent({ handle: 'a', bucket: 'market_signal' }, rubric, llmFn, { extractJson });
+    const out = await classifyIntent(grounded, rubric, llmFn, { extractJson });
     expect(out.intent).toBe('buyer_intent');
     expect(out.confidence).toBe(0.85);
   });
@@ -78,15 +80,52 @@ describe('classifyIntent', () => {
   it('coerces unknown intent class to adjacent_noise', async () => {
     const llmFn = async () => '{"intent":"maybe","confidence":0.9,"reason":""}';
     const extractJson = (t) => JSON.parse(t);
-    const out = await classifyIntent({ handle: 'a' }, rubric, llmFn, { extractJson });
+    const out = await classifyIntent(grounded, rubric, llmFn, { extractJson });
     expect(out.intent).toBe('adjacent_noise');
   });
 
   it('clamps confidence into [0,1]', async () => {
     const llmFn = async () => '{"intent":"buyer_intent","confidence":5,"reason":""}';
     const extractJson = (t) => JSON.parse(t);
-    const out = await classifyIntent({ handle: 'a' }, rubric, llmFn, { extractJson });
+    const out = await classifyIntent(grounded, rubric, llmFn, { extractJson });
     expect(out.confidence).toBe(1);
+  });
+
+  it('short-circuits to adjacent_noise when post_text is missing, WITHOUT calling the LLM', async () => {
+    let llmInvocations = 0;
+    const llmFn = async () => { llmInvocations++; return '{"intent":"buyer_intent","confidence":0.99,"reason":"x"}'; };
+    const extractJson = (t) => JSON.parse(t);
+    const out = await classifyIntent({ handle: 'a', bucket: 'market_signal' }, rubric, llmFn, { extractJson });
+    expect(out.intent).toBe('adjacent_noise');
+    expect(out.confidence).toBe(0);
+    expect(out.reason).toContain('no_post_text');
+    expect(llmInvocations).toBe(0);
+  });
+
+  it('includes the verbatim post text in the prompt (model grounding)', async () => {
+    let capturedPrompt = '';
+    const llmFn = async ({ prompt }) => {
+      capturedPrompt = prompt;
+      return '{"intent":"buyer_intent","confidence":0.8,"reason":"quoted: tired of zapier"}';
+    };
+    const extractJson = (t) => JSON.parse(t);
+    await classifyIntent(grounded, rubric, llmFn, { extractJson });
+    expect(capturedPrompt).toContain('tired of zapier, need something smarter for my solo ops');
+    expect(capturedPrompt).toContain('CRITICAL: base the decision on what the author WROTE');
+  });
+
+  it('surfaces business_label and instructs the model to route agencies to adjacent_noise', async () => {
+    let capturedPrompt = '';
+    const llmFn = async ({ prompt }) => {
+      capturedPrompt = prompt;
+      return '{"intent":"adjacent_noise","confidence":0.9,"reason":"agency_or_vendor: Lunar Strategy"}';
+    };
+    const extractJson = (t) => JSON.parse(t);
+    const row = { ...grounded, business_label: 'Lunar Strategy', post_text: 'what is the AI knowledge layer' };
+    const out = await classifyIntent(row, rubric, llmFn, { extractJson });
+    expect(capturedPrompt).toContain('Lunar Strategy');
+    expect(capturedPrompt).toContain('agency_or_vendor');
+    expect(out.intent).toBe('adjacent_noise');
   });
 });
 
