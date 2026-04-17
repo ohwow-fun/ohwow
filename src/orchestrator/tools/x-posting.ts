@@ -696,7 +696,7 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     if (!typing.ok) {
       return {
         success: false,
-        message: `Tweet text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). All three typing strategies dropped the text.`,
+        message: `Tweet text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). All four typing strategies dropped the text.`,
         screenshotBase64: await captureScreenshot(page),
         tweetsTyped: 0,
         tweetsPublished: 0,

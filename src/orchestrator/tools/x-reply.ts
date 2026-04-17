@@ -563,7 +563,7 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     if (!typing.ok) {
       return {
         success: false,
-        message: `Reply text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). Tried insertText, execCommand, and dispatchKeyEvent — none accepted the text.`,
+        message: `Reply text did not register (expected ~${typing.expectedLen}ch, got ${typing.observedLen}ch). Tried paste, dispatchKeyEvent, execCommand, and insertText — none accepted the text.`,
         screenshotBase64: await captureScreenshot(page),
         currentUrl: await page.url(),
       };
@@ -591,21 +591,28 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     }
 
     // Submit via element.click() to bypass CDP-coordinate overlay.
-    // X uses different submit testids depending on layout:
-    //   - tweetButton        full-page /compose/post
-    //   - tweetButtonInline  inline modal reply composer (most common
-    //                         when you click Reply on a post detail page)
-    // Try inline first (the reply path), fall back to the primary.
+    // X renders BOTH tweetButton and tweetButtonInline on the reply
+    // route — they're alternative entry points; one is enabled when
+    // the composer state has fillable content, the other stays
+    // disabled as an inactive sibling. Live probe (2026-04-17) showed
+    // the two in opposite states (tweetButton enabled, Inline
+    // disabled) after dispatchKeyEvent typing on /compose/post.
+    // Prior code preferred Inline unconditionally via `||`, so it
+    // always saw the disabled sibling and gave up. Fix: scan both,
+    // pick any enabled + visible one.
     let submitted = false;
     for (let i = 0; i < 20; i++) {
       submitted = await page.evaluate<boolean>(`(() => {
-        const btn = document.querySelector('[data-testid="tweetButtonInline"]')
-                 || document.querySelector('[data-testid="tweetButton"]');
-        if (!(btn instanceof HTMLElement)) return false;
-        if (btn.getAttribute('aria-disabled') === 'true') return false;
-        const r = btn.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) return false;
-        if (typeof btn.click === 'function') { btn.click(); return true; }
+        const candidates = Array.from(document.querySelectorAll(
+          '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]'
+        ));
+        for (const btn of candidates) {
+          if (!(btn instanceof HTMLElement)) continue;
+          if (btn.getAttribute('aria-disabled') === 'true') continue;
+          const r = btn.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          if (typeof btn.click === 'function') { btn.click(); return true; }
+        }
         return false;
       })()`).catch(() => false);
       if (submitted) break;

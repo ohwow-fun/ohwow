@@ -293,7 +293,7 @@ export async function clearTextbox(page: RawCdpPage, selector: string): Promise<
  */
 export interface TypeTextResult {
   ok: boolean;
-  strategy: 'insertText' | 'execCommand' | 'dispatchKeyEvent' | 'none';
+  strategy: 'insertText' | 'execCommand' | 'dispatchKeyEvent' | 'paste' | 'none';
   observedLen: number;
   expectedLen: number;
 }
@@ -315,65 +315,54 @@ export async function typeIntoRichTextbox(
     } catch { return -1; }
   }
 
-  async function clearAndFocus(): Promise<void> {
+  // Focus without destructive clearing. On an empty DraftJS editor,
+  // selectAll+delete or Backspace can remove the internal block node,
+  // leaving the outer shell with nothing editable — which makes every
+  // subsequent strategy fail at 0ch. Only clear if there's actually
+  // content present, and never via Backspace-into-empty.
+  async function focusOnly(): Promise<void> {
     try {
       await page.evaluate(`(() => {
         const tb = document.querySelector(${JSON.stringify(selector)});
         if (!(tb instanceof HTMLElement)) return false;
         tb.focus();
-        document.execCommand('selectAll', false);
-        document.execCommand('delete', false);
         return true;
       })()`);
     } catch { /* best effort */ }
-    await wait(150);
+    await wait(100);
   }
 
-  // Warmup: seed the editor's input pipeline. Also re-establishes focus
-  // on React-composer targets that lose keyboard routing across awaits.
-  try {
-    await page.typeText(' ');
-    await page.pressKey('Backspace');
-  } catch { /* best effort */ }
-  await wait(100);
-
-  // Strategy 1: CDP Input.insertText (single call, whole string).
-  await clearAndFocus();
-  try {
-    await page.typeText(text);
-  } catch { /* fall through */ }
-  await wait(400);
-  let observed = await measureLen();
-  if (observed >= minAccept) {
-    return { ok: true, strategy: 'insertText', observedLen: observed, expectedLen: expected };
+  async function focusAndClearIfDirty(): Promise<void> {
+    try {
+      await page.evaluate(`(() => {
+        const tb = document.querySelector(${JSON.stringify(selector)});
+        if (!(tb instanceof HTMLElement)) return false;
+        tb.focus();
+        if ((tb.textContent || '').trim().length > 0) {
+          document.execCommand('selectAll', false);
+          document.execCommand('delete', false);
+        }
+        return true;
+      })()`);
+    } catch { /* best effort */ }
+    await wait(100);
   }
 
-  // Strategy 2: document.execCommand('insertText'). Escape for JS string
-  // literal embedding — backslashes first, then quotes + newlines.
-  await clearAndFocus();
   const escaped = text
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '');
-  try {
-    await page.evaluate(`(() => {
-      const tb = document.querySelector(${JSON.stringify(selector)});
-      if (!(tb instanceof HTMLElement)) return false;
-      tb.focus();
-      return document.execCommand('insertText', false, '${escaped}');
-    })()`);
-  } catch { /* fall through */ }
-  await wait(400);
-  observed = await measureLen();
-  if (observed >= minAccept) {
-    return { ok: true, strategy: 'execCommand', observedLen: observed, expectedLen: expected };
-  }
 
-  // Strategy 3: CDP Input.dispatchKeyEvent per-character. Slowest, last
-  // resort. Was the primary path historically but started failing with
-  // 0ch against X's current reply composer.
-  await clearAndFocus();
+  // Strategy 1: CDP Input.dispatchKeyEvent per-character. Proven
+  // live (2026-04-17) to both populate DraftJS content AND wake
+  // EditorState on the X reply composer — the Post button's
+  // disabled attribute flipped from "true" to null after this
+  // strategy ran. Paste/execCommand populate the DOM but leave
+  // EditorState stale, so the Post button stays disabled. Slower
+  // than paste but it's the only strategy that both lands text and
+  // unlocks submission in the current X release.
+  await focusOnly();
   const send = (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send.bind(page);
   for (const ch of text) {
     if (ch === '\n') {
@@ -385,10 +374,71 @@ export async function typeIntoRichTextbox(
       await send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch });
     } catch { /* continue */ }
   }
-  await wait(500);
-  observed = await measureLen();
+  await wait(400);
+  let observed = await measureLen();
   if (observed >= minAccept) {
     return { ok: true, strategy: 'dispatchKeyEvent', observedLen: observed, expectedLen: expected };
+  }
+
+  // Strategy 2: Clipboard paste. DraftJS ships with a dedicated
+  // onPaste handler; when it fires, EditorState updates in one
+  // step. Works on some X releases but not the current one (live
+  // probe showed paste event dispatched but 0ch landed). Kept as a
+  // defense-in-depth option for future X variants.
+  await focusAndClearIfDirty();
+  try {
+    await page.evaluate(`(() => {
+      const tb = document.querySelector(${JSON.stringify(selector)});
+      if (!(tb instanceof HTMLElement)) return false;
+      tb.focus();
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '${escaped}');
+      const ev = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt,
+      });
+      tb.dispatchEvent(ev);
+      return true;
+    })()`);
+  } catch { /* fall through */ }
+  await wait(400);
+  observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'paste', observedLen: observed, expectedLen: expected };
+  }
+
+  // Strategy 3: document.execCommand('insertText'). Populates DOM
+  // reliably but doesn't wake DraftJS EditorState — the visible
+  // text appears but the Post button stays disabled. Still useful
+  // when the target composer is a plain contenteditable (Threads
+  // in some states) rather than a full DraftJS/ProseMirror editor.
+  await focusAndClearIfDirty();
+  try {
+    await page.evaluate(`(() => {
+      const tb = document.querySelector(${JSON.stringify(selector)});
+      if (!(tb instanceof HTMLElement)) return false;
+      tb.focus();
+      return document.execCommand('insertText', false, '${escaped}');
+    })()`);
+  } catch { /* fall through */ }
+  await wait(300);
+  observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'execCommand', observedLen: observed, expectedLen: expected };
+  }
+
+  // Strategy 4: CDP Input.insertText (page.typeText). Canonical for
+  // Threads + X top-level compose; last resort on X reply composer
+  // since live probe shows it returning 0ch there.
+  await focusOnly();
+  try {
+    await page.typeText(text);
+  } catch { /* fall through */ }
+  await wait(400);
+  observed = await measureLen();
+  if (observed >= minAccept) {
+    return { ok: true, strategy: 'insertText', observedLen: observed, expectedLen: expected };
   }
 
   return { ok: false, strategy: 'none', observedLen: observed, expectedLen: expected };
