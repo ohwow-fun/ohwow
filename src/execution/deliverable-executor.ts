@@ -21,8 +21,14 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { logger } from '../lib/logger.js';
-import { hasRecentlyPostedText, recordPostedText } from '../lib/posted-text-log.js';
+import {
+  hasRecentlyPostedText,
+  recordPostedText,
+  hasRecentlyPostedTextForPlatform,
+  recordPostedTextForPlatform,
+} from '../lib/posted-text-log.js';
 import { composeTweetViaBrowser } from '../orchestrator/tools/x-posting.js';
+import { composeThreadsPostViaBrowser } from '../orchestrator/tools/threads-posting.js';
 import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
 import { profileByHandleHint } from './browser/chrome-lifecycle.js';
 
@@ -62,6 +68,7 @@ export class DeliverableExecutor {
   private handlers = new Map<string, Handler>();
   constructor(private db: DatabaseAdapter) {
     this.register('post_tweet', postTweetHandler);
+    this.register('post_threads', postThreadsHandler);
   }
 
   register(actionType: string, handler: Handler): void {
@@ -159,6 +166,7 @@ function inferActionType(row: DeliverableRow, content: Record<string, unknown>):
   const spec = content.action_spec as Record<string, unknown> | undefined;
   if (spec && typeof spec.type === 'string') return spec.type;
   if (row.provider === 'x') return 'post_tweet';
+  if (row.provider === 'threads') return 'post_threads';
   return null;
 }
 
@@ -349,6 +357,132 @@ const postTweetHandler: Handler = async (content, ctx) => {
         approvalId,
         taskId: ctx.taskId,
         source: 'post_tweet',
+      });
+      // Dual-write to platform-generic posted_log so the unified
+      // scheduler dedup path covers X posts too.
+      await recordPostedTextForPlatform({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        platform: 'x',
+        text,
+        approvalId,
+        taskId: ctx.taskId,
+        source: 'post_tweet',
+      });
+    }
+    return { ok: true, result: { dryRun, expectedHandle, ...(res as unknown as Record<string, unknown>) } };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Threads posting handler
+// ---------------------------------------------------------------------------
+
+async function readPreferredThreadsProfile(db: DatabaseAdapter): Promise<string | null> {
+  for (const key of ['threads_posting_profile', 'x_posting_profile']) {
+    try {
+      const { data } = await db.from('runtime_settings')
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+      const val = (data as { value: string } | null)?.value;
+      if (val && val.trim().length > 0) return val.trim();
+    } catch { /* continue */ }
+  }
+  return null;
+}
+
+async function readExpectedThreadsHandle(db: DatabaseAdapter): Promise<string | null> {
+  try {
+    const { data } = await db.from('runtime_settings')
+      .select('value')
+      .eq('key', 'threads_posting_handle')
+      .maybeSingle();
+    const val = (data as { value: string } | null)?.value;
+    return val && val.trim().length > 0 ? val.trim().replace(/^@/, '') : null;
+  } catch { return null; }
+}
+
+async function ensureThreadsProfileChrome(
+  db: DatabaseAdapter,
+): Promise<{ ok: true; browserContextId: string | null } | { ok: false; error: string }> {
+  const override = await readPreferredThreadsProfile(db);
+  const expectedHandle = await readExpectedThreadsHandle(db);
+  const profiles = listProfiles();
+  if (profiles.length === 0) {
+    return { ok: false, error: 'no profiles in ~/.ohwow/chrome-cdp/. Log into Threads in desktop Chrome.' };
+  }
+  const handleDerived = expectedHandle ? profileByHandleHint(profiles, expectedHandle) : null;
+  const target = (override && findProfileByIdentity(profiles, override))
+    || handleDerived
+    || profiles.find((p) => !!p.email)
+    || profiles[0];
+  try {
+    await ensureDebugChrome({ preferredProfile: target.directory });
+    const opened = await openProfileWindow({
+      profileDir: target.directory,
+      url: 'https://www.threads.com/',
+    });
+    return { ok: true, browserContextId: opened.browserContextId };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+const postThreadsHandler: Handler = async (content, ctx) => {
+  const text = typeof content.text === 'string' ? content.text.trim() : '';
+  if (!text) return { ok: false, error: 'post_threads: content.text missing' };
+  const dryRun = !ctx.liveMode;
+
+  const spec = (content.action_spec ?? {}) as Record<string, unknown>;
+  const approvalId = typeof spec.approved_draft_id === 'string' ? spec.approved_draft_id : null;
+
+  // Pre-flight dedup
+  if (!dryRun && ctx.workspaceId) {
+    const lookup = await hasRecentlyPostedTextForPlatform(ctx.db, ctx.workspaceId, 'threads', text);
+    if (lookup.alreadyPosted) {
+      logger.info(
+        { workspaceId: ctx.workspaceId, taskId: ctx.taskId, approvalId, postedAt: lookup.postedAt },
+        '[post_threads] pre-flight duplicate — skipping compose modal',
+      );
+      return {
+        ok: true,
+        result: {
+          dryRun,
+          duplicateSkipped: true,
+          reason: 'text already posted on Threads within window',
+          posted_at: lookup.postedAt,
+        },
+      };
+    }
+  }
+
+  const prep = await ensureThreadsProfileChrome(ctx.db);
+  if (!prep.ok) return { ok: false, error: `post_threads: ${prep.error}` };
+
+  const expectedHandle = await readExpectedThreadsHandle(ctx.db);
+  try {
+    const res = await composeThreadsPostViaBrowser({
+      text,
+      dryRun,
+      expectedHandle: expectedHandle || undefined,
+      expectedBrowserContextId: prep.browserContextId || undefined,
+    });
+    if (!res.success) {
+      return { ok: false, error: res.message || 'compose failed', result: res as unknown as Record<string, unknown> };
+    }
+    // Record posted text for dedup
+    if (!dryRun && ctx.workspaceId) {
+      await recordPostedTextForPlatform({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        platform: 'threads',
+        text,
+        approvalId,
+        taskId: ctx.taskId,
+        source: 'post_threads',
       });
     }
     return { ok: true, result: { dryRun, expectedHandle, ...(res as unknown as Record<string, unknown>) } };
