@@ -50,6 +50,10 @@ import {
   deleteLastTweetViaBrowser,
 } from '../../orchestrator/tools/x-posting.js';
 import {
+  scanXPostsViaBrowser,
+  composeTweetReplyViaBrowser,
+} from '../../orchestrator/tools/x-reply.js';
+import {
   ensureDebugChrome,
   findProfileByIdentity,
   listProfiles,
@@ -68,6 +72,8 @@ const X_POSTING_TOOL_NAMES = new Set([
   'x_send_dm',
   'x_list_dms',
   'x_delete_tweet',
+  'x_scan_posts',
+  'x_compose_reply',
 ]);
 
 // Per-tool deadline. X DOM ops that take longer than this are either
@@ -81,6 +87,8 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   x_send_dm: 60_000,
   x_list_dms: 30_000,
   x_delete_tweet: 60_000,
+  x_scan_posts: 45_000,
+  x_compose_reply: 90_000,
 };
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
@@ -178,6 +186,8 @@ export const xPostingExecutor: ToolExecutor = {
       currentUrl?: string;
       landedAt?: string;
       threads?: unknown[];
+      replyTyped?: number;
+      replyPublished?: number;
     };
     const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
     try {
@@ -223,6 +233,30 @@ export const xPostingExecutor: ToolExecutor = {
             threads: listed.threads as unknown[],
           };
         }
+        if (toolName === 'x_scan_posts') {
+          const scanned = await scanXPostsViaBrowser({
+            source: String(input.source || ''),
+            limit: typeof input.limit === 'number' ? input.limit : undefined,
+            scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
+            expectedBrowserContextId,
+          });
+          return {
+            success: scanned.success,
+            message: scanned.message,
+            screenshotBase64: scanned.screenshotBase64,
+            currentUrl: scanned.currentUrl,
+            threads: scanned.tweets as unknown[],
+          };
+        }
+        if (toolName === 'x_compose_reply') {
+          return composeTweetReplyViaBrowser({
+            replyToUrl: String(input.reply_to_url || ''),
+            text: String(input.text || ''),
+            dryRun,
+            expectedHandle,
+            expectedBrowserContextId,
+          });
+        }
         // x_delete_tweet
         return deleteLastTweetViaBrowser({
           handle: String(input.handle || ''),
@@ -262,6 +296,8 @@ export const xPostingExecutor: ToolExecutor = {
     if (result.currentUrl) envelope.currentUrl = result.currentUrl;
     if (result.tweetsTyped !== undefined) envelope.tweetsTyped = result.tweetsTyped;
     if (result.tweetsPublished !== undefined) envelope.tweetsPublished = result.tweetsPublished;
+    if (result.replyTyped !== undefined) envelope.replyTyped = result.replyTyped;
+    if (result.replyPublished !== undefined) envelope.replyPublished = result.replyPublished;
     if (result.landedAt !== undefined) envelope.landedAt = result.landedAt;
     if (result.threads !== undefined) envelope.threads = result.threads;
     envelope.dry_run = dryRun;

@@ -56,6 +56,8 @@ import {
   X_POSTING_DELETE_TOOL_DEFINITIONS,
 } from './tools/x-posting.js';
 import { THREADS_POSTING_TOOL_DEFINITIONS } from './tools/threads-posting.js';
+import { X_REPLY_TOOL_DEFINITIONS } from './tools/x-reply.js';
+import { THREADS_REPLY_TOOL_DEFINITIONS } from './tools/threads-reply.js';
 import { SYNTHESIZE_FOR_GOAL_TOOL_DEFINITIONS } from './tools/synthesize-for-goal.js';
 import { SYNTHESIS_ACCEPTANCE_TOOL_DEFINITIONS } from './tools/synthesis-acceptance.js';
 import { CONNECTORS_TOOL_DEFINITIONS } from './tools/connectors.js';
@@ -142,7 +144,9 @@ export const ORCHESTRATOR_TOOL_DEFINITIONS: Tool[] = [
   ...KNOWLEDGE_TOOL_DEFINITIONS,
   ...WIKI_TOOL_DEFINITIONS,
   ...X_POSTING_HEAD_TOOL_DEFINITIONS,
+  ...X_REPLY_TOOL_DEFINITIONS,
   ...THREADS_POSTING_TOOL_DEFINITIONS,
+  ...THREADS_REPLY_TOOL_DEFINITIONS,
   ...SYNTHESIZE_FOR_GOAL_TOOL_DEFINITIONS,
   ...SYNTHESIS_ACCEPTANCE_TOOL_DEFINITIONS,
   ...X_POSTING_DELETE_TOOL_DEFINITIONS,

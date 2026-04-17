@@ -306,7 +306,8 @@ export interface ComposeResult {
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_TWEET_LENGTH = 280;
+export const MAX_TWEET_LENGTH = 280;
+export const X_HYDRATION_WAIT_MS = 2500;
 const COMPOSE_URL = 'https://x.com/compose/post';
 const DM_INBOX_URL = 'https://x.com/i/chat';
 const ARTICLE_LANDING_URL = 'https://x.com/compose/articles';
@@ -329,7 +330,7 @@ const KEYBOARD_DELAY_MS = 15;
 // raw driver exposes targets with their real `browserContextId`, so we
 // can pick the exact profile's x.com tab. See raw-cdp.ts top-of-file
 // comment for the full rationale + the hang repro.
-type CdpPage = RawCdpPage;
+export type CdpPage = RawCdpPage;
 
 /**
  * Connect to the already-running debug Chrome at `CDP_URL` and return a
@@ -359,7 +360,7 @@ type CdpPage = RawCdpPage;
  * one — callers surface the error to the operator rather than posting
  * from the wrong session.
  */
-async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise<CdpPage | null> {
+export async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise<CdpPage | null> {
   let browser: RawCdpBrowser | null = null;
   try {
     browser = await RawCdpBrowser.connect(CDP_URL, 5000);
@@ -438,7 +439,7 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
 // Helpers
 // ---------------------------------------------------------------------------
 
-function wait(ms: number): Promise<void> {
+export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -483,11 +484,11 @@ export function stripMarkdownForXArticle(body: string): { plainText: string } {
   return { plainText: out.trim() };
 }
 
-function isLoginRedirect(url: string): boolean {
+export function isLoginRedirect(url: string): boolean {
   return /\/(login|i\/flow\/login|i\/flow\/signup)/.test(url);
 }
 
-async function captureScreenshot(page: CdpPage): Promise<string | undefined> {
+export async function captureScreenshot(page: CdpPage): Promise<string | undefined> {
   try {
     return await page.screenshotJpeg(70);
   } catch (err) {
@@ -501,7 +502,7 @@ async function captureScreenshot(page: CdpPage): Promise<string | undefined> {
  * compose textareas — we focus first, then use `page.keyboard.type`
  * so React sees real input events.
  */
-async function focusByTestid(page: CdpPage, testid: string): Promise<boolean> {
+export async function focusByTestid(page: CdpPage, testid: string): Promise<boolean> {
   try {
     const ok = await page.evaluate(`(() => {
       const el = document.querySelector('[data-testid="${testid}"]');
@@ -521,7 +522,7 @@ async function focusByTestid(page: CdpPage, testid: string): Promise<boolean> {
  * Delete menu items and the article Publish button, which don't have
  * stable testids. Dispatches a real event through page.click.
  */
-async function clickByText(page: CdpPage, text: string, selectorScope = 'button, [role="button"], [role="menuitem"]'): Promise<boolean> {
+export async function clickByText(page: CdpPage, text: string, selectorScope = 'button, [role="button"], [role="menuitem"]'): Promise<boolean> {
   try {
     const found = await page.evaluate(`(() => {
       const scope = ${JSON.stringify(selectorScope)};

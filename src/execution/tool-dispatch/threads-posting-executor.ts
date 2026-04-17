@@ -16,6 +16,10 @@ import {
   readThreadsProfileViaBrowser,
 } from '../../orchestrator/tools/threads-posting.js';
 import {
+  scanThreadsPostsViaBrowser,
+  composeThreadsReplyViaBrowser,
+} from '../../orchestrator/tools/threads-reply.js';
+import {
   ensureDebugChrome,
   findProfileByIdentity,
   listProfiles,
@@ -31,12 +35,16 @@ const THREADS_TOOL_NAMES = new Set([
   'threads_compose_post',
   'threads_compose_thread',
   'threads_read_profile',
+  'threads_scan_posts',
+  'threads_compose_reply',
 ]);
 
 const TOOL_TIMEOUT_MS: Record<string, number> = {
   threads_compose_post: 90_000,
   threads_compose_thread: 180_000,
   threads_read_profile: 30_000,
+  threads_scan_posts: 45_000,
+  threads_compose_reply: 90_000,
 };
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
@@ -137,6 +145,9 @@ export const threadsPostingExecutor: ToolExecutor = {
       postsPublished?: number;
       currentUrl?: string;
       handle?: string;
+      replyTyped?: number;
+      replyPublished?: number;
+      threads?: unknown[];
     };
     const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
 
@@ -153,6 +164,30 @@ export const threadsPostingExecutor: ToolExecutor = {
         if (toolName === 'threads_compose_thread') {
           const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
           return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId });
+        }
+        if (toolName === 'threads_scan_posts') {
+          const scanned = await scanThreadsPostsViaBrowser({
+            source: String(input.source || ''),
+            limit: typeof input.limit === 'number' ? input.limit : undefined,
+            scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
+            expectedBrowserContextId,
+          });
+          return {
+            success: scanned.success,
+            message: scanned.message,
+            screenshotBase64: scanned.screenshotBase64,
+            currentUrl: scanned.currentUrl,
+            threads: scanned.posts as unknown[],
+          };
+        }
+        if (toolName === 'threads_compose_reply') {
+          return composeThreadsReplyViaBrowser({
+            replyToUrl: String(input.reply_to_url || ''),
+            text: String(input.text || ''),
+            dryRun,
+            expectedHandle,
+            expectedBrowserContextId,
+          });
         }
         // threads_read_profile
         return readThreadsProfileViaBrowser({ expectedBrowserContextId });
@@ -185,7 +220,10 @@ export const threadsPostingExecutor: ToolExecutor = {
     if (result.currentUrl) envelope.currentUrl = result.currentUrl;
     if (result.postsTyped !== undefined) envelope.postsTyped = result.postsTyped;
     if (result.postsPublished !== undefined) envelope.postsPublished = result.postsPublished;
+    if (result.replyTyped !== undefined) envelope.replyTyped = result.replyTyped;
+    if (result.replyPublished !== undefined) envelope.replyPublished = result.replyPublished;
     if (result.handle !== undefined) envelope.handle = result.handle;
+    if (result.threads !== undefined) envelope.threads = result.threads;
     envelope.dry_run = dryRun;
     envelope.profile_used = target.email || target.directory;
 
