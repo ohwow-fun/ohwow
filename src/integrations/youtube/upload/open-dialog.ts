@@ -61,8 +61,11 @@ export async function openUploadDialog(page: RawCdpPage, maxAttempts = 3): Promi
       const clickedCreate = await page.clickSelector(SEL.UPLOAD_CREATE_BUTTON, 8_000);
       if (!clickedCreate) throw new YTUploadError('open_dialog', 'Create button click dispatch returned false');
 
-      // Wait for menu items to mount.
-      await waitForSelector(page, SEL.UPLOAD_MENU_ITEMS, { timeoutMs: 5_000, label: 'Create menu items' });
+      // Wait for the narrow menu-item tag that ONLY mounts after the
+      // Create dropdown opens. Must NOT wait on [role="menuitem"] —
+      // the left-nav sidebar uses that role, so the wait would resolve
+      // instantly on every page and we'd scan the wrong menu.
+      await waitForSelector(page, SEL.UPLOAD_MENU_ITEM_READY, { timeoutMs: 5_000, label: 'Create menu items' });
 
       const clickedUpload = await page.evaluate<boolean>(`(() => {
         const items = document.querySelectorAll(${JSON.stringify(SEL.UPLOAD_MENU_ITEMS)});

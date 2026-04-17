@@ -23,7 +23,11 @@
 export const SEL = {
   // --- Create / upload wizard ---------------------------------------------
   UPLOAD_CREATE_BUTTON: '[aria-label="Create"]',
-  // "Upload videos" menu item — we match by text since the id is unstable.
+  // Create dropdown mounts tp-yt-paper-item children. We use the narrow
+  // selector for the mount-wait because [role="menuitem"] matches the
+  // left-nav sidebar too (always present), giving false positives.
+  UPLOAD_MENU_ITEM_READY: 'tp-yt-paper-item',
+  // Full scan set used when matching the "Upload videos" item by text.
   UPLOAD_MENU_ITEMS: 'tp-yt-paper-item, [role="menuitem"]',
   UPLOAD_FILE_INPUT: 'input[type="file"][name="Filedata"]',
   UPLOAD_DIALOG: 'ytcp-uploads-dialog',

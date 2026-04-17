@@ -160,11 +160,19 @@ export async function ensureYTStudio(opts: EnsureYTStudioOptions = {}): Promise<
   const page = await browser.attachToPage(studio.targetId);
   await page.installUnloadEscapes();
 
-  // Ensure we're actually on Studio — it sometimes redirects through
-  // accounts.google.com if the session is stale.
+  // Ensure we're on a functional Studio page. A previous action may
+  // have left the tab at a 404 / error subpage — in that case the
+  // top-nav Create button won't render and downstream flows hang.
   const currentUrl = await page.url();
-  if (!/studio\.youtube\.com/.test(currentUrl)) {
+  const nav = await assessStudioNavState(page);
+  if (!/studio\.youtube\.com/.test(currentUrl) || !nav.createBtnPresent || nav.studioErrorShown) {
+    logger.debug(
+      { url: currentUrl, ...nav },
+      '[youtube/session] nav unfit — bouncing to dashboard',
+    );
     await page.goto(STUDIO_URL);
+    // Give Studio a beat to paint the nav before continuing.
+    await new Promise((r) => setTimeout(r, 1_500));
   }
 
   // Dismiss welcome dialog if it's mounted.
@@ -291,6 +299,20 @@ function identityMatches(wanted: string, health: YTHealth): boolean {
   // Email match: we don't read email from Studio DOM cheaply; ignore for now.
   // Callers that need email-level identity should use chrome-profile-router.
   return false;
+}
+
+async function assessStudioNavState(page: RawCdpPage): Promise<{ createBtnPresent: boolean; studioErrorShown: boolean }> {
+  try {
+    return await page.evaluate<{ createBtnPresent: boolean; studioErrorShown: boolean }>(`(() => {
+      const createBtn = document.querySelector('[aria-label="Create"]');
+      const createBtnPresent = !!createBtn && createBtn.offsetParent !== null;
+      const bodyText = (document.body ? document.body.textContent : '') || '';
+      const studioErrorShown = /Oops, something went wrong/i.test(bodyText) && !!document.querySelector('ytcp-error-section');
+      return { createBtnPresent, studioErrorShown };
+    })()`);
+  } catch {
+    return { createBtnPresent: false, studioErrorShown: false };
+  }
 }
 
 async function waitForTargetUrl(
