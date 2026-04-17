@@ -27,7 +27,7 @@ import {
   hasRecentlyPostedTextForPlatform,
   recordPostedTextForPlatform,
 } from '../lib/posted-text-log.js';
-import { composeTweetViaBrowser } from '../orchestrator/tools/x-posting.js';
+import { composeTweetViaBrowser, sendDmViaBrowser } from '../orchestrator/tools/x-posting.js';
 import { composeThreadsPostViaBrowser } from '../orchestrator/tools/threads-posting.js';
 import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
 import { profileByHandleHint } from './browser/chrome-lifecycle.js';
@@ -69,6 +69,7 @@ export class DeliverableExecutor {
   constructor(private db: DatabaseAdapter) {
     this.register('post_tweet', postTweetHandler);
     this.register('post_threads', postThreadsHandler);
+    this.register('send_dm', sendDmHandler);
   }
 
   register(actionType: string, handler: Handler): void {
@@ -371,6 +372,44 @@ const postTweetHandler: Handler = async (content, ctx) => {
       });
     }
     return { ok: true, result: { dryRun, expectedHandle, ...(res as unknown as Record<string, unknown>) } };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+// ---------------------------------------------------------------------------
+// X DM send handler
+// ---------------------------------------------------------------------------
+
+const sendDmHandler: Handler = async (content, ctx) => {
+  const text = typeof content.text === 'string' ? content.text.trim() : '';
+  if (!text) return { ok: false, error: 'send_dm: content.text missing' };
+
+  const handle = typeof content.handle === 'string' ? content.handle.trim().replace(/^@/, '') : '';
+  const conversationPair = typeof content.conversation_pair === 'string'
+    ? content.conversation_pair.trim()
+    : '';
+  if (!handle && !conversationPair) {
+    return { ok: false, error: 'send_dm: handle or conversation_pair required' };
+  }
+
+  const dryRun = !ctx.liveMode;
+
+  const prep = await ensureProfileChrome(ctx.db);
+  if (!prep.ok) return { ok: false, error: `send_dm: ${prep.error}` };
+
+  try {
+    const res = await sendDmViaBrowser({
+      handle: handle || undefined,
+      conversationPair: conversationPair || undefined,
+      text,
+      dryRun,
+      expectedBrowserContextId: prep.browserContextId || undefined,
+    });
+    if (!res.success) {
+      return { ok: false, error: res.message || 'DM send failed', result: res as unknown as Record<string, unknown> };
+    }
+    return { ok: true, result: { dryRun, handle, conversationPair, ...(res as unknown as Record<string, unknown>) } };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

@@ -54,6 +54,7 @@ import { createPermissionRequestsRouter } from './routes/permission-requests.js'
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createXDraftsRouter } from './routes/x-drafts.js';
+import { createXDmDraftsRouter } from './routes/x-dm-drafts.js';
 import { createPulseRouter } from './routes/pulse.js';
 import { createConversationsRouter } from './routes/conversations.js';
 import { createTemplatesRouter } from './routes/templates.js';
@@ -611,6 +612,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createExpensesRouter(db, eventBus));
   app.use(createTimeTrackingRouter(db, eventBus));
   app.use(createXDraftsRouter(db, workspaceId || 'local'));
+  app.use(createXDmDraftsRouter(db));
   app.use(createPulseRouter(rawDb, startTime, config.dataDir));
   app.use(createConversationsRouter(rawDb, config.dataDir));
   if (config.dataDir) {
