@@ -114,6 +114,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '137-documents.sql', expectedTables: ['document_templates', 'documents'] },
   { migrationFile: '138-support-tickets.sql', expectedTables: ['support_tickets', 'ticket_comments', 'analytics_snapshots'] },
   { migrationFile: '139-bookkeeping-time.sql', expectedTables: ['expense_categories', 'expenses', 'time_entries'] },
+  { migrationFile: '140-yt-short-drafts.sql', expectedTables: ['yt_short_drafts', 'yt_episode_metrics'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —
