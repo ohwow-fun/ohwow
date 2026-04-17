@@ -138,7 +138,7 @@ describe('MCP tool registration', () => {
   it('registers 2 research tools', () => {
     const server = createMockServer();
     registerResearchTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(2);
+    expect(server.tools).toHaveLength(3);
   });
 
   it('registers 2 messaging tools', () => {
@@ -187,7 +187,7 @@ describe('MCP tool registration', () => {
   it('registers all tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(85);
+    expect(server.tools).toHaveLength(87);
   });
 
   it('every tool has a unique name', () => {

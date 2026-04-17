@@ -24,6 +24,7 @@ import { createLlmRouter } from './routes/llm.js';
 import { createAgentsRouter } from './routes/agents.js';
 import { createActivityRouter } from './routes/activity.js';
 import { createApprovalsRouter } from './routes/approvals.js';
+import { createXRouter } from './routes/x.js';
 import { createDeliverablesRouter } from './routes/deliverables.js';
 import { createSchedulesRouter } from './routes/schedules.js';
 import { createKnowledgeRouter } from './routes/knowledge.js';
@@ -567,6 +568,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createAgentsRouter(db));
   app.use(createActivityRouter(db));
   app.use(createApprovalsRouter(db));
+  app.use(createXRouter());
   app.use(createDeliverablesRouter(db));
   app.use(createMarketingRouter(db));
   app.use(createSocialRouter(db));
