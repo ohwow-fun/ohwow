@@ -70,8 +70,22 @@ export interface YTHealth {
   loggedIn: boolean;
   /** UC-prefixed channel ID if visible. */
   channelId: string | null;
-  /** Handle with leading "@" if visible. */
+  /** Handle with leading "@" if visible. Studio often doesn't expose this — will be null even when logged in. */
   channelHandle: string | null;
+  /** Google session slot index ("0" = primary account). */
+  sessionIndex: string | null;
+  /** Unique identifier for the logged-in creator account. */
+  datasyncId: string | null;
+  /**
+   * Policy flags surfaced by Studio bootstrap. When any are true the
+   * creator has a pending copyright takedown / terms-of-use strike /
+   * artist-roster issue that can block further uploads.
+   */
+  accountFlags: {
+    hasUnacknowledgedCopyrightTakedown: boolean;
+    hasUnacknowledgedTouStrike: boolean;
+    hasArtistRoster: boolean;
+  } | null;
   welcomeDialogOpen: boolean;
   consentBannerOpen: boolean;
   uploadDialogOpen: boolean;
@@ -200,24 +214,43 @@ export async function ensureYTStudio(opts: EnsureYTStudioOptions = {}): Promise<
  * Returns a snapshot of the session's fitness. Fast (~one RTT).
  */
 export async function healthCheck(page: RawCdpPage): Promise<YTHealth> {
-  const result = await page.evaluate<Omit<YTHealth, 'url'> & { url: string }>(`(() => {
+  const result = await page.evaluate<YTHealth>(`(() => {
     const url = location.href;
     const welcomeDialogOpen = !!document.querySelector(${JSON.stringify(SEL.DIALOG_WELCOME_CLOSE)});
     const uploadDialogOpen = !!document.querySelector(${JSON.stringify(SEL.UPLOAD_DIALOG)});
 
-    // loggedIn heuristic: Studio mounts a channel header with an avatar
-    // when signed in. If the URL is a sign-in redirect, we're not.
+    // Primary identity source: Studio bootstraps window.ytcfg.data_
+    // with LOGGED_IN, CHANNEL_ID, SESSION_INDEX, DATASYNC_ID,
+    // ACCOUNT_FLAGS. This is far more reliable than DOM probing.
+    const cfg = (window && window.ytcfg && window.ytcfg.data_) || {};
+    const cfgLoggedIn = cfg.LOGGED_IN === true;
+    let channelId = cfg.CHANNEL_ID || null;
+    const sessionIndex = cfg.SESSION_INDEX != null ? String(cfg.SESSION_INDEX) : null;
+    const datasyncId = cfg.DATASYNC_ID || null;
+    let accountFlags = null;
+    if (cfg.ACCOUNT_FLAGS) {
+      let af = cfg.ACCOUNT_FLAGS;
+      if (typeof af === 'string') { try { af = JSON.parse(af); } catch { af = null; } }
+      if (af && typeof af === 'object') {
+        accountFlags = {
+          hasUnacknowledgedCopyrightTakedown: !!af.has_unacknowledged_copyright_takedown,
+          hasUnacknowledgedTouStrike: !!af.has_unacknowledged_tou_strike,
+          hasArtistRoster: !!af.has_artist_roster,
+        };
+      }
+    }
+
+    // DOM-based fallbacks for URL-inferred state when ytcfg isn't populated
+    // yet (e.g. mid-navigation).
     const signInForm = document.querySelector(${JSON.stringify(SEL.AUTH_SIGNIN_FORM)});
     const avatarBtn = document.querySelector(${JSON.stringify(SEL.CHANNEL_HEADER_AVATAR)});
     const onSignInUrl = /accounts\\.google\\.com/.test(url);
-    const loggedIn = !signInForm && !onSignInUrl && !!avatarBtn;
+    const loggedIn = cfgLoggedIn || (!signInForm && !onSignInUrl && !!avatarBtn);
 
-    // Channel id: Studio's URL has /channel/UC... once loaded; if we're
-    // on /en or /intl or just / (pre-redirect) we might not have it yet.
-    let channelId = null;
-    const m = url.match(/\\/channel\\/(UC[\\w-]+)/);
-    if (m) channelId = m[1];
-    // Backup: look for a channel link anywhere in header.
+    if (!channelId) {
+      const m = url.match(/\\/channel\\/(UC[\\w-]+)/);
+      if (m) channelId = m[1];
+    }
     if (!channelId) {
       const a = document.querySelector(${JSON.stringify(SEL.CHANNEL_HANDLE_ANCHOR)});
       const href = a ? a.getAttribute('href') : null;
@@ -227,23 +260,24 @@ export async function healthCheck(page: RawCdpPage): Promise<YTHealth> {
       }
     }
 
-    // Handle: anchor starting with /@foo.
+    // Handle (optional): Studio rarely surfaces it. Check /@handle anchors as a best-effort.
     let channelHandle = null;
-    const handleAnchors = document.querySelectorAll('a[href^="/@"]');
+    const handleAnchors = document.querySelectorAll('a[href^="/@"], a[href*="youtube.com/@"]');
     for (const a of handleAnchors) {
       const h = a.getAttribute('href') || '';
-      const hm = h.match(/^\\/@([^/?#]+)/);
+      const hm = h.match(/\\/@([^/?#]+)/);
       if (hm) { channelHandle = '@' + hm[1]; break; }
     }
 
-    // Consent / cookie banner: Google's consent iframe or an "Accept all" btn.
     const consentBannerOpen = !!document.querySelector(${JSON.stringify(SEL.CHALLENGE_CONSENT_AGREE)});
-
-    // Surface the link the sign-in form points at (so callers can log it).
     const signInA = document.querySelector('a[href*="accounts.google.com/ServiceLogin"], a[href*="accounts.google.com/signin"]');
     const signInHref = signInA ? signInA.getAttribute('href') : null;
 
-    return { url, loggedIn, channelId, channelHandle, welcomeDialogOpen, consentBannerOpen, uploadDialogOpen, signInHref };
+    return {
+      url, loggedIn, channelId, channelHandle,
+      sessionIndex, datasyncId, accountFlags,
+      welcomeDialogOpen, consentBannerOpen, uploadDialogOpen, signInHref,
+    };
   })()`);
   return result;
 }
