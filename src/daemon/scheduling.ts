@@ -33,7 +33,27 @@ import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
 import { resolveActiveWorkspace } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { registerExperiments } from './experiments.js';
+import { seedXIntelAutomation } from './seed-x-intel-automation.js';
 import type { DaemonContext } from './context.js';
+
+/** Convert `xIntelIntervalMinutes` config into a cron expression the
+ * LocalScheduler can evaluate. Whole-hour divisors of 24 become comma-
+ * lists ("0 0,3,6,9,12,15,18,21 * * *") so cron-parser advances
+ * correctly at midnight boundaries; other hour values use `/<N>` form;
+ * sub-hourly falls back to minute-step form. */
+export function cronForIntervalMinutes(minutes: number): string {
+  const n = Math.max(1, Math.round(minutes));
+  if (n >= 60 && n % 60 === 0) {
+    const hours = n / 60;
+    if (24 % hours === 0) {
+      const marks: number[] = [];
+      for (let h = 0; h < 24; h += hours) marks.push(h);
+      return `0 ${marks.join(',')} * * *`;
+    }
+    return `0 */${hours} * * *`;
+  }
+  return `*/${n} * * * *`;
+}
 
 export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise<void> {
   const { config, db, rawDb, bus, engine, orchestrator, workspaceId, modelRouter, triggerEvaluator, connectorRegistry, channelRegistry, controlPlane, digitalBody, dataDir } = ctx as DaemonContext;
@@ -50,72 +70,39 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
     logger.warn(`[daemon] Scheduler failed: ${err instanceof Error ? err.message : err}`);
   });
 
-  // X intelligence scheduler: opt-in per workspace via xIntelEnabled.
-  // Shells out to scripts/x-experiments/x-intel.mjs on a cadence — the
-  // script itself handles browser attach, classification, synthesis, and
-  // knowledge upload through the approval queue. Decoupled child process
-  // so a pipeline bug cannot crash the daemon.
+  // X intelligence pipeline: opt-in per workspace via xIntelEnabled.
+  // Now seeded as a native ohwow automation (trigger_type='schedule')
+  // so LocalScheduler.tickAutomationSchedules drives it — last_fired_at
+  // persists in the DB across daemon restarts, the dashboard can
+  // toggle/edit it like any user-authored flow, and the trigger watchdog
+  // picks up stuck runs via consecutive_failures. The shell_script
+  // dispatcher preserves the original env contract + heartbeat files.
+  //
+  // XForecast and XHumor still run as hand-coded schedulers below —
+  // migrating them is a separate pass (same pattern, different seed).
   if (config.xIntelEnabled) {
-    // The daemon doesn't know where the ohwow source tree lives for
-    // arbitrary installs (the child needs to find scripts/x-experiments/
-    // x-intel.mjs). Prefer an env override; otherwise fall back to
-    // process.cwd() which is correct when launched from the repo root.
     const repoRoot = process.env.OHWOW_REPO_ROOT || process.cwd();
     const workspaceSlug = resolveActiveWorkspace().name;
-    // Chain steps fire sequentially after a successful x-intel tick,
-    // each with its own heartbeat and child process. All three
-    // scripts depend on x-intel's fresh sidecars, so piggybacking on
-    // the same trigger avoids re-scraping. DRY is default inside
-    // each script; the live write paths are separate work.
-    const chainSteps = [];
-    if (config.xAuthorsToCrmEnabled) {
-      chainSteps.push({
-        enabled: true,
-        scriptRelPath: 'scripts/x-experiments/x-authors-to-crm.mjs',
-        heartbeatName: 'x-authors-to-crm-last-run.json',
-        logTag: '[XAuthorsToCrmScheduler]',
-      });
-    }
-    if (config.xComposeEnabled) {
-      chainSteps.push({
-        enabled: true,
-        scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
-        heartbeatName: 'x-compose-last-run.json',
-        logTag: '[XComposeScheduler]',
-        // DRY=0 so proposals hit the approval queue. Whether they
-        // auto-apply (and post live via Chrome) depends on trust
-        // thresholds inside propose() and the outbound gate; the
-        // scheduler doesn't short-circuit those.
-        env: { DRY: '0' },
-      });
-    }
-    if (config.xReplyEnabled) {
-      chainSteps.push({
-        enabled: true,
-        scriptRelPath: 'scripts/x-experiments/x-reply.mjs',
-        heartbeatName: 'x-reply-last-run.json',
-        logTag: '[XReplyScheduler]',
-        env: { DRY: '0' },
-      });
-    }
-    const xIntel = new XIntelScheduler({
-      workspaceSlug,
-      dataDir,
-      repoRoot,
-      runOnBoot: false,
-      chainOnZeroExit: chainSteps.length ? chainSteps : undefined,
+
+    await seedXIntelAutomation(db, workspaceId, {
+      // Convert interval minutes into a cron expression. 180min → "0 */3 * * *".
+      // Sub-hourly intervals fall back to "*/<N> * * * *".
+      cron: cronForIntervalMinutes(config.xIntelIntervalMinutes),
+      authorsToCrm: config.xAuthorsToCrmEnabled,
+      compose: config.xComposeEnabled,
+      reply: config.xReplyEnabled,
+    }).catch((err) => {
+      logger.warn({ err }, '[daemon] seed-x-intel-automation failed');
     });
-    xIntel.start(config.xIntelIntervalMinutes * 60 * 1000);
     logger.info(
       { workspaceSlug, intervalMin: config.xIntelIntervalMinutes, repoRoot },
-      '[daemon] x-intel-scheduler started',
+      '[daemon] x-intel automation seeded',
     );
 
-    // Forecast scorer — reuses XIntelScheduler mechanics (child-process
-    // isolation, wall-clock kill, heartbeat, executing-guard) but spawns
-    // the scorer script on its own slower cadence. Enabled by default
-    // because it's read-only: judges predictions emitted by x-intel and
-    // writes x-predictions-scores.jsonl. No knowledge uploads, no DMs.
+    // Forecast scorer — read-only cadence that scores predictions emitted
+    // by x-intel. Still hand-coded; the Phase 0 heartbeat rehydrate
+    // (XIntelScheduler.start) keeps it restart-safe until it too moves
+    // to an automation.
     if (config.xForecastEnabled) {
       const xForecast = new XIntelScheduler({
         workspaceSlug,
@@ -133,11 +120,8 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
       );
     }
 
-    // Humor scheduler — runs x-compose with SHAPES=humor on its own
-    // hourly cadence. Independent of x-intel because humor draws
-    // from x-intel-history (persists across ticks) rather than the
-    // day's fresh sidecars. Default cadence 60min; workspace can
-    // override via xHumorIntervalMinutes.
+    // Humor scheduler — runs x-compose with SHAPES=humor on an hourly
+    // cadence, independent of x-intel. Same migration path pending.
     if (config.xHumorEnabled) {
       const xHumor = new XIntelScheduler({
         workspaceSlug,
@@ -147,9 +131,6 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
         scriptRelPath: 'scripts/x-experiments/x-compose.mjs',
         heartbeatName: 'x-humor-last-run.json',
         logTag: '[XHumorScheduler]',
-        // SHAPES=humor scopes this instance's spawns to the humor
-        // shape only. The x-intel chain step (which also runs
-        // x-compose) keeps the default mixed shapes.
         env: { SHAPES: 'humor', MAX_DRAFTS: '1', DRY: '0' },
       });
       xHumor.start(config.xHumorIntervalMinutes * 60 * 1000);

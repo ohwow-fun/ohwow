@@ -35,7 +35,8 @@ export type AutomationStepType =
   | 'fill_pdf'
   | 'save_attachment'
   | 'take_screenshot'
-  | 'generate_chart';
+  | 'generate_chart'
+  | 'shell_script';
 
 export interface AutomationStep {
   id: string;

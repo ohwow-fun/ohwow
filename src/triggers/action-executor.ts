@@ -17,6 +17,10 @@ import { createDefaultRegistry } from './action-registry.js';
 import type { DispatcherDeps } from './action-dispatcher.js';
 
 const STEP_TIMEOUT_MS = 120_000;
+/** Dispatchers whose own timeout covers a long-running subprocess get
+ * this much extra slack on top so the outer withTimeout never trips
+ * before the inner one has a chance to finalize cleanup. */
+const STEP_TIMEOUT_SLACK_MS = 30_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -25,6 +29,18 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)), ms)
     ),
   ]);
+}
+
+/** Per-action timeout override: dispatchers like shell_script can run
+ * for minutes (x-intel takes ~6 min in the wild) and supply their own
+ * internal timeout. If the action_config carries a `timeout_seconds`
+ * field, honor it here so the outer safety net doesn't pre-empt a
+ * long-but-legitimate run. Fall back to the global 2-minute default. */
+function resolveStepTimeoutMs(action: AutomationAction): number {
+  const cfg = action.action_config as { timeout_seconds?: unknown } | undefined;
+  const sec = cfg && typeof cfg.timeout_seconds === 'number' ? cfg.timeout_seconds : null;
+  if (sec === null || !Number.isFinite(sec) || sec <= 0) return STEP_TIMEOUT_MS;
+  return sec * 1000 + STEP_TIMEOUT_SLACK_MS;
 }
 
 export class ActionExecutor {
@@ -64,7 +80,7 @@ export class ActionExecutor {
       try {
         const output = await withTimeout(
           this.executeAction(trigger, action, context),
-          STEP_TIMEOUT_MS,
+          resolveStepTimeoutMs(action),
           `Step ${action.id} (${action.action_type})`,
         );
         context[action.id] = output;
