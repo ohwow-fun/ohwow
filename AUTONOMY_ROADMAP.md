@@ -299,6 +299,24 @@ signal above is running on proxies.
 
 _Maintained by RoadmapUpdaterExperiment from live loop state._
 
-## 6. Missing Experiments
-
-_Maintained by RoadmapUpdaterExperiment from live loop state._
+- **adaptive-scheduler** — tier-1: creates new files only
+- **agent-cost-watcher** — tier-1: creates new files only
+- **agent-coverage-gap** — tier-1: creates new files only
+- **agent-lock-contention** — tier-1: creates new files only
+- **agent-outcomes** — tier-1: creates new files only
+- **agent-state-hygiene-sentinel** — tier-1: creates new files only
+- **analogical-reasoning-emergence-signal-v3** — tier-1: creates new files only
+- **anthropic-claude-sonnet-4-6-latency** — tier-1: creates new files only
+- **autonomous-author-quality** — tier-1: creates new files only
+- **autonomous-patch-rollback** — tier-1: creates new files only
+- **browser-profile-guardian** — tier-1: creates new files only
+- **burn-guard** — tier-1: creates new files only
+- **canaries** — tier-1: creates new files only
+- **canary-experiment** — tier-1: creates new files only
+- **classifier-stability** — tier-1: creates new files only
+- **contact-conversation-analyst** — tier-1: creates new files only
+- **content-cadence-loop-health** — tier-1: creates new files only
+- **content-cadence-tuner** — tier-1: creates new files only
+- **daily-surprise-digest** — tier-1: creates new files only
+- **dashboard-copy** — tier-1: creates new files only
+- **deepseek-deepseek-v3-2-latency** — tier-1: creates new files only
