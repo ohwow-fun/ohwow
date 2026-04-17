@@ -42,3 +42,24 @@ export {
 } from './upload/index.js';
 
 export { type Visibility } from './upload/visibility.js';
+
+export {
+  channelSummary,
+  analyticsOverview,
+  parseAbbrevCount,
+  type ChannelSummary,
+  type AnalyticsOverview,
+  type AnalyticsMetric,
+} from './read/channel-analytics.js';
+
+export {
+  listMyVideos,
+  type VideoListEntry,
+  type VideoListResult,
+  type ListVideosOptions,
+} from './read/list-videos.js';
+
+export {
+  videoMetadata,
+  type VideoMetadata,
+} from './read/video-metadata.js';
