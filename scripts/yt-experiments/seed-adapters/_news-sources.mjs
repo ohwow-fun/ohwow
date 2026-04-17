@@ -55,17 +55,28 @@ export async function fetchHackerNewsTop({ maxAgeHours = 48, maxStories = 50 } =
     .filter((s) => s && s.type === "story" && s.title && s.url)
     .filter((s) => nowSec - s.time <= maxAgeSec)
     .map((s) => {
-      const titleLower = s.title.toLowerCase();
+      const title = s.title;
+      const titleLower = title.toLowerCase();
       const matchedKeywords = HN_KEYWORDS.filter((k) => titleLower.includes(k));
       const aiRelevance = matchedKeywords.length;
       const ageHours = (nowSec - s.time) / 3600;
+
+      // Show HN / Ask HN / Tell HN are community projects, not news.
+      // Not banned outright because some Show HN posts do cover real AI
+      // releases — but a heavy penalty moves them below official
+      // announcements.
+      const isCommunityPost = /^(show|ask|tell) hn:/i.test(title);
+      const communityPenalty = isCommunityPost ? 50 : 0;
+
       // Score: favor AI relevance, high HN score, and recency (linear decay).
       const score =
         aiRelevance * 30 +
         (s.score || 0) * 0.5 +
-        Math.max(0, 48 - ageHours);
+        Math.max(0, 48 - ageHours) -
+        communityPenalty;
+
       return {
-        title: s.title,
+        title,
         url: s.url,
         domain: safeDomain(s.url),
         hn_score: s.score || 0,
@@ -73,6 +84,7 @@ export async function fetchHackerNewsTop({ maxAgeHours = 48, maxStories = 50 } =
         age_hours: Math.round(ageHours * 10) / 10,
         matched_keywords: matchedKeywords,
         ai_relevance: aiRelevance,
+        is_community_post: isCommunityPost,
         score,
         hn_id: s.id,
       };
