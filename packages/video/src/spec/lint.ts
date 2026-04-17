@@ -33,10 +33,11 @@ function checkAudioRef(
   ref: AudioRef,
   pathPrefix: string,
   totalFrames: number,
-  out: LintIssue[],
+  errors: LintIssue[],
+  warnings: LintIssue[],
 ): void {
   if (ref.startFrame >= totalFrames) {
-    out.push({
+    errors.push({
       code: "audio/start-after-end",
       severity: "error",
       message: `AudioRef startFrame (${ref.startFrame}) is past the total composition duration (${totalFrames} frames).`,
@@ -46,7 +47,7 @@ function checkAudioRef(
   if (ref.durationFrames != null) {
     const end = ref.startFrame + ref.durationFrames;
     if (end > totalFrames) {
-      out.push({
+      warnings.push({
         code: "audio/overruns-composition",
         severity: "warning",
         message: `AudioRef ends at frame ${end} but composition is ${totalFrames} frames long. Will be clipped.`,
@@ -225,18 +226,9 @@ export function lintVideoSpec(
   }
 
   // ─── Audio refs ───────────────────────────────────────────────────────────
-  if (spec.music) checkAudioRef(spec.music, "music", totalFrames, warnings);
+  if (spec.music) checkAudioRef(spec.music, "music", totalFrames, errors, warnings);
   spec.voiceovers.forEach((v, i) => {
-    checkAudioRef(v, `voiceovers[${i}]`, totalFrames, warnings);
-    // Also add hard errors for start-past-end.
-    if (v.startFrame >= totalFrames) {
-      errors.push({
-        code: "audio/voice-start-after-end",
-        severity: "error",
-        message: `Voiceover ${i} starts at frame ${v.startFrame} but composition is ${totalFrames}f long.`,
-        path: `voiceovers[${i}].startFrame`,
-      });
-    }
+    checkAudioRef(v, `voiceovers[${i}]`, totalFrames, errors, warnings);
   });
 
   // ─── FPS sanity ───────────────────────────────────────────────────────────

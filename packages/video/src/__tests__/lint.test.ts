@@ -236,6 +236,6 @@ describe("lintVideoSpec", () => {
       voiceovers: [{ src: "cache://abc", startFrame: 9999 }],
     };
     const result = lintVideoSpec(spec);
-    expect(result.errors.some(e => e.code === "audio/voice-start-after-end")).toBe(true);
+    expect(result.errors.some(e => e.code === "audio/start-after-end")).toBe(true);
   });
 });
