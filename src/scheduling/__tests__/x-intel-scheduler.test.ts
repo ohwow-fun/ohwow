@@ -187,6 +187,76 @@ describe('XIntelScheduler', () => {
     expect(existsSync(join(dataDir, 'x-authors-to-crm-last-run.json'))).toBe(false);
   });
 
+  it('start() rehydrates cadence from heartbeat: fresh run defers first fire', async () => {
+    // Heartbeat says we ran 100ms ago. Interval is 10s. First fire
+    // should be ~9.9s out, so after a short wait the child has not run
+    // and the heartbeat `ts` we wrote by hand is unchanged.
+    const writtenTs = new Date(Date.now() - 100).toISOString();
+    writeFileSync(
+      join(dataDir, 'x-intel-last-run.json'),
+      JSON.stringify({ ts: writtenTs, workspace: 'default', exitCode: 0, durationMs: 1, stdoutTail: '' }),
+    );
+    const s = new XIntelScheduler({ workspaceSlug: 'default', dataDir, repoRoot, runOnBoot: true });
+    s.start(10_000);
+    await new Promise((r) => setTimeout(r, 200));
+    s.stop();
+    const hb = JSON.parse(readFileSync(join(dataDir, 'x-intel-last-run.json'), 'utf8'));
+    expect(hb.ts).toBe(writtenTs);
+    expect(s.lastExit).toBeNull();
+  });
+
+  it('start() rehydrates cadence from heartbeat: overdue run fires immediately', async () => {
+    // Heartbeat says we last ran way before the interval. Even with
+    // runOnBoot:false, persistence should force an immediate fire.
+    const writtenTs = new Date(Date.now() - 60_000).toISOString();
+    writeFileSync(
+      join(dataDir, 'x-intel-last-run.json'),
+      JSON.stringify({ ts: writtenTs, workspace: 'default', exitCode: 0, durationMs: 1, stdoutTail: '' }),
+    );
+    const s = new XIntelScheduler({ workspaceSlug: 'default', dataDir, repoRoot, runOnBoot: false });
+    s.start(10_000);
+    // Wait long enough for npx tsx cold-start + trivial script exit.
+    await new Promise((r) => setTimeout(r, 4000));
+    s.stop();
+    const hb = JSON.parse(readFileSync(join(dataDir, 'x-intel-last-run.json'), 'utf8'));
+    expect(hb.ts).not.toBe(writtenTs);
+    expect(s.lastExit).toBe(0);
+  });
+
+  it('start() with no heartbeat + runOnBoot:false waits full interval', async () => {
+    // No heartbeat, runOnBoot:false → behaves like the old code path:
+    // no immediate fire. Verified by the absence of the heartbeat file
+    // after a short wait.
+    const s = new XIntelScheduler({ workspaceSlug: 'default', dataDir, repoRoot, runOnBoot: false });
+    s.start(10_000);
+    await new Promise((r) => setTimeout(r, 200));
+    s.stop();
+    expect(existsSync(join(dataDir, 'x-intel-last-run.json'))).toBe(false);
+    expect(s.lastExit).toBeNull();
+  });
+
+  it('start() with no heartbeat + runOnBoot:true fires immediately', async () => {
+    const s = new XIntelScheduler({ workspaceSlug: 'default', dataDir, repoRoot, runOnBoot: true });
+    s.start(10_000);
+    await new Promise((r) => setTimeout(r, 4000));
+    s.stop();
+    expect(existsSync(join(dataDir, 'x-intel-last-run.json'))).toBe(true);
+    expect(s.lastExit).toBe(0);
+  });
+
+  it('start() ignores a corrupted heartbeat and falls back to runOnBoot', async () => {
+    writeFileSync(join(dataDir, 'x-intel-last-run.json'), '{ not json');
+    const s = new XIntelScheduler({ workspaceSlug: 'default', dataDir, repoRoot, runOnBoot: true });
+    s.start(10_000);
+    await new Promise((r) => setTimeout(r, 4000));
+    s.stop();
+    // runOnBoot true + unreadable heartbeat → should have fired,
+    // overwriting the corrupt file with a valid heartbeat.
+    const hb = JSON.parse(readFileSync(join(dataDir, 'x-intel-last-run.json'), 'utf8'));
+    expect(hb.exitCode).toBe(0);
+    expect(s.lastExit).toBe(0);
+  });
+
   it('honors scriptRelPath + heartbeatName for the forecast-scorer sibling', async () => {
     // Two schedulers sharing mechanics but pointed at different scripts
     // and different heartbeat files. Mirrors how start.ts runs them.

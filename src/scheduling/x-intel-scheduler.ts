@@ -27,7 +27,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
 import { logger } from '../lib/logger.js';
 
@@ -109,14 +109,73 @@ export class XIntelScheduler {
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.running) return;
     this.running = true;
-    if (this.opts.runOnBoot) {
-      void this.tick();
+
+    // Persistence: resume the cadence from the last heartbeat instead of
+    // resetting the timer on every boot. With the ohwow daemon restarted
+    // dozens of times per dev day, a naive setInterval with
+    // runOnBoot:false never reaches its full period and the pipeline
+    // silently drifts. The heartbeat file's `ts` is our authoritative
+    // "last attempted run" — if the gap since then is already past the
+    // interval, fire immediately; otherwise schedule the first fire for
+    // the remainder.
+    const lastTs = this.readHeartbeatTs();
+    const now = Date.now();
+    let firstFireDelayMs: number;
+    if (lastTs !== null) {
+      firstFireDelayMs = Math.max(0, intervalMs - (now - lastTs));
+    } else if (this.opts.runOnBoot) {
+      firstFireDelayMs = 0;
+    } else {
+      firstFireDelayMs = intervalMs;
     }
-    this.timer = setInterval(() => void this.tick(), intervalMs);
+
+    const armInterval = () => {
+      this.timer = setInterval(() => void this.tick(), intervalMs);
+    };
+
+    if (firstFireDelayMs === 0) {
+      void this.tick();
+      armInterval();
+    } else {
+      // setTimeout + setInterval share the NodeJS.Timeout type, and
+      // clearInterval is an alias for clearTimeout, so storing the
+      // handle in `this.timer` and stopping via the existing stop()
+      // path works for both phases.
+      this.timer = setTimeout(() => {
+        void this.tick();
+        armInterval();
+      }, firstFireDelayMs);
+    }
+
     logger.info(
-      { workspaceSlug: this.opts.workspaceSlug, intervalMs, runOnBoot: !!this.opts.runOnBoot },
+      {
+        workspaceSlug: this.opts.workspaceSlug,
+        intervalMs,
+        runOnBoot: !!this.opts.runOnBoot,
+        firstFireDelayMs,
+        lastRunAt: lastTs ? new Date(lastTs).toISOString() : null,
+      },
       `${this.tag} started`,
     );
+  }
+
+  /**
+   * Read the last run timestamp from our heartbeat file. Returns null
+   * for any "no prior run observable" case (file missing, corrupt, or
+   * missing `ts` field) so callers fall through to the runOnBoot /
+   * fresh-install branch.
+   */
+  private readHeartbeatTs(): number | null {
+    try {
+      const heartbeatPath = join(this.opts.dataDir, this.heartbeatName);
+      const raw = readFileSync(heartbeatPath, 'utf8');
+      const parsed = JSON.parse(raw) as { ts?: string };
+      if (!parsed || typeof parsed.ts !== 'string') return null;
+      const ms = Date.parse(parsed.ts);
+      return Number.isFinite(ms) ? ms : null;
+    } catch {
+      return null;
+    }
   }
 
   stop(): void {
