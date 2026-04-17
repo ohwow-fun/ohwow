@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   rankCandidates,
   topRankedCandidate,
+  deriveAdaptiveWeights,
+  BASELINE_WEIGHTS,
+  LIFT_HEALTH_MIN_SAMPLES,
+  ADAPTIVE_SCALE_FACTOR,
   type RankableCandidate,
   type EvidencePointer,
 } from '../value-ranker.js';
@@ -213,5 +217,118 @@ describe('value-ranker — integration', () => {
     });
     expect(ranked[0].score).toBeGreaterThan(0);
     expect(ranked[0].rationale.join(' ')).toMatch(/revenue/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase 5d — adaptive weights driven by lift-measurements outcomes.
+// -----------------------------------------------------------------------------
+
+describe('deriveAdaptiveWeights', () => {
+  it('returns baseline unchanged when liftHealth is absent', () => {
+    expect(deriveAdaptiveWeights(undefined)).toEqual(BASELINE_WEIGHTS);
+  });
+
+  it('returns baseline unchanged when samples < LIFT_HEALTH_MIN_SAMPLES', () => {
+    const below = LIFT_HEALTH_MIN_SAMPLES - 1;
+    expect(
+      deriveAdaptiveWeights({ total_closed: below, moved_right: below, moved_wrong: 0 }),
+    ).toEqual(BASELINE_WEIGHTS);
+  });
+
+  it('amplifies revenue_proximity + evidence_strength on a healthy loop', () => {
+    const adapted = deriveAdaptiveWeights({
+      total_closed: 10,
+      moved_right: 8,
+      moved_wrong: 2,
+    });
+    const net = (8 - 2) / 10; // 0.6
+    const scale = 1 + ADAPTIVE_SCALE_FACTOR * net; // 1 + 0.3 = 1.3
+    expect(adapted.revenue_proximity).toBeCloseTo(BASELINE_WEIGHTS.revenue_proximity * scale, 6);
+    expect(adapted.evidence_strength).toBeCloseTo(BASELINE_WEIGHTS.evidence_strength * scale, 6);
+    // Safety + operator + retention-policy components never scale.
+    expect(adapted.blast_radius).toBe(BASELINE_WEIGHTS.blast_radius);
+    expect(adapted.priority_match).toBe(BASELINE_WEIGHTS.priority_match);
+    expect(adapted.recency).toBe(BASELINE_WEIGHTS.recency);
+  });
+
+  it('damps revenue_proximity + evidence_strength on a regressive loop', () => {
+    const adapted = deriveAdaptiveWeights({
+      total_closed: 10,
+      moved_right: 2,
+      moved_wrong: 8,
+    });
+    const net = (2 - 8) / 10; // -0.6
+    const scale = 1 + ADAPTIVE_SCALE_FACTOR * net; // 1 - 0.3 = 0.7
+    expect(adapted.revenue_proximity).toBeCloseTo(BASELINE_WEIGHTS.revenue_proximity * scale, 6);
+    expect(adapted.evidence_strength).toBeCloseTo(BASELINE_WEIGHTS.evidence_strength * scale, 6);
+  });
+
+  it('clamps scale into [0.5, 1.5] even at perfect-wrong / perfect-right extremes', () => {
+    // ADAPTIVE_SCALE_FACTOR=0.5 × net_ratio∈[-1,+1] gives [0.5, 1.5] on
+    // the multiplier. The weight never flips sign or disappears — data
+    // nudges the prior, doesn't overwrite it.
+    const allRight = deriveAdaptiveWeights({ total_closed: 10, moved_right: 10, moved_wrong: 0 });
+    expect(allRight.revenue_proximity).toBeCloseTo(BASELINE_WEIGHTS.revenue_proximity * 1.5, 6);
+    const allWrong = deriveAdaptiveWeights({ total_closed: 10, moved_right: 0, moved_wrong: 10 });
+    expect(allWrong.revenue_proximity).toBeCloseTo(BASELINE_WEIGHTS.revenue_proximity * 0.5, 6);
+  });
+});
+
+describe('rankCandidates with liftHealth', () => {
+  it('preserves baseline behavior when liftHealth is absent (dormant skeleton)', () => {
+    const candidates = [
+      cand({
+        findingId: 'rev-1',
+        experimentId: 'attribution-observer',
+        subject: 'attribution:rollup',
+        tier2Files: ['src/self-bench/experiments/attribution-observer.ts'],
+      }),
+    ];
+    const withoutHealth = rankCandidates({ now: NOW, candidates });
+    const withThinData = rankCandidates({
+      now: NOW,
+      candidates,
+      liftHealth: { total_closed: 2, moved_right: 1, moved_wrong: 1 },
+    });
+    // <5 samples → same scores as no liftHealth at all.
+    expect(withoutHealth[0].score).toBe(withThinData[0].score);
+  });
+
+  it('amplifies a revenue-proximal candidate score under a healthy lift signal', () => {
+    const candidates = [
+      cand({
+        findingId: 'rev-1',
+        experimentId: 'attribution-observer',
+        subject: 'attribution:rollup',
+        tier2Files: ['src/self-bench/experiments/attribution-observer.ts'],
+      }),
+    ];
+    const baseline = rankCandidates({ now: NOW, candidates });
+    const healthy = rankCandidates({
+      now: NOW,
+      candidates,
+      liftHealth: { total_closed: 10, moved_right: 8, moved_wrong: 2 },
+    });
+    // Healthy loop: revenue_proximity component is amplified, score is higher.
+    expect(healthy[0].score).toBeGreaterThan(baseline[0].score);
+  });
+
+  it('damps a revenue-proximal candidate score under a regressive lift signal', () => {
+    const candidates = [
+      cand({
+        findingId: 'rev-1',
+        experimentId: 'attribution-observer',
+        subject: 'attribution:rollup',
+        tier2Files: ['src/self-bench/experiments/attribution-observer.ts'],
+      }),
+    ];
+    const baseline = rankCandidates({ now: NOW, candidates });
+    const regressive = rankCandidates({
+      now: NOW,
+      candidates,
+      liftHealth: { total_closed: 10, moved_right: 2, moved_wrong: 8 },
+    });
+    expect(regressive[0].score).toBeLessThan(baseline[0].score);
   });
 });

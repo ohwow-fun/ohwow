@@ -64,6 +64,22 @@ export interface RankedCandidate<T extends RankableCandidate> {
   rationale: string[];
 }
 
+/**
+ * Phase 5d input for adaptive weight derivation. Counts come from
+ * summarizeRecentVerdicts over a recent window (7d by convention).
+ * When total_closed crosses LIFT_HEALTH_MIN_SAMPLES the ranker scales
+ * the "what the loop learned works" components by the observed net
+ * signed ratio; below that sample floor the hand-tuned baseline is
+ * used unchanged. Safety components (blast_radius) and operator
+ * overrides (priority_match) never scale — those are priors about
+ * intent, not about what the data shows.
+ */
+export interface LiftHealthInput {
+  total_closed: number;
+  moved_right: number;
+  moved_wrong: number;
+}
+
 export interface RankInput<T extends RankableCandidate> {
   candidates: readonly T[];
   /**
@@ -79,12 +95,33 @@ export interface RankInput<T extends RankableCandidate> {
    * priority_match bonus. Empty/missing = no bonus.
    */
   priorityTags?: readonly string[];
+  /**
+   * Phase 5d — recent lift verdict counts from lift_measurements. When
+   * present and total_closed >= LIFT_HEALTH_MIN_SAMPLES, the ranker
+   * scales revenue_proximity + evidence_strength multiplicatively by
+   * (1 + 0.5 × net_ratio). Absent or below the sample floor: the
+   * baseline weights apply. The feature lands dormant until real lift
+   * data accumulates, then auto-activates.
+   */
+  liftHealth?: LiftHealthInput;
   /** Clock injection for tests. Defaults to `new Date()`. */
   now?: Date;
 }
 
-/** Weights on each component. Tuned so revenue_proximity dominates a single-finding baseline. */
-const WEIGHT = {
+/** Weight on each scoring component. Non-const so adaptive scaling
+ *  (Phase 5d) can return a derived version with the same shape. */
+export interface RankerWeights {
+  revenue_proximity: number;
+  evidence_strength: number;
+  blast_radius: number;
+  recency: number;
+  priority_match: number;
+}
+
+/** Baseline hand-tuned weights. Tuned so revenue_proximity dominates
+ *  a single-finding baseline. deriveAdaptiveWeights returns these
+ *  unchanged when lift data is thin. */
+export const BASELINE_WEIGHTS: RankerWeights = {
   revenue_proximity: 3,
   evidence_strength: 2,
   blast_radius: -1,
@@ -93,7 +130,49 @@ const WEIGHT = {
   // evidence_strength — a priority-tagged candidate beats a single-
   // corroboration one, and combined with revenue-proximity it dominates.
   priority_match: 2,
-} as const;
+};
+
+/** Phase 5d sample floor. Below this, adaptive weights are a noise
+ *  amplifier; above this, the observed net signed ratio nudges the
+ *  prior in the direction of recent outcomes. 5 matches the
+ *  strategist's LIFT_HEALTH_MIN_SAMPLES so the two adaptations (demote
+ *  on regression / rescale on confidence) activate together. */
+export const LIFT_HEALTH_MIN_SAMPLES = 5;
+/** Scale factor on the net ratio. 0.5 caps the per-component
+ *  adjustment at ±50% so a single noisy week doesn't double or erase
+ *  a hand-tuned weight; data nudges, doesn't overwrite. */
+export const ADAPTIVE_SCALE_FACTOR = 0.5;
+
+/**
+ * Return weights adapted to recent lift outcomes. Pure — same input
+ * always returns the same numbers; safe to call per-tick.
+ *
+ * Scaling rule: scale = 1 + ADAPTIVE_SCALE_FACTOR × net_ratio, where
+ * net_ratio = (moved_right - moved_wrong) / total_closed. Components
+ * that scale: revenue_proximity (the "target selection prior"),
+ * evidence_strength (the "corroboration prior"). Components that
+ * don't: blast_radius (safety), priority_match (operator directive),
+ * recency (retention policy).
+ *
+ * Below LIFT_HEALTH_MIN_SAMPLES the function returns BASELINE_WEIGHTS
+ * unchanged — the skeleton lands dormant when no lift data exists.
+ */
+export function deriveAdaptiveWeights(
+  liftHealth?: LiftHealthInput,
+): RankerWeights {
+  if (!liftHealth || liftHealth.total_closed < LIFT_HEALTH_MIN_SAMPLES) {
+    return BASELINE_WEIGHTS;
+  }
+  const net = (liftHealth.moved_right - liftHealth.moved_wrong) / liftHealth.total_closed;
+  const scale = 1 + ADAPTIVE_SCALE_FACTOR * net;
+  return {
+    revenue_proximity: BASELINE_WEIGHTS.revenue_proximity * scale,
+    evidence_strength: BASELINE_WEIGHTS.evidence_strength * scale,
+    blast_radius: BASELINE_WEIGHTS.blast_radius,
+    recency: BASELINE_WEIGHTS.recency,
+    priority_match: BASELINE_WEIGHTS.priority_match,
+  };
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Recency decays linearly to zero across this many days. */
@@ -223,19 +302,20 @@ function scorePriorityMatch<T extends RankableCandidate>(
   return 0;
 }
 
-function combineScore(b: ScoreBreakdown): number {
+function combineScore(b: ScoreBreakdown, weights: RankerWeights): number {
   return (
-    WEIGHT.revenue_proximity * b.revenue_proximity +
-    WEIGHT.evidence_strength * b.evidence_strength +
-    WEIGHT.blast_radius * b.blast_radius +
-    WEIGHT.recency * b.recency +
-    WEIGHT.priority_match * b.priority_match
+    weights.revenue_proximity * b.revenue_proximity +
+    weights.evidence_strength * b.evidence_strength +
+    weights.blast_radius * b.blast_radius +
+    weights.recency * b.recency +
+    weights.priority_match * b.priority_match
   );
 }
 
 function buildRationale<T extends RankableCandidate>(
   c: T,
   breakdown: ScoreBreakdown,
+  weights: RankerWeights,
 ): string[] {
   const parts: string[] = [];
   if (breakdown.revenue_proximity > 0) {
@@ -245,19 +325,19 @@ function buildRationale<T extends RankableCandidate>(
         : c.subject && REVENUE_PROXIMAL_SUBJECT_PREFIXES.some((p) => c.subject!.startsWith(p))
           ? `revenue-proximal subject '${c.subject}'`
           : 'revenue-proximal path touched';
-    parts.push(`+${WEIGHT.revenue_proximity.toFixed(1)} ${reason}`);
+    parts.push(`+${weights.revenue_proximity.toFixed(2)} ${reason}`);
   }
   if (breakdown.evidence_strength > 0) {
-    parts.push(`+${(WEIGHT.evidence_strength * breakdown.evidence_strength).toFixed(2)} evidence strength (${Math.round(breakdown.evidence_strength * MAX_EVIDENCE_COUNT)} corroborating findings)`);
+    parts.push(`+${(weights.evidence_strength * breakdown.evidence_strength).toFixed(2)} evidence strength (${Math.round(breakdown.evidence_strength * MAX_EVIDENCE_COUNT)} corroborating findings)`);
   }
   if (breakdown.blast_radius > 0) {
-    parts.push(`${(WEIGHT.blast_radius * breakdown.blast_radius).toFixed(2)} blast radius`);
+    parts.push(`${(weights.blast_radius * breakdown.blast_radius).toFixed(2)} blast radius`);
   }
   if (breakdown.recency > 0) {
-    parts.push(`+${(WEIGHT.recency * breakdown.recency).toFixed(2)} recency`);
+    parts.push(`+${(weights.recency * breakdown.recency).toFixed(2)} recency`);
   }
   if (breakdown.priority_match > 0) {
-    parts.push(`+${WEIGHT.priority_match.toFixed(1)} operator-priority tag match`);
+    parts.push(`+${weights.priority_match.toFixed(2)} operator-priority tag match`);
   }
   if (parts.length === 0) parts.push('baseline (no positive signals)');
   return parts;
@@ -274,6 +354,10 @@ export function rankCandidates<T extends RankableCandidate>(
   const now = input.now ?? new Date();
   const others = input.otherFindings ?? [];
   const priorityTags = input.priorityTags ?? [];
+  // Phase 5d — when lift data crosses the sample floor, weights scale
+  // by the observed net signed ratio; otherwise this returns the
+  // hand-tuned baseline unchanged so existing behavior is preserved.
+  const weights = deriveAdaptiveWeights(input.liftHealth);
   const ranked = input.candidates.map((c) => {
     const breakdown: ScoreBreakdown = {
       revenue_proximity: scoreRevenueProximity(c),
@@ -282,12 +366,12 @@ export function rankCandidates<T extends RankableCandidate>(
       recency: scoreRecency(c, now),
       priority_match: scorePriorityMatch(c, priorityTags),
     };
-    const score = combineScore(breakdown);
+    const score = combineScore(breakdown, weights);
     return {
       candidate: c,
       score,
       breakdown,
-      rationale: buildRationale(c, breakdown),
+      rationale: buildRationale(c, breakdown, weights),
     };
   });
   ranked.sort((a, b) => {

@@ -51,7 +51,8 @@ import {
   recordProposedPatch,
   hasRecentlyRevertedPatch,
 } from '../../lib/patches-attempted-log.js';
-import { rankCandidates, type EvidencePointer } from '../value-ranker.js';
+import { rankCandidates, type EvidencePointer, type LiftHealthInput } from '../value-ranker.js';
+import { summarizeRecentVerdicts } from '../lift-measurements-store.js';
 import {
   readActivePriorities,
   matchActivePriorities,
@@ -238,10 +239,17 @@ export class PatchAuthorExperiment implements Experiment {
       affectedFiles: extractAffectedFiles(r.evidence),
     }));
     const priorityTags = collectActivePriorityTags(ctx.workspaceSlug ?? null);
+    // Phase 5d — feed recent lift verdicts into the ranker so weights
+    // scale by observed outcome health. Falls back to BASELINE_WEIGHTS
+    // when total_closed < LIFT_HEALTH_MIN_SAMPLES, so this lands
+    // dormant and auto-activates once real data accumulates. Read
+    // failure → undefined → baseline; safe either way.
+    const liftHealth = await readLiftHealthForRanker(ctx.db, ctx.workspaceId);
     const ranked = rankCandidates({
       candidates,
       otherFindings,
       priorityTags,
+      liftHealth,
     });
     const rankedOrdered: PatchCandidate[] = ranked.map((r) => r.candidate);
     const topBreakdown = ranked[0]
@@ -790,6 +798,29 @@ export function buildCrossDomainHypothesis(
   const change = candidate.tier2Files[0] ?? 'this file';
   const becauseFragment = findingHypothesis ?? findingSummary ?? 'the finding describes the broken contract';
   return `When I change ${change}, ${metric} should move because ${becauseFragment.slice(0, 200)}`;
+}
+
+/**
+ * Phase 5d — read the 7d lift verdict distribution so the ranker can
+ * scale weights by observed outcome health. Returns undefined on any
+ * read error; the ranker falls back to BASELINE_WEIGHTS so an absent
+ * signal never destabilizes candidate selection.
+ */
+async function readLiftHealthForRanker(
+  db: import('../../db/adapter-types.js').DatabaseAdapter,
+  workspaceId: string,
+): Promise<LiftHealthInput | undefined> {
+  try {
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const counts = await summarizeRecentVerdicts(db, workspaceId, since);
+    return {
+      total_closed: counts.total_closed,
+      moved_right: counts.moved_right,
+      moved_wrong: counts.moved_wrong,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function guessRevenueMetric(candidate: PatchCandidate): string {
