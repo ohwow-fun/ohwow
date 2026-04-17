@@ -20,6 +20,8 @@ import {
   TextShadowTrail,
 } from "../motion/generative";
 import { VideoClipLayer } from "./VideoClipLayer";
+import { CountUp } from "./semantic-primitives/CountUp";
+import { BadgeReveal } from "./semantic-primitives/BadgeReveal";
 
 export type PrimitiveComponent = React.FC<Record<string, unknown>>;
 
@@ -120,6 +122,14 @@ register("particle-burst", ParticleBurst as PrimitiveComponent, ["count", "color
 register("grid-morph", GridMorph as PrimitiveComponent, ["cols", "rows", "cellSize", "color", "seed", "speed", "morphIntensity"], "Morphing grid pattern. Data, tech, structure.", true);
 register("text-shadow-trail", TextShadowTrail as PrimitiveComponent, ["text", "color", "trailColor", "trailCount", "speed", "fontSize"], "Text with trailing shadow copies. Motion, emphasis.", true);
 register("video-clip", VideoClipLayer as PrimitiveComponent, ["src", "opacity", "blendMode", "fit", "muted"], "Generative mp4 clip resolved at render time by the configured video provider.", true);
+
+// ─── Semantic primitives (2D) — carry real script content ──────────────
+// These animate on a fixed timeline inside their enclosing scene. They
+// respect ASMR easing by default. Use them when the narration names a
+// concrete number / metric / badge; keep decorative primitives
+// (aurora, grid-morph, ...) in the backdrop layer slots.
+register("count-up", CountUp as PrimitiveComponent, ["target", "unit", "formatDecimals", "durationFrames", "fontSize", "color", "label", "labelColor", "position"], "Large number that animates 0 → target with ASMR easing. For concrete stats like '13%', '40 tok/s'.", true);
+register("badge-reveal", BadgeReveal as PrimitiveComponent, ["text", "variant", "subtitle", "position", "fontSize", "revealAt"], "Text pill that pops in with soft scale + glow. For named metrics / tags / version labels.", true);
 
 // Exposed position keys that auto-scale from [0,1] ratios to percentage strings.
 export const POSITION_KEYS: ReadonlySet<string> = new Set(["cx", "cy", "originX", "originY", "y"]);

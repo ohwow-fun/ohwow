@@ -22,6 +22,8 @@ import { ThreeCanvas } from "@remotion/three";
 import { useCurrentFrame, useVideoConfig } from "remotion";
 import { asmrEasingDeep, getMotionProfile } from "../motion/asmr";
 import { r3fRegistry } from "./r3f-registry";
+// Side-effect import: registers all r3f.* primitives at module load.
+import "../r3f/register";
 
 interface CameraSpec {
   position?: [number, number, number];
@@ -91,28 +93,23 @@ export const R3FScene: React.FC<{
   );
 };
 
-// ─── Demo primitive — proves the Remotion↔R3F pipeline works ──────────
-// A single chrome cube that slowly rotates and breathes with ASMR easing.
-// Used by the Phase 0 verification render; real primitives come in Phase 1.
+// ─── Demo primitive (kept for Phase 0 smoke testing) ──────────────────
+// A single chrome cube that slowly rotates. Used by specs/r3f-demo.json.
+// The real Phase 1 primitives live under src/r3f/primitives/.
 
 const DemoCube: React.FC<{
   color?: string;
   motionProfile?: string;
-  durationInFrames?: number;
 }> = ({ color = "#f4eadb", motionProfile }) => {
   const frame = useCurrentFrame();
   const profile = getMotionProfile(motionProfile);
-
-  // Slow rotation driven by ASMR easing.
-  const t = frame / 30; // seconds
-  const rotationY = t * 0.4; // ~0.4 rad/sec = very slow turn
+  const t = frame / 30;
+  const rotationY = t * 0.4;
   const rotationX = Math.sin(t * 0.3) * 0.15;
-
-  // Breath-scale pulse (only when ASMR profile is active).
   const breath = profile.breathAmp > 0
     ? 1 + Math.sin((frame / profile.breathPeriodFrames) * Math.PI * 2) * profile.breathAmp
     : 1;
-  void asmrEasingDeep; // reserved for cross-scene use
+  void asmrEasingDeep;
 
   return (
     <mesh rotation={[rotationX, rotationY, 0]} scale={[breath, breath, breath]}>
@@ -127,12 +124,4 @@ const DemoCube: React.FC<{
   );
 };
 
-// Register demo-cube at module load. Real primitives register similarly
-// from their own files in Phase 1.
-r3fRegistry.set("r3f.demo-cube", DemoCube as R3FPrimitive);
-
-export type R3FPrimitive = React.FC<{
-  motionProfile?: string;
-  durationInFrames?: number;
-  [key: string]: unknown;
-}>;
+r3fRegistry.set("r3f.demo-cube", DemoCube as unknown as Parameters<typeof r3fRegistry.set>[1]);

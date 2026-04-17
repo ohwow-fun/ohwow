@@ -1,0 +1,156 @@
+{
+  "id": "semantic-p1-demo",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": {
+      "bg": "#0a1020",
+      "text": "#f4f7fb",
+      "accent": "#e3b58a"
+    },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": {
+    "seedHue": 215,
+    "harmony": "complementary",
+    "mood": "electric"
+  },
+  "voiceovers": [],
+  "transitions": [{ "kind": "fade", "durationInFrames": 24 }],
+  "scenes": [
+    {
+      "id": "s1-countup-2d",
+      "kind": "composable",
+      "durationInFrames": 150,
+      "narration": "Opus four point seven delivers a thirteen percent coding lift.",
+      "params": {
+        "visualLayers": [
+          { "primitive": "grid-morph", "params": { "cols": 20, "rows": 11, "color": "#1c2740", "speed": 0.4 } },
+          { "primitive": "vignette", "params": { "intensity": 0.55 } },
+          {
+            "primitive": "count-up",
+            "params": {
+              "target": 13,
+              "unit": "%",
+              "fontSize": 360,
+              "color": "#f4eadb",
+              "label": "coding lift on SWE-bench",
+              "durationFrames": 90
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "s2-r3f-countup-bar",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Ninety three task benchmark resolution climbs.",
+      "params": {
+        "background": "#080c1a",
+        "fog": { "color": "#080c1a", "near": 6, "far": 18 },
+        "camera": { "position": [0, 1.2, 7.5], "fov": 45 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 600, "spread": 8, "color": "#f4eadb", "size": 0.05, "swirlSpeed": 0.05 } },
+          {
+            "primitive": "r3f.count-up-bar",
+            "params": {
+              "target": 93,
+              "max": 100,
+              "unit": "",
+              "label": "tasks solved",
+              "color": "#f4eadb",
+              "durationFrames": 90
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "s3-versus",
+      "kind": "r3f-scene",
+      "durationInFrames": 150,
+      "narration": "Opus four point six passes the torch to Opus four point seven.",
+      "params": {
+        "background": "#0a1020",
+        "fog": { "color": "#0a1020", "near": 7, "far": 20 },
+        "camera": { "position": [0, 0, 8.5], "fov": 50 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 400, "spread": 9, "color": "#e3b58a", "size": 0.035, "swirlSpeed": 0.04, "seed": 7 } },
+          {
+            "primitive": "r3f.versus-cards",
+            "params": {
+              "before": { "label": "SWE-bench score", "value": "82%" },
+              "after":  { "label": "SWE-bench score", "value": "93%" },
+              "label":  "Opus 4.6 → 4.7",
+              "transitionAt": 30,
+              "transitionDuration": 80
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "s4-number-sculpture",
+      "kind": "r3f-scene",
+      "durationInFrames": 120,
+      "narration": "Thirty five billion parameters, running on a laptop.",
+      "params": {
+        "background": "#0a1020",
+        "fog": { "color": "#0a1020", "near": 5, "far": 16 },
+        "camera": { "position": [0, 0, 7], "fov": 40 },
+        "motionProfile": "asmr",
+        "primitives": [
+          { "primitive": "r3f.particle-cloud", "params": { "count": 500, "spread": 8, "color": "#f0c89b", "size": 0.03, "swirlSpeed": 0.06, "seed": 23 } },
+          {
+            "primitive": "r3f.number-sculpture",
+            "params": {
+              "value": "35B",
+              "label": "parameters",
+              "color": "#f4eadb",
+              "fontSize": 4.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "s5-badge",
+      "kind": "composable",
+      "durationInFrames": 120,
+      "narration": "Open weight. Available now.",
+      "params": {
+        "visualLayers": [
+          { "primitive": "gradient-wash", "params": { "colors": ["#1a2236", "#0a1020"], "speed": 0.002, "opacity": 0.6 } },
+          { "primitive": "grid-morph", "params": { "cols": 16, "rows": 9, "color": "#222d48", "speed": 0.35 } },
+          { "primitive": "vignette", "params": { "intensity": 0.5 } },
+          {
+            "primitive": "badge-reveal",
+            "params": {
+              "text": "OPEN WEIGHTS",
+              "variant": "delta",
+              "subtitle": "Qwen 3.6 · available today on Hugging Face",
+              "fontSize": 110,
+              "position": "center",
+              "revealAt": 8
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
