@@ -26,6 +26,29 @@ describe('inferExpectedLifts', () => {
     }
   });
 
+  it('emits a 1h horizon on reply_ratio_24h for outreach patches (fast triangulation)', () => {
+    const lifts = inferExpectedLifts(['src/lib/outreach-policy.ts']);
+    const horizons = lifts
+      .filter((l) => l.kpiId === 'reply_ratio_24h')
+      .map((l) => l.horizonHours)
+      .sort((a, b) => a - b);
+    expect(horizons).toEqual([1, 24]);
+  });
+
+  it('emits a 1h horizon on qualified_events_24h for qualifier-pipeline patches', () => {
+    const lifts = inferExpectedLifts(['scripts/x-experiments/x-authors-to-crm.mjs']);
+    const qualifiedHorizons = lifts
+      .filter((l) => l.kpiId === 'qualified_events_24h')
+      .map((l) => l.horizonHours)
+      .sort((a, b) => a - b);
+    expect(qualifiedHorizons).toEqual([1, 168]);
+    // active_leads still only 168h — too slow to measure at 1h.
+    const leadsHorizons = lifts
+      .filter((l) => l.kpiId === 'active_leads')
+      .map((l) => l.horizonHours);
+    expect(leadsHorizons).toEqual([168]);
+  });
+
   it('matches outreach-thermostat.ts under the same heuristic as outreach-policy.ts', () => {
     const policy = inferExpectedLifts(['src/lib/outreach-policy.ts']);
     const thermostat = inferExpectedLifts(['src/self-bench/experiments/outreach-thermostat.ts']);

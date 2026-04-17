@@ -44,13 +44,19 @@ export interface LiftHeuristic {
 export const LIFT_HEURISTICS: readonly LiftHeuristic[] = Object.freeze([
   // Outreach copy / cooldown policy — the revenue bucket's active
   // surface. A patch here is presumed to move reply rate + qualified
-  // events; the horizon is wider for qualification because the
-  // reply → DM → lead → qualified chain takes time.
+  // events. Three horizons triangulate the signal:
+  //   1h   — early ripple on reply_ratio_24h (the 24h window slides by
+  //          1/24th; noisy but gives the loop a verdict within the
+  //          LiftMeasurementExperiment cadence instead of waiting a day)
+  //   24h  — primary reply_ratio check once the full window has turned
+  //   168h — qualification downstream (reply → DM → lead → qualified
+  //          takes a week to surface)
   {
     description:
       'outreach-policy.ts or outreach-thermostat.ts — changes to cooldown gate + draft templates',
     pathMatches: /src\/(lib\/outreach-policy|self-bench\/experiments\/outreach-thermostat)\.ts$/,
     lifts: [
+      { kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 1 },
       { kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 24 },
       { kpiId: 'qualified_events_24h', direction: 'up', horizonHours: 168 },
     ],
@@ -58,12 +64,16 @@ export const LIFT_HEURISTICS: readonly LiftHeuristic[] = Object.freeze([
   // x-authors-to-crm / qualifier scripts — pipeline upstream of the
   // lead flip. Moving these tends to show up in active_leads + qualified
   // events; attribution to revenue takes even longer than the outreach
-  // surface, so the horizon is 7d.
+  // surface, so the main horizon is 7d. A 1h qualified_events_24h read
+  // gives an early regression signal if a classifier change is
+  // catastrophically worse; active_leads changes too slowly to bother
+  // measuring at 1h.
   {
     description:
       'x-authors-to-crm.mjs / _qualify.mjs — qualification pipeline changes',
     pathMatches: /scripts\/x-experiments\/(x-authors-to-crm|_qualify)\.mjs$/,
     lifts: [
+      { kpiId: 'qualified_events_24h', direction: 'up', horizonHours: 1 },
       { kpiId: 'active_leads', direction: 'up', horizonHours: 168 },
       { kpiId: 'qualified_events_24h', direction: 'up', horizonHours: 168 },
     ],
