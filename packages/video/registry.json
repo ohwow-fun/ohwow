@@ -1,0 +1,14 @@
+{
+  "$schema": "https://ohwow.fun/schemas/video-registry.json",
+  "version": 1,
+  "blocks": [
+    { "id": "title-card",       "category": "titling",   "files": ["src/blocks/title-card.ts"],       "dependencies": [] },
+    { "id": "lower-third",      "category": "overlay",   "files": ["src/blocks/lower-third.ts"],      "dependencies": [] },
+    { "id": "caption-strip",    "category": "overlay",   "files": ["src/blocks/caption-strip.ts"],    "dependencies": [] },
+    { "id": "quote-card",       "category": "narrative", "files": ["src/blocks/quote-card.ts"],       "dependencies": [] },
+    { "id": "bullet-list",      "category": "narrative", "files": ["src/blocks/bullet-list.ts"],      "dependencies": [] },
+    { "id": "stat-card",        "category": "metrics",   "files": ["src/blocks/stat-card.ts"],        "dependencies": [] },
+    { "id": "metric-dashboard", "category": "metrics",   "files": ["src/blocks/metric-dashboard.ts"], "dependencies": [] },
+    { "id": "logo-reveal",      "category": "cta",       "files": ["src/blocks/logo-reveal.ts"],      "dependencies": [] }
+  ]
+}

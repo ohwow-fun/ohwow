@@ -38,5 +38,21 @@ export {
 } from "./transitions/registry";
 export * from "./motion/generative";
 export * from "./layers";
+export {
+  BLOCKS,
+  getBlock,
+  listBlocks,
+  lowerThird,
+  statCard,
+  captionStrip,
+  titleCard,
+  quoteCard,
+  bulletList,
+  metricDashboard,
+  logoReveal,
+  type VideoBlock,
+  type BlockCategory,
+  type BlockParamField,
+} from "./blocks";
 
 registerRoot(Root);
