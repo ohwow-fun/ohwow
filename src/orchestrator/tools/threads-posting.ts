@@ -40,6 +40,7 @@ import {
   clickByText,
   clearTextbox,
   wait,
+  confirmPostLanded,
   HYDRATION_WAIT_MS,
   POST_SETTLE_MS,
   type ComposeResult,
@@ -502,7 +503,26 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
       };
     }
 
-    logger.info(`[${LOG_TAG}] Post published`);
+    // Positive landing check: dialog-closed is necessary but not
+    // sufficient. We've seen the dialog close without publish (race on
+    // focus/escape, auto-dismissed error toast). Poll 2.5s for our
+    // text in the feed before committing to success. Only flip to
+    // failure on a confident "not visible" — a probe error stays on
+    // the legacy success path to avoid inventing failures.
+    const landing = await confirmPostLanded(page, text, 2500);
+    if (landing === 'not_visible') {
+      logger.warn(`[${LOG_TAG}] dialog closed but text not visible within 2.5s — treating as silent failure`);
+      return {
+        success: false,
+        message: 'Compose dialog closed but the post text did not appear on the page within 2.5s. Threads may have silently dropped the post; re-check the profile.',
+        screenshotBase64: await captureScreenshot(page) || postShot || screenshotBase64,
+        postsTyped: 1,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info({ landing }, `[${LOG_TAG}] Post published`);
     return {
       success: true,
       message: `Threads post published (${text.length} chars).`,
@@ -656,7 +676,24 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       };
     }
 
-    logger.info(`[${LOG_TAG}] Thread published (${postsTyped} posts)`);
+    // Positive landing check against the last post in the thread. The
+    // first post could be echoed by lingering compose state; the final
+    // post only lands once the whole thread is actually submitted.
+    const probeText = posts[posts.length - 1];
+    const landing = await confirmPostLanded(page, probeText, 2500);
+    if (landing === 'not_visible') {
+      logger.warn({ postsTyped }, `[${LOG_TAG}] thread dialog closed but last-post text not visible — silent failure`);
+      return {
+        success: false,
+        message: `Threads thread dialog closed but the last post (${probeText.slice(0, 40)}...) did not appear within 2.5s. Threads may have dropped the thread.`,
+        screenshotBase64: await captureScreenshot(page) || screenshotBase64,
+        postsTyped,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info({ postsTyped, landing }, `[${LOG_TAG}] Thread published`);
     return {
       success: true,
       message: `Threads thread published (${postsTyped} posts).`,

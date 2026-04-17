@@ -58,6 +58,7 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import { confirmPostLanded } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -747,7 +748,25 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       };
     }
 
-    logger.info('[x-posting] Tweet published');
+    // Positive landing check: modal-closed alone isn't proof the post
+    // went through. Poll up to 2.5s for our text in the DOM (timeline
+    // or toast). Only flip to failure when we positively see no match
+    // — a CDP probe error stays on the legacy success path so transient
+    // hiccups don't invent failures.
+    const landing = await confirmPostLanded(page, text, 2500);
+    if (landing === 'not_visible') {
+      logger.warn('[x-posting] modal closed but text not visible within 2.5s — treating as silent failure');
+      return {
+        success: false,
+        message: 'Compose modal closed but the tweet text did not appear on the page within 2.5s. X may have silently dropped the post; re-check in the feed.',
+        screenshotBase64: await captureScreenshot(page) || postShot || screenshotBase64,
+        tweetsTyped: 1,
+        tweetsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info({ landing }, '[x-posting] Tweet published');
     return {
       success: true,
       message: `Tweet published (${text.length} chars).`,
@@ -903,7 +922,26 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     };
   }
   await wait(POST_SETTLE_MS);
-  logger.info(`[x-posting] Thread published (${tweetsTyped} tweets)`);
+
+  // Positive landing check against the last tweet in the thread. The
+  // first tweet's text could be echoed by the still-hydrating compose
+  // modal even on failure; the final tweet is only visible once the
+  // whole thread actually posted.
+  const probeText = tweets[tweets.length - 1];
+  const landing = await confirmPostLanded(page, probeText, 2500);
+  if (landing === 'not_visible') {
+    logger.warn({ tweetsTyped }, '[x-posting] thread modal closed but last-tweet text not visible — silent failure');
+    return {
+      success: false,
+      message: `Thread compose closed but the last tweet (${probeText.slice(0, 40)}...) did not appear within 2.5s. X may have dropped the thread.`,
+      screenshotBase64: await captureScreenshot(page) || screenshotBase64,
+      tweetsTyped,
+      tweetsPublished: 0,
+      currentUrl: await page.url(),
+    };
+  }
+
+  logger.info({ tweetsTyped, landing }, '[x-posting] Thread published');
   return {
     success: true,
     message: `Thread published (${tweetsTyped} tweets).`,

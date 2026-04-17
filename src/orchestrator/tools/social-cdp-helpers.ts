@@ -259,6 +259,87 @@ export async function clearTextbox(page: RawCdpPage, selector: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// Post-publish confirmation (shared across X + Threads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a probe string suitable for confirming a just-published post
+ * landed on the timeline/profile. Picks the first 6 whitespace-separated
+ * tokens (capped at 60 chars) to stay resilient against X/Threads URL
+ * shortening and inline-entity rendering — if the original text had
+ * `https://long.example/path`, the rendered version might show
+ * `long.example/...` instead, and a first-60-chars probe starting inside
+ * the URL would miss. Words at the front of the content are almost
+ * always preserved verbatim.
+ *
+ * Returns an empty string if the text has no usable leading tokens
+ * (pure emoji/whitespace) — callers should treat an empty probe as
+ * "can't confirm" and fall back to legacy modal-close detection.
+ */
+export function buildPostProbe(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const firstLine = trimmed.split('\n')[0];
+  const words = firstLine.split(/\s+/).filter((w) => w.length > 0);
+  const taken: string[] = [];
+  let len = 0;
+  for (const w of words) {
+    if (taken.length >= 6) break;
+    const add = (taken.length === 0 ? 0 : 1) + w.length;
+    if (len + add > 60) break;
+    taken.push(w);
+    len += add;
+  }
+  return taken.join(' ');
+}
+
+/**
+ * After a compose modal closes, positively confirm the post landed
+ * by polling the DOM for our text within `timeoutMs`. This is the
+ * missing half of "did the publish actually succeed" — modal-closed
+ * alone is necessary but not sufficient (the dialog can close on
+ * Cancel, Escape, connectivity glitches, or a silently-dismissed
+ * error toast, with nothing published).
+ *
+ * Returns 'confirmed' when the probe text is visible in the page,
+ * 'not_visible' when the polling window elapses without a match,
+ * and 'probe_error' when we can't run the check (CDP hiccup). The
+ * three-valued return lets callers distinguish "probably failed"
+ * from "inconclusive" — only the former should flip the publish
+ * result to success:false.
+ */
+export async function confirmPostLanded(
+  page: RawCdpPage,
+  text: string,
+  timeoutMs: number = 2500,
+): Promise<'confirmed' | 'not_visible' | 'probe_error'> {
+  const probe = buildPostProbe(text);
+  if (!probe) return 'probe_error';
+  const escaped = probe.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const deadline = Date.now() + timeoutMs;
+  let sawError = false;
+  while (Date.now() < deadline) {
+    try {
+      const visible = await page.evaluate<boolean>(`(() => {
+        const needle = "${escaped}";
+        const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"], [data-pressable-container="true"], [role="article"]'));
+        for (const a of articles) {
+          const t = a.textContent || '';
+          if (t.includes(needle)) return true;
+        }
+        const body = document.body?.innerText || '';
+        return body.includes(needle);
+      })()`);
+      if (visible) return 'confirmed';
+    } catch {
+      sawError = true;
+    }
+    await wait(250);
+  }
+  return sawError ? 'probe_error' : 'not_visible';
+}
+
+// ---------------------------------------------------------------------------
 // Compose result type (shared across platforms)
 // ---------------------------------------------------------------------------
 
