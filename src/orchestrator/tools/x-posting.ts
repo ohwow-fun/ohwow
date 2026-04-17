@@ -459,6 +459,37 @@ export async function getCdpPage(
     if (!target) target = candidates.find((t) => t.url.startsWith('https://x.com'));
     if (!target) target = candidates.find((t) => t.url.startsWith('https://twitter.com'));
     if (!target) {
+      // Ownership-mode='ours' + no owned tab = can't reuse. But this
+      // is the scheduler/scan path (called without a context hint)
+      // and it's still legitimate agent work — open our own owned
+      // tab rather than bail. Pick any visible browserContextId from
+      // existing tabs (the debug profile) so the new tab lands in
+      // the same session state. If no existing tabs, Chrome uses
+      // the default context.
+      if (ownershipMode === 'ours') {
+        const ctxIdFromOther = pageTargets.find((t) => t.browserContextId)?.browserContextId;
+        try {
+          const newTargetId = ctxIdFromOther
+            ? await browser.createTargetInContext(ctxIdFromOther, 'https://x.com/home')
+            : null;
+          if (newTargetId) {
+            markTabOwned(newTargetId);
+            logger.info(
+              { targetId: newTargetId.slice(0, 8), ownershipMode },
+              '[x-posting] opened new owned x.com tab (no-context fallback)',
+            );
+            const page = await browser.attachToPage(newTargetId);
+            await page.installUnloadEscapes();
+            await tagTabAsOwned(page);
+            return page;
+          }
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : err },
+            '[x-posting] createTargetInContext fallback failed',
+          );
+        }
+      }
       logger.warn(
         { pageUrls: pageTargets.slice(0, 6).map((t) => t.url), ownershipMode },
         '[x-posting] no usable x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',

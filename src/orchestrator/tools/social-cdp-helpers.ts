@@ -141,6 +141,35 @@ export async function getCdpPageForPlatform(opts: {
     // Fallback: URL-only heuristic
     const target = pageTargets.find((t) => urlMatcher(t.url) && isUsable(t.targetId));
     if (!target) {
+      // Same reasoning as the pinned-context path: if we're in 'ours'
+      // mode and have no owned tab matching the URL, open a fresh
+      // owned one rather than bail. Lets scheduler/scan paths that
+      // never thread expectedContextId still function after a daemon
+      // restart cleared the ownership registry.
+      if (ownershipMode === 'ours') {
+        const ctxIdFromOther = pageTargets.find((t) => t.browserContextId)?.browserContextId;
+        try {
+          const newTargetId = ctxIdFromOther
+            ? await browser.createTargetInContext(ctxIdFromOther, fallbackUrl)
+            : null;
+          if (newTargetId) {
+            markTabOwned(newTargetId);
+            logger.info(
+              { targetId: newTargetId.slice(0, 8), ownershipMode },
+              `[${logTag}] opened new owned tab (no-context fallback)`,
+            );
+            const page = await browser.attachToPage(newTargetId);
+            await page.installUnloadEscapes();
+            await tagTabAsOwned(page);
+            return { page, created: true };
+          }
+        } catch (err) {
+          logger.warn(
+            { err: err instanceof Error ? err.message : err },
+            `[${logTag}] createTargetInContext fallback failed`,
+          );
+        }
+      }
       logger.warn(
         { pageUrls: pageTargets.slice(0, 6).map((t) => t.url), ownershipMode },
         `[${logTag}] no matching tab in CDP; refusing to hijack an unrelated tab`,
