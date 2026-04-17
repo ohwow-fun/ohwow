@@ -33,6 +33,7 @@ import {
   Microphone,
   Eye,
   Megaphone,
+  ChatsCircle,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -61,6 +62,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/approvals', label: 'Approvals', icon: ShieldCheck, group: 'manage' },
   { path: '/goals', label: 'Goals', icon: Target, group: 'manage' },
   { path: '/marketing', label: 'Marketing', icon: Megaphone, group: 'manage' },
+  { path: '/social', label: 'Social', icon: ChatsCircle, group: 'manage' },
   { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'manage' },
   // Connect
   { path: '/messaging', label: 'Messaging', icon: ChatCircleDots, group: 'connect' },

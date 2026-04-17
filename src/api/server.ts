@@ -66,6 +66,7 @@ import { createMcpRouter } from './routes/mcp.js';
 import { createCloudProxyRouter } from './routes/cloud-proxy.js';
 import { createOrgRouter } from './routes/org.js';
 import { createMarketingRouter } from './routes/marketing.js';
+import { createSocialRouter } from './routes/social.js';
 import { createAttributionRouter } from './routes/attribution.js';
 import { createWebhookRouter } from '../webhooks/webhook-handler.js';
 import { createStripeWebhookRouter } from '../webhooks/stripe-subscription.js';
@@ -567,6 +568,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createApprovalsRouter(db));
   app.use(createDeliverablesRouter(db));
   app.use(createMarketingRouter(db));
+  app.use(createSocialRouter(db));
   app.use(createSchedulesRouter(db, onScheduleChange));
   app.use(createKnowledgeRouter(db, config.dataDir));
   app.use(createSystemRouter(db, rawDb, startTime));
