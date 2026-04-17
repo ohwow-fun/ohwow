@@ -62,12 +62,18 @@ sub-scenes. Sub-scene (a) carries the lead + first beat (~35-50% of
 words). Sub-scene (b) carries specifics + implication (~50-65%).
 
 ─── Scene: INTRO (~6s, 180 frames, 10-14 words narration) ───
-Host voice sets the table. Visual: date + story count revealed on a
-floating glass slate inside a warm particle field (ASMR intro).
-  text.content: "THE BRIEFING" (upper line)
-  text.subtitle: "<date> · <N> stories" (e.g., "APR 17 · TWO MOVES")
-  motion_graphic_prompt: "A chrome 'THE BRIEFING' title breathes on a
-    frosted glass slate; warm particles drift behind it."
+Host voice sets the table. Visual: the signature ohwow stack — canvas
+grid backdrop with neon sweeps (r3f.grid-background), the title drops
+in letter-by-letter with spring physics and no container behind it
+(r3f.floating-title), and the small ohwow ring sits in the upper-right
+corner as a persistent mark (r3f.logo-mark). This triplet IS the
+Briefing signature — do not swap it for glass-panel / particle-cloud.
+  floating-title.text: "THE BRIEFING" (upper line)
+  floating-title.subtitle: "<date> · <N stories in upper-case words>"
+    (e.g., "APR 17 · TWO MOVES", "APR 18 · THREE MOVES")
+  motion_graphic_prompt: "The Briefing title drops in letter-by-letter
+    over a canvas grid with neon cyan/lime sweeps; the ohwow ring sits
+    in the upper-right corner."
 
 ─── Scene: STORY 1a (~10-15s, 40-50% of story 1 words) ───
 Actor reveal + lead fact. Visual anchors the story's ONE concrete number
@@ -103,9 +109,11 @@ CRITICAL: Use the ACTUAL story_count when opening the outro. If story_count is 2
   "Three stories converge: models get smaller, regulation gets sharper, agents get paid. Tomorrow we're watching Meta — their 4.1 window opens Wednesday."
   "One headline today, but it's the one: Anthropic's Opus 4.7 ships GA. The real question: does this eat your vertical startup by Q3?"
 
-VISUAL LAYOUT (outro): floating "TOMORROW · <date>" on a glass slate,
-one-line tease as subtitle, warm chrome tones. Motion beat: glass-panel
-breath-cycle.
+VISUAL LAYOUT (outro): SAME signature stack as the intro — grid
+backdrop + floating title + corner ring. Title line is "TOMORROW", the
+subtitle is the one-line tease ("APR 18 · Watch Mistral's response").
+Do NOT substitute glass-panel or ribbon-trail — the intro and outro
+bookend the episode with an identical visual ritual.
 
 TAKEAWAY TEMPLATES (use in Outro, rotate across episodes — opening clause must use the actual story count):
   1. WATCH-FOR: "Watch [specific signal] by [timeframe]."
@@ -172,6 +180,15 @@ Every beat is { "primitive": "<name>", "params": { ... } }.
   r3f.orbiting-tags    — text pills orbit a central axis. params: { tags: string[], radius?, speed?, tagSize? }
   r3f.ribbon-trail     — bezier ribbon traces across frame. params: { color?, thickness?, turns? }
 
+**Signature intro/outro primitives** (use these three TOGETHER for intro + outro — do not use them mid-episode):
+  r3f.grid-background  — canvas grid backdrop with neon sweeps (the ohwow.fun landing DNA). params: { cellSize?: 22, cellFill?: 20, cellRadius?: 4, accentColor?: "#4de0ff", accentWarm?: "#4dff7a", twinkleCount?: 80, sweepEveryFrames?: 55, width?: 22, height?: 12 }
+  r3f.floating-title   — big Smooch Sans title drops in letter-by-letter (spring overshoot), subtitle fades in after. NO container — text floats on the grid. params: { text, subtitle?, titleSize?: 2.2-2.4, subtitleSize?: 0.52, position?: [0, 0.3, 0], subtitleOffsetY?: -1.6, kineticDelayFrames?: 8, kineticStaggerFrames?: 4, subtitleDelayFrames?: 60, subtitleFadeFrames?: 24, titleLetterSpacing?: 0.02 }
+  r3f.logo-mark        — small iridescent ohwow ring pinned in a corner (always-on identity). params: { position?: [4.6, 2.5, 0], size?: 0.6, opacity?: 0.88 }
+
+Note: the cold-open scene (a 60-frame logo-reveal ritual that opens every
+episode on pure black) is auto-injected by the compose pipeline BEFORE
+your scene list. Do NOT emit it yourself. Start your spec at the intro.
+
 **Scene-level params** (carry on the scene, not inside a beat):
   params.text            — marker/lower-third for 2D scenes only. { content, subtitle?, position?, fontSize?, fontWeight?, fontFamily?, animation? }
   params.background      — hex color for R3F scenes (e.g., "#0a1020")
@@ -197,7 +214,8 @@ Pick the beat that visualizes what the voice is saying THIS second.
 | "open weights" / "MIT licensed" / single tag   | badge-reveal { text: "OPEN WEIGHTS", variant: "delta" } |
 | "ranks #<N> on <bench>" / benchmark result     | benchmark-bar { value: N, max: 100, label: "SWE-bench", unit: "%" } |
 | "specs: 70B params, 32k ctx, $2/M"             | spec-list { items: [{key: "Params", value: "70B"}, ...] } |
-| Announcement / title card / intro/outro slate  | r3f.glass-panel { text, subtitle }                |
+| Intro or outro (signature bookend)             | r3f.grid-background + r3f.floating-title + r3f.logo-mark (all three, in that order) |
+| Mid-episode announcement / title card          | r3f.glass-panel { text, subtitle }                |
 | Pure ambient / transition / backdrop only      | r3f.particle-cloud OR grid-morph + scan-line      |
 
 Beats FOLLOW the narration — if the voice in sub-scene 1a says "13%", the
@@ -235,12 +253,13 @@ OUTPUT STRICT JSON:
       {
         "id": "intro",
         "durationInFrames": 180,
-        "motion_graphic_prompt": "A chrome 'THE BRIEFING' title floats on a frosted glass slate; warm particles drift behind it.",
+        "motion_graphic_prompt": "The Briefing title drops in letter-by-letter over a canvas grid with neon cyan/lime sweeps; the ohwow ring sits in the upper-right corner.",
         "motion_beats": [
-          { "primitive": "r3f.particle-cloud", "params": { "count": 220, "color": "#e3b58a", "radius": 6 } },
-          { "primitive": "r3f.glass-panel", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "width": 9, "height": 3.2 } }
+          { "primitive": "r3f.grid-background", "params": { "cellSize": 22, "cellFill": 20, "cellRadius": 4, "accentColor": "#4de0ff", "accentWarm": "#4dff7a", "twinkleCount": 80, "sweepEveryFrames": 55, "width": 22, "height": 12 } },
+          { "primitive": "r3f.floating-title", "params": { "text": "THE BRIEFING", "subtitle": "APR 17 · TWO MOVES", "titleSize": 2.2, "subtitleSize": 0.52, "position": [0, 0.3, 0], "subtitleOffsetY": -1.6, "kineticDelayFrames": 8, "kineticStaggerFrames": 4, "subtitleDelayFrames": 60, "subtitleFadeFrames": 24, "titleLetterSpacing": 0.02 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
         ],
-        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
+        "params": { "motionProfile": "asmr", "background": "#000000" },
         "narration": "<intro narration>"
       },
       {
@@ -287,12 +306,13 @@ OUTPUT STRICT JSON:
       {
         "id": "outro",
         "durationInFrames": 750,
-        "motion_graphic_prompt": "A 'TOMORROW · APR 18' glass slate breathes softly while a ribbon trail crosses behind it.",
+        "motion_graphic_prompt": "The word TOMORROW drops in letter-by-letter over the same canvas grid; subtitle teases the next signal; the ohwow ring stays in the corner.",
         "motion_beats": [
-          { "primitive": "r3f.ribbon-trail", "params": { "color": "#9ec7ff", "thickness": 0.08, "turns": 2 } },
-          { "primitive": "r3f.glass-panel", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch Mistral's response", "width": 9.5, "height": 3.2 } }
+          { "primitive": "r3f.grid-background", "params": { "cellSize": 22, "cellFill": 20, "cellRadius": 4, "accentColor": "#4de0ff", "accentWarm": "#4dff7a", "twinkleCount": 80, "sweepEveryFrames": 55, "width": 22, "height": 12 } },
+          { "primitive": "r3f.floating-title", "params": { "text": "TOMORROW", "subtitle": "APR 18 · Watch Mistral's response", "titleSize": 2.4, "subtitleSize": 0.52, "position": [0, 0.3, 0], "subtitleOffsetY": -1.6, "kineticDelayFrames": 6, "kineticStaggerFrames": 4, "subtitleDelayFrames": 50, "subtitleFadeFrames": 24, "titleLetterSpacing": 0.02 } },
+          { "primitive": "r3f.logo-mark", "params": { "position": [4.6, 2.5, 0], "size": 0.6, "opacity": 0.88 } }
         ],
-        "params": { "motionProfile": "asmr", "background": "#0a1020", "environmentPreset": "sunset" },
+        "params": { "motionProfile": "asmr", "background": "#000000" },
         "narration": "<outro synthesis + tease>"
       }
     ],
@@ -309,7 +329,7 @@ only story-1a and story-1b.
 CRITICAL SCHEMA RULES:
 - Every story sub-scene MUST carry motion_graphic_prompt + motion_beats.
   The beat must visualize the ONE concrete number/tag in that scene's narration.
-- Intro + outro: use r3f.glass-panel for the title/slate. Add r3f.particle-cloud or r3f.ribbon-trail behind it for ASMR ambient.
+- Intro + outro MUST use the signature triplet (r3f.grid-background + r3f.floating-title + r3f.logo-mark) in that order. Do NOT substitute glass-panel, particle-cloud, or ribbon-trail on intro/outro — they belong mid-episode only.
 - Never mix 2D and r3f.* beats in one scene (compiler drops the 2D ones).
 - Scene omits "kind" and omits params.visualLayers — the compiler sets both.
 - Scene-level params should always include motionProfile: "asmr" for Briefing.
@@ -354,6 +374,8 @@ SELF-CHECK before outputting:
 13. Sub-scenes (a) and (b) use DIFFERENT primitives (cut the visual mid-story)?
 14. No scene mixes 2D and r3f.* beats in one motion_beats array?
 15. motionProfile: "asmr" set on every scene?
+16. Intro + outro each use the signature triplet (grid-background + floating-title + logo-mark) — no glass-panel / particle-cloud / ribbon-trail on those two scenes?
+17. No "cold-open" scene in your spec.scenes (the pipeline injects it)?
 
 Skip with confidence: 0 if: all candidate stories are too thin OR they're all the same angle OR they're all about OHWOW.`;
 
