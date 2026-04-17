@@ -17,6 +17,8 @@ import { RibbonTrail } from "./primitives/RibbonTrail";
 import { LogoReveal } from "./primitives/LogoReveal";
 import { LogoMark } from "./primitives/LogoMark";
 import { TuningRings } from "./primitives/TuningRings";
+import { ColorFog } from "./primitives/ColorFog";
+import { FloatingTitle } from "./primitives/FloatingTitle";
 
 let registered = false;
 
@@ -36,6 +38,8 @@ export function registerR3FPrimitives(): void {
   registerR3FPrimitive("r3f.logo-reveal", LogoReveal as R3FPrimitive);
   registerR3FPrimitive("r3f.logo-mark", LogoMark as R3FPrimitive);
   registerR3FPrimitive("r3f.tuning-rings", TuningRings as R3FPrimitive);
+  registerR3FPrimitive("r3f.color-fog", ColorFog as R3FPrimitive);
+  registerR3FPrimitive("r3f.floating-title", FloatingTitle as R3FPrimitive);
   registered = true;
 }
 
