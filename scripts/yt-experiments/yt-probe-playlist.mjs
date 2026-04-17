@@ -51,6 +51,7 @@ import {
   uploadShort,
 } from '../../src/integrations/youtube/index.ts';
 import { humanClickAt, sleepRandom } from '../../src/integrations/youtube/upload/human.ts';
+import { waitForSelector } from '../../src/integrations/youtube/wait.ts';
 
 const VIDEO_PKG = path.resolve('packages/video');
 const DEFAULT_MP4 = path.join(VIDEO_PKG, 'out/briefing-dryrun-v4.mp4');
@@ -223,8 +224,21 @@ function dumpPhase(label, dump) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
+  // Two probe modes:
+  //   (default)        open the /video/<id>/edit page for the most recent
+  //                    public video and probe its Audience/playlist DOM.
+  //                    No staging, no cleanup — safest and simplest path.
+  //                    The Audience section + playlist picker Polymer
+  //                    components are shared with the upload wizard
+  //                    (same story as thumbnail.ts).
+  //   --stage          stage a throwaway draft via uploadShort, reopen via
+  //                    udvid=… so we land on the wizard's Details step,
+  //                    probe, then deleteDraft. Use when the edit-page
+  //                    DOM differs and we need wizard-specific selectors.
+  const stageMode = args.flags.has('stage');
+
   const mp4Path = path.resolve(args.kv.mp4 || DEFAULT_MP4);
-  if (!fs.existsSync(mp4Path)) {
+  if (stageMode && !fs.existsSync(mp4Path)) {
     console.error(`[probe] mp4 not found: ${mp4Path}`);
     process.exit(1);
   }
@@ -233,10 +247,16 @@ async function main() {
   const title = `Playlist Probe ${stamp} (delete me)`;
 
   console.error('[probe] plan:');
-  console.error(`  mp4        ${mp4Path}  (${(fs.statSync(mp4Path).size / 1024 / 1024).toFixed(1)} MB)`);
-  console.error(`  title      ${title}`);
-  console.error(`  keep       ${args.flags.has('keep') ? 'YES (operator deletes manually)' : 'no (auto deleteDraft)'}`);
-  console.error('  effect     stages one draft, reopens on Details, dumps DOM × 3 phases, deletes draft');
+  console.error(`  mode       ${stageMode ? 'stage (wizard on fresh draft)' : 'edit-page (existing video)'}`);
+  if (stageMode) {
+    console.error(`  mp4        ${mp4Path}  (${(fs.statSync(mp4Path).size / 1024 / 1024).toFixed(1)} MB)`);
+    console.error(`  title      ${title}`);
+    console.error(`  keep       ${args.flags.has('keep') ? 'YES (operator deletes manually)' : 'no (auto deleteDraft)'}`);
+  } else if (args.kv['edit-video']) {
+    console.error(`  video      ${args.kv['edit-video']}`);
+  } else {
+    console.error('  video      (most recent uploaded, autodetected)');
+  }
 
   if (!args.flags.has('yes')) {
     const ok = await confirmTty('[probe] run probe now? Type \'y\': ');
@@ -248,7 +268,7 @@ async function main() {
 
   const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
   const { page } = session;
-  let videoId = null;
+  let videoId = args.kv['edit-video'] ?? null;
 
   try {
     const flags = session.health.accountFlags || {};
@@ -258,36 +278,64 @@ async function main() {
     }
     console.error(`[probe] session ok. channel=${session.health.channelId ?? '(unknown)'}`);
 
-    // --- STAGE -------------------------------------------------------------
-    console.error('[probe] staging throwaway draft…');
-    await uploadShort(page, {
-      filePath: mp4Path,
-      title,
-      description: 'Probe run — safe to delete.',
-      visibility: 'unlisted',
-      dryRun: true,
-      onStage: (ev) => process.stderr.write(
-        `  [stage] ${ev.stage} ${ev.ok ? 'ok' : 'FAIL'} ${ev.durationMs}ms${ev.error ? ' — ' + ev.error : ''}\n`,
-      ),
-    });
+    if (stageMode) {
+      // --- STAGE -------------------------------------------------------------
+      console.error('[probe] staging throwaway draft…');
+      await uploadShort(page, {
+        filePath: mp4Path,
+        title,
+        description: 'Probe run — safe to delete.',
+        visibility: 'unlisted',
+        dryRun: true,
+        onStage: (ev) => process.stderr.write(
+          `  [stage] ${ev.stage} ${ev.ok ? 'ok' : 'FAIL'} ${ev.durationMs}ms${ev.error ? ' — ' + ev.error : ''}\n`,
+        ),
+      });
 
-    // --- RESOLVE videoId ---------------------------------------------------
-    console.error('[probe] resolving draft videoId…');
-    videoId = await findDraftIdByTitle(page, {
-      channelId: session.health.channelId,
-      titleContains: title.slice(0, 40),
-    });
-    if (!videoId) {
-      console.error('[probe] could not resolve draft videoId. Inspect Studio Content → Drafts and clean up manually.');
-      process.exit(3);
+      // --- RESOLVE videoId ---------------------------------------------------
+      console.error('[probe] resolving draft videoId…');
+      videoId = await findDraftIdByTitle(page, {
+        channelId: session.health.channelId,
+        titleContains: title.slice(0, 40),
+      });
+      if (!videoId) {
+        console.error('[probe] could not resolve draft videoId. Inspect Studio Content → Drafts and clean up manually.');
+        process.exit(3);
+      }
+      console.error(`[probe] draft videoId = ${videoId}`);
+
+      // --- REOPEN on Details -------------------------------------------------
+      const resumeUrl = `https://studio.youtube.com/channel/${session.health.channelId}/videos/upload?d=ud&udvid=${videoId}`;
+      await page.goto(resumeUrl);
+      await sleepRandom(1_500, 2_500);
+    } else {
+      // --- EDIT-PAGE MODE ----------------------------------------------------
+      if (!videoId) {
+        console.error('[probe] autodetecting most recent video…');
+        await page.goto(`https://studio.youtube.com/channel/${session.health.channelId}/videos/upload`);
+        await sleepRandom(2_000, 3_000);
+        videoId = await page.evaluate(`(() => {
+          const row = document.querySelector('ytcp-video-row');
+          if (!row) return null;
+          const m = (row.outerHTML || '').match(/i\\d*\\.ytimg\\.com\\/vi\\/([\\w-]{11})\\//);
+          return m ? m[1] : null;
+        })()`);
+        if (!videoId) {
+          console.error('[probe] could not autodetect a video. Pass --edit-video=<id>.');
+          process.exit(3);
+        }
+        console.error(`[probe] autodetected videoId = ${videoId}`);
+      }
+      const editUrl = `https://studio.youtube.com/video/${videoId}/edit`;
+      console.error(`[probe] opening edit page: ${editUrl}`);
+      await page.goto(editUrl);
+      // Wait for the title box to mount — canary for the edit page loading.
+      await waitForSelector(page, '#title-textarea #textbox', {
+        timeoutMs: 12_000,
+        label: 'edit page title box',
+      });
+      await sleepRandom(1_500, 2_500);
     }
-    console.error(`[probe] draft videoId = ${videoId}`);
-
-    // --- REOPEN on Details -------------------------------------------------
-    const resumeUrl = `https://studio.youtube.com/channel/${session.health.channelId}/videos/upload?d=ud&udvid=${videoId}`;
-    await page.goto(resumeUrl);
-    // Give Details time to mount. Title textarea is the canary.
-    await sleepRandom(1_500, 2_500);
 
     // --- PHASE A: pristine Details ----------------------------------------
     const phaseA = await page.evaluate(PROBE_JS);
@@ -369,7 +417,9 @@ async function main() {
     }, null, 2));
 
     // --- CLEANUP ----------------------------------------------------------
-    if (args.flags.has('keep')) {
+    if (!stageMode) {
+      console.error('[probe] edit-page mode — nothing to clean up (no edits were saved).');
+    } else if (args.flags.has('keep')) {
       console.error(`[probe] --keep set. Draft ${videoId} left on channel. Delete manually when done.`);
     } else {
       console.error('[probe] deleting draft…');
@@ -378,7 +428,7 @@ async function main() {
     }
   } catch (err) {
     console.error(`[probe] error: ${err?.message ?? err}`);
-    if (videoId) {
+    if (stageMode && videoId) {
       console.error(`[probe] leftover draft may exist: ${videoId}`);
       console.error(`  clean up: node --import tsx scripts/yt-experiments/_publish-briefing.mjs --delete-draft=${videoId}`);
     }
