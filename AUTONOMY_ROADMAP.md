@@ -272,3 +272,30 @@ step #2 wires the cap.
 Every lever that could move conversion (classifier, templates,
 scheduler, CRM handoff) is humans-only. The revenue bucket can prefer
 revenue-keyword proposals
+
+### P2 — 18 Experiments Missing from Roadmap (NEW)
+
+The roadmap is 2.5h old and missing 18 experiments that are running in
+the system. This drift means the roadmap is not a single source of truth
+for what is active. The `roadmap-updater` experiment must integrate these
+experiments into Section 5 to restore full coverage.
+
+Missing experiments:
+- adaptive-scheduler
+- agent-cost-watcher
+- agent-coverage-gap
+- agent-lock-contention
+- agent-outcomes
+- agent-state-hygiene-sentinel
+- analogical-reasoning-emergence-signal-v3
+- anthropic-claude-sonnet-4-6-latency
+- autonomous-author-quality
+- autonomous-patch-rollback
+- browser-profile-guardian
+- burn-guard
+- canaries
+- canary-experiment
+- classifier-stability
+- contact-conversation-analyst
+- content-cadence-loop-health
+- dashboard-smoke
