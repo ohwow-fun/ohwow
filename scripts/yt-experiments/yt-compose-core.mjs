@@ -575,9 +575,32 @@ export async function composeEpisode({ slug, env = {} }) {
       fs.writeFileSync(path.join(briefDir, 'visual-review.json'), JSON.stringify(visualReview, null, 2));
       console.log(`[compose-core] visual review: pass=${visualReview.pass} score=${visualReview.score ?? '?'}`);
     }
+
+    // 7b. Thumbnail — only for horizontal briefing-style videos; Shorts
+    // use YouTube's auto-generated thumbnails.
+    if (series?.format?.aspectRatio === 'horizontal') {
+      try {
+        const { generateThumbnail } = await import('./_thumbnail.mjs');
+        const thumbPath = path.join(briefDir, 'thumbnail.jpg');
+        const result = generateThumbnail({
+          videoPath,
+          draft,
+          outPath: thumbPath,
+          keyframeSeconds: 6,
+        });
+        if (result.ok) {
+          console.log(`[compose-core] thumbnail: ${thumbPath}`);
+        } else {
+          console.log(`[compose-core] thumbnail failed: ${result.error}`);
+        }
+      } catch (e) {
+        console.log(`[compose-core] thumbnail error: ${e.message}`);
+      }
+    }
   }
 
   // 8. Brief.
+  const thumbnailPath = path.join(briefDir, 'thumbnail.jpg');
   const record = {
     ts: new Date().toISOString(),
     workspace,
@@ -586,6 +609,7 @@ export async function composeEpisode({ slug, env = {} }) {
     draft,
     spec,
     videoPath: skipRender ? null : videoPath,
+    thumbnailPath: !skipRender && fs.existsSync(thumbnailPath) ? thumbnailPath : null,
     visualReview,
     durationMs: Date.now() - t0,
   };

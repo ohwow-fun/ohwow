@@ -104,10 +104,14 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     voice: {
       provider: "openrouter",
       voiceName: "alloy",
-      speed: 1.05,
+      speed: 1.0,
       prosodyPrompt:
-        "Credible, newsroom-anchor cadence. Clear, confident, no hedging. " +
-        "Slight forward-lean. Crisp consonants.",
+        "Credible morning-show anchor pacing a 2-minute daily brief. " +
+        "Clear, confident, no hedging. Not frantic — the viewer is sipping " +
+        "coffee, not running for a train. Slightly warmer than broadcast, " +
+        "but still crisp on consonants and proper nouns. Leave natural " +
+        "pauses between stories (half-beat at paragraph breaks). " +
+        "When introducing a company or product name, land on it deliberately.",
     },
     cadence: {
       cron: "3 13 * * *",

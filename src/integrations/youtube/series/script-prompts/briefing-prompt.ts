@@ -62,27 +62,42 @@ The biggest story. Full structure within the scene:
   - Actor + artifact lead (one sentence, 10-12 words)
   - Concrete specifics (2-3 sentences, 30-45 words: versions, numbers, names)
   - Operator implication (1 sentence, 15-25 words: specific segment + timeframe + consequence)
-Text on screen: "01 · <ACTOR>" lower-third at story start.
+VISUAL LAYOUT: composable scene with bottom-left text marker.
+  text.content: "01 · <ACTOR NAME IN CAPS>" (e.g., "01 · ANTHROPIC")
+  text.position: "bottom-left", fontSize: 40, fontWeight: 700
+  Visual primitives (background): grid-morph + scan-line + light-rays + vignette.
+  The narration is VOICE only — viewers hear the story, they don't read it.
 
 Scene 3 — STORY 2 (45-95s, 1500 frames, 80-100 words).
-Second story, same structure as Story 1. Pick a DIFFERENT angle than Story 1 so viewers don't feel rehashed coverage (e.g., if S1 is a model release, S2 should be a tool/platform move, regulatory shift, or benchmark result — not another model).
-Text on screen: "02 · <ACTOR>".
+Second story, same voice structure as Story 1. Pick a DIFFERENT angle (if S1 was a model release, S2 should be a tool/platform, regulation, or benchmark — not another model).
+VISUAL LAYOUT: same as Story 1 but with a different visual-primitive mix to signal a fresh beat. Try: flow-field + constellation + film-grain + vignette.
+  text.content: "02 · <ACTOR NAME IN CAPS>"
+  text.position: "bottom-left", fontSize: 40, fontWeight: 700
 
 Scene 4 — STORY 3 (95-145s, 1500 frames, 80-100 words) — OPTIONAL.
-Third story. Include if the seed bundle has three qualifying stories with distinct angles. If only two stories are worth covering, SKIP this scene entirely (return a 4-scene spec: intro + story1 + story2 + outro).
-Text on screen: "03 · <ACTOR>".
+Third story. Include only if the seed bundle has three qualifying stories with DISTINCT angles. If only two stories are worth covering, SKIP this scene entirely (return a 4-scene spec: intro + story1 + story2 + outro). Set story_count accordingly.
+VISUAL LAYOUT: another distinct primitive mix. Try: aurora + bokeh + geometric + vignette.
+  text.content: "03 · <ACTOR NAME IN CAPS>"
+  text.position: "bottom-left", fontSize: 40, fontWeight: 700
 
 Scene 5 — OUTRO (145-170s, 750 frames, 30-45 words).
-Synthesize. ONE sentence that connects the stories OR names the underlying trend. Then a single concrete watch-for / question / call-to-action for tomorrow. NEVER "subscribe for more" — instead name what the viewer should monitor this week.
-  Examples:
-  "Three moves, one thread: the open-weight arms race just went retail. Watch if Mistral answers before Friday."
-  "Model wars on one side, platform plays on the other. Tomorrow we're watching Meta — their 4.1 release window opens Wednesday."
-  "This week the center of gravity shifted on-device. The real question: does agentic commerce even need clouds by Q3?"
-Text on screen: "TOMORROW ON THE BRIEFING · <date+1>" + one-line tease.
+Synthesize. ONE sentence connecting the stories OR naming the underlying trend. Then a single concrete watch-for / question / call-to-action for tomorrow. NEVER "subscribe for more" — instead name what the viewer should monitor this week.
 
-TAKEAWAY TEMPLATES (use in Outro, rotate across episodes):
+CRITICAL: Use the ACTUAL story_count when opening the outro. If story_count is 2, write "Two moves..." If 3, write "Three moves..." If 1, "One story, one thread:" — the number must match story_count exactly. Hardcoding "three" when you only covered two reveals the template to the viewer.
+
+  Examples (assuming story_count matches):
+  "Two moves, one thread: the open-weight arms race just went retail. Watch if Mistral answers before Friday."
+  "Three stories converge: models get smaller, regulation gets sharper, agents get paid. Tomorrow we're watching Meta — their 4.1 window opens Wednesday."
+  "One headline today, but it's the one: Anthropic's Opus 4.7 ships GA. The real question: does this eat your vertical startup by Q3?"
+
+VISUAL LAYOUT: composable with dark backdrop (gradient-wash + scan-line + vignette).
+  text.content: "TOMORROW · <tomorrow's date>" on first line, single-line tease on second line if possible (use subtitle field for the tease).
+  text.position: "center", fontSize: 56, fontWeight: 700
+  Alternative: split into two halves — first half the connecting line, second half the tease.
+
+TAKEAWAY TEMPLATES (use in Outro, rotate across episodes — opening clause must use the actual story count):
   1. WATCH-FOR: "Watch [specific signal] by [timeframe]."
-  2. THREAD-CONNECTION: "Three moves, one thread: [shared implication]."
+  2. THREAD-CONNECTION: "<N> moves, one thread: [shared implication]." (N matches story_count)
   3. NAMING THE LOSER: "This is the week [named segment] got nervous."
   4. PROVOCATIVE QUESTION: "The real question: does [specific shift] kill [specific role/product]?"
   5. HISTORICAL ECHO: "This is [past event] all over again."
@@ -111,9 +126,23 @@ SOURCE RULES:
 - If the seed includes @handles with relevant posts, you MAY cite them ("as @simonw noted...") — max one @handle per episode.
 - Never cite OHWOW's own product. If the seed drifts to OHWOW, skip with confidence: 0.
 
-VISUAL SPEC: output a valid VideoSpec JSON. Use scene kinds: text-typewriter, quote-card, composable, stats-counter. Prefer composable with grid-morph + scan-line + light-rays + vignette — newsroom "news ticker" energy. Body font is Inter; headline font is Merriweather (serif) for editorial feel.
+VISUAL SPEC: output a valid VideoSpec JSON. Canvas is 1920×1080 (horizontal), not a Short. Scene kinds: text-typewriter, composable. Story scenes use composable with a bottom-left text marker (the story number + actor name in caps) and background primitives that create newsroom-ticker energy.
 
-PALETTE: mood 'electric' (bright, awake), hue around 215 (newsroom blue). Light surface (#ffffff / #0a1629 text).
+HORIZONTAL TEXT SIZING (1920px wide, 240px padding each side → 1440px text area):
+  - Intro marker: fontSize 64-72, position center, short (10-14 words)
+  - Story markers: fontSize 40-48, position bottom-left, ~15-25 chars ("01 · ANTHROPIC")
+  - Outro: fontSize 56-64, position center, two-clause structure (thread line + tease)
+  - maxWidth on any wrapping text: 1400px
+  Don't make marker text huge — it's chrome, not content.
+
+PRIMITIVE MIXING by scene (differentiation matters — if every story looks the same, the format feels monotonous):
+  - Intro: grid-morph + scan-line + vignette (newsroom idle)
+  - Story 1: grid-morph + light-rays + scan-line + vignette (energetic "breaking")
+  - Story 2: flow-field + constellation + film-grain + vignette (softer, second beat)
+  - Story 3: aurora + bokeh + geometric + vignette (cooler palette shift)
+  - Outro: gradient-wash + scan-line + vignette (wind-down)
+
+PALETTE: mood 'electric' (bright, awake), hue around 215 (newsroom blue). Light surface (#ffffff / #0a1629 text). Body font is Inter; headline font is Merriweather (serif) for editorial feel.
 
 OUTPUT STRICT JSON:
 {
@@ -143,16 +172,125 @@ OUTPUT STRICT JSON:
   "reason": "one sentence: why these specific stories matter to the target audience THIS week",
   "spec": {
     "scenes": [
-      { "id": "intro",   "kind": "text-typewriter", "durationInFrames": 180,  "params": {...}, "narration": "..." },
-      { "id": "story-1", "kind": "composable",      "durationInFrames": 1170, "params": {...}, "narration": "..." },
-      { "id": "story-2", "kind": "composable",      "durationInFrames": 1500, "params": {...}, "narration": "..." },
-      { "id": "story-3", "kind": "composable",      "durationInFrames": 1500, "params": {...}, "narration": "..." },
-      { "id": "outro",   "kind": "text-typewriter", "durationInFrames": 750,  "params": {...}, "narration": "..." }
+      {
+        "id": "intro",
+        "kind": "composable",
+        "durationInFrames": 180,
+        "params": {
+          "visualLayers": [
+            { "primitive": "grid-morph", "params": { "cols": 16, "rows": 9 } },
+            { "primitive": "scan-line", "params": { "opacity": 0.25 } },
+            { "primitive": "vignette", "params": { "intensity": 0.4 } }
+          ],
+          "text": {
+            "content": "THE BRIEFING · APR 17",
+            "position": "center",
+            "fontSize": 72,
+            "fontWeight": 700,
+            "fontFamily": "display",
+            "animation": "fade-in"
+          }
+        },
+        "narration": "<intro narration>"
+      },
+      {
+        "id": "story-1",
+        "kind": "composable",
+        "durationInFrames": 1170,
+        "params": {
+          "visualLayers": [
+            { "primitive": "grid-morph", "params": { "cols": 20, "rows": 11 } },
+            { "primitive": "light-rays", "params": { "count": 8, "opacity": 0.35 } },
+            { "primitive": "scan-line", "params": { "opacity": 0.2 } },
+            { "primitive": "vignette", "params": { "intensity": 0.5 } }
+          ],
+          "text": {
+            "content": "01 · ANTHROPIC",
+            "position": "bottom-left",
+            "fontSize": 44,
+            "fontWeight": 700,
+            "fontFamily": "sans",
+            "animation": "fade-in"
+          }
+        },
+        "narration": "<story 1 narration>"
+      },
+      {
+        "id": "story-2",
+        "kind": "composable",
+        "durationInFrames": 1500,
+        "params": {
+          "visualLayers": [
+            { "primitive": "flow-field", "params": { "count": 160, "speed": 0.6 } },
+            { "primitive": "constellation", "params": { "nodeCount": 24, "lineOpacity": 0.3 } },
+            { "primitive": "film-grain", "params": { "intensity": 0.05 } },
+            { "primitive": "vignette", "params": { "intensity": 0.5 } }
+          ],
+          "text": {
+            "content": "02 · ALIBABA",
+            "position": "bottom-left",
+            "fontSize": 44,
+            "fontWeight": 700,
+            "fontFamily": "sans",
+            "animation": "fade-in"
+          }
+        },
+        "narration": "<story 2 narration>"
+      },
+      {
+        "id": "story-3",
+        "kind": "composable",
+        "durationInFrames": 1500,
+        "params": {
+          "visualLayers": [
+            { "primitive": "aurora", "params": { "opacity": 0.55 } },
+            { "primitive": "bokeh", "params": { "count": 18 } },
+            { "primitive": "geometric", "params": { "count": 6, "opacity": 0.25 } },
+            { "primitive": "vignette", "params": { "intensity": 0.5 } }
+          ],
+          "text": {
+            "content": "03 · <ACTOR>",
+            "position": "bottom-left",
+            "fontSize": 44,
+            "fontWeight": 700,
+            "fontFamily": "sans",
+            "animation": "fade-in"
+          }
+        },
+        "narration": "<story 3 narration>"
+      },
+      {
+        "id": "outro",
+        "kind": "composable",
+        "durationInFrames": 750,
+        "params": {
+          "visualLayers": [
+            { "primitive": "gradient-wash", "params": { "speed": 0.002, "opacity": 0.35 } },
+            { "primitive": "scan-line", "params": { "opacity": 0.15 } },
+            { "primitive": "vignette", "params": { "intensity": 0.6 } }
+          ],
+          "text": {
+            "content": "TOMORROW · <DATE+1>",
+            "subtitle": "<one-line tease>",
+            "position": "center",
+            "fontSize": 56,
+            "fontWeight": 700,
+            "fontFamily": "display",
+            "animation": "fade-in"
+          }
+        },
+        "narration": "<outro narration>"
+      }
     ],
     "transitions": [{ "kind": "fade", "durationInFrames": 12 }],
     "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" }
   }
 }
+
+CRITICAL SCHEMA RULES:
+- EVERY scene's params.text MUST be an object with {content, position, fontSize, ...}. NEVER a bare string.
+- EVERY scene's params.visualLayers MUST be a non-empty array with 3-4 {primitive, params} entries. Empty array = render is a blank background.
+- Copy the scene params shape above verbatim; substitute content + narration + ACTOR name.
 
 IF only 2 stories qualify, return a 4-scene spec (omit story-3). Set story_count: 2.
 
