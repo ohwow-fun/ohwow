@@ -14,21 +14,27 @@
     "gen:catalog": "tsx scripts/gen-catalog.cts"
   },
   "dependencies": {
+    "@react-three/drei": "^10.0.0",
+    "@react-three/fiber": "^9.0.0",
+    "@react-three/postprocessing": "^3.0.0",
     "@remotion/animation-utils": "^4.0.445",
     "@remotion/cli": "^4.0.445",
     "@remotion/google-fonts": "^4.0.445",
     "@remotion/media": "^4.0.445",
     "@remotion/noise": "^4.0.445",
     "@remotion/paths": "^4.0.445",
+    "@remotion/three": "^4.0.445",
     "@remotion/transitions": "^4.0.445",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "remotion": "^4.0.445",
+    "three": "^0.170.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.170.0",
     "typescript": "^5.6.0",
     "vitest": "^4.1.0"
   }

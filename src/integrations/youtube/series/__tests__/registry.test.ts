@@ -66,6 +66,20 @@ describe("series/registry", () => {
     }
   });
 
+  it("every series declares a motion profile (asmr | crisp | chaotic)", () => {
+    for (const s of Object.values(SERIES)) {
+      expect(["asmr", "crisp", "chaotic"]).toContain(s.format.motionProfile);
+    }
+  });
+
+  it("motion profiles align to series role — Operator Mode crisp, Bot Beats chaotic, rest asmr", () => {
+    expect(SERIES["operator-mode"].format.motionProfile).toBe("crisp");
+    expect(SERIES["bot-beats"].format.motionProfile).toBe("chaotic");
+    expect(SERIES.briefing.format.motionProfile).toBe("asmr");
+    expect(SERIES["tomorrow-broke"].format.motionProfile).toBe("asmr");
+    expect(SERIES["mind-wars"].format.motionProfile).toBe("asmr");
+  });
+
   it("The Briefing is horizontal and packs 2-3 stories per episode", () => {
     expect(SERIES.briefing.format.aspectRatio).toBe("horizontal");
     expect(SERIES.briefing.format.storyCount?.min).toBeGreaterThanOrEqual(2);

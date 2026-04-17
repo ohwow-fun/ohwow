@@ -53,6 +53,17 @@ export interface SeriesFormatConfig {
    * pack per episode. Undefined = single-narrative format.
    */
   storyCount?: { min: number; max: number };
+  /**
+   * Motion aesthetic profile. Drives easing curves, crossfade durations,
+   * breath-cycle oscillations, primitive defaults, R3F material choices.
+   * - asmr:    slow-in-slow-out, 24-frame crossfades, chrome/glass
+   *            materials, breath cycles. Newsroom-calm-but-premium.
+   * - crisp:   tight easing, 8-frame fades, no breath cycles. Operator
+   *            Mode credibility — no wasted motion.
+   * - chaotic: snappy/bouncy easing, hard cuts, fast primitive drift.
+   *            Bot Beats (v2) future use.
+   */
+  motionProfile: "asmr" | "crisp" | "chaotic";
 }
 
 export interface SeriesConfig {
@@ -125,6 +136,8 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       aspectRatio: "horizontal",
       targetDurationSeconds: { min: 90, max: 180 },
       storyCount: { min: 2, max: 3 },
+      // ASMR profile: slow, chrome/glass, breath-paced. Newsroom-premium.
+      motionProfile: "asmr",
     },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#AINews", "#DailyBriefing"],
@@ -161,6 +174,8 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     format: {
       aspectRatio: "vertical",
       targetDurationSeconds: { min: 30, max: 60 },
+      // Tomorrow Broke is cinematic + noir — ASMR pacing fits.
+      motionProfile: "asmr",
     },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Future", "#Shorts"],
@@ -196,6 +211,8 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     format: {
       aspectRatio: "vertical",
       targetDurationSeconds: { min: 45, max: 75 },
+      // Mind Wars is premium/thoughtful — ASMR pacing for intellectual gravitas.
+      motionProfile: "asmr",
     },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Debate", "#Philosophy", "#Shorts"],
@@ -231,6 +248,8 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     format: {
       aspectRatio: "vertical",
       targetDurationSeconds: { min: 45, max: 75 },
+      // Operator Mode wants crisp ops-credibility — no breath cycles.
+      motionProfile: "crisp",
     },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Business", "#Ops", "#Shorts"],
@@ -266,6 +285,8 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     format: {
       aspectRatio: "vertical",
       targetDurationSeconds: { min: 15, max: 60 },
+      // Bot Beats wants chaos — snappy, hard cuts, fast drift.
+      motionProfile: "chaotic",
     },
     defaultVisibility: "private",
     hashtags: ["#AIMusic", "#Shorts"],
