@@ -12,7 +12,50 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { LocalToolContext, ToolResult } from '../local-tool-types.js';
-import { syncResource } from '../../control-plane/sync-resources.js';
+import { syncResource, hexToUuid, type SyncPayload } from '../../control-plane/sync-resources.js';
+
+/**
+ * Reshape a local agent_workforce_contacts row for the cloud sync-resource
+ * upsert. The cloud table has name/email/phone/company/contact_type/status/
+ * notes/tags/external_id/service_role/custom_fields/outreach_token — local
+ * stores `tags` and `custom_fields` as JSON strings, ids as 32-char hex or
+ * UUID, and carries `never_sync` as a workspace-local privacy gate that
+ * must not leave the machine. This builder does the mapping so every sync
+ * call site — the HTTP route, the orchestrator tools, and the resync
+ * backfill — produces the same shape.
+ */
+export function contactSyncPayload(row: Record<string, unknown>): SyncPayload {
+  let tags: unknown = row.tags;
+  if (typeof tags === 'string') {
+    try { tags = JSON.parse(tags); } catch { tags = []; }
+  }
+  if (!Array.isArray(tags)) tags = [];
+
+  let customFields: unknown = row.custom_fields;
+  if (typeof customFields === 'string') {
+    try { customFields = JSON.parse(customFields); } catch { customFields = {}; }
+  }
+  if (!customFields || typeof customFields !== 'object' || Array.isArray(customFields)) {
+    customFields = {};
+  }
+
+  return {
+    id: hexToUuid(row.id as string),
+    name: (row.name as string) ?? '',
+    email: (row.email as string | null) ?? null,
+    phone: (row.phone as string | null) ?? null,
+    company: (row.company as string | null) ?? null,
+    contact_type: (row.contact_type as string | null) ?? 'lead',
+    status: (row.status as string | null) ?? 'active',
+    notes: (row.notes as string | null) ?? null,
+    tags,
+    external_id: (row.external_id as string | null) ?? null,
+    service_role: (row.service_role as string | null) ?? null,
+    custom_fields: customFields,
+    outreach_token: (row.outreach_token as string | null) ?? null,
+    created_at: row.created_at ?? null,
+  };
+}
 
 export const CRM_TOOL_DEFINITIONS: Tool[] = [
   {
@@ -194,17 +237,14 @@ export async function createContact(
 
   // Fire-and-forget cloud sync so the new contact shows up in the cloud
   // dashboard and cloud-side agents. Never blocks the local response.
-  void syncResource(ctx, 'contact', 'upsert', {
-    id: contactId,
-    name,
-    email: insertPayload.email as string | undefined,
-    phone: insertPayload.phone as string | undefined,
-    company: insertPayload.company as string | undefined,
-    contact_type: insertPayload.contact_type as string,
-    notes: insertPayload.notes as string | undefined,
-    tags: input.tags,
-    status: 'active',
-  });
+  const { data: refreshed } = await ctx.db
+    .from('agent_workforce_contacts')
+    .select('*')
+    .eq('id', contactId)
+    .maybeSingle();
+  if (refreshed) {
+    void syncResource(ctx, 'contact', 'upsert', contactSyncPayload(refreshed as Record<string, unknown>));
+  }
 
   return {
     success: true,
@@ -251,14 +291,11 @@ export async function updateContact(
   // complete shape instead of a diff that might be merged with stale state.
   const { data: refreshed } = await ctx.db
     .from('agent_workforce_contacts')
-    .select('id, name, email, phone, company, contact_type, status, notes, tags')
+    .select('*')
     .eq('id', contactId)
     .maybeSingle();
   if (refreshed) {
-    void syncResource(ctx, 'contact', 'upsert', {
-      ...(refreshed as Record<string, unknown>),
-      id: contactId,
-    });
+    void syncResource(ctx, 'contact', 'upsert', contactSyncPayload(refreshed as Record<string, unknown>));
   }
 
   return {

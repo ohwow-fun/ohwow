@@ -26,6 +26,8 @@ import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ControlPlaneClient } from '../../control-plane/client.js';
 import { resolveActiveWorkspace } from '../../config.js';
 import { ATTRIBUTION_EVENT_SAFELIST } from './attribution.js';
+import { contactSyncPayload } from '../../orchestrator/tools/crm.js';
+import { hexToUuid } from '../../control-plane/sync-resources.js';
 import { logger } from '../../lib/logger.js';
 
 /** Whitelist a custom_field key before interpolating it into a json_extract() expression. */
@@ -145,9 +147,12 @@ export function createContactsRouter(
   const router = Router();
 
   /** Fire-and-forget sync helper. Never throws, never blocks. Respects never_sync. */
-  const syncContact = (action: 'upsert' | 'delete', payload: Record<string, unknown> & { id: string }) => {
+  const syncContact = (action: 'upsert' | 'delete', row: Record<string, unknown> & { id: string }) => {
     if (!controlPlane) return;
-    if (payload.never_sync === 1 || payload.never_sync === true) return;
+    if (row.never_sync === 1 || row.never_sync === true) return;
+    const payload = action === 'upsert'
+      ? contactSyncPayload(row)
+      : { id: hexToUuid(row.id) };
     controlPlane
       .reportResource('contact', action, payload)
       .catch((err) => {

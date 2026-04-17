@@ -131,6 +131,7 @@ export async function resyncWorkspaceToCloud(
   const { teamMemberSyncPayload } = await import('../orchestrator/tools/team.js');
   const { onboardingPlanSyncPayload } = await import('../orchestrator/tools/onboarding-plan.js');
   const { agentSyncPayload } = await import('../orchestrator/tools/agents.js');
+  const { contactSyncPayload } = await import('../orchestrator/tools/crm.js');
 
   // Order matters: agents must land before tasks (agent_id FK), goals
   // before tasks (goal_id FK), team_members before onboarding_plans
@@ -145,6 +146,15 @@ export async function resyncWorkspaceToCloud(
     { resource: 'team_member', table: 'agent_workforce_team_members', build: (row) => teamMemberSyncPayload(row) },
     { resource: 'goal', table: 'agent_workforce_goals', build: (row) => goalSyncPayload(row) },
     { resource: 'task', table: 'agent_workforce_tasks', build: (row) => taskSyncPayload(row) },
+    { resource: 'contact', table: 'agent_workforce_contacts', build: (row) => {
+        // Preserve the per-row privacy opt-out in backfills too — operators
+        // who want to sync an opt-out row must flip never_sync=0 in the
+        // local DB first (that's the explicit opt-in), then re-run the
+        // backfill. The payload builder itself strips never_sync, so we
+        // can't rely on the syncResource() gate downstream.
+        if (row.never_sync === 1 || row.never_sync === true) return null;
+        return contactSyncPayload(row);
+      } },
     { resource: 'onboarding_plan', table: 'agent_workforce_onboarding_plans', build: (row) => onboardingPlanSyncPayload(row as Parameters<typeof onboardingPlanSyncPayload>[0]) },
   ];
 
