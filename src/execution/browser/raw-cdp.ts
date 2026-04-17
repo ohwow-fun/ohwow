@@ -212,6 +212,26 @@ export class RawCdpPage {
     return this.browser.send<T>(method, params, this.sessionId);
   }
 
+  /**
+   * Wait for the next occurrence of a named CDP event scoped to this
+   * page's session. Resolves with the event params. Rejects on timeout.
+   * Used for FileChooser interception and similar one-shot signals.
+   */
+  async waitForEvent<T = unknown>(method: string, timeoutMs = 5_000): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const to = setTimeout(() => {
+        off();
+        reject(new Error(`timed out waiting for ${method} after ${timeoutMs}ms`));
+      }, timeoutMs);
+      const off = this.browser.on(method, (params, sid) => {
+        if (sid && sid !== this.sessionId) return;
+        clearTimeout(to);
+        off();
+        resolve(params as T);
+      });
+    });
+  }
+
   async goto(url: string): Promise<void> {
     await this.send('Page.navigate', { url });
     await this.waitForLoad();

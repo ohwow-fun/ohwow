@@ -26,6 +26,7 @@ import { detectChallenge, type YTChallenge } from '../challenges.js';
 import { YTChallengeError, YTUploadError } from '../errors.js';
 import { closeAnyOpenDialog, openUploadDialog } from './open-dialog.js';
 import { fillDescription, fillTitle, setNotMadeForKids } from './fill-metadata.js';
+import { readTime, sleepRandom } from './human.js';
 import { injectFile } from './inject-file.js';
 import { uploadThumbnail } from './thumbnail.js';
 import { clickSave, dismissProcessingDialog, extractVideoUrl, selectVisibility, type Visibility } from './visibility.js';
@@ -131,6 +132,8 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
   }
 
   await stage('dialog_open', undefined, () => openUploadDialog(page));
+  // A person opens the dialog, then looks for the file they want.
+  await sleepRandom(700, 1_800);
   await stage('file_injected', { filePath: opts.filePath }, () => injectFile(page, opts.filePath));
 
   // After file injection, Studio spins up processing AND async-autofills
@@ -156,19 +159,32 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
 
   await assertNoChallenge();
 
+  // "Reading the Details step that just appeared" pause — scales to
+  // how much text will be typed.
+  await sleepRandom(readTime(40), readTime(80));
   await stage('title_filled', { title: opts.title }, () => fillTitle(page, opts.title));
+
   if (opts.description) {
+    // "Clicking into the description" pause.
+    await sleepRandom(500, 1_200);
     await stage('description_filled', { length: opts.description.length }, () => fillDescription(page, opts.description!));
   }
+
   if (opts.thumbnailPath) {
+    // "Scrolling to the thumbnail section" pause.
+    await sleepRandom(700, 1_600);
     await stage('thumbnail_attached', { thumbnailPath: opts.thumbnailPath }, () =>
       uploadThumbnail(page, opts.thumbnailPath!),
     );
   }
+
+  // "Scrolling to the Audience section" pause.
+  await sleepRandom(800, 1_800);
   await stage('not_for_kids_set', undefined, () => setNotMadeForKids(page));
 
-  // Give Studio a moment to flush autosave after contenteditable edits.
-  await sleep(500);
+  // Let Studio flush autosave after contenteditable edits, then take
+  // a realistic "scanning for the Next button" pause.
+  await sleepRandom(600, 1_400);
 
   const finalStep = await stage('step_advanced', { target: visibilityStepIndex }, () =>
     advanceToStep(page, visibilityStepIndex),
@@ -177,10 +193,18 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
 
   await assertNoChallenge();
 
+  // "Reading the Visibility step options" pause.
+  await sleepRandom(900, 2_200);
   await stage('visibility_set', { visibility }, () => selectVisibility(page, visibility));
+
+  // Small pause before URL extraction — DOM scan is near-instant, this
+  // keeps the surrounding cadence human.
+  await sleepRandom(400, 900);
   const videoUrl = await stage('url_extracted', undefined, () => extractVideoUrl(page));
 
   if (opts.dryRun) {
+    // "Deciding to close without publishing" pause.
+    await sleepRandom(600, 1_400);
     await stage('dry_run_exit', { wouldPublishAs: visibility, wouldBeUrl: videoUrl }, async () => {
       await closeAnyOpenDialog(page);
     });
@@ -189,7 +213,7 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
 
   await stage('save_clicked', undefined, () => clickSave(page));
   // Studio shows a processing-confirmation dialog after publish.
-  await sleep(1_500);
+  await sleepRandom(1_400, 2_400);
   await stage('processing_dialog_closed', undefined, async () => {
     await dismissProcessingDialog(page);
   });

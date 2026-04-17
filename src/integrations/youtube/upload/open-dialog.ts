@@ -12,6 +12,7 @@ import type { RawCdpPage } from '../../../execution/browser/raw-cdp.js';
 import { YTUploadError } from '../errors.js';
 import { SEL } from '../selectors.js';
 import { waitForNoSelector, waitForSelector } from '../wait.js';
+import { humanClickAt, humanClickSelector, sleepRandom } from './human.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -58,25 +59,26 @@ export async function openUploadDialog(page: RawCdpPage, maxAttempts = 3): Promi
       await closeAnyOpenDialog(page);
 
       await waitForSelector(page, SEL.UPLOAD_CREATE_BUTTON, { visible: true, timeoutMs: 8_000, label: 'Create button' });
-      const clickedCreate = await page.clickSelector(SEL.UPLOAD_CREATE_BUTTON, 8_000);
-      if (!clickedCreate) throw new YTUploadError('open_dialog', 'Create button click dispatch returned false');
+      // Trusted click on Create (anti-detection), then the natural
+      // "wait for the menu to render" pause before picking an item.
+      await humanClickSelector(page, SEL.UPLOAD_CREATE_BUTTON, { label: 'Create button' });
 
-      // Wait for the narrow menu-item tag that ONLY mounts after the
-      // Create dropdown opens. Must NOT wait on [role="menuitem"] —
-      // the left-nav sidebar uses that role, so the wait would resolve
-      // instantly on every page and we'd scan the wrong menu.
       await waitForSelector(page, SEL.UPLOAD_MENU_ITEM_READY, { timeoutMs: 5_000, label: 'Create menu items' });
+      await sleepRandom(300, 700);
 
-      const clickedUpload = await page.evaluate<boolean>(`(() => {
+      const uploadCoords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
         const items = document.querySelectorAll(${JSON.stringify(SEL.UPLOAD_MENU_ITEMS)});
         for (const item of items) {
-          if (/upload video/i.test(item.textContent || '')) {
-            if (item instanceof HTMLElement) { item.click(); return true; }
-          }
+          if (item.offsetParent === null) continue;
+          if (!/upload video/i.test(item.textContent || '')) continue;
+          const r = item.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
-        return false;
+        return null;
       })()`);
-      if (!clickedUpload) throw new YTUploadError('open_dialog', '"Upload videos" menu item not found');
+      if (!uploadCoords) throw new YTUploadError('open_dialog', '"Upload videos" menu item not found');
+      await humanClickAt(page, uploadCoords.x, uploadCoords.y);
 
       // Dialog + file input mounted.
       await waitForSelector(page, SEL.UPLOAD_FILE_INPUT, { timeoutMs: 8_000, label: 'upload file input' });

@@ -29,9 +29,11 @@
  * Options:
  *   --mp4=<path>         video to upload. Default packages/video/out/briefing-dryrun-v4.mp4
  *   --spec=<path>        compiled spec for title/description. Default briefing-dryrun.compiled.json
- *   --thumbnail=<path>   override thumbnail. Default: ffmpeg frame-grab at 5s, cached
- *                        under ~/.ohwow/media/thumbnails/briefing-<sha256>.jpg
- *   --no-thumbnail       skip custom thumbnail (lets Studio auto-pick a frame)
+ *   --thumbnail=<path>   custom thumbnail file (.jpg/.png). Requires the channel
+ *                        to be phone-verified (Studio's gate for custom thumbs).
+ *   --no-thumbnail       skip the thumbnail attach and keep Studio's auto-pick.
+ *                        Default: generate a frame-grab at 5s and attach it
+ *                        (cached under ~/.ohwow/media/thumbnails/briefing-<sha256>.jpg).
  *   --visibility=<v>     private|unlisted|public. Default: series registry (unlisted).
  *                        --public still requires ≥5 prior applied unlisted rows.
  *   --yes                skip interactive confirm (needed in non-TTY)
@@ -316,7 +318,7 @@ async function cmdStage({ args }) {
   const description = args.kv.description || deriveDescription(spec, series);
   const visibility = (args.kv.visibility || series.defaultVisibility).toLowerCase();
 
-  // Thumbnail: explicit path > auto-generated frame-grab > skip
+  // Thumbnail: explicit path > auto frame-grab > skip
   let thumbnailPath = null;
   if (args.kv.thumbnail) {
     thumbnailPath = path.resolve(args.kv.thumbnail);

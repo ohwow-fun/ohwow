@@ -97,6 +97,29 @@ All CLIs live under `scripts/x-experiments/` and run via
 - `yt-read-metadata.mjs <videoId>` — read one video's title /
   description / visibility / metrics.
 
+## Naturalized input
+
+As of 2026-04-17, every user-visible interaction (typing, radio clicks,
+Next button, thumbnail upload, delete confirmation) goes through
+`upload/human.ts`:
+
+- `humanType()` types characters one at a time via `Input.insertText`
+  with 40-120ms jitter and occasional thinking pauses.
+- `humanClickAt()` / `humanClickSelector()` moves the mouse along a
+  curved path via `Input.dispatchMouseEvent` before clicking with a
+  realistic 40-120ms hold. This is also what Studio's thumbnail
+  uploader requires — its handler checks `event.isTrusted` and rejects
+  JS `element.click()`.
+- Between stages, `uploadShort` waits a jittered "reading time" before
+  the next action.
+
+Why: a few fast runs triggered YouTube's "Upload more videos daily
+after a one-time verification or wait 24 hours" rate-limit. The
+replacement paths target the cadence of a careful operator, not an
+adversarially-stealthy bot. Good enough for a single channel running
+this repo's dogfood cadence; a motivated detection system could still
+fingerprint the patterns.
+
 ## Extending selectors
 
 Every selector lives in `selectors.ts`. Add a new constant with:

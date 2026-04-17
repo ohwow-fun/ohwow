@@ -28,6 +28,7 @@ import { logger } from '../../lib/logger.js';
 import { YTUploadError } from './errors.js';
 import { SEL } from './selectors.js';
 import { waitForSelector } from './wait.js';
+import { humanClickAt, humanClickSelector, sleepRandom } from './upload/human.js';
 import { uploadThumbnail } from './upload/thumbnail.js';
 import { clickSave, extractVideoUrl, selectVisibility, type Visibility } from './upload/visibility.js';
 import { advanceToStep } from './upload/wizard.js';
@@ -74,21 +75,28 @@ export async function publishDraft(
   });
 
   if (opts.thumbnailPath) {
+    // "Scrolling to the thumbnail section" pause.
+    await sleepRandom(600, 1_400);
     await uploadThumbnail(page, opts.thumbnailPath);
   }
 
-  // Give Studio a moment to flush any pending autosave.
-  await sleep(400);
+  // "Reviewing the details before advancing" pause — gives Studio
+  // time to flush autosave too.
+  await sleepRandom(900, 1_800);
 
   const finalStep = await advanceToStep(page, stepIndex);
   logger.debug({ finalStep }, '[youtube/drafts] reached visibility step');
 
+  // "Reading the visibility options" pause.
+  await sleepRandom(800, 1_800);
   await selectVisibility(page, opts.visibility);
+
+  await sleepRandom(400, 900);
   const videoUrl = await extractVideoUrl(page);
 
   await clickSave(page);
   // Studio shows a processing-confirmation dialog on a brief delay.
-  await sleep(1_500);
+  await sleepRandom(1_400, 2_400);
 
   return { videoId: opts.videoId, videoUrl, visibility: opts.visibility };
 }
@@ -175,44 +183,44 @@ export async function deleteDraft(page: RawCdpPage, opts: DeleteDraftOptions): P
     timeoutMs: 12_000,
     label: 'edit page overflow menu',
   });
-  await sleep(600);
+  // "Scanning for the menu button" pause.
+  await sleepRandom(700, 1_600);
 
-  // Open the overflow menu. Filter to visible in case Studio mounts
-  // a hidden placeholder with the same id elsewhere on the page.
-  const opened = await page.evaluate<boolean>(`(() => {
-    for (const btn of document.querySelectorAll(${JSON.stringify(SEL.VIDEO_OVERFLOW_MENU_BUTTON)})) {
-      if (btn.offsetParent !== null && btn instanceof HTMLElement) {
-        btn.click(); return true;
-      }
-    }
-    return false;
-  })()`);
-  if (!opened) {
-    throw new YTUploadError('delete_draft', 'overflow menu button not clickable');
+  // Trusted click on the visible overflow button.
+  try {
+    await humanClickSelector(page, SEL.VIDEO_OVERFLOW_MENU_BUTTON, {
+      label: 'video overflow menu',
+    });
+  } catch (err) {
+    throw new YTUploadError('delete_draft', 'overflow menu button not clickable', { cause: (err as Error).message });
   }
 
-  // Poll for the Delete item to appear (the Polymer menu hydrates on
-  // a variable delay; fixed sleeps flake). Text-match is stable — id
-  // text-item-N is positional and shifts with item reordering.
+  // Poll for the Delete item to appear (Polymer menu hydrates on a
+  // variable delay). Once found, humanClickAt on its coords — not JS
+  // .click(), which some Studio handlers reject.
   const menuDeadline = Date.now() + 4_000;
-  let clickedDelete = false;
+  let deleteCoords: { x: number; y: number } | null = null;
   while (Date.now() < menuDeadline) {
-    clickedDelete = await page.evaluate<boolean>(`(() => {
+    deleteCoords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
       const items = document.querySelectorAll(${JSON.stringify(SEL.VIDEO_OVERFLOW_MENU_ITEMS)});
       for (const item of items) {
         if (item.offsetParent === null) continue;
-        if (/^delete$/i.test((item.textContent || '').trim())) {
-          if (item instanceof HTMLElement) { item.click(); return true; }
-        }
+        if (!/^delete$/i.test((item.textContent || '').trim())) continue;
+        const r = item.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
-      return false;
+      return null;
     })()`);
-    if (clickedDelete) break;
+    if (deleteCoords) break;
     await sleep(200);
   }
-  if (!clickedDelete) {
+  if (!deleteCoords) {
     throw new YTUploadError('delete_draft', 'Delete menu item never mounted or not visible');
   }
+  // "Reading the menu" pause before choosing Delete.
+  await sleepRandom(400, 1_000);
+  await humanClickAt(page, deleteCoords.x, deleteCoords.y);
 
   // Poll for the confirmation dialog to mount. Fixed sleeps flake
   // here — the dialog appears 800-1500ms after the menu click on a
@@ -230,47 +238,62 @@ export async function deleteDraft(page: RawCdpPage, opts: DeleteDraftOptions): P
     throw new YTUploadError('delete_draft', 'confirmation dialog never mounted');
   }
 
+  // "Reading the confirmation dialog" pause.
+  await sleepRandom(800, 1_800);
+
   // Check the acknowledgement checkbox. Only click if not already
-  // checked — a double-click toggles it back off.
-  await page.evaluate<boolean>(`(() => {
+  // checked — a double-click toggles it back off. Trusted click.
+  const cbCoords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
     const cb = document.querySelector('ytcp-checkbox-lit#confirm-checkbox');
-    if (!cb) return false;
+    if (!cb || cb.offsetParent === null) return null;
     const isChecked = cb.hasAttribute('checked') || cb.getAttribute('aria-checked') === 'true';
-    if (!isChecked && cb instanceof HTMLElement) { cb.click(); return true; }
-    return false;
+    if (isChecked) return null;
+    const r = cb.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
+  if (cbCoords) {
+    await humanClickAt(page, cbCoords.x, cbCoords.y);
+    // Small post-click pause so Studio's reactivity re-enables the
+    // confirm button before we race it.
+    await sleepRandom(300, 700);
+  }
 
   // Wait up to 3s for the confirm button to become enabled (Studio
   // gates it behind the checkbox). We explicitly scope to the dialog
   // and match by text so the page-level "Save" / other "Confirm"
   // buttons don't get picked.
   const deadline = Date.now() + 3_000;
-  let confirmed = false;
+  let confirmCoords: { x: number; y: number } | null = null;
   while (Date.now() < deadline) {
-    confirmed = await page.evaluate<boolean>(`(() => {
+    confirmCoords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
       const dlg = document.querySelector('ytcp-confirmation-dialog, tp-yt-paper-dialog[opened]');
-      if (!dlg) return false;
+      if (!dlg) return null;
       const btns = dlg.querySelectorAll('ytcp-button');
       for (const b of btns) {
         if (b.offsetParent === null) continue;
         if (b.hasAttribute('disabled')) continue;
         const label = (b.getAttribute('label') || b.textContent || '').trim();
-        // Match both draft-delete ("Delete draft video") and
-        // published-delete ("Delete forever") phrasings. Avoid Cancel.
         if (/delete/i.test(label) && !/cancel/i.test(label)) {
           const inner = b.querySelector('button');
-          if (inner && !inner.disabled) { inner.click(); return true; }
-          if (b instanceof HTMLElement) { b.click(); return true; }
+          const target = (inner && !inner.disabled) ? inner : b;
+          const r = target.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
       }
-      return false;
+      return null;
     })()`);
-    if (confirmed) break;
+    if (confirmCoords) break;
     await sleep(200);
   }
-  if (!confirmed) {
+  if (!confirmCoords) {
     throw new YTUploadError('delete_draft', 'delete confirmation button never enabled / not found');
   }
+
+  // Final "am I sure" pause before the destructive click.
+  await sleepRandom(600, 1_400);
+  await humanClickAt(page, confirmCoords.x, confirmCoords.y);
 
   // Studio's delete is server-round-trip — poll the edit page for an
   // error state or the overflow button to vanish as the positive

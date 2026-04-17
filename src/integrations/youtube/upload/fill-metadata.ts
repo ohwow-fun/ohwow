@@ -1,11 +1,12 @@
 /**
  * Title / description / made-for-kids fillers for the details step.
  *
- * Studio's title + description are contenteditable divs (not inputs),
- * so we use `document.execCommand('insertText', …)` — same approach
- * the original _yt-browser.mjs uses, which matches how the React-ish
- * Polymer component processes input events (plain value assignment
- * doesn't fire the needed handlers).
+ * All paths go through human.ts helpers — jittered typing, trusted
+ * mouse clicks — so the timing fingerprint doesn't look like a bot.
+ * Studio rate-limited the channel on 2026-04-17 after a few runs of
+ * the old one-shot execCommand path; the replacement types char-by-
+ * char via Input.insertText and clicks radios via
+ * Input.dispatchMouseEvent at the element's center.
  *
  * Made-for-kids: there are two Polymer paper-radios grouped under a
  * `name` attribute. We click the one named VIDEO_MADE_FOR_KIDS_NOT_MFK,
@@ -16,75 +17,89 @@ import type { RawCdpPage } from '../../../execution/browser/raw-cdp.js';
 import { YTUploadError } from '../errors.js';
 import { SEL } from '../selectors.js';
 import { waitForSelector } from '../wait.js';
+import { humanClickAt, humanType, sleepRandom } from './human.js';
 
-export async function fillTitle(page: RawCdpPage, title: string): Promise<void> {
-  await waitForSelector(page, SEL.META_TITLE_BOX, { timeoutMs: 10_000, label: 'title box' });
-  const ok = await page.evaluate<boolean>(`(() => {
-    const textbox = document.querySelector(${JSON.stringify(SEL.META_TITLE_BOX)});
+async function focusAndClear(page: RawCdpPage, selector: string): Promise<boolean> {
+  return page.evaluate<boolean>(`(() => {
+    const textbox = document.querySelector(${JSON.stringify(selector)});
     if (!textbox || !(textbox instanceof HTMLElement)) return false;
     textbox.focus();
     document.execCommand('selectAll');
-    document.execCommand('insertText', false, ${JSON.stringify(title)});
+    // Delete selection via execCommand 'delete' — this fires the input
+    // events Studio expects. One-shot here is fine; no rate-limit risk
+    // on a clear action that's indistinguishable from a user select-all + Backspace.
+    document.execCommand('delete');
     return true;
   })()`);
-  if (!ok) throw new YTUploadError('fill_title', 'title textbox not reachable');
+}
 
-  // Verify the write landed and didn't get clobbered by Studio's async
-  // filename-autofill. Studio's autofill fires on a variable delay after
-  // the title box mounts; if we see a mismatch, re-write. Three attempts
-  // is empirically enough — the race window closes after ~1s.
+export async function fillTitle(page: RawCdpPage, title: string): Promise<void> {
+  await waitForSelector(page, SEL.META_TITLE_BOX, { timeoutMs: 10_000, label: 'title box' });
+
+  if (!(await focusAndClear(page, SEL.META_TITLE_BOX))) {
+    throw new YTUploadError('fill_title', 'title textbox not reachable');
+  }
+  // Small "aim" pause before typing — a human who just clicked into
+  // the title field doesn't start typing on frame 0.
+  await sleepRandom(150, 400);
+  await humanType(page, title);
+
+  // Verify the write landed and wasn't clobbered by Studio's async
+  // filename-autofill. On race, re-clear + re-type (still human-paced).
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await new Promise((r) => setTimeout(r, 400));
+    await sleepRandom(350, 650);
     const current = await page.evaluate<string>(
       `(() => (document.querySelector(${JSON.stringify(SEL.META_TITLE_BOX)})?.textContent || ''))()`,
     );
     if (current.trim() === title.trim()) return;
-    await page.evaluate<boolean>(`(() => {
-      const textbox = document.querySelector(${JSON.stringify(SEL.META_TITLE_BOX)});
-      if (!textbox || !(textbox instanceof HTMLElement)) return false;
-      textbox.focus();
-      document.execCommand('selectAll');
-      document.execCommand('insertText', false, ${JSON.stringify(title)});
-      return true;
-    })()`);
+    await focusAndClear(page, SEL.META_TITLE_BOX);
+    await sleepRandom(120, 300);
+    await humanType(page, title);
   }
 }
 
 export async function fillDescription(page: RawCdpPage, description: string): Promise<void> {
   if (!description) return;
-  // Description mounts with title — don't fail the whole flow if missing.
   const present = await page.evaluate<boolean>(
     `(() => !!document.querySelector(${JSON.stringify(SEL.META_DESCRIPTION_BOX)}))()`,
   );
   if (!present) return;
-  await page.evaluate<boolean>(`(() => {
-    const textbox = document.querySelector(${JSON.stringify(SEL.META_DESCRIPTION_BOX)});
-    if (!textbox || !(textbox instanceof HTMLElement)) return false;
-    textbox.focus();
-    document.execCommand('selectAll');
-    document.execCommand('insertText', false, ${JSON.stringify(description)});
-    return true;
-  })()`);
+
+  if (!(await focusAndClear(page, SEL.META_DESCRIPTION_BOX))) return;
+  await sleepRandom(200, 500);
+  // Description is much longer than title — bump the per-char upper
+  // bound so the total time lands in a realistic range for a person
+  // pasting + reviewing a block of copy.
+  await humanType(page, description, { perCharMinMs: 25, perCharMaxMs: 90, thinkChance: 0.04 });
 }
 
 export async function setNotMadeForKids(page: RawCdpPage): Promise<void> {
-  const clicked = await page.evaluate<string>(`(() => {
-    const radios = document.querySelectorAll(${JSON.stringify(SEL.META_KIDS_RADIOS)});
-    // Prefer name-based match — Studio's internal enum.
+  // Resolve the target radio's click coords via evaluate, then
+  // humanClickAt. Fall back to click-via-JS only if we can't find a
+  // visible candidate (shouldn't happen, but failing closed on
+  // coord-resolution beats silently clicking the wrong radio).
+  const coords = await page.evaluate<{ x: number; y: number; by: string } | null>(`(() => {
+    const radios = Array.from(document.querySelectorAll(${JSON.stringify(SEL.META_KIDS_RADIOS)}));
+    const pick = (r) => {
+      if (r.offsetParent === null) return null;
+      const rect = r.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    };
     for (const r of radios) {
       if (r.getAttribute('name') === 'VIDEO_MADE_FOR_KIDS_NOT_MFK') {
-        if (r instanceof HTMLElement) { r.click(); return 'by-name'; }
+        const c = pick(r); if (c) return { ...c, by: 'name' };
       }
     }
-    // Fallback text match.
     for (const r of radios) {
       if (/not made for kids/i.test(r.textContent || '')) {
-        if (r instanceof HTMLElement) { r.click(); return 'by-text'; }
+        const c = pick(r); if (c) return { ...c, by: 'text' };
       }
     }
-    return 'none';
+    return null;
   })()`);
-  if (clicked === 'none') {
+  if (!coords) {
     throw new YTUploadError('set_not_for_kids', '"Not made for kids" radio not found');
   }
+  await humanClickAt(page, coords.x, coords.y);
 }
