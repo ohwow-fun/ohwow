@@ -143,7 +143,6 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-
 **Honest read of 2026-04-16T22:15Z:**
 
 - 24h autonomous commits: 51. 24h reverts: 1 (hand-done, for a cosmetic
@@ -191,7 +190,6 @@ This session landed the first three foundations of the money-telos phase:
   loop needs to see actual dollars for its Next Move logic to sharpen.
 
 ## 3. Next Steps
-
 ### Phase 2 (next session) — give the loop something to act on
 
 1. **Widen tier-2 to cover the sales-loop copy surface.**
