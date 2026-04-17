@@ -1,0 +1,53 @@
+{
+  "id": "p1-fixes-demo",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": { "bg": "#0a1020", "text": "#f4f7fb", "accent": "#e3b58a" },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "voiceovers": [],
+  "transitions": [{ "kind": "none" }, { "kind": "none" }],
+  "scenes": [
+    {
+      "id": "fix-1-countup-decimal",
+      "durationInFrames": 120,
+      "narration": "Tokenizer uses one point four seven times more tokens.",
+      "motion_beats": [
+        { "primitive": "r3f.count-up-bar", "params": { "target": 1.47, "unit": "x", "label": "token ratio vs 4.6", "barColor": "#e3b58a" } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 1.2, 7.5], "fov": 45 }, "motionProfile": "asmr" }
+    },
+    {
+      "id": "fix-2-versus-left-right",
+      "durationInFrames": 120,
+      "narration": "ElevenLabs to Voxtral.",
+      "motion_beats": [
+        { "primitive": "r3f.versus-cards", "params": { "left": { "label": "ELEVENLABS" }, "right": { "label": "VOXTRAL" } } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.2, 8], "fov": 42 }, "motionProfile": "asmr" }
+    },
+    {
+      "id": "fix-3-number-sculpture-unit",
+      "durationInFrames": 120,
+      "narration": "Four billion parameters.",
+      "motion_beats": [
+        { "primitive": "r3f.number-sculpture", "params": { "value": 4, "unit": "B", "label": "parameters", "fontSize": 2.4 } }
+      ],
+      "params": { "background": "#0a1020", "environmentPreset": "sunset", "camera": { "position": [0, 0.4, 10], "fov": 40 }, "motionProfile": "asmr" }
+    }
+  ]
+}

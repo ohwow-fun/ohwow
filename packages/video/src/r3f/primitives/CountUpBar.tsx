@@ -34,6 +34,8 @@ interface CountUpBarProps {
   durationFrames?: number;
   barHeightMax?: number;
   motionProfile?: string;
+  /** Alias for color — briefing prompt's primitive catalog uses this name. */
+  barColor?: string;
 }
 
 export const CountUpBar: React.FC<CountUpBarProps> = ({
@@ -41,12 +43,18 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
   max,
   label,
   unit = "",
-  color = "#f4eadb",
-  formatDecimals = 0,
+  color,
+  barColor,
+  formatDecimals,
   durationFrames = 60,
   barHeightMax = 1.8,
   motionProfile,
 }) => {
+  const resolvedColor = barColor ?? color ?? "#f4eadb";
+  // Auto-detect decimals from the target when caller didn't specify:
+  // fractional targets (1.47, 0.85) get 2 decimals; integers stay as ints.
+  const resolvedDecimals =
+    formatDecimals ?? (Number.isInteger(target) ? 0 : 2);
   const frame = useCurrentFrame();
   const profile = getMotionProfile(motionProfile);
 
@@ -69,8 +77,8 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
     [0, target],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: asmrEasing },
   );
-  const numberText = formatDecimals > 0
-    ? displayValue.toFixed(formatDecimals)
+  const numberText = resolvedDecimals > 0
+    ? displayValue.toFixed(resolvedDecimals)
     : Math.round(displayValue).toString();
 
   // Breath-scale (ASMR only).
@@ -101,7 +109,7 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
         <boxGeometry args={[1.1, Math.max(0.02, barHeight), 1.1]} />
         <meshStandardMaterial
           {...chromeMaterialPreset}
-          color={color}
+          color={resolvedColor}
         />
       </mesh>
 
@@ -122,7 +130,7 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
         fontSize={1.4}
         anchorX="center"
         anchorY="middle"
-        color={color}
+        color={resolvedColor}
         outlineWidth={0.025}
         outlineColor="#0a1629"
         outlineOpacity={0.9}

@@ -21,10 +21,14 @@ import { chromeMaterialPreset, getMotionProfile } from "../../motion/asmr";
 
 interface NumberSculptureProps {
   value?: string | number;
+  /** Suffix appended to the numeral ("B", "M", "%", "GB"). Matches briefing prompt catalog. */
+  unit?: string;
   color?: string;
   label?: string;
   tiltSpeed?: number;
   size?: number;
+  /** Alias for `size` — briefing prompt catalog uses this name. */
+  fontSize?: number;
   depth?: number;
   /**
    * URL of a drei-compatible font JSON (typeface.json format). Defaults
@@ -39,10 +43,12 @@ const DEFAULT_FONT_URL =
 
 export const NumberSculpture: React.FC<NumberSculptureProps> = ({
   value = "0",
+  unit = "",
   color = "#f4eadb",
   label,
   tiltSpeed = 0.15,
-  size = 1.6,
+  size,
+  fontSize,
   depth = 0.35,
   fontUrl = DEFAULT_FONT_URL,
   motionProfile,
@@ -50,6 +56,8 @@ export const NumberSculpture: React.FC<NumberSculptureProps> = ({
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const profile = getMotionProfile(motionProfile);
+  const resolvedSize = fontSize ?? size ?? 1.6;
+  const displayText = `${value}${unit}`;
 
   // Slow Y rotation + subtle X wobble.
   const t = frame / fps;
@@ -69,12 +77,12 @@ export const NumberSculpture: React.FC<NumberSculptureProps> = ({
           extrusion. */}
       {label && (
         <Text
-          position={[0, size * 1.2, 0]}
-          fontSize={size * 0.2}
+          position={[0, resolvedSize * 1.2, 0]}
+          fontSize={resolvedSize * 0.2}
           color="#c8d4e8"
           anchorX="center"
           anchorY="middle"
-          maxWidth={size * 6}
+          maxWidth={resolvedSize * 6}
           textAlign="center"
           letterSpacing={0.04}
         >
@@ -87,15 +95,15 @@ export const NumberSculpture: React.FC<NumberSculptureProps> = ({
       <Center>
         <Text3D
           font={fontUrl}
-          size={size}
+          size={resolvedSize}
           height={depth}
           curveSegments={8}
           bevelEnabled
-          bevelSize={size * 0.015}
-          bevelThickness={size * 0.02}
+          bevelSize={resolvedSize * 0.015}
+          bevelThickness={resolvedSize * 0.02}
           bevelSegments={3}
         >
-          {String(value)}
+          {displayText}
           <meshStandardMaterial
             {...chromeMaterialPreset}
             color={color}

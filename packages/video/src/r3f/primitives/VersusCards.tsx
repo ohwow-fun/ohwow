@@ -25,6 +25,10 @@ interface Card {
 interface VersusCardsProps {
   before?: Card;
   after?: Card;
+  /** Alias for `before` — briefing prompt catalog uses left/right naming. */
+  left?: Card;
+  /** Alias for `after`. */
+  right?: Card;
   label?: string;
   transitionAt?: number;
   transitionDuration?: number;
@@ -85,8 +89,10 @@ const CardMesh: React.FC<{
 };
 
 export const VersusCards: React.FC<VersusCardsProps> = ({
-  before = { label: "Before" },
-  after = { label: "After" },
+  before,
+  after,
+  left,
+  right,
   label,
   transitionAt = 30,
   transitionDuration = 60,
@@ -94,6 +100,10 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
 }) => {
   const frame = useCurrentFrame();
   const profile = getMotionProfile(motionProfile);
+
+  // Resolve naming: left/right (prompt catalog) wins over before/after.
+  const leftCard: Card = left ?? before ?? { label: "Before" };
+  const rightCard: Card = right ?? after ?? { label: "After" };
 
   // Brightness crossfade: before starts at 1, drops to 0.45; after starts at 0.45, rises to 1.
   const afterBrightness = interpolate(
@@ -134,8 +144,8 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         position={[-1.85, 0, 0]}
         tint="#2a333f"
         brightness={beforeBrightness}
-        label={before.label}
-        value={before.value}
+        label={leftCard.label}
+        value={leftCard.value}
         accentColor="#5e6d82"
       />
 
@@ -154,8 +164,8 @@ export const VersusCards: React.FC<VersusCardsProps> = ({
         position={[1.85, 0, 0]}
         tint="#f4eadb"
         brightness={afterBrightness}
-        label={after.label}
-        value={after.value}
+        label={rightCard.label}
+        value={rightCard.value}
         accentColor="#f0c89b"
       />
     </group>
