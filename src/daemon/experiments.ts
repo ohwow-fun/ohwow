@@ -102,7 +102,7 @@ import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
 
 export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<void> {
-  const { config: _config, db, engine, workspaceId } = ctx as DaemonContext;
+  const { config: _config, db, engine, workspaceId, scraplingService } = ctx as DaemonContext;
 
   // Phase 5-B: runtime config overrides cache. Experiments read
   // runtime-mutable settings via getRuntimeConfig() which
@@ -156,7 +156,9 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // workspaceSlug is the human-readable name ('default', 'avenued', ...)
   // that business experiments match against.
   const workspaceSlug = resolveActiveWorkspace().name;
-  const experimentRunner = new ExperimentRunner(db, engine, workspaceId, workspaceSlug);
+  const experimentRunner = new ExperimentRunner(db, engine, workspaceId, workspaceSlug, {
+    scraplingService,
+  });
   experimentRunner.register(new ModelHealthExperiment());
   experimentRunner.register(new TriggerStabilityExperiment());
   experimentRunner.register(new CanaryExperiment());

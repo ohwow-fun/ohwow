@@ -32,6 +32,7 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
+import type { ScraplingService } from '../execution/scrapling/index.js';
 
 /**
  * Category buckets for experiment organization and ledger filtering.
@@ -210,6 +211,14 @@ export interface ExperimentContext {
    * Optional so test contexts that don't need it can stay minimal.
    */
   scoreSurprise?: (input: import('./surprise.js').ScoreSurpriseInput) => Promise<import('./surprise.js').SurpriseResult>;
+  /**
+   * Shared Scrapling service for probes that fetch external URLs
+   * (e.g. ScrapeDiffProbeExperiment watching competitor pricing pages).
+   * Present when the daemon started a ScraplingService and passed it
+   * into the runner; absent in unit tests that stub the fetcher
+   * directly. Probes that need scraping must null-check and fail soft.
+   */
+  scraplingService?: ScraplingService;
 }
 
 /**
