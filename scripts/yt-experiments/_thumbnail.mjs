@@ -74,45 +74,80 @@ function escFF(s) {
 }
 
 /**
- * Generate the thumbnail. Returns { ok: boolean, path?: string, error?: string }.
+ * Check if ffmpeg has the drawtext filter available. Homebrew's default
+ * ffmpeg is often compiled without libfreetype, which means text overlays
+ * fail silently. We probe once; if missing, fall back to keyframe-only
+ * thumbnails.
+ */
+let _drawtextCache = null;
+function hasDrawtext() {
+  if (_drawtextCache !== null) return _drawtextCache;
+  try {
+    const out = execSync('ffmpeg -hide_banner -filters 2>&1', { encoding: 'utf8' });
+    _drawtextCache = /\bdrawtext\b/.test(out);
+  } catch { _drawtextCache = false; }
+  return _drawtextCache;
+}
+
+/**
+ * Generate the thumbnail. Returns { ok: boolean, path?: string, error?: string, textOverlay: boolean }.
+ *
+ * If ffmpeg's drawtext filter isn't available on this system (common on
+ * minimal ffmpeg builds), we still produce a thumbnail — just the bare
+ * keyframe, scaled + darkened. textOverlay:false signals the caller that
+ * the labels weren't baked in and could be added later via a different
+ * tool (Canvas, Pillow, ImageMagick).
  */
 export function generateThumbnail({ videoPath, draft, outPath, keyframeSeconds = 6 }) {
   if (!fs.existsSync(videoPath)) {
-    return { ok: false, error: `video not found: ${videoPath}` };
-  }
-  const font = findFont();
-  if (!font) {
-    return { ok: false, error: 'no usable font found on system — install DejaVu Sans or Arial' };
+    return { ok: false, error: `video not found: ${videoPath}`, textOverlay: false };
   }
 
-  const date = formatDate(draft?.episode_date);
-  const actors = extractActors(draft);
-  const actorLine = actors.length ? actors.join('  -  ') : 'OHWOW.FUN';
-  const header = `THE BRIEFING  -  ${date}`;
-
-  // drawtext filter parts. Top: small label band. Bottom: bold actor list.
-  const fontFile = escFF(font);
-  const hdrText = escFF(header);
-  const actorText = escFF(actorLine);
-
-  const filters = [
-    // First, scale the keyframe to 1280x720 fit-cover, blur it slightly,
-    // and darken for text legibility.
+  const baseFilters = [
     `scale=1280:720:force_original_aspect_ratio=increase`,
     `crop=1280:720`,
     `eq=brightness=-0.08:contrast=1.05`,
-    // Top-left label: small, medium weight
-    `drawtext=fontfile='${fontFile}':text='${hdrText}':x=64:y=48:fontsize=28:fontcolor=white:box=1:boxcolor=0x0a1629CC:boxborderw=16`,
-    // Bottom-center actors: big, bold
-    `drawtext=fontfile='${fontFile}':text='${actorText}':x=(w-text_w)/2:y=h-140:fontsize=62:fontcolor=white:box=1:boxcolor=0x0a1629EE:boxborderw=24:borderw=2:bordercolor=0x2563eb`,
-  ].join(',');
+  ];
 
-  const cmd = `ffmpeg -y -ss ${keyframeSeconds.toFixed(1)} -i "${videoPath}" -vframes 1 -vf "${filters}" -q:v 3 "${outPath}"`;
+  const font = findFont();
+  const canOverlayText = hasDrawtext() && font;
+
+  let filters = baseFilters;
+  if (canOverlayText) {
+    const date = formatDate(draft?.episode_date);
+    const actors = extractActors(draft);
+    const actorLine = actors.length ? actors.join('  -  ') : 'OHWOW.FUN';
+    const header = `THE BRIEFING  -  ${date}`;
+
+    // ffmpeg drawtext needs the fontfile path with escaped colons on macOS
+    // (e.g. /System/Library/... → /System\:/Library/...). Escape spaces too.
+    const fontFile = font.replace(/:/g, '\\:').replace(/ /g, '\\ ');
+    const hdrText = escFF(header);
+    const actorText = escFF(actorLine);
+
+    filters = [
+      ...baseFilters,
+      `drawtext=fontfile=${fontFile}:text='${hdrText}':x=64:y=48:fontsize=28:fontcolor=white:box=1:boxcolor=0x0a1629CC:boxborderw=16`,
+      `drawtext=fontfile=${fontFile}:text='${actorText}':x=(w-text_w)/2:y=h-140:fontsize=62:fontcolor=white:box=1:boxcolor=0x0a1629EE:boxborderw=24:borderw=2:bordercolor=0x2563eb`,
+    ];
+  }
+
+  const filterStr = filters.join(',');
+  const cmd = `ffmpeg -y -ss ${keyframeSeconds.toFixed(1)} -i "${videoPath}" -vframes 1 -vf "${filterStr}" -q:v 3 "${outPath}"`;
 
   try {
     execSync(cmd, { stdio: 'pipe', timeout: 15_000 });
-    return { ok: true, path: outPath };
+    return { ok: true, path: outPath, textOverlay: canOverlayText };
   } catch (e) {
-    return { ok: false, error: `ffmpeg failed: ${e instanceof Error ? e.message.slice(0, 300) : String(e)}` };
+    // drawtext failure mid-run (rare — usually hasDrawtext catches it).
+    // Fall back to bare keyframe if we were attempting overlay.
+    if (canOverlayText) {
+      const fallback = `ffmpeg -y -ss ${keyframeSeconds.toFixed(1)} -i "${videoPath}" -vframes 1 -vf "${baseFilters.join(',')}" -q:v 3 "${outPath}"`;
+      try {
+        execSync(fallback, { stdio: 'pipe', timeout: 15_000 });
+        return { ok: true, path: outPath, textOverlay: false, note: 'drawtext failed, fell back to bare keyframe' };
+      } catch { /* fall through */ }
+    }
+    return { ok: false, error: `ffmpeg failed: ${e instanceof Error ? e.message.slice(0, 300) : String(e)}`, textOverlay: false };
   }
 }

@@ -45,13 +45,12 @@ export {
 } from "./transitions/registry";
 export * from "./motion/generative";
 export * from "./layers";
-export {
-  hashScene,
-  hashScenesInSpec,
-  sceneAbsoluteRanges,
-  audioRefsOverlappingScene,
-  type SceneHashContext,
-} from "./render/scene-hash";
+// NOTE: scene-hash.ts imports "node:crypto" and is Node-side only (used
+// by the media-asset cache, not at render time). Do NOT re-export it
+// from this module — Remotion's webpack bundler follows every export
+// in the entry file and UnhandledSchemeError's on node:* URIs. If you
+// need hashScene in Node code, import directly from the source path:
+//   import { hashScene } from "@ohwow/video/dist/render/scene-hash";
 export {
   BLOCKS,
   getBlock,

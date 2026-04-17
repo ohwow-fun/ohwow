@@ -549,6 +549,29 @@ export async function composeEpisode({ slug, env = {} }) {
 
   // 6. Spec.
   const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });
+
+  // Programmatic-only guard: the Briefing (and any series with
+  // format.aspectRatio='horizontal' newsroom format) uses ONLY the
+  // programmatic primitives. AI video clips (Seedance, Fal Luma) are
+  // expensive and off-brand for a news format. Strip video-clip layers
+  // if they sneak in — belt-and-suspenders; the prompt and brand kit
+  // both already exclude them, but a future prompt regression shouldn't
+  // accidentally burn $$.
+  if (series?.format?.aspectRatio === 'horizontal') {
+    let strippedCount = 0;
+    for (const sc of spec.scenes) {
+      const layers = sc.params?.visualLayers;
+      if (Array.isArray(layers)) {
+        const before = layers.length;
+        sc.params.visualLayers = layers.filter((l) => l?.primitive !== 'video-clip');
+        strippedCount += before - sc.params.visualLayers.length;
+      }
+    }
+    if (strippedCount > 0) {
+      console.log(`[compose-core] ⚠ stripped ${strippedCount} video-clip primitive(s) — briefing is programmatic-only`);
+    }
+  }
+
   const specPath = path.join(briefDir, 'spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   console.log(`[compose-core] spec: ${spec.scenes.length} scenes, kit=${spec.brandKitRef}`);
