@@ -15,6 +15,18 @@ export {
   SceneSchema,
 } from "./spec/schema";
 export { registerSceneKind, renderScene } from "./scenes/registry";
+export {
+  registerTransition,
+  unregisterTransition,
+  getTransition,
+  hasTransition,
+  listTransitions,
+  resolveTransition,
+  TransitionConflictError,
+  type ResolvedTransition,
+  type TransitionBuilder,
+  type TransitionCatalogEntry,
+} from "./transitions/registry";
 export * from "./motion/generative";
 export * from "./layers";
 

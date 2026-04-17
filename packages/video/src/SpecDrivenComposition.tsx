@@ -1,17 +1,10 @@
 import React from "react";
 import { AbsoluteFill, Audio, Sequence, staticFile } from "remotion";
-import {
-  TransitionSeries,
-  springTiming,
-  linearTiming,
-  type TransitionTiming,
-} from "@remotion/transitions";
-import { fade } from "@remotion/transitions/fade";
-import { slide } from "@remotion/transitions/slide";
-import { wipe } from "@remotion/transitions/wipe";
-import type { VideoSpec, TransitionSpec, AudioRef, CaptionSpec } from "./spec/types";
+import { TransitionSeries } from "@remotion/transitions";
+import type { VideoSpec, AudioRef, CaptionSpec } from "./spec/types";
 import { totalDurationFrames } from "./spec/totalDuration";
 import { renderScene } from "./scenes/registry";
+import { resolveTransition } from "./transitions/registry";
 import { Caption } from "./components/Caption";
 import { loadBrandFonts } from "./fonts";
 
@@ -22,30 +15,6 @@ function resolveSrc(src: string): string {
     return src;
   }
   return staticFile(src);
-}
-
-function timingFor(t: TransitionSpec): TransitionTiming {
-  if (t.kind === "fade") {
-    return t.spring
-      ? springTiming({
-          config: { damping: t.spring.damping },
-          durationInFrames: t.durationInFrames,
-          durationRestThreshold: t.spring.durationRestThreshold ?? 0.001,
-        })
-      : linearTiming({ durationInFrames: t.durationInFrames });
-  }
-  if (t.kind === "slide" || t.kind === "wipe") {
-    return linearTiming({ durationInFrames: t.durationInFrames });
-  }
-  return linearTiming({ durationInFrames: 0 });
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function presentationFor(t: TransitionSpec): any {
-  if (t.kind === "fade") return fade();
-  if (t.kind === "slide") return slide({ direction: t.direction });
-  if (t.kind === "wipe") return wipe({ direction: t.direction });
-  return fade();
 }
 
 const AudioLayer: React.FC<{ refs: AudioRef[]; totalFrames: number }> = ({
@@ -80,8 +49,11 @@ function sceneStartFrames(spec: VideoSpec): number[] {
     starts.push(cursor);
     cursor += spec.scenes[i].durationInFrames;
     const t = spec.transitions[i];
-    if (i < spec.scenes.length - 1 && t && t.kind !== "none") {
-      cursor -= t.durationInFrames;
+    // Overlap only if the transition actually resolves to a registered builder
+    // (kind !== "none" and kind is registered). Unregistered custom kinds
+    // degrade to no-overlap, matching the render-path behavior.
+    if (i < spec.scenes.length - 1 && t && t.kind !== "none" && resolveTransition(t)) {
+      cursor -= typeof t.durationInFrames === "number" ? t.durationInFrames : 0;
     }
   }
   return starts;
@@ -187,14 +159,17 @@ export const SpecDrivenComposition: React.FC<VideoSpec> = (spec) => {
             </TransitionSeries.Sequence>,
           );
           const t = transitions[i];
-          if (i < scenes.length - 1 && t && t.kind !== "none") {
-            parts.push(
-              <TransitionSeries.Transition
-                key={`tr-${scene.id}`}
-                presentation={presentationFor(t)}
-                timing={timingFor(t)}
-              />,
-            );
+          if (i < scenes.length - 1 && t) {
+            const resolved = resolveTransition(t);
+            if (resolved) {
+              parts.push(
+                <TransitionSeries.Transition
+                  key={`tr-${scene.id}`}
+                  presentation={resolved.presentation}
+                  timing={resolved.timing}
+                />,
+              );
+            }
           }
           return parts;
         })}
