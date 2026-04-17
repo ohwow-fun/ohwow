@@ -74,6 +74,32 @@ export function registerApprovalTools(server: McpServer, client: DaemonApiClient
   );
 
   server.tool(
+    'ohwow_preview_approval',
+    "[Approvals] Preview what ohwow_approve_task will actually fire — *without* flipping status. Returns the task, its attached deliverables (type, provider, status, content preview, target handle/conversation for DMs), whether the deliverable executor is in live-send mode, and a one-line verdict ('will send DM to @handle via Playwright for real', 'will mark done only — no deliverable', 'will dry-run log because executor live=false', 'task already resolved', etc.). Call this before ohwow_approve_task whenever the task description is vague or it's not obvious whether approval has external side-effects (DM / tweet / email). For permission-denied approvals, use ohwow_list_permission_requests instead.",
+    {
+      id: z.string().min(1).describe('Task id from ohwow_list_approvals.'),
+    },
+    async ({ id }) => {
+      try {
+        const result = (await client.get(`/api/approvals/${encodeURIComponent(id)}/preview`)) as {
+          data?: {
+            task: Record<string, unknown>;
+            deliverables: Array<Record<string, unknown>>;
+            liveMode: boolean;
+            verdict: string;
+          };
+          error?: string;
+        };
+        if (result.error) return errorResponse(`Couldn't preview approval: ${result.error}`);
+        if (!result.data) return errorResponse('Task not found.');
+        return jsonResponse({ ok: true, ...result.data });
+      } catch (err) {
+        return errorResponse(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      }
+    },
+  );
+
+  server.tool(
     'ohwow_approve_task',
     "[Approvals] Approve a task that's currently in status=needs_approval. Flips status to 'approved', cascades any attached deliverables in pending_review to approved, and runs the real-world deliverable action (post tweet, send email, etc.) unless the workspace is in dry-run mode. Returns the execution result array so the caller can see whether sending succeeded. For permission-denied approvals, use ohwow_approve_permission_request instead.",
     {

@@ -133,6 +133,36 @@ export class DeliverableExecutor {
   }
 
   /**
+   * Dry-inspect a deliverable: resolve actionType + handler availability +
+   * live-mode without running the handler. The approval-preview route uses
+   * this so operators can see what approving a task will actually fire
+   * (send a real DM? dry-run log? nothing because no action_spec?) before
+   * committing to it.
+   */
+  async preview(deliverableId: string): Promise<{
+    found: boolean;
+    deliverable: DeliverableRow | null;
+    actionType: string | null;
+    hasHandler: boolean;
+    liveMode: boolean;
+    content: Record<string, unknown>;
+  }> {
+    const { data } = await this.db.from('agent_workforce_deliverables')
+      .select('*')
+      .eq('id', deliverableId)
+      .maybeSingle();
+    const row = data as DeliverableRow | null;
+    if (!row) {
+      return { found: false, deliverable: null, actionType: null, hasHandler: false, liveMode: false, content: {} };
+    }
+    const content = parseContent(row.content);
+    const actionType = inferActionType(row, content);
+    const hasHandler = actionType !== null && this.handlers.has(actionType);
+    const liveMode = await readLiveMode(this.db);
+    return { found: true, deliverable: row, actionType, hasHandler, liveMode, content };
+  }
+
+  /**
    * Convenience: execute the deliverable(s) linked to a task. Used from the
    * approve endpoint and from the trust-output path after a task completes.
    */

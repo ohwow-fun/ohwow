@@ -1,6 +1,7 @@
 /**
  * Approvals Routes
  * GET /api/approvals — List tasks needing approval
+ * GET /api/approvals/:id/preview — Dry-inspect what an approval will fire
  * POST /api/approvals/:id/approve — Approve a task
  * POST /api/approvals/:id/reject — Reject a task
  */
@@ -30,6 +31,118 @@ export function createApprovalsRouter(db: DatabaseAdapter): Router {
       }
 
       res.json({ data: data || [] });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Preview what approval will actually fire — task + deliverables +
+  // live-mode flag + a one-line verdict. Lets operators check before
+  // committing, especially when the task description doesn't reveal
+  // whether a deliverable is attached or whether a real DM/tweet will
+  // go out.
+  router.get('/api/approvals/:id/preview', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+
+      const { data: task, error: fetchErr } = await db.from('agent_workforce_tasks')
+        .select('*')
+        .eq('id', req.params.id)
+        .eq('workspace_id', workspaceId)
+        .maybeSingle();
+
+      if (fetchErr || !task) {
+        res.status(404).json({ error: 'Task not found' });
+        return;
+      }
+
+      const { data: delivRowsRaw } = await db.from('agent_workforce_deliverables')
+        .select('*')
+        .eq('task_id', req.params.id)
+        .eq('workspace_id', workspaceId);
+      const delivRows = (delivRowsRaw as Array<{ id: string }>) ?? [];
+
+      interface PreviewDeliverable {
+        id: string;
+        deliverable_type: string | null;
+        provider: string | null;
+        status: string | null;
+        title: string | null;
+        contentPreview: string;
+        actionType: string | null;
+        hasHandler: boolean;
+        target: { handle: string | null; conversation_pair: string | null } | null;
+      }
+
+      const { data: liveSetting } = await db.from('runtime_settings')
+        .select('value')
+        .eq('key', 'deliverable_executor_live')
+        .maybeSingle();
+      const liveSettingVal = (liveSetting as { value?: string } | null)?.value;
+      const liveMode = liveSettingVal === 'true' || liveSettingVal === '1';
+
+      const deliverables: PreviewDeliverable[] = [];
+      for (const raw of delivRows) {
+        const preview = await executor.preview(raw.id);
+        const row = preview.deliverable;
+        if (!row) continue;
+        const content = preview.content;
+        const text = typeof content.text === 'string' ? content.text : '';
+        const target = preview.actionType === 'send_dm'
+          ? {
+              handle: typeof content.handle === 'string' ? content.handle : null,
+              conversation_pair: typeof content.conversation_pair === 'string' ? content.conversation_pair : null,
+            }
+          : null;
+        deliverables.push({
+          id: row.id,
+          deliverable_type: row.deliverable_type ?? null,
+          provider: row.provider ?? null,
+          status: row.status ?? null,
+          title: (row as { title?: string }).title ?? null,
+          contentPreview: text.slice(0, 200),
+          actionType: preview.actionType,
+          hasHandler: preview.hasHandler,
+          target,
+        });
+      }
+
+      const taskRow = task as { status?: string };
+      const taskStatus = taskRow.status ?? 'unknown';
+
+      let verdict: string;
+      if (taskStatus !== 'needs_approval') {
+        verdict = `Task already resolved (status=${taskStatus}). Approval is a no-op.`;
+      } else if (deliverables.length === 0) {
+        verdict = 'Will mark task approved. No deliverable is attached, so no external action fires.';
+      } else {
+        const pending = deliverables.filter((d) => d.status === 'pending_review');
+        if (pending.length === 0) {
+          verdict = `Will mark task approved. Deliverable(s) already in status=${deliverables[0].status} — cascade is a no-op.`;
+        } else {
+          const parts = pending.map((d) => {
+            const short = d.id.slice(0, 8);
+            if (!d.actionType) {
+              return `deliverable ${short}: no action_spec and no inferrable type, will fail-log "no action_spec or inferrable action type".`;
+            }
+            if (!d.hasHandler) {
+              return `deliverable ${short}: actionType=${d.actionType} has no registered handler, will fail-log.`;
+            }
+            const who = d.target?.handle
+              ? `@${d.target.handle}`
+              : d.target?.conversation_pair
+                ? `conversation_pair=${d.target.conversation_pair}`
+                : null;
+            const mode = liveMode
+              ? 'LIVE — real send via Playwright'
+              : "DRY-RUN — executor live=false (set runtime_settings.deliverable_executor_live='true' to send for real)";
+            return `will fire ${d.actionType}${who ? ` to ${who}` : ''} — ${mode}.`;
+          });
+          verdict = parts.join(' ');
+        }
+      }
+
+      res.json({ data: { task, deliverables, liveMode, verdict } });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
