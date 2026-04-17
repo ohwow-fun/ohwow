@@ -541,15 +541,34 @@ export async function composeEpisode({ slug, env = {} }) {
   }
 
   // 5. Voice.
+  // Derive the TTS text from per-scene narrations, NOT draft.narration_full.
+  // Observed: the LLM emits draft.narration_full and scene.narration strings
+  // as SEPARATE scripts that often diverge — one may include intro/outro
+  // lines the other lacks, or reword specifics differently. When voice is
+  // generated from narration_full but captions come from scene.narration,
+  // they desync from frame 1. Joining per-scene narrations guarantees
+  // voice-caption alignment by construction.
+  const sceneNarrations = (draft.spec?.scenes || [])
+    .map((s) => (s.narration || '').trim())
+    .filter(Boolean);
+  const voiceText = sceneNarrations.length
+    ? sceneNarrations.join('\n\n')  // paragraph break = natural inter-scene pause
+    : (draft.narration_full || '');
+
   let voiceoverRef = null, audioDurationMs = null;
-  if (!skipVoice && draft.narration_full) {
-    const voicePath = await generateVoiceOver({ text: draft.narration_full, voiceConfig: series.voice });
+  if (!skipVoice && voiceText) {
+    const voicePath = await generateVoiceOver({ text: voiceText, voiceConfig: series.voice });
     if (voicePath) {
       voiceoverRef = stageVoiceFile(voicePath);
       audioDurationMs = getAudioDurationMs(voicePath);
-      console.log(`[compose-core] voice: ${voiceoverRef} · ${audioDurationMs}ms`);
+      console.log(`[compose-core] voice: ${voiceoverRef} · ${audioDurationMs}ms (from ${sceneNarrations.length} scene narrations)`);
     }
   }
+
+  // Overwrite narration_full with the actual voice script so downstream
+  // (brief.json, visual review, approval queue payload) reflects what
+  // was spoken, not the LLM's possibly-divergent narration_full field.
+  draft.narration_full = voiceText;
 
   // 6. Spec.
   const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });

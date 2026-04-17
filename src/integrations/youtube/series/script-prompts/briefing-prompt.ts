@@ -357,6 +357,18 @@ mixes so the backdrop cuts mid-story while the voice flows continuously.
 Sub-scene a narration = 35-45% of that story's words (lead + first spec).
 Sub-scene b narration = 55-65% (remaining specifics + implication).
 
+CRITICAL VOICE/CAPTION CONSISTENCY RULE:
+The TTS voice is generated from the concatenation of each scene's
+narration field (scene[0].narration + scene[1].narration + ...). Captions
+come from the same per-scene narration strings. Do NOT put intro/outro
+lines in narration_full that don't appear in a scene's narration — they'd
+be spoken but never captioned. The voice pipeline DERIVES narration_full
+from the scenes; your narration_full field is just for display/debugging.
+
+Rule: every word the voice should speak MUST appear in some scene.narration.
+Scene narrations are the source of truth; narration_full should be the
+exact concatenation with "\\n\\n" between scenes for natural pauses.
+
 SELF-CHECK before outputting:
 1. Each story: actor + artifact + ONE concrete number/version/date in the facts?
 2. Each story has a DIFFERENT ANGLE — not three model-release stories, not three regulatory stories. Mix model/platform/regulation/benchmark.
