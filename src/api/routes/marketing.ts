@@ -119,12 +119,16 @@ export function createMarketingRouter(db: DatabaseAdapter): Router {
         let textPreview = '';
         if (row.content) {
           try {
-            const parsed = JSON.parse(row.content);
-            textPreview = typeof parsed === 'string'
+            const c = String(row.content);
+            const parsed = JSON.parse(c);
+            const raw = typeof parsed === 'string'
               ? parsed
-              : parsed.text || parsed.body || parsed.message || '';
+              : (parsed && typeof parsed === 'object')
+                ? (parsed.text ?? parsed.body ?? parsed.message ?? '')
+                : '';
+            textPreview = typeof raw === 'string' ? raw : JSON.stringify(raw);
           } catch {
-            textPreview = row.content;
+            textPreview = String(row.content);
           }
         }
 

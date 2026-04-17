@@ -69,6 +69,13 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Default tick interval — every hour. */
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 
+/**
+ * Minimum gap between consecutive posts (in ms). Prevents rapid-fire
+ * posting when the daemon restarts repeatedly (each restart fires an
+ * immediate tick). 2 hours keeps the feed looking organic.
+ */
+const MIN_POST_GAP_MS = 2 * 60 * 60 * 1000;
+
 export interface ContentCadenceSchedulerOptions {
   /**
    * Absolute path to the workspace's `x-approvals.jsonl` ledger. When
@@ -157,6 +164,16 @@ export class ContentCadenceScheduler {
       );
 
       if (postsToday < postsPerDay) {
+        // Cooldown guard: avoid rapid-fire posts that look automated.
+        // Check the most recent completed post task's timestamp and skip
+        // if it's too recent. This catches daemon-restart bursts where
+        // each boot fires an immediate tick.
+        const tooRecent = await this.lastPostTooRecent();
+        if (tooRecent) {
+          logger.info(
+            '[ContentCadenceScheduler] cooldown — last post too recent, skipping',
+          );
+        } else {
         const agentId = await this.findXAgent();
         if (agentId) {
           // Backlog guard: don't pile up duplicate work. If this agent already
@@ -177,6 +194,7 @@ export class ContentCadenceScheduler {
             '[ContentCadenceScheduler] no idle agent found — skipping dispatch',
           );
         }
+        } // close cooldown else
       }
 
       const weekStart = new Date(Date.now() - WEEK_MS);
@@ -298,6 +316,30 @@ export class ContentCadenceScheduler {
     } catch (err) {
       logger.warn({ err, since }, '[ContentCadenceScheduler] countXPostsAfter failed');
       return 0;
+    }
+  }
+
+  /**
+   * True when the most recent completed X post task was dispatched less
+   * than MIN_POST_GAP_MS ago. Prevents rapid-fire posting on daemon
+   * restarts (each restart fires an immediate tick).
+   */
+  private async lastPostTooRecent(): Promise<boolean> {
+    try {
+      const { data } = await this.db
+        .from<{ completed_at: string }>('agent_workforce_tasks')
+        .select('completed_at')
+        .eq('workspace_id', this.workspaceId)
+        .eq('title', 'Post one tweet today')
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false })
+        .limit(1);
+      const rows = (data ?? []) as Array<{ completed_at: string | null }>;
+      if (rows.length === 0 || !rows[0].completed_at) return false;
+      const elapsed = Date.now() - new Date(rows[0].completed_at).getTime();
+      return elapsed < MIN_POST_GAP_MS;
+    } catch {
+      return false; // fail open — don't block posting on a query error
     }
   }
 
