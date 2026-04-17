@@ -819,10 +819,38 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       };
     }
     if (postOutcome === 'still_open') {
+      // Snapshot what's on the page at the moment we gave up. We've
+      // seen this fire after a successful submit-click, which means
+      // either (a) the click was intercepted by an overlay, (b) X
+      // showed a confirmation dialog on top of the composer, or (c)
+      // content was rate-limited and the banner sits alongside the
+      // still-open textarea. The diag helps distinguish the three.
+      const diag = await page.evaluate<{
+        url: string;
+        textLen: number;
+        btnDisabled: string | null;
+        overlayText: string;
+        bodySnippet: string;
+      }>(
+        `(() => {
+          const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+          const btn = document.querySelector('[data-testid="tweetButton"]');
+          const overlays = Array.from(document.querySelectorAll('[role="dialog"], [role="alert"], [aria-live="polite"]'));
+          const overlayText = overlays.map((e) => (e.textContent || '').trim()).filter(Boolean).slice(0, 3).join(' || ');
+          return {
+            url: location.href,
+            textLen: tb ? (tb.textContent || '').length : -1,
+            btnDisabled: btn instanceof HTMLElement ? btn.getAttribute('aria-disabled') : null,
+            overlayText: overlayText.slice(0, 200),
+            bodySnippet: (document.body?.innerText || '').slice(0, 200),
+          };
+        })()`,
+      ).catch(() => ({ url: '?', textLen: -1, btnDisabled: '?', overlayText: '', bodySnippet: '' }));
+      logger.warn(diag, '[x-posting] still_open — compose modal did not close after submit');
       await dismissComposeModal(page);
       return {
         success: false,
-        message: 'Post button clicked but the compose modal did not close within the settle window. X likely rejected the content for another reason (rate limit, policy, etc.).',
+        message: `Post button clicked but the compose modal did not close within the settle window. diag=${JSON.stringify(diag)}`,
         screenshotBase64: postShot || screenshotBase64,
         tweetsTyped: 1,
         tweetsPublished: 0,

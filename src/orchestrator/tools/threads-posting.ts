@@ -506,10 +506,28 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
     const postShot = await captureScreenshot(page);
 
     if (outcome === 'still_open') {
+      const diag = await page.evaluate<{
+        url: string;
+        dialogCount: number;
+        dialogTexts: string[];
+        overlayAlert: string;
+      }>(
+        `(() => {
+          const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+          const alerts = Array.from(document.querySelectorAll('[role="alert"], [aria-live="polite"]'));
+          return {
+            url: location.href,
+            dialogCount: dialogs.length,
+            dialogTexts: dialogs.map((d) => (d.textContent || '').trim().slice(0, 120)),
+            overlayAlert: alerts.map((a) => (a.textContent || '').trim()).filter(Boolean).slice(0, 2).join(' || ').slice(0, 200),
+          };
+        })()`,
+      ).catch(() => ({ url: '?', dialogCount: -1, dialogTexts: [], overlayAlert: '' }));
+      logger.warn(diag, `[${LOG_TAG}] still_open — compose dialog did not close after submit`);
       await dismissComposeDialog(page);
       return {
         success: false,
-        message: 'Post button clicked but the compose dialog did not close. Threads likely rejected the content (rate limit, policy, etc.).',
+        message: `Post button clicked but the compose dialog did not close. diag=${JSON.stringify(diag)}`,
         screenshotBase64: postShot || screenshotBase64,
         postsTyped: 1,
         postsPublished: 0,

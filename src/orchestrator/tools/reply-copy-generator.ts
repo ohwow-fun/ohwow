@@ -46,6 +46,12 @@ import type { RuntimeEngine } from '../../execution/engine.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import type { ReplyCandidate } from './reply-target-selector.js';
 import { logger } from '../../lib/logger.js';
+import {
+  buildVoicePrinciples,
+  buildLengthDirective,
+  voiceCheck as voiceCoreCheck,
+  LENGTH_CAPS,
+} from '../../lib/voice/voice-core.js';
 
 export interface GenerateReplyInput {
   target: ReplyCandidate;
@@ -65,61 +71,28 @@ export interface GenerateReplyOutput {
   modelUsed?: string;
 }
 
-const X_MAX = 240;
-const THREADS_MAX = 280;
+// Length caps kept as re-exports for call-sites that still import them
+// directly. voiceCheck uses LENGTH_CAPS from voice-core under the hood.
+const X_MAX = LENGTH_CAPS.x.reply;
+const THREADS_MAX = LENGTH_CAPS.threads.reply;
 
 function buildSystemPrompt(platform: 'x' | 'threads'): string {
-  const cap = platform === 'x' ? X_MAX : THREADS_MAX;
   return [
     'You draft replies to social posts in a specific voice.',
     'These are first-principles rules — follow them structurally. Do NOT',
     'imitate example replies (none are given, deliberately).',
     '',
-    'STANCE:',
-    '  - Observational, not narrative. The voice notices and opines,',
-    '    but never claims to have personally experienced specific events.',
-    '  - Curious + exploring, not corrective. Open a question or reframe;',
-    '    never restate the author\'s point back at them or imply they',
-    '    missed something obvious.',
-    '  - Peer-to-peer. Same level as the author — not an expert teaching,',
-    '    not a fan praising.',
-    '  - Reciprocate energy. A question invites a statement back; a',
-    '    statement invites a question or a contrasting claim. Match',
-    '    register (dry / playful / technical) without copying phrasing.',
+    buildVoicePrinciples(),
     '',
-    'CRAFT:',
+    'REPLY-SPECIFIC:',
+    '  - Reciprocate the source post\'s energy. A question invites a',
+    '    statement back; a statement invites a question or contrasting',
+    '    claim. Match register (dry / playful / technical) without',
+    '    copying phrasing.',
     '  - Compress to one idea + one concrete mechanism. Not a two-step',
     '    lecture, not a question + answer combo.',
-    '  - Specific beats abstract. Name the actual cause, not its category.',
-    '  - Add a dimension the post did not already cover. Agreement alone',
-    '    is dead air; mild dissent or a reframe is why anyone reads a reply.',
     '',
-    'FORBIDDEN:',
-    '  - FIRST-PERSON pronouns: I, me, my, mine, we, us, our, I\'ve, I\'m,',
-    '    I\'d, I\'ll, I was. These make the voice sound like a marketer',
-    '    dropping fake experience. The voice does not have private',
-    '    experience to share.',
-    '  - FAKE-EXPERIENCE phrasing: "I\'ve seen", "my experience",',
-    '    "when I tried", "I lost", "in practice I", "I ran into",',
-    '    "we found", "when we", "we ended up", "I spent". Same reason.',
-    '    Opinions and observations land; personal narrative does not.',
-    '  - Pitches of any kind. No products, tools, companies named unless',
-    '    the post named them first.',
-    '  - Corporate softeners: "happy to discuss", "great take/point",',
-    '    "this is interesting", "love this", "100%".',
-    '  - Lecture openers: "at the end of the day", "table stakes",',
-    '    "the real question is", "here\'s the thing", "the key is",',
-    '    "honestly", "tbh".',
-    '  - Em dashes (— or –). Use periods, commas, semicolons, line breaks.',
-    '  - "Please". Hashtags. Links. Sign-offs.',
-    '  - Emojis, unless the post itself used them AND one fits naturally.',
-    '  - A trailing period at the end of the reply. Internal sentence',
-    '    periods are fine; just no final ".".',
-    '  - Drift/tic vocabulary overused recently, use sparingly:',
-    '    "scope ownership", "context rot". Use only when they are the',
-    '    single most precise term, never as a default reach.',
-    '',
-    `LENGTH: cap ${cap} characters. Aim 80-200. Shorter usually better.`,
+    buildLengthDirective({ platform, useCase: 'reply' }),
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
     '  - The post is a pitch, link-drop, affiliate, or promo.',
@@ -184,61 +157,14 @@ function parseLlmJson(raw: string): { draft: string; alternates?: string[]; rati
  * slipped past. We do NOT rewrite — if something egregious, the caller
  * should reject and re-draft (or skip).
  */
+/**
+ * Reply-voice gate. Delegates to voice-core — the shared voice
+ * implementation. Kept as a named export here for backward
+ * compatibility with existing tests; new callers should import
+ * directly from voice-core.
+ */
 export function voiceCheck(text: string, platform: 'x' | 'threads'): { ok: boolean; reasons: string[] } {
-  const reasons: string[] = [];
-  const cap = platform === 'x' ? X_MAX : THREADS_MAX;
-  if (text.length > cap) reasons.push(`length(${text.length}>cap${cap})`);
-  if (/—|–/.test(text)) reasons.push('emDash');
-  if (/\bplease\b/i.test(text)) reasons.push('please');
-  if (/#\w/.test(text)) reasons.push('hashtag');
-  if (/\bhttps?:\/\//.test(text)) reasons.push('link');
-  if (/\.\s*$/.test(text)) reasons.push('trailingPeriod');
-
-  // First-person markers. The voice is observational, not narrative:
-  // opinions + mechanisms, never personal experience claims. These
-  // patterns are the tell that the model slipped into "builder voice"
-  // and started inventing fake lived-through moments.
-  //
-  // Word-boundary '\bI\b' matches the pronoun but not words containing
-  // 'i' like 'interesting'. Case-sensitive on purpose — lowercase 'i'
-  // isn't the pronoun in English-legitimate writing.
-  const firstPersonPatterns: Array<[RegExp, string]> = [
-    [/\bI\b/, 'firstPerson:I'],
-    [/\bI'(?:ve|m|d|ll|s|re)\b/i, 'firstPerson:I-contraction'],
-    [/\bme\b/i, 'firstPerson:me'],
-    [/\bmy\b/i, 'firstPerson:my'],
-    [/\bmine\b/i, 'firstPerson:mine'],
-    [/\bwe\b/i, 'firstPerson:we'],
-    [/\bus\b/i, 'firstPerson:us'],
-    [/\bour\b/i, 'firstPerson:our'],
-  ];
-  for (const [re, label] of firstPersonPatterns) {
-    if (re.test(text)) reasons.push(label);
-  }
-
-  // Fake-experience phrasing. Catches common second-person narrative
-  // that reads as recycled "you know when you..." experience-mining.
-  const fakeExperiencePatterns: Array<[RegExp, string]> = [
-    [/\byou end up\b/i, 'fakeExperience:you-end-up'],
-    [/\byou (?:find|found)\b/i, 'fakeExperience:you-found'],
-    [/\bin (?:my|our) experience\b/i, 'fakeExperience:my-experience'],
-    [/\bwhen (?:you|i) tr(?:y|ied)\b/i, 'fakeExperience:when-you-try'],
-  ];
-  for (const [re, label] of fakeExperiencePatterns) {
-    if (re.test(text)) reasons.push(label);
-  }
-
-  // Corporate softeners
-  const softeners = ['great take', 'this is interesting', 'happy to', 'at the end of the day', 'table stakes', 'the real question is', "here's the thing", 'the key is'];
-  for (const s of softeners) {
-    if (text.toLowerCase().includes(s)) reasons.push(`softener:${s}`);
-  }
-  // Sign-offs
-  const signoffs = ['thanks!', 'cheers', 'best,', 'hope this helps'];
-  for (const s of signoffs) {
-    if (text.toLowerCase().includes(s)) reasons.push(`signoff:${s}`);
-  }
-  return { ok: reasons.length === 0, reasons };
+  return voiceCoreCheck(text, { platform, useCase: 'reply' });
 }
 
 export interface GenerateReplyDeps {
