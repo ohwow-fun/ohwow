@@ -20,6 +20,8 @@ import {
   findProfileByIdentity,
   listProfiles,
   openProfileWindow,
+  findExistingTabForHost,
+  closeTabById,
 } from '../browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
@@ -95,15 +97,26 @@ export const threadsPostingExecutor: ToolExecutor = {
       || profiles.find((p) => !!p.email)
       || profiles[0];
 
-    // ---- 2. Ensure Chrome + open profile window → browserContextId ----
+    // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
+    // Reuse an existing threads.com tab when one is already open. Only call
+    // openProfileWindow — which unconditionally creates a new tab — when no
+    // reusable tab exists. `freshTargetId` is set ONLY when we opened a new
+    // tab; the finally block closes it after compose so tabs don't leak.
     let expectedBrowserContextId: string | undefined;
+    let freshTargetId: string | null = null;
     try {
       await ensureDebugChrome({ preferredProfile: target.directory });
-      const opened = await openProfileWindow({
-        profileDir: target.directory,
-        url: 'https://www.threads.com/',
-      });
-      expectedBrowserContextId = opened.browserContextId ?? undefined;
+      const existing = await findExistingTabForHost('threads.com');
+      if (existing) {
+        expectedBrowserContextId = existing.browserContextId ?? undefined;
+      } else {
+        const opened = await openProfileWindow({
+          profileDir: target.directory,
+          url: 'https://www.threads.com/',
+        });
+        expectedBrowserContextId = opened.browserContextId ?? undefined;
+        freshTargetId = opened.targetId;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `Error: Couldn't open Chrome profile for Threads: ${msg}`, is_error: true };
@@ -158,6 +171,10 @@ export const threadsPostingExecutor: ToolExecutor = {
       }
       logger.error({ err: msg, tool: toolName }, '[threads-posting-executor] handler crashed');
       return { content: `Error: threads-posting handler crashed: ${msg}`, is_error: true };
+    } finally {
+      if (freshTargetId) {
+        await closeTabById(freshTargetId);
+      }
     }
 
     // ---- 5. Shape the result for the agent ----

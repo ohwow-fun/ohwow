@@ -52,6 +52,7 @@ import {
   type ProfileInfo,
 } from './chrome-lifecycle.js';
 import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
+import { RawCdpBrowser } from './raw-cdp.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -440,6 +441,57 @@ export async function connectAndPinCdpPage(
     // connection on failure. The underlying debug Chrome stays up.
     await browser.close().catch(() => { /* ignore */ });
     throw err;
+  }
+}
+
+/**
+ * Find an existing page target whose URL host matches `hostMatch` (case-insensitive
+ * substring). Returns null when none exist. Connects raw CDP briefly — the caller
+ * doesn't hold a session open.
+ *
+ * Used by posting executors to reuse tabs the daemon (or the user) already has
+ * open, instead of letting `openProfileWindow` always create a fresh one. Without
+ * this the X and Threads posting cadences leak one tab per fire (48+/day each).
+ */
+export async function findExistingTabForHost(
+  hostMatch: string,
+  port: number = DEFAULT_CDP_PORT,
+): Promise<{ targetId: string; browserContextId: string | null } | null> {
+  let browser: RawCdpBrowser | null = null;
+  try {
+    browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+    const targets = await browser.getTargets();
+    const needle = hostMatch.toLowerCase();
+    const match = targets.find((t) => t.type === 'page' && t.url.toLowerCase().includes(needle));
+    if (!match) return null;
+    return { targetId: match.targetId, browserContextId: match.browserContextId };
+  } catch {
+    return null;
+  } finally {
+    try { browser?.close(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Close a specific CDP page target. Best-effort; swallows errors so callers
+ * can use this in a `finally` block without risk. Used by posting executors
+ * to drop the tab they opened via `openProfileWindow` so tabs don't leak.
+ */
+export async function closeTabById(
+  targetId: string,
+  port: number = DEFAULT_CDP_PORT,
+): Promise<void> {
+  let browser: RawCdpBrowser | null = null;
+  try {
+    browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+    await browser.closeTarget(targetId);
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, targetId: targetId.slice(0, 8) },
+      '[chrome-profile-router] closeTabById best-effort failure',
+    );
+  } finally {
+    try { browser?.close(); } catch { /* ignore */ }
   }
 }
 

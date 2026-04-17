@@ -54,6 +54,8 @@ import {
   findProfileByIdentity,
   listProfiles,
   openProfileWindow,
+  findExistingTabForHost,
+  closeTabById,
 } from '../browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
@@ -135,15 +137,27 @@ export const xPostingExecutor: ToolExecutor = {
       || profiles.find((p) => !!p.email)
       || profiles[0];
 
-    // ---- 2. Ensure Chrome + open profile window → browserContextId ----
+    // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
+    // Reuse an existing x.com tab when one is already open (either from a
+    // previous cadence fire or the user). Only call openProfileWindow — which
+    // unconditionally creates a new tab — when no reusable tab exists.
+    // `freshTargetId` is set ONLY when we opened a new tab; the finally block
+    // closes it after compose so tabs don't leak across cadence fires.
     let expectedBrowserContextId: string | undefined;
+    let freshTargetId: string | null = null;
     try {
       await ensureDebugChrome({ preferredProfile: target.directory });
-      const opened = await openProfileWindow({
-        profileDir: target.directory,
-        url: 'https://x.com/home',
-      });
-      expectedBrowserContextId = opened.browserContextId ?? undefined;
+      const existing = await findExistingTabForHost('x.com');
+      if (existing) {
+        expectedBrowserContextId = existing.browserContextId ?? undefined;
+      } else {
+        const opened = await openProfileWindow({
+          profileDir: target.directory,
+          url: 'https://x.com/home',
+        });
+        expectedBrowserContextId = opened.browserContextId ?? undefined;
+        freshTargetId = opened.targetId;
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `Error: Couldn't open Chrome profile for X: ${msg}`, is_error: true };
@@ -234,6 +248,10 @@ export const xPostingExecutor: ToolExecutor = {
         '[x-posting-executor] composer handler crashed',
       );
       return { content: `Error: x-posting handler crashed: ${msg}`, is_error: true };
+    } finally {
+      if (freshTargetId) {
+        await closeTabById(freshTargetId);
+      }
     }
 
     // ---- 5. Shape the result for the agent ----
