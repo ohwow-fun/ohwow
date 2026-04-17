@@ -64,6 +64,37 @@ export const SEL = {
   // detect whether the thumbnail slot has mounted before injecting.
   THUMBNAIL_SELECT_BUTTON: 'ytcp-thumbnail-uploader #select-button',
 
+  // --- Playlists (Details step + edit page) ------------------------------
+  // The playlist binding control lives on both the upload wizard's Details
+  // step and the per-video edit page. Same Polymer component, same picker
+  // dialog — identical selectors in both places. On the upload wizard the
+  // trigger may be hidden below an "Advanced / Show more" expander; the
+  // helper in upload/playlist.ts expands any such expander first, no-op if
+  // the trigger is already visible.
+  //
+  // Interaction model:
+  //   1. Click PLAYLIST_TRIGGER — opens a ytcp-playlist-dialog dropdown.
+  //   2. Scan PLAYLIST_ROWS for a row whose label matches the target.
+  //   3. Click the row (ytcp-checkbox-lit) to toggle selection. Each row
+  //      carries the real playlist id in its `test-id` attribute — we
+  //      cache that id in ~/.ohwow/workspaces/<ws>/yt-playlists.json.
+  //   4. If not found and createIfMissing is set, click PLAYLIST_NEW_BUTTON
+  //      → a visibility menu appears → confirm name + visibility.
+  //   5. Click PLAYLIST_DONE to close the dropdown.
+  //
+  // Verified 2026-04-17 against studio.youtube.com/video/<id>/edit.
+  PLAYLIST_TRIGGER: 'ytcp-video-metadata-playlists',
+  // Match either an ancestor of the trigger with a "Show more"/"Show advanced
+  // settings" aria-label, or a sibling "Show more" toggle-button. We click
+  // the closest one whose expansion reveals the trigger.
+  PLAYLIST_SHOW_MORE_TOGGLE: 'ytcp-button#toggle-button, button[aria-label="Show advanced settings"], button[aria-label="Show more"]',
+  PLAYLIST_PICKER_DIALOG: 'ytcp-playlist-dialog',
+  PLAYLIST_ROWS: 'ytcp-playlist-dialog ytcp-checkbox-lit',
+  // Bottom-left affordance inside the dialog; chevron_down icon means it
+  // opens a small menu for visibility selection before name entry.
+  PLAYLIST_NEW_BUTTON: 'ytcp-playlist-dialog ytcp-button.new-playlist-button',
+  PLAYLIST_DONE_BUTTON: 'ytcp-playlist-dialog ytcp-button.done-button',
+
   // --- Per-video edit page (studio.youtube.com/video/{id}/edit) ----------
   // Top-right page-level overflow menu. Opens a tp-yt-paper-listbox with
   // text-items: Download / Delete / Promote / Brainstorm video ideas.
