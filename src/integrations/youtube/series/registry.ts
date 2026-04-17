@@ -102,6 +102,14 @@ export interface SeriesConfig {
 
   /** Approval queue kind. Routed through propose() with bucketBy='series'. */
   approvalKind: `yt_short_draft_${SeriesSlug}`;
+
+  /**
+   * Playlist to bind each episode to, if any. Exact name as it appears in
+   * Studio (case-insensitive match against existing rows). The upload
+   * pipeline creates the playlist if missing when the CLI opts in via
+   * `createPlaylistIfMissing`. Omit when the series doesn't use a playlist.
+   */
+  playlist?: string;
 }
 
 export const SERIES: Record<SeriesSlug, SeriesConfig> = {
@@ -148,6 +156,7 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
     ],
     killSwitchEnv: "OHWOW_YT_BRIEFING_ENABLED",
     approvalKind: "yt_short_draft_briefing",
+    playlist: "Daily AI News",
   },
 
   "tomorrow-broke": {

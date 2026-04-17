@@ -28,6 +28,7 @@ import { closeAnyOpenDialog, openUploadDialog } from './open-dialog.js';
 import { fillDescription, fillTitle, setNotMadeForKids } from './fill-metadata.js';
 import { readTime, sleepRandom } from './human.js';
 import { injectFile } from './inject-file.js';
+import { selectPlaylist, type PlaylistVisibility } from './playlist.js';
 import { uploadThumbnail } from './thumbnail.js';
 import { clickSave, dismissProcessingDialog, extractVideoUrl, selectVisibility, type Visibility } from './visibility.js';
 import { advanceToStep } from './wizard.js';
@@ -39,6 +40,7 @@ export type UploadStage =
   | 'title_filled'
   | 'description_filled'
   | 'thumbnail_attached'
+  | 'playlist_set'
   | 'not_for_kids_set'
   | 'step_advanced'
   | 'visibility_set'
@@ -65,6 +67,16 @@ export interface UploadShortOptions {
    * frame-grab thumbnail.
    */
   thumbnailPath?: string;
+  /**
+   * Playlist to bind this upload to. Exact name as it appears in Studio
+   * (case-insensitive match against existing rows). Resolved on the
+   * Details step after thumbnail_attached, before not_for_kids_set.
+   */
+  playlist?: string;
+  /** Create the playlist if no row matches. Default false (fail loud). */
+  createPlaylistIfMissing?: boolean;
+  /** Visibility for a newly-created playlist. Default 'unlisted'. */
+  createPlaylistVisibility?: PlaylistVisibility;
   visibility?: Visibility;
   /** When true, stop before clicking Save and close the dialog. */
   dryRun?: boolean;
@@ -176,6 +188,19 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
     await stage('thumbnail_attached', { thumbnailPath: opts.thumbnailPath }, () =>
       uploadThumbnail(page, opts.thumbnailPath!),
     );
+  }
+
+  if (opts.playlist) {
+    // "Scrolling to the playlist section" pause.
+    await sleepRandom(600, 1_400);
+    await stage('playlist_set', { playlist: opts.playlist }, async () => {
+      const result = await selectPlaylist(page, {
+        name: opts.playlist!,
+        createIfMissing: opts.createPlaylistIfMissing,
+        createVisibility: opts.createPlaylistVisibility,
+      });
+      return result;
+    });
   }
 
   // "Scrolling to the Audience section" pause.

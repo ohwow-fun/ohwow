@@ -46,6 +46,13 @@ export { type Visibility } from './upload/visibility.js';
 export { uploadThumbnail } from './upload/thumbnail.js';
 
 export {
+  selectPlaylist,
+  type SelectPlaylistOptions,
+  type SelectPlaylistResult,
+  type PlaylistVisibility,
+} from './upload/playlist.js';
+
+export {
   publishDraft,
   deleteDraft,
   findDraftIdByTitle,

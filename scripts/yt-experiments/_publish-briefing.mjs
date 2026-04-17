@@ -34,6 +34,10 @@
  *   --no-thumbnail       skip the thumbnail attach and keep Studio's auto-pick.
  *                        Default: generate a frame-grab at 5s and attach it
  *                        (cached under ~/.ohwow/media/thumbnails/briefing-<sha256>.jpg).
+ *   --playlist=<name>    override the series' default playlist binding.
+ *   --no-playlist        skip playlist binding entirely.
+ *                        Default: bind to series.playlist ("Daily AI News"),
+ *                        create if missing.
  *   --visibility=<v>     private|unlisted|public. Default: series registry (unlisted).
  *                        --public still requires ≥5 prior applied unlisted rows.
  *   --yes                skip interactive confirm (needed in non-TTY)
@@ -332,11 +336,20 @@ async function cmdStage({ args }) {
     console.error(`[stage]   thumbnail: ${thumbnailPath} (${(fs.statSync(thumbnailPath).size / 1024).toFixed(1)} KB)`);
   }
 
+  // Playlist: explicit --playlist > series default > --no-playlist skip
+  let playlistName = null;
+  if (args.kv.playlist) {
+    playlistName = args.kv.playlist;
+  } else if (!args.flags.has('no-playlist')) {
+    playlistName = series.playlist ?? null;
+  }
+
   console.error('[stage] plan:');
   console.error(`  mp4           ${mp4Path}  (${(fs.statSync(mp4Path).size / 1024 / 1024).toFixed(1)} MB)`);
   console.error(`  title         ${title}`);
   console.error(`  visibility    ${visibility}  (saved with draft; publish-draft uses this unless overridden)`);
   console.error(`  thumbnail     ${thumbnailPath ?? '(Studio auto-pick)'}`);
+  console.error(`  playlist      ${playlistName ?? '(none)'}`);
 
   const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
   const flags = session.health.accountFlags || {};
@@ -356,6 +369,9 @@ async function cmdStage({ args }) {
       title,
       description,
       thumbnailPath: thumbnailPath ?? undefined,
+      playlist: playlistName ?? undefined,
+      createPlaylistIfMissing: !!playlistName,
+      createPlaylistVisibility: 'public',
       visibility,
       dryRun: true,
       onStage: (ev) => process.stderr.write(
@@ -396,6 +412,7 @@ async function cmdStage({ args }) {
       specPath,
       specId: spec.id,
       thumbnailPath,
+      playlist: playlistName,
       videoId,
       wouldBeUrlFromSidebar: wizardResult.videoUrl,
       channelId: session.health.channelId,
