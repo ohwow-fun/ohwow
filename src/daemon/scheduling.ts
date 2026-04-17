@@ -39,21 +39,27 @@ import {
 } from './seed-x-automations.js';
 import type { DaemonContext } from './context.js';
 
-/** Convert `xIntelIntervalMinutes` config into a cron expression the
+/** Convert an interval in minutes into a cron expression the
  * LocalScheduler can evaluate. Whole-hour divisors of 24 become comma-
- * lists ("0 0,3,6,9,12,15,18,21 * * *") so cron-parser advances
+ * lists ("20 0,3,6,9,12,15,18,21 * * *") so cron-parser advances
  * correctly at midnight boundaries; other hour values use `/<N>` form;
- * sub-hourly falls back to minute-step form. */
-export function cronForIntervalMinutes(minutes: number): string {
+ * sub-hourly falls back to minute-step form.
+ *
+ * `minuteOffset` lets us stagger hourly+ automations off :00 so they
+ * don't pile up with every other :00 schedule — ignored for sub-hourly
+ * cadences since it would break the `*\/N` semantics (use a cron
+ * override there instead). Clamped to [0, 59]. */
+export function cronForIntervalMinutes(minutes: number, minuteOffset = 0): string {
   const n = Math.max(1, Math.round(minutes));
+  const offset = Math.max(0, Math.min(59, Math.round(minuteOffset)));
   if (n >= 60 && n % 60 === 0) {
     const hours = n / 60;
     if (24 % hours === 0) {
       const marks: number[] = [];
       for (let h = 0; h < 24; h += hours) marks.push(h);
-      return `0 ${marks.join(',')} * * *`;
+      return `${offset} ${marks.join(',')} * * *`;
     }
-    return `0 */${hours} * * *`;
+    return `${offset} */${hours} * * *`;
   }
   return `*/${n} * * * *`;
 }
@@ -85,8 +91,20 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
     const repoRoot = process.env.OHWOW_REPO_ROOT || process.cwd();
     const workspaceSlug = resolveActiveWorkspace().name;
 
+    // Stagger strategy — avoid :00 pile-ups across five schedule-type
+    // automations. X-intel anchors :00 because it owns the browser lane
+    // for ~6 min; the rest shift off :00 so neither Chrome nor the
+    // model router takes simultaneous demand.
+    //   x-intel:           :00 (every 3h, unchanged)
+    //   x-humor:           :20  — starts after x-intel chain usually done
+    //   x-forecast-scorer: 00:30 — post-midnight-chain
+    //   x-draft-distiller: :45  — pure LLM, slots between cadence ticks
+    //   content-cadence:   :07 :22 :37 :52 — offset by 7, never :00
+    // refreshableFrom tells each seed "these cron strings were produced
+    // by an earlier generation of me; refresh them to the new default".
+    // Operator-edited crons don't match → they survive.
     await seedXIntelAutomation(db, workspaceId, {
-      cron: cronForIntervalMinutes(config.xIntelIntervalMinutes),
+      cron: cronForIntervalMinutes(config.xIntelIntervalMinutes, 0),
       authorsToCrm: config.xAuthorsToCrmEnabled,
       compose: config.xComposeEnabled,
       reply: config.xReplyEnabled,
@@ -100,7 +118,8 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
 
     if (config.xForecastEnabled) {
       await seedXForecastAutomation(db, workspaceId, {
-        cron: cronForIntervalMinutes(config.xForecastIntervalMinutes),
+        cron: cronForIntervalMinutes(config.xForecastIntervalMinutes, 30),
+        refreshableFrom: [cronForIntervalMinutes(config.xForecastIntervalMinutes, 0)],
       }).catch((err) => {
         logger.warn({ err }, '[daemon] seed-x-forecast-automation failed');
       });
@@ -112,7 +131,8 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
 
     if (config.xHumorEnabled) {
       await seedXHumorAutomation(db, workspaceId, {
-        cron: cronForIntervalMinutes(config.xHumorIntervalMinutes),
+        cron: cronForIntervalMinutes(config.xHumorIntervalMinutes, 20),
+        refreshableFrom: [cronForIntervalMinutes(config.xHumorIntervalMinutes, 0)],
       }).catch((err) => {
         logger.warn({ err }, '[daemon] seed-x-humor-automation failed');
       });

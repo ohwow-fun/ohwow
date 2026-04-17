@@ -10,10 +10,12 @@ vi.mock('../../lib/logger.js', () => ({
 
 const listMock = vi.fn();
 const createMock = vi.fn();
+const updateMock = vi.fn();
 vi.mock('../../triggers/automation-service.js', () => ({
   AutomationService: class {
     list = listMock;
     create = createMock;
+    update = updateMock;
   },
 }));
 
@@ -30,6 +32,7 @@ describe('seedXIntelAutomation', () => {
   beforeEach(() => {
     listMock.mockReset();
     createMock.mockReset();
+    updateMock.mockReset();
   });
 
   it('creates the automation when it does not exist yet', async () => {
@@ -88,15 +91,57 @@ describe('seedXIntelAutomation', () => {
     const input = createMock.mock.calls[0][0];
     expect(input.trigger_config.cron).toBe('*/30 * * * *');
   });
+
+  it('refreshes an existing row when its cron matches a prior default', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: X_INTEL_AUTOMATION_NAME, trigger_config: { cron: 'OLD_CRON' } },
+    ]);
+
+    const id = await seedXIntelAutomation({} as never, 'ws-1', {
+      cron: 'NEW_CRON',
+      refreshableFrom: ['OLD_CRON'],
+    });
+
+    expect(id).toBe('existing');
+    expect(createMock).not.toHaveBeenCalled();
+    expect(updateMock).toHaveBeenCalledWith('existing', { trigger_config: { cron: 'NEW_CRON' } });
+  });
+
+  it('leaves operator-edited crons alone (no match in refreshableFrom)', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: X_INTEL_AUTOMATION_NAME, trigger_config: { cron: 'OPERATOR_EDITED' } },
+    ]);
+
+    await seedXIntelAutomation({} as never, 'ws-1', {
+      cron: 'NEW_CRON',
+      refreshableFrom: ['OLD_CRON'],
+    });
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('does not call update when existing cron already equals new cron', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: X_INTEL_AUTOMATION_NAME, trigger_config: { cron: 'SAME_CRON' } },
+    ]);
+
+    await seedXIntelAutomation({} as never, 'ws-1', {
+      cron: 'SAME_CRON',
+      refreshableFrom: ['SAME_CRON', 'OLD_CRON'],
+    });
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('seedXForecastAutomation', () => {
   beforeEach(() => {
     listMock.mockReset();
     createMock.mockReset();
+    updateMock.mockReset();
   });
 
-  it('creates a single-step forecast automation with daily cron by default', async () => {
+  it('creates a single-step forecast automation at 00:30 UTC by default', async () => {
     listMock.mockResolvedValue([]);
     createMock.mockResolvedValue({ id: 'forecast-auto' });
 
@@ -105,7 +150,7 @@ describe('seedXForecastAutomation', () => {
     expect(id).toBe('forecast-auto');
     const input = createMock.mock.calls[0][0];
     expect(input.name).toBe(X_FORECAST_AUTOMATION_NAME);
-    expect(input.trigger_config.cron).toBe('0 0 * * *');
+    expect(input.trigger_config.cron).toBe('30 0 * * *');
     expect(input.steps).toHaveLength(1);
     expect(input.steps[0].action_config.script_path).toBe('scripts/x-experiments/x-forecast-scorer.mjs');
     expect(input.steps[0].action_config.heartbeat_filename).toBe('x-forecast-last-run.json');
@@ -125,9 +170,10 @@ describe('seedXHumorAutomation', () => {
   beforeEach(() => {
     listMock.mockReset();
     createMock.mockReset();
+    updateMock.mockReset();
   });
 
-  it('creates a humor-scoped compose automation with hourly cron by default', async () => {
+  it('creates a humor-scoped compose automation at :20 past the hour by default', async () => {
     listMock.mockResolvedValue([]);
     createMock.mockResolvedValue({ id: 'humor-auto' });
 
@@ -136,7 +182,7 @@ describe('seedXHumorAutomation', () => {
     expect(id).toBe('humor-auto');
     const input = createMock.mock.calls[0][0];
     expect(input.name).toBe(X_HUMOR_AUTOMATION_NAME);
-    expect(input.trigger_config.cron).toBe('0 * * * *');
+    expect(input.trigger_config.cron).toBe('20 * * * *');
     expect(input.steps).toHaveLength(1);
     expect(input.steps[0].action_config.script_path).toBe('scripts/x-experiments/x-compose.mjs');
     expect(input.steps[0].action_config.env).toEqual({

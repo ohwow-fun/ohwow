@@ -10,7 +10,7 @@
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
-import { AutomationService } from '../triggers/automation-service.js';
+import { AutomationService, type Automation } from '../triggers/automation-service.js';
 import { logger } from '../lib/logger.js';
 
 export const X_DRAFT_DISTILLER_AUTOMATION_NAME = 'ohwow:x-draft-distiller';
@@ -20,9 +20,26 @@ export const CONTENT_CADENCE_AUTOMATION_NAME = 'ohwow:content-cadence';
 export const X_DRAFT_DISTILLER_HANDLER = 'x-draft-distiller:tick';
 export const CONTENT_CADENCE_HANDLER = 'content-cadence:tick';
 
+/** Prior cron defaults we'll refresh from. See shouldRefreshCron below. */
+const X_DRAFT_DISTILLER_PRIOR_DEFAULTS = ['0 * * * *'];
+const CONTENT_CADENCE_PRIOR_DEFAULTS = ['*/15 * * * *'];
+
 export interface SeedSimpleAutomationOptions {
   cron?: string;
+  /** If the existing row's cron matches any of these (previous generations of
+   *  our own defaults), refresh it. Operator-edited crons survive. */
+  refreshableFrom?: string[];
   cooldownSeconds?: number;
+}
+
+function shouldRefreshCron(
+  existing: Automation,
+  newCron: string,
+  refreshableFrom: string[],
+): boolean {
+  const current = (existing.trigger_config?.cron as string | undefined) ?? '';
+  if (current === newCron) return false;
+  return refreshableFrom.includes(current);
 }
 
 /**
@@ -35,15 +52,20 @@ export async function seedXDraftDistillerAutomation(
   opts: SeedSimpleAutomationOptions = {},
 ): Promise<string | null> {
   const service = new AutomationService(db, workspaceId);
+  const cron = opts.cron ?? '45 * * * *';
+  const refreshableFrom = opts.refreshableFrom ?? X_DRAFT_DISTILLER_PRIOR_DEFAULTS;
   const existing = (await service.list()).find(
     (a) => a.name === X_DRAFT_DISTILLER_AUTOMATION_NAME,
   );
   if (existing) {
-    logger.debug({ automationId: existing.id }, '[seed-x-draft-distiller] already present');
+    if (shouldRefreshCron(existing, cron, refreshableFrom)) {
+      await service.update(existing.id, { trigger_config: { cron } });
+      logger.info({ automationId: existing.id, cron }, '[seed-x-draft-distiller] refreshed cron from prior default');
+    } else {
+      logger.debug({ automationId: existing.id }, '[seed-x-draft-distiller] already present');
+    }
     return existing.id;
   }
-
-  const cron = opts.cron ?? '0 * * * *';
   const created = await service.create({
     name: X_DRAFT_DISTILLER_AUTOMATION_NAME,
     description:
@@ -75,15 +97,20 @@ export async function seedContentCadenceAutomation(
   opts: SeedSimpleAutomationOptions = {},
 ): Promise<string | null> {
   const service = new AutomationService(db, workspaceId);
+  const cron = opts.cron ?? '7,22,37,52 * * * *';
+  const refreshableFrom = opts.refreshableFrom ?? CONTENT_CADENCE_PRIOR_DEFAULTS;
   const existing = (await service.list()).find(
     (a) => a.name === CONTENT_CADENCE_AUTOMATION_NAME,
   );
   if (existing) {
-    logger.debug({ automationId: existing.id }, '[seed-content-cadence] already present');
+    if (shouldRefreshCron(existing, cron, refreshableFrom)) {
+      await service.update(existing.id, { trigger_config: { cron } });
+      logger.info({ automationId: existing.id, cron }, '[seed-content-cadence] refreshed cron from prior default');
+    } else {
+      logger.debug({ automationId: existing.id }, '[seed-content-cadence] already present');
+    }
     return existing.id;
   }
-
-  const cron = opts.cron ?? '*/15 * * * *';
   const created = await service.create({
     name: CONTENT_CADENCE_AUTOMATION_NAME,
     description:

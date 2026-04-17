@@ -10,10 +10,12 @@ vi.mock('../../lib/logger.js', () => ({
 
 const listMock = vi.fn();
 const createMock = vi.fn();
+const updateMock = vi.fn();
 vi.mock('../../triggers/automation-service.js', () => ({
   AutomationService: class {
     list = listMock;
     create = createMock;
+    update = updateMock;
   },
 }));
 
@@ -30,6 +32,7 @@ describe('seedXDraftDistillerAutomation', () => {
   beforeEach(() => {
     listMock.mockReset();
     createMock.mockReset();
+    updateMock.mockReset();
   });
 
   it('creates a run_internal automation with the canonical handler name', async () => {
@@ -41,19 +44,32 @@ describe('seedXDraftDistillerAutomation', () => {
     expect(id).toBe('distiller-auto');
     const input = createMock.mock.calls[0][0];
     expect(input.name).toBe(X_DRAFT_DISTILLER_AUTOMATION_NAME);
-    expect(input.trigger_config.cron).toBe('0 * * * *');
+    expect(input.trigger_config.cron).toBe('45 * * * *');
     expect(input.steps).toHaveLength(1);
     expect(input.steps[0].step_type).toBe('run_internal');
     expect(input.steps[0].action_config.handler_name).toBe(X_DRAFT_DISTILLER_HANDLER);
   });
 
-  it('is idempotent', async () => {
-    listMock.mockResolvedValue([{ id: 'existing', name: X_DRAFT_DISTILLER_AUTOMATION_NAME }]);
+  it('is idempotent when existing cron matches the new default', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: X_DRAFT_DISTILLER_AUTOMATION_NAME, trigger_config: { cron: '45 * * * *' } },
+    ]);
 
     const id = await seedXDraftDistillerAutomation({} as never, 'ws-1');
 
     expect(id).toBe('existing');
     expect(createMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes from the old :00 default to the new :45 stagger', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: X_DRAFT_DISTILLER_AUTOMATION_NAME, trigger_config: { cron: '0 * * * *' } },
+    ]);
+
+    await seedXDraftDistillerAutomation({} as never, 'ws-1');
+
+    expect(updateMock).toHaveBeenCalledWith('existing', { trigger_config: { cron: '45 * * * *' } });
   });
 });
 
@@ -61,9 +77,10 @@ describe('seedContentCadenceAutomation', () => {
   beforeEach(() => {
     listMock.mockReset();
     createMock.mockReset();
+    updateMock.mockReset();
   });
 
-  it('creates a 15-min run_internal automation with the canonical handler name', async () => {
+  it('creates a staggered cadence automation (:07 :22 :37 :52)', async () => {
     listMock.mockResolvedValue([]);
     createMock.mockResolvedValue({ id: 'cadence-auto' });
 
@@ -72,18 +89,31 @@ describe('seedContentCadenceAutomation', () => {
     expect(id).toBe('cadence-auto');
     const input = createMock.mock.calls[0][0];
     expect(input.name).toBe(CONTENT_CADENCE_AUTOMATION_NAME);
-    expect(input.trigger_config.cron).toBe('*/15 * * * *');
+    expect(input.trigger_config.cron).toBe('7,22,37,52 * * * *');
     expect(input.steps).toHaveLength(1);
     expect(input.steps[0].step_type).toBe('run_internal');
     expect(input.steps[0].action_config.handler_name).toBe(CONTENT_CADENCE_HANDLER);
   });
 
-  it('is idempotent', async () => {
-    listMock.mockResolvedValue([{ id: 'existing', name: CONTENT_CADENCE_AUTOMATION_NAME }]);
+  it('is idempotent when existing cron matches the new default', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: CONTENT_CADENCE_AUTOMATION_NAME, trigger_config: { cron: '7,22,37,52 * * * *' } },
+    ]);
 
     const id = await seedContentCadenceAutomation({} as never, 'ws-1');
 
     expect(id).toBe('existing');
     expect(createMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it('refreshes from the old */15 default to the new staggered cron', async () => {
+    listMock.mockResolvedValue([
+      { id: 'existing', name: CONTENT_CADENCE_AUTOMATION_NAME, trigger_config: { cron: '*/15 * * * *' } },
+    ]);
+
+    await seedContentCadenceAutomation({} as never, 'ws-1');
+
+    expect(updateMock).toHaveBeenCalledWith('existing', { trigger_config: { cron: '7,22,37,52 * * * *' } });
   });
 });

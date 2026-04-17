@@ -37,4 +37,19 @@ describe('cronForIntervalMinutes', () => {
     expect(cronForIntervalMinutes(0)).toBe('*/1 * * * *');
     expect(cronForIntervalMinutes(-10)).toBe('*/1 * * * *');
   });
+
+  it('applies minuteOffset to hourly+ cadences', () => {
+    expect(cronForIntervalMinutes(180, 20)).toBe('20 0,3,6,9,12,15,18,21 * * *');
+    expect(cronForIntervalMinutes(1440, 30)).toBe('30 0 * * *');
+    expect(cronForIntervalMinutes(60, 45)).toBe('45 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 * * *');
+  });
+
+  it('ignores minuteOffset for sub-hourly cadences (preserves */N semantics)', () => {
+    expect(cronForIntervalMinutes(15, 7)).toBe('*/15 * * * *');
+  });
+
+  it('clamps minuteOffset to [0, 59]', () => {
+    expect(cronForIntervalMinutes(180, -5)).toBe('0 0,3,6,9,12,15,18,21 * * *');
+    expect(cronForIntervalMinutes(180, 99)).toBe('59 0,3,6,9,12,15,18,21 * * *');
+  });
 });
