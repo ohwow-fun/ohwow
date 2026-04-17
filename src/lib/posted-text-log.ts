@@ -1,5 +1,9 @@
 /**
- * posted-text-log — durable dedup primitive for the X posting path.
+ * posted-text-log — durable dedup primitive for social posting.
+ *
+ * Two tables:
+ *   - x_posted_log (migration 129): legacy X-only table, still active
+ *   - posted_log (migration 133): platform-generic table for X + Threads
  *
  * Every successful publish appends one row to x_posted_log (migration 129).
  * Two consumers:
@@ -170,5 +174,147 @@ export async function recentPostedPreviews(
       '[posted-text-log] recentPostedPreviews failed',
     );
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Platform-aware functions (write to posted_log, migration 133)
+// ---------------------------------------------------------------------------
+
+interface PlatformPostedLogRow extends PostedLogRow {
+  platform: string;
+}
+
+export interface RecordPostedForPlatformInput extends RecordPostedInput {
+  platform: string;
+}
+
+/**
+ * Insert a posted-text row into the platform-generic posted_log table.
+ * Same semantics as recordPostedText but multi-platform.
+ */
+export async function recordPostedTextForPlatform(input: RecordPostedForPlatformInput): Promise<void> {
+  const { db, workspaceId, text, platform } = input;
+  const hash = hashPostText(text);
+  const preview = text.slice(0, 240);
+  try {
+    const { error } = await db.from('posted_log').insert({
+      workspace_id: workspaceId,
+      platform,
+      text_hash: hash,
+      text_preview: preview,
+      text_length: text.length,
+      posted_at: new Date().toISOString(),
+      approval_id: input.approvalId ?? null,
+      task_id: input.taskId ?? null,
+      source: input.source ?? null,
+    });
+    if (error) {
+      const msg = (error as { message?: string }).message ?? String(error);
+      if (/UNIQUE|constraint/i.test(msg)) return;
+      logger.warn({ err: error, workspaceId, platform, hash }, '[posted-text-log] platform insert error');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/UNIQUE|constraint/i.test(msg)) return;
+    logger.warn({ err, workspaceId, platform }, '[posted-text-log] platform insert threw');
+  }
+}
+
+/**
+ * Check whether the normalized form of `text` has been posted on the
+ * given platform inside the rolling window. Reads from posted_log.
+ */
+export async function hasRecentlyPostedTextForPlatform(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  platform: string,
+  text: string,
+  windowMs: number = DEFAULT_POSTED_LOG_WINDOW_MS,
+): Promise<PostedLookupResult> {
+  const hash = hashPostText(text);
+  const cutoffIso = new Date(Date.now() - windowMs).toISOString();
+  try {
+    const { data } = await db
+      .from<PlatformPostedLogRow>('posted_log')
+      .select('id, workspace_id, platform, text_hash, text_preview, posted_at, approval_id, task_id, source')
+      .eq('workspace_id', workspaceId)
+      .eq('platform', platform)
+      .eq('text_hash', hash)
+      .gte('posted_at', cutoffIso)
+      .limit(1);
+    const rows = (data ?? []) as PlatformPostedLogRow[];
+    if (rows.length === 0) return { alreadyPosted: false };
+    const [row] = rows;
+    return {
+      alreadyPosted: true,
+      postedAt: row.posted_at,
+      approvalId: row.approval_id,
+      taskId: row.task_id,
+    };
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, workspaceId, platform },
+      '[posted-text-log] platform lookup failed; treating as not-posted',
+    );
+    return { alreadyPosted: false };
+  }
+}
+
+/**
+ * Read the N most recent posted rows for a workspace on a specific platform.
+ */
+export async function recentPostedPreviewsForPlatform(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  platform: string,
+  limit = 20,
+): Promise<Array<{ preview: string; postedAt: string }>> {
+  try {
+    const { data } = await db
+      .from<PlatformPostedLogRow>('posted_log')
+      .select('text_preview, posted_at')
+      .eq('workspace_id', workspaceId)
+      .eq('platform', platform)
+      .order('posted_at', { ascending: false })
+      .limit(limit);
+    const rows = (data ?? []) as Array<{ text_preview: string; posted_at: string }>;
+    return rows.map((r) => ({ preview: r.text_preview, postedAt: r.posted_at }));
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, workspaceId, platform },
+      '[posted-text-log] recentPostedPreviewsForPlatform failed',
+    );
+    return [];
+  }
+}
+
+/**
+ * Load text hashes from posted_log for a given platform within the
+ * default window. Used by the scheduler to build a deny set for the
+ * approved-draft picker.
+ */
+export async function loadPostedHashesForPlatform(
+  db: DatabaseAdapter,
+  workspaceId: string,
+  platform: string,
+  windowMs: number = DEFAULT_POSTED_LOG_WINDOW_MS,
+): Promise<Set<string>> {
+  const cutoffIso = new Date(Date.now() - windowMs).toISOString();
+  try {
+    const { data } = await db
+      .from<{ text_hash: string }>('posted_log')
+      .select('text_hash')
+      .eq('workspace_id', workspaceId)
+      .eq('platform', platform)
+      .gte('posted_at', cutoffIso);
+    const rows = (data ?? []) as Array<{ text_hash: string }>;
+    return new Set(rows.map((r) => r.text_hash));
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, workspaceId, platform },
+      '[posted-text-log] loadPostedHashesForPlatform failed',
+    );
+    return new Set();
   }
 }
