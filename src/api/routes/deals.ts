@@ -130,6 +130,137 @@ export function createDealsRouter(
     }
   });
 
+  // ── Pipeline Summary ─────────────────────────────────────────────
+  // Mounted before `/api/deals/:id` so Express doesn't match
+  // "pipeline-summary" as a deal id and return "deal not found".
+
+  router.get('/api/deals/pipeline-summary', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+
+      const { data: stages } = await db.from('deal_stages')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .order('sort_order', { ascending: true });
+
+      const { data: deals } = await db.from('deals')
+        .select('*')
+        .eq('workspace_id', workspaceId);
+
+      const allDeals = (deals || []) as Array<Record<string, unknown>>;
+      const allStages = (stages || []) as Array<Record<string, unknown>>;
+
+      const stageMap = new Map(allStages.map(s => [s.id as string, s]));
+
+      const pipeline = allStages.map(stage => {
+        const stageDeals = allDeals.filter(d => d.stage_id === stage.id);
+        const totalValue = stageDeals.reduce((sum, d) => sum + (d.value_cents as number || 0), 0);
+        const prob = stage.probability as number || 0;
+        return {
+          stage_id: stage.id,
+          stage_name: stage.name,
+          sort_order: stage.sort_order,
+          probability: prob,
+          is_won: stage.is_won,
+          is_lost: stage.is_lost,
+          deal_count: stageDeals.length,
+          total_value_cents: totalValue,
+          weighted_value_cents: Math.round(totalValue * prob),
+        };
+      });
+
+      const wonDeals = allDeals.filter(d => {
+        const stage = stageMap.get(d.stage_id as string);
+        return stage && (stage.is_won as number) === 1;
+      });
+      const lostDeals = allDeals.filter(d => {
+        const stage = stageMap.get(d.stage_id as string);
+        return stage && (stage.is_lost as number) === 1;
+      });
+
+      const totalPipeline = pipeline.reduce((s, p) => s + p.total_value_cents, 0);
+      const totalWeighted = pipeline.reduce((s, p) => s + p.weighted_value_cents, 0);
+      const activeDeals = allDeals.filter(d => {
+        const stage = stageMap.get(d.stage_id as string);
+        return !stage || ((stage.is_won as number) !== 1 && (stage.is_lost as number) !== 1);
+      });
+
+      res.json({
+        data: {
+          stages: pipeline,
+          total_pipeline_cents: totalPipeline,
+          total_weighted_cents: totalWeighted,
+          active_deal_count: activeDeals.length,
+          avg_deal_value_cents: activeDeals.length > 0 ? Math.round(totalPipeline / activeDeals.length) : 0,
+          win_rate: (wonDeals.length + lostDeals.length) > 0
+            ? Math.round((wonDeals.length / (wonDeals.length + lostDeals.length)) * 100) / 100
+            : null,
+          won_count: wonDeals.length,
+          lost_count: lostDeals.length,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // ── Revenue Summary ──────────────────────────────────────────────
+
+  router.get('/api/deals/revenue-summary', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const months = parseInt(req.query.months as string || '12', 10);
+      const now = new Date();
+      const currentMonth = now.getMonth() + 1;
+      const currentYear = now.getFullYear();
+
+      const { data: revenueRows } = await db.from('agent_workforce_revenue_entries')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .order('year', { ascending: false });
+
+      const entries = (revenueRows || []) as Array<Record<string, unknown>>;
+
+      const monthlyRevenue: Array<{ month: number; year: number; total_cents: number }> = [];
+      for (let i = 0; i < months; i++) {
+        let m = currentMonth - i;
+        let y = currentYear;
+        while (m <= 0) { m += 12; y--; }
+        const total = entries
+          .filter(e => (e.month as number) === m && (e.year as number) === y)
+          .reduce((sum, e) => sum + (e.amount_cents as number || 0), 0);
+        monthlyRevenue.push({ month: m, year: y, total_cents: total });
+      }
+
+      const currentMrr = monthlyRevenue[0]?.total_cents || 0;
+      const prevMrr = monthlyRevenue[1]?.total_cents || 0;
+      const mrrGrowth = prevMrr > 0 ? Math.round(((currentMrr - prevMrr) / prevMrr) * 10000) / 100 : null;
+
+      const monthStart = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+      const { data: wonThisMonth } = await db.from('deals')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .gte('won_at', monthStart);
+
+      const wonDeals = (wonThisMonth || []) as Array<Record<string, unknown>>;
+      const wonValue = wonDeals.reduce((sum, d) => sum + (d.value_cents as number || 0), 0);
+
+      res.json({
+        data: {
+          mrr_cents: currentMrr,
+          mrr_growth_pct: mrrGrowth,
+          arr_cents: currentMrr * 12,
+          monthly_revenue: monthlyRevenue.slice(0, 6),
+          won_deals_this_month: wonDeals.length,
+          won_value_this_month_cents: wonValue,
+          total_revenue_cents: entries.reduce((sum, e) => sum + (e.amount_cents as number || 0), 0),
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
   router.get('/api/deals/:id', async (req, res) => {
     try {
       const { workspaceId } = req;
@@ -314,138 +445,6 @@ export function createDealsRouter(
         .limit(50);
       if (error) { res.status(500).json({ error: error.message }); return; }
       res.json({ data: data || [] });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
-    }
-  });
-
-  // ── Pipeline Summary ─────────────────────────────────────────────
-
-  router.get('/api/deals/pipeline-summary', async (req, res) => {
-    try {
-      const { workspaceId } = req;
-
-      const { data: stages } = await db.from('deal_stages')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('sort_order', { ascending: true });
-
-      const { data: deals } = await db.from('deals')
-        .select('*')
-        .eq('workspace_id', workspaceId);
-
-      const allDeals = (deals || []) as Array<Record<string, unknown>>;
-      const allStages = (stages || []) as Array<Record<string, unknown>>;
-
-      const stageMap = new Map(allStages.map(s => [s.id as string, s]));
-
-      const pipeline = allStages.map(stage => {
-        const stageDeals = allDeals.filter(d => d.stage_id === stage.id);
-        const totalValue = stageDeals.reduce((sum, d) => sum + (d.value_cents as number || 0), 0);
-        const prob = stage.probability as number || 0;
-        return {
-          stage_id: stage.id,
-          stage_name: stage.name,
-          sort_order: stage.sort_order,
-          probability: prob,
-          is_won: stage.is_won,
-          is_lost: stage.is_lost,
-          deal_count: stageDeals.length,
-          total_value_cents: totalValue,
-          weighted_value_cents: Math.round(totalValue * prob),
-        };
-      });
-
-      const wonDeals = allDeals.filter(d => {
-        const stage = stageMap.get(d.stage_id as string);
-        return stage && (stage.is_won as number) === 1;
-      });
-      const lostDeals = allDeals.filter(d => {
-        const stage = stageMap.get(d.stage_id as string);
-        return stage && (stage.is_lost as number) === 1;
-      });
-
-      const totalPipeline = pipeline.reduce((s, p) => s + p.total_value_cents, 0);
-      const totalWeighted = pipeline.reduce((s, p) => s + p.weighted_value_cents, 0);
-      const activeDeals = allDeals.filter(d => {
-        const stage = stageMap.get(d.stage_id as string);
-        return !stage || ((stage.is_won as number) !== 1 && (stage.is_lost as number) !== 1);
-      });
-
-      res.json({
-        data: {
-          stages: pipeline,
-          total_pipeline_cents: totalPipeline,
-          total_weighted_cents: totalWeighted,
-          active_deal_count: activeDeals.length,
-          avg_deal_value_cents: activeDeals.length > 0 ? Math.round(totalPipeline / activeDeals.length) : 0,
-          win_rate: (wonDeals.length + lostDeals.length) > 0
-            ? Math.round((wonDeals.length / (wonDeals.length + lostDeals.length)) * 100) / 100
-            : null,
-          won_count: wonDeals.length,
-          lost_count: lostDeals.length,
-        },
-      });
-    } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
-    }
-  });
-
-  // ── Revenue Summary ──────────────────────────────────────────────
-
-  router.get('/api/deals/revenue-summary', async (req, res) => {
-    try {
-      const { workspaceId } = req;
-      const months = parseInt(req.query.months as string || '12', 10);
-      const now = new Date();
-      const currentMonth = now.getMonth() + 1;
-      const currentYear = now.getFullYear();
-
-      // Revenue entries from existing table
-      const { data: revenueRows } = await db.from('agent_workforce_revenue_entries')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .order('year', { ascending: false });
-
-      const entries = (revenueRows || []) as Array<Record<string, unknown>>;
-
-      // Build monthly buckets
-      const monthlyRevenue: Array<{ month: number; year: number; total_cents: number }> = [];
-      for (let i = 0; i < months; i++) {
-        let m = currentMonth - i;
-        let y = currentYear;
-        while (m <= 0) { m += 12; y--; }
-        const total = entries
-          .filter(e => (e.month as number) === m && (e.year as number) === y)
-          .reduce((sum, e) => sum + (e.amount_cents as number || 0), 0);
-        monthlyRevenue.push({ month: m, year: y, total_cents: total });
-      }
-
-      const currentMrr = monthlyRevenue[0]?.total_cents || 0;
-      const prevMrr = monthlyRevenue[1]?.total_cents || 0;
-      const mrrGrowth = prevMrr > 0 ? Math.round(((currentMrr - prevMrr) / prevMrr) * 10000) / 100 : null;
-
-      // Won deals this month
-      const monthStart = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-      const { data: wonThisMonth } = await db.from('deals')
-        .select('*')
-        .eq('workspace_id', workspaceId)
-        .gte('won_at', monthStart);
-
-      const wonDeals = (wonThisMonth || []) as Array<Record<string, unknown>>;
-      const wonValue = wonDeals.reduce((sum, d) => sum + (d.value_cents as number || 0), 0);
-
-      res.json({
-        data: {
-          mrr_cents: currentMrr,
-          mrr_growth_pct: mrrGrowth,
-          arr_cents: currentMrr * 12,
-          monthly_revenue: monthlyRevenue.slice(0, 6),
-          won_deals_this_month: wonDeals.length,
-          won_value_this_month_cents: wonValue,
-          total_revenue_cents: entries.reduce((sum, e) => sum + (e.amount_cents as number || 0), 0),
-        },
-      });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
