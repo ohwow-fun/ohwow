@@ -69,8 +69,9 @@ import type {
   Verdict,
 } from '../experiment-types.js';
 
-/** Title the scheduler uses for dispatched post tasks. Used to count dispatches. */
+/** Titles the scheduler uses for dispatched post tasks. Used to count dispatches. */
 const SCHEDULER_TASK_TITLE = 'Post one tweet today';
+const THREADS_SCHEDULER_TASK_TITLE = 'Post one Threads post today';
 
 /** Tuner experiment id whose findings + validations we read. */
 const TUNER_EXPERIMENT_ID = 'content-cadence-tuner';
@@ -203,7 +204,7 @@ export class ContentCadenceLoopHealthExperiment extends BusinessExperiment {
 
     const tasks = await this.readWorkspaceTasks(ctx.db, ctx.workspaceId, since7d);
     const dispatches24h = tasks.filter(
-      (t) => t.title === SCHEDULER_TASK_TITLE && (t.created_at ?? '') >= since24h,
+      (t) => (t.title === SCHEDULER_TASK_TITLE || t.title === THREADS_SCHEDULER_TASK_TITLE) && (t.created_at ?? '') >= since24h,
     ).length;
     const completed24h = tasks.filter((t) => isCompletedXPost(t, since24h)).length;
     const completed7d = tasks.filter((t) => isCompletedXPost(t, since7d)).length;
@@ -440,5 +441,5 @@ function isCompletedXPost(t: TaskRow, since: string): boolean {
   if (!t.completed_at || t.completed_at < since) return false;
   const meta = parseMetadata(t.metadata);
   const via = meta.posted_via as string | undefined;
-  return typeof via === 'string' && via.startsWith('x_compose');
+  return typeof via === 'string' && (via.startsWith('x_compose') || via.startsWith('threads_compose'));
 }

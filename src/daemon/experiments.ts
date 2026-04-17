@@ -291,7 +291,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       db,
       engine,
       workspaceId,
-      { approvalsJsonlPath },
+      { approvalsJsonlPath, enabledPlatforms: ['x', 'threads'] },
     );
     cadenceScheduler.start();
     logger.info({ approvalsJsonlPath }, '[daemon] content-cadence-scheduler started');
