@@ -118,30 +118,35 @@ export function createMarketingRouter(db: DatabaseAdapter): Router {
         // Extract text preview from content JSON
         let textPreview = '';
         if (row.content) {
-          try {
-            const c = String(row.content);
-            const parsed = JSON.parse(c);
-            const raw = typeof parsed === 'string'
-              ? parsed
-              : (parsed && typeof parsed === 'object')
-                ? (parsed.text ?? parsed.body ?? parsed.message ?? '')
-                : '';
+          // The SQLite adapter auto-parses JSON columns, so row.content
+          // may already be an object (not a string). Handle both cases.
+          const parsed = typeof row.content === 'string'
+            ? (() => { try { return JSON.parse(row.content as string); } catch { return row.content; } })()
+            : row.content;
+          if (typeof parsed === 'string') {
+            textPreview = parsed;
+          } else if (parsed && typeof parsed === 'object') {
+            const raw = (parsed as Record<string, unknown>).text
+              ?? (parsed as Record<string, unknown>).body
+              ?? (parsed as Record<string, unknown>).message
+              ?? '';
             textPreview = typeof raw === 'string' ? raw : JSON.stringify(raw);
-          } catch {
-            textPreview = String(row.content);
           }
         }
 
-        // Parse delivery result
+        // Parse delivery result (may already be an object from adapter)
         let deliveryOk: boolean | null = null;
         let deliveryError: string | null = null;
         if (row.delivery_result) {
-          try {
-            const dr = JSON.parse(row.delivery_result);
-            deliveryOk = dr.ok ?? null;
-            if (!dr.ok && dr.error) deliveryError = dr.error;
-            if (!dr.ok && dr.reason) deliveryError = dr.reason;
-          } catch { /* ignore */ }
+          const dr = typeof row.delivery_result === 'string'
+            ? (() => { try { return JSON.parse(row.delivery_result as string); } catch { return null; } })()
+            : row.delivery_result;
+          if (dr && typeof dr === 'object') {
+            const drObj = dr as Record<string, unknown>;
+            deliveryOk = (drObj.ok as boolean) ?? null;
+            if (!drObj.ok && drObj.error) deliveryError = String(drObj.error);
+            if (!drObj.ok && drObj.reason) deliveryError = String(drObj.reason);
+          }
         }
 
         return {
