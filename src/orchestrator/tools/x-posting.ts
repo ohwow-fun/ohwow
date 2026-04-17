@@ -646,106 +646,101 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no x.com tab open in any profile window, or debug Chrome is down. Open x.com in the target profile window and retry.' };
 
-  if (input.expectedHandle) {
-    const mismatch = await assertSignedInAs(page, input.expectedHandle);
-    if (mismatch) return mismatch;
-  }
+  try {
+    if (input.expectedHandle) {
+      const mismatch = await assertSignedInAs(page, input.expectedHandle);
+      if (mismatch) return mismatch;
+    }
 
-  await page.goto(COMPOSE_URL);
-  await wait(HYDRATION_WAIT_MS);
-  const currentUrl = await page.url();
-  if (isLoginRedirect(currentUrl)) {
-    return { success: false, message: `X redirected to login (${currentUrl}).`, currentUrl };
-  }
+    await page.goto(COMPOSE_URL);
+    await wait(HYDRATION_WAIT_MS);
+    const currentUrl = await page.url();
+    if (isLoginRedirect(currentUrl)) {
+      return { success: false, message: `X redirected to login (${currentUrl}).`, currentUrl };
+    }
 
-  const focused = await focusByTestid(page, 'tweetTextarea_0');
-  if (!focused) {
-    return {
-      success: false,
-      message: 'Could not focus tweetTextarea_0',
-      screenshotBase64: await captureScreenshot(page),
-      currentUrl: await page.url(),
-    };
-  }
+    const focused = await focusByTestid(page, 'tweetTextarea_0');
+    if (!focused) {
+      return {
+        success: false,
+        message: 'Could not focus tweetTextarea_0',
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
 
-  // Small warmup: a single space + backspace reliably eats the
-  // intermittent first-keystroke-dropped glitch we saw when typing
-  // straight after focus.
-  await page.typeText(' ');
-  await page.pressKey('Backspace');
+    await page.typeText(' ');
+    await page.pressKey('Backspace');
 
-  await page.typeText(text);
-  await wait(400);
+    await page.typeText(text);
+    await wait(400);
 
-  const screenshotBase64 = await captureScreenshot(page);
+    const screenshotBase64 = await captureScreenshot(page);
 
-  if (dryRun) {
-    logger.info('[x-posting] Tweet dry run — composed but did not publish');
+    if (dryRun) {
+      logger.info('[x-posting] Tweet dry run — composed but did not publish');
+      return {
+        success: true,
+        message: `Dry run complete. Composed ${text.length} chars in X compose modal. Call again with dry_run=false to publish.`,
+        screenshotBase64,
+        tweetsTyped: 1,
+        tweetsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    const clicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
+    if (!clicked) {
+      return {
+        success: false,
+        message: 'Post button never became clickable within 10s.',
+        screenshotBase64,
+        tweetsTyped: 1,
+        tweetsPublished: 0,
+      };
+    }
+    await wait(POST_SETTLE_MS);
+
+    const postOutcome = await readPostOutcome(page);
+    const postShot = await captureScreenshot(page);
+
+    if (postOutcome === 'duplicate') {
+      await dismissComposeModal(page);
+      logger.warn('[x-posting] X blocked the post as duplicate content');
+      return {
+        success: false,
+        duplicateBlocked: true,
+        message: 'X blocked the post as duplicate content ("Whoops! You already said that."). Text is considered already-posted; caller should advance the work item.',
+        screenshotBase64: postShot || screenshotBase64,
+        tweetsTyped: 1,
+        tweetsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+    if (postOutcome === 'still_open') {
+      await dismissComposeModal(page);
+      return {
+        success: false,
+        message: 'Post button clicked but the compose modal did not close within the settle window. X likely rejected the content for another reason (rate limit, policy, etc.).',
+        screenshotBase64: postShot || screenshotBase64,
+        tweetsTyped: 1,
+        tweetsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info('[x-posting] Tweet published');
     return {
       success: true,
-      message: `Dry run complete. Composed ${text.length} chars in X compose modal. Call again with dry_run=false to publish.`,
-      screenshotBase64,
-      tweetsTyped: 1,
-      tweetsPublished: 0,
-      currentUrl: await page.url(),
-    };
-  }
-
-  const clicked = await page.clickSelector('[data-testid="tweetButton"]', 10000);
-  if (!clicked) {
-    return {
-      success: false,
-      message: 'Post button never became clickable within 10s.',
-      screenshotBase64,
-      tweetsTyped: 1,
-      tweetsPublished: 0,
-    };
-  }
-  await wait(POST_SETTLE_MS);
-
-  // X renders "Whoops! You already said that." as an in-modal alert
-  // when the content matches a recent post from the same account.
-  // Without this check, the click-Post path would return success
-  // unconditionally and the caller would mark its draft/task done —
-  // so the SAME draft would re-enter the queue on a later tick and
-  // loop indefinitely against the duplicate-content gate.
-  const postOutcome = await readPostOutcome(page);
-  const postShot = await captureScreenshot(page);
-
-  if (postOutcome === 'duplicate') {
-    await dismissComposeModal(page);
-    logger.warn('[x-posting] X blocked the post as duplicate content');
-    return {
-      success: false,
-      duplicateBlocked: true,
-      message: 'X blocked the post as duplicate content ("Whoops! You already said that."). Text is considered already-posted; caller should advance the work item.',
+      message: `Tweet published (${text.length} chars).`,
       screenshotBase64: postShot || screenshotBase64,
       tweetsTyped: 1,
-      tweetsPublished: 0,
+      tweetsPublished: 1,
       currentUrl: await page.url(),
     };
+  } finally {
+    page.close();
   }
-  if (postOutcome === 'still_open') {
-    await dismissComposeModal(page);
-    return {
-      success: false,
-      message: 'Post button clicked but the compose modal did not close within the settle window. X likely rejected the content for another reason (rate limit, policy, etc.).',
-      screenshotBase64: postShot || screenshotBase64,
-      tweetsTyped: 1,
-      tweetsPublished: 0,
-      currentUrl: await page.url(),
-    };
-  }
-
-  logger.info('[x-posting] Tweet published');
-  return {
-    success: true,
-    message: `Tweet published (${text.length} chars).`,
-    screenshotBase64: postShot || screenshotBase64,
-    tweetsTyped: 1,
-    tweetsPublished: 1,
-    currentUrl: await page.url(),
-  };
 }
 
 /**
@@ -821,6 +816,7 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
+  try {
   await page.goto(COMPOSE_URL);
   await wait(HYDRATION_WAIT_MS);
   const afterGoto = await page.url();
@@ -898,6 +894,9 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     tweetsPublished: tweetsTyped,
     currentUrl: await page.url(),
   };
+  } finally {
+    page.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -915,6 +914,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
+  try {
   await page.goto(ARTICLE_LANDING_URL);
   await wait(HYDRATION_WAIT_MS);
 
@@ -1068,6 +1068,9 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
     currentUrl: finalUrl,
     landedAt: finalUrl,
   };
+  } finally {
+    page.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,6 +1096,7 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
+  try {
   await page.goto(DM_INBOX_URL);
   await wait(HYDRATION_WAIT_MS);
 
@@ -1133,6 +1137,9 @@ export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsRes
     threads,
     screenshotBase64: await captureScreenshot(page),
   };
+  } finally {
+    page.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,6 +1219,7 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.', conversationName: null };
 
+  try {
   await page.goto(`https://x.com/i/chat/${pairHyphen}`);
   await wait(THREAD_HYDRATION_WAIT_MS);
 
@@ -1299,6 +1307,9 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
     messages: trimmed,
     currentUrl,
   };
+  } finally {
+    page.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1329,7 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
+  try {
   // Either navigate directly to the thread URL, or open from the inbox.
   if (pairHyphen) {
     await page.goto(`https://x.com/i/chat/${pairHyphen}`);
@@ -1405,6 +1417,9 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
     currentUrl: await page.url(),
     landedAt: landedPair,
   };
+  } finally {
+    page.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,6 +1436,7 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
+  try {
   await page.goto(`https://x.com/${handle}`);
   await wait(HYDRATION_WAIT_MS);
 
@@ -1488,4 +1504,7 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
     screenshotBase64: await captureScreenshot(page),
     currentUrl: await page.url(),
   };
+  } finally {
+    page.close();
+  }
 }
