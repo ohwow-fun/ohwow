@@ -24,6 +24,7 @@ import {
   X_POSTING_HEAD_TOOL_DEFINITIONS,
   X_POSTING_DELETE_TOOL_DEFINITIONS,
 } from '../orchestrator/tools/x-posting.js';
+import { THREADS_POSTING_TOOL_DEFINITIONS } from '../orchestrator/tools/threads-posting.js';
 import { DRAFT_TOOL_DEFINITIONS } from './draft-tools.js';
 import { SCRAPLING_TOOL_DEFINITIONS } from './scrapling/index.js';
 import { FILESYSTEM_TOOL_DEFINITIONS } from './filesystem/index.js';
@@ -171,6 +172,7 @@ export async function buildTaskToolList(
   if (caps.browserEnabled || caps.desktopEnabled) {
     tools.push(...X_POSTING_HEAD_TOOL_DEFINITIONS);
     tools.push(...X_POSTING_DELETE_TOOL_DEFINITIONS);
+    tools.push(...THREADS_POSTING_TOOL_DEFINITIONS);
   }
   // If SOP excludes desktop, still include it — desktop is rarely excluded
   // When real Chrome is available via CDP, skip Scrapling — Chrome handles

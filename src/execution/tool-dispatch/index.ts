@@ -21,6 +21,7 @@ import { stateExecutor } from './state-executor.js';
 import { docMountExecutor } from '../doc-mounts/doc-mount-executor.js';
 import { llmExecutor } from './llm-executor.js';
 import { xPostingExecutor } from './x-posting-executor.js';
+import { threadsPostingExecutor } from './threads-posting-executor.js';
 
 /** Create a registry with all default tool executors */
 export function createDefaultToolRegistry(): ToolExecutorRegistry {
@@ -36,6 +37,7 @@ export function createDefaultToolRegistry(): ToolExecutorRegistry {
   // registering earlier is safe and makes the routing visible next
   // to the other browser-surface dispatchers.
   registry.register(xPostingExecutor);
+  registry.register(threadsPostingExecutor);
   registry.register(scraplingExecutor);
   registry.register(docMountExecutor);
   registry.register(filesystemExecutor);

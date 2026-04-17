@@ -45,6 +45,11 @@ import {
   deleteLastTweetViaBrowser,
 } from './tools/x-posting.js';
 import {
+  composeThreadsPostViaBrowser,
+  composeThreadsThreadViaBrowser,
+  readThreadsProfileViaBrowser,
+} from './tools/threads-posting.js';
+import {
   ensureDebugChrome,
   findProfileByIdentity,
   listProfiles,
@@ -766,6 +771,186 @@ Constraints:
         }
       } catch (err) {
         logger.warn({ err, tool: request.name }, '[x-posting] content_calendar sync failed');
+      }
+    }
+
+    const result: ToolResult = opResult.success
+      ? { success: true, data: dataEnvelope }
+      : { success: false, error: opResult.message, data: dataEnvelope };
+
+    ctx.executedToolCalls.set(toolKey, result);
+    yield { type: 'tool_done', name: request.name, result };
+    return {
+      toolName: request.name,
+      result,
+      resultContent: opResult.message,
+      isError: !opResult.success,
+    };
+  }
+
+  // --- Threads (threads.com) posting tools ---
+  // Same pattern as X posting: raw CDP → multi-profile debug Chrome.
+  if (
+    request.name === 'threads_compose_post'
+    || request.name === 'threads_compose_thread'
+    || request.name === 'threads_read_profile'
+  ) {
+    let threadsBrowserContextId: string | null = null;
+    {
+      const profileOverride = (toolInput.profile as string | undefined) || null;
+      const profiles = listProfiles();
+      if (profiles.length === 0) {
+        const errorResult: ToolResult = { success: false, error: 'No Chrome profiles found. Log into Threads in desktop Chrome via onboarding.' };
+        ctx.executedToolCalls.set(toolKey, errorResult);
+        yield { type: 'tool_done', name: request.name, result: errorResult };
+        return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
+      }
+      const profileHint = profileOverride
+        || await (async () => {
+          try {
+            const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'threads_posting_profile').maybeSingle();
+            const val = (data as { value: string } | null)?.value;
+            if (val && val.trim().length > 0) return val.trim();
+            // Fallback to x_posting_profile
+            const { data: d2 } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'x_posting_profile').maybeSingle();
+            const v2 = (d2 as { value: string } | null)?.value;
+            return v2 && v2.trim().length > 0 ? v2.trim() : null;
+          } catch { return null; }
+        })();
+      const handleHint = profileHint
+        ? null
+        : await (async () => {
+          try {
+            const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'threads_posting_handle').maybeSingle();
+            const val = (data as { value: string } | null)?.value;
+            if (val && val.trim().length > 0) return val.trim();
+            const { data: d2 } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'x_posting_handle').maybeSingle();
+            const v2 = (d2 as { value: string } | null)?.value;
+            return v2 && v2.trim().length > 0 ? v2.trim() : null;
+          } catch { return null; }
+        })();
+      const target = (profileHint && findProfileByIdentity(profiles, profileHint))
+        || (handleHint && profileByHandleHint(profiles, handleHint))
+        || profiles.find((p) => !!p.email)
+        || profiles[0];
+      yield { type: 'status', message: `Ensuring Chrome profile "${target.email || target.directory}" for Threads...` };
+      try {
+        await ensureDebugChrome({ preferredProfile: target.directory });
+        const opened = await openProfileWindow({
+          profileDir: target.directory,
+          url: 'https://www.threads.com/',
+        });
+        threadsBrowserContextId = opened.browserContextId;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const errorResult: ToolResult = { success: false, error: `Couldn't open Chrome profile for Threads: ${msg}` };
+        ctx.executedToolCalls.set(toolKey, errorResult);
+        yield { type: 'tool_done', name: request.name, result: errorResult };
+        return { toolName: request.name, result: errorResult, resultContent: errorResult.error!, isError: true };
+      }
+    }
+
+    const expectedThreadsHandle = await (async () => {
+      try {
+        const { data } = await ctx.toolCtx.db.from('runtime_settings').select('value').eq('key', 'threads_posting_handle').maybeSingle();
+        const val = (data as { value: string } | null)?.value;
+        if (val && val.trim().length > 0) return val.trim().replace(/^@/, '');
+        // Fallback: no specific Threads handle configured
+        return undefined;
+      } catch { return undefined; }
+    })();
+
+    const dryRun = toolInput.dry_run !== false;
+    const opLabel = request.name.replace('threads_', '').replace('_', ' ');
+    yield { type: 'status', message: `${dryRun ? 'DRY RUN' : 'LIVE'}: Threads ${opLabel}...` };
+
+    let opResult: {
+      success: boolean;
+      message: string;
+      screenshotBase64?: string;
+      postsTyped?: number;
+      postsPublished?: number;
+      currentUrl?: string;
+      handle?: string;
+    };
+    try {
+      const ctxId = threadsBrowserContextId || undefined;
+      if (request.name === 'threads_compose_post') {
+        opResult = await composeThreadsPostViaBrowser({
+          text: String(toolInput.text || ''),
+          dryRun,
+          expectedHandle: expectedThreadsHandle,
+          expectedBrowserContextId: ctxId,
+        });
+      } else if (request.name === 'threads_compose_thread') {
+        const posts = Array.isArray(toolInput.posts) ? (toolInput.posts as string[]) : [];
+        opResult = await composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle: expectedThreadsHandle, expectedBrowserContextId: ctxId });
+      } else /* threads_read_profile */ {
+        opResult = await readThreadsProfileViaBrowser({ expectedBrowserContextId: ctxId });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error({ err: msg }, `[threads-posting] ${request.name} threw`);
+      opResult = { success: false, message: `threads-posting handler crashed: ${msg}` };
+    }
+
+    const dataEnvelope: Record<string, unknown> = {
+      message: opResult.message,
+      currentUrl: opResult.currentUrl,
+    };
+    if (opResult.postsTyped !== undefined) dataEnvelope.postsTyped = opResult.postsTyped;
+    if (opResult.postsPublished !== undefined) dataEnvelope.postsPublished = opResult.postsPublished;
+    if (opResult.handle !== undefined) dataEnvelope.handle = opResult.handle;
+
+    if (opResult.screenshotBase64 && ctx.browserState.dataDir) {
+      try {
+        const saved = await saveScreenshotLocally(opResult.screenshotBase64, ctx.browserState.dataDir);
+        if (saved) dataEnvelope.screenshotPath = saved;
+      } catch (err) {
+        logger.warn({ err }, '[threads-posting] failed to save screenshot');
+      }
+    }
+
+    // Content calendar sync for Threads posts
+    if (opResult.success && !dryRun && request.name !== 'threads_read_profile') {
+      try {
+        const { syncResource } = await import('../control-plane/sync-resources.js');
+        const nowIso = new Date().toISOString();
+        const calId = crypto.randomUUID();
+
+        let calendarPayload: Record<string, unknown> | null = null;
+        if (request.name === 'threads_compose_post') {
+          calendarPayload = {
+            id: calId,
+            platform: 'threads',
+            content: String(toolInput.text || ''),
+            content_type: 'social_post',
+            status: 'published',
+            published_at: nowIso,
+            published_url: opResult.currentUrl || null,
+            metadata: { posted_via: 'threads_compose_post' },
+          };
+        } else if (request.name === 'threads_compose_thread') {
+          const posts = Array.isArray(toolInput.posts) ? (toolInput.posts as string[]) : [];
+          calendarPayload = {
+            id: calId,
+            platform: 'threads',
+            content: posts.join('\n\n'),
+            content_type: 'social_post',
+            status: 'published',
+            published_at: nowIso,
+            published_url: opResult.currentUrl || null,
+            metadata: { posted_via: 'threads_compose_thread', post_count: posts.length },
+          };
+        }
+
+        if (calendarPayload) {
+          await syncResource(ctx.toolCtx, 'content_calendar', 'upsert', calendarPayload as Record<string, unknown> & { id: string });
+          dataEnvelope.calendarSynced = true;
+          dataEnvelope.calendarId = calId;
+        }
+      } catch (err) {
+        logger.warn({ err, tool: request.name }, '[threads-posting] content_calendar sync failed');
       }
     }
 
