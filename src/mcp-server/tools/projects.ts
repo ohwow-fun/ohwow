@@ -11,7 +11,7 @@ export function registerProjectTools(server: McpServer, client: DaemonApiClient)
   // ohwow_list_projects — Direct REST
   server.tool(
     'ohwow_list_projects',
-    '[Projects] List all projects with status and task counts.',
+    '[Projects] List all projects with id, name, description, status, task counts (total/completed), and timestamps.',
     {},
     async () => {
       try {
@@ -47,7 +47,7 @@ export function registerProjectTools(server: McpServer, client: DaemonApiClient)
   // ohwow_list_goals — Via orchestrator (no direct REST endpoint)
   server.tool(
     'ohwow_list_goals',
-    '[Goals] List workspace goals with progress tracking.',
+    '[Goals] List workspace goals with progress tracking (target, current value, percentage). Routes through orchestrator (~15s).',
     {},
     async () => {
       try {

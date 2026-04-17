@@ -11,7 +11,7 @@ export function registerWorkflowTools(server: McpServer, client: DaemonApiClient
   // ohwow_list_workflows — Direct REST
   server.tool(
     'ohwow_list_workflows',
-    '[Workflows] List all workflows in the workspace with their steps and status.',
+    '[Workflows] List all workflows in the workspace. Returns id, name, description, step definitions, enabled status, and last run info.',
     {},
     async () => {
       try {
@@ -48,7 +48,7 @@ export function registerWorkflowTools(server: McpServer, client: DaemonApiClient
   // ohwow_list_automations — Direct REST
   server.tool(
     'ohwow_list_automations',
-    '[Automations] List all automations with their triggers and status.',
+    '[Automations] List all automations with their trigger conditions, action types, cooldown settings, fire counts, and enabled status.',
     {},
     async () => {
       try {

@@ -10,13 +10,13 @@ import type { DaemonApiClient } from '../api-client.js';
 export function registerEmailTools(server: McpServer, client: DaemonApiClient): void {
   server.tool(
     'ohwow_search_emails',
-    '[Email] Search inbox by sender, subject, or date range. Returns subject, sender, snippet, and read status.',
+    '[Email] Search and filter email messages. Returns id, from_address, from_name, subject, snippet, is_read, is_starred, has_attachments, and received_at. Supports filtering by sender, subject, date range, and read status. Fast direct query (not AI-powered). For an AI-generated summary of unread emails, use ohwow_summarize_inbox instead.',
     {
       search: z.string().optional().describe('Full-text search across subject, sender, and snippet'),
       from: z.string().optional().describe('Filter by sender email (partial match)'),
       subject: z.string().optional().describe('Filter by subject (partial match)'),
-      after: z.string().optional().describe('Only emails received after this date (ISO)'),
-      before: z.string().optional().describe('Only emails received before this date (ISO)'),
+      after: z.string().optional().describe('Only emails received after this ISO 8601 datetime (e.g. 2026-04-15T00:00:00Z)'),
+      before: z.string().optional().describe('Only emails received before this ISO 8601 datetime (e.g. 2026-04-16T23:59:59Z)'),
       is_read: z.boolean().optional().describe('Filter by read status'),
       limit: z.number().optional().describe('Max results (default: 50)'),
     },
@@ -41,7 +41,7 @@ export function registerEmailTools(server: McpServer, client: DaemonApiClient): 
 
   server.tool(
     'ohwow_summarize_inbox',
-    '[Email] AI summary of unread or recent emails. Groups by priority and highlights action items.',
+    '[Email] AI-generated summary of unread or recent emails. Groups by priority: urgent items first, then items needing a response, then FYI. Highlights action items. Routes through orchestrator (~30s). For raw email data, use ohwow_search_emails instead.',
     {
       hours: z.number().optional().describe('Look back N hours (default: 24)'),
     },

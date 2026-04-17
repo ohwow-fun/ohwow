@@ -11,7 +11,7 @@ export function registerCrmTools(server: McpServer, client: DaemonApiClient): vo
   // ohwow_list_contacts — List contacts via direct REST
   server.tool(
     'ohwow_list_contacts',
-    '[CRM] List contacts in the workspace. Returns name, email, company, pipeline stage, and tags.',
+    '[CRM] List contacts in the workspace. Returns id, name, email, phone, company, contact_type (lead/customer/partner), status, tags, and notes. Use the `search` param for quick filtering by name/email/company. For deeper full-text search across all fields including notes, use ohwow_search_contacts instead.',
     {
       search: z.string().optional().describe('Filter by name, email, or company'),
       limit: z.number().optional().describe('Max results (default: 50)'),
@@ -34,7 +34,7 @@ export function registerCrmTools(server: McpServer, client: DaemonApiClient): vo
   // ohwow_create_contact — Create contact via direct REST
   server.tool(
     'ohwow_create_contact',
-    '[CRM] Add a new contact to the CRM.',
+    '[CRM] Add a new contact to the CRM. Returns the created contact with id, timestamps, and all fields. Contacts default to type "lead" and status "active".',
     {
       name: z.string().describe('Contact full name'),
       email: z.string().optional().describe('Email address'),
@@ -62,7 +62,7 @@ export function registerCrmTools(server: McpServer, client: DaemonApiClient): vo
   // ohwow_search_contacts — Semantic search via orchestrator
   server.tool(
     'ohwow_search_contacts',
-    '[CRM] Full-text search across contacts by name, email, company, or notes.',
+    '[CRM] Deep full-text search across all contact fields including notes and custom fields. Routes through the orchestrator (slower, ~15s). For simple filtering by name/email/company, use ohwow_list_contacts with the `search` param instead.',
     {
       query: z.string().describe('Search query'),
     },

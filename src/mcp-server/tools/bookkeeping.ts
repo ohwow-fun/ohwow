@@ -10,11 +10,11 @@ import type { DaemonApiClient } from '../api-client.js';
 export function registerBookkeepingTools(server: McpServer, client: DaemonApiClient): void {
   server.tool(
     'ohwow_list_expenses',
-    '[Finance] List business expenses with category, amount, vendor, and date.',
+    '[Finance] List business expenses. Returns id, description, amount_cents, currency, vendor, expense_date, category_id, is_recurring, tax_deductible, and tags.',
     {
       category_id: z.string().optional().describe('Filter by expense category ID'),
-      after: z.string().optional().describe('Only expenses after this date (ISO)'),
-      before: z.string().optional().describe('Only expenses before this date (ISO)'),
+      after: z.string().optional().describe('Only expenses after this date (YYYY-MM-DD)'),
+      before: z.string().optional().describe('Only expenses before this date (YYYY-MM-DD)'),
       limit: z.number().optional().describe('Max results (default: 50)'),
     },
     async ({ category_id, after, before, limit }) => {
@@ -83,7 +83,7 @@ export function registerBookkeepingTools(server: McpServer, client: DaemonApiCli
 
   server.tool(
     'ohwow_list_team',
-    '[Team] List team members with name, role, and department.',
+    '[Team] List team members. Returns id, name, role, department, email, hourly_rate_cents, and status. Uses the existing team-members API.',
     {},
     async () => {
       try {
@@ -126,11 +126,11 @@ export function registerBookkeepingTools(server: McpServer, client: DaemonApiCli
 
   server.tool(
     'ohwow_time_report',
-    '[Time] Time tracking report grouped by person, project, or date. Shows total hours, billable hours, and entry counts.',
+    '[Time] Time tracking report. Returns total_hours, billable_hours, entry_count, and grouped breakdown (by person name, project name, or date). Each group shows total_minutes, billable_minutes, and entry_count.',
     {
       group_by: z.enum(['person', 'project', 'date']).optional().describe('How to group results (default: person)'),
-      after: z.string().optional().describe('Only entries after this date (ISO)'),
-      before: z.string().optional().describe('Only entries before this date (ISO)'),
+      after: z.string().optional().describe('Only entries after this date (YYYY-MM-DD)'),
+      before: z.string().optional().describe('Only entries before this date (YYYY-MM-DD)'),
       team_member_id: z.string().optional().describe('Filter by team member'),
       project_id: z.string().optional().describe('Filter by project'),
     },

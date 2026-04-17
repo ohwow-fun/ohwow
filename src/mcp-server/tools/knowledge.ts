@@ -11,7 +11,7 @@ export function registerKnowledgeTools(server: McpServer, client: DaemonApiClien
   // ohwow_list_knowledge — Via orchestrator
   server.tool(
     'ohwow_list_knowledge',
-    '[Knowledge] List all documents in the knowledge base.',
+    '[Knowledge] List all documents in the knowledge base. Returns document titles, sources, chunk counts, and sync status. Routes through orchestrator (~15s).',
     {},
     async () => {
       try {
@@ -28,7 +28,7 @@ export function registerKnowledgeTools(server: McpServer, client: DaemonApiClien
   // ohwow_search_knowledge — Via orchestrator (RAG search)
   server.tool(
     'ohwow_search_knowledge',
-    '[Knowledge] Semantic search across the knowledge base. Returns relevant document chunks.',
+    '[Knowledge] Semantic (RAG) search across the knowledge base. Returns relevant document chunks ranked by similarity, with source attribution. Routes through orchestrator (~15s).',
     {
       query: z.string().describe('The search query'),
     },
