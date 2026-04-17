@@ -12,7 +12,12 @@ export interface VisualLayer {
   params?: Record<string, unknown>;
 }
 
-export type VisualLayerPrimitive =
+/**
+ * Built-in primitive names shipped with @ohwow/video. The public
+ * VisualLayerPrimitive type is an open set so consumers can register custom
+ * primitives via registerLayerPrimitive() without touching this file.
+ */
+export type BuiltinVisualLayerPrimitive =
   | "aurora"
   | "bokeh"
   | "light-rays"
@@ -32,6 +37,8 @@ export type VisualLayerPrimitive =
   | "grid-morph"
   | "text-shadow-trail"
   | "video-clip";
+
+export type VisualLayerPrimitive = BuiltinVisualLayerPrimitive | (string & {});
 
 export type TextAnimation =
   | "typewriter"
