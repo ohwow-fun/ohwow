@@ -320,23 +320,35 @@ export class ContentCadenceScheduler {
   }
 
   /**
-   * True when the most recent completed X post task was dispatched less
-   * than MIN_POST_GAP_MS ago. Prevents rapid-fire posting on daemon
-   * restarts (each restart fires an immediate tick).
+   * True when ANY X post task was dispatched less than MIN_POST_GAP_MS ago,
+   * regardless of outcome. Prevents rapid-fire posting on daemon restarts
+   * (each restart fires an immediate tick) AND on failure cascades (when
+   * X blocks a duplicate, the task ends status='failed' with completed_at
+   * set to null — the old version keyed on completed_at and status='completed'
+   * so every failed post let the next tick dispatch again, burning tasks at
+   * the daemon-restart rate).
+   *
+   * Keys on created_at: dispatch time, which is set the moment we queue the
+   * task and therefore always present regardless of later status. Any status
+   * counts — pending, in_progress, completed, failed, rejected.
    */
   private async lastPostTooRecent(): Promise<boolean> {
     try {
       const { data } = await this.db
-        .from<{ completed_at: string }>('agent_workforce_tasks')
-        .select('completed_at')
+        .from<{ created_at: string }>('agent_workforce_tasks')
+        .select('created_at')
         .eq('workspace_id', this.workspaceId)
         .eq('title', 'Post one tweet today')
-        .eq('status', 'completed')
-        .order('completed_at', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(1);
-      const rows = (data ?? []) as Array<{ completed_at: string | null }>;
-      if (rows.length === 0 || !rows[0].completed_at) return false;
-      const elapsed = Date.now() - new Date(rows[0].completed_at).getTime();
+      const rows = (data ?? []) as Array<{ created_at: string | null }>;
+      if (rows.length === 0 || !rows[0].created_at) return false;
+      // SQLite stores `datetime('now')` as UTC naive ("2026-04-17 00:34:32").
+      // new Date() on a naive string parses as local time, which skews the
+      // elapsed comparison by the TZ offset. Normalise to UTC explicitly.
+      const ts = rows[0].created_at;
+      const iso = /Z$|[+-]\d\d:?\d\d$/.test(ts) ? ts : ts.replace(' ', 'T') + 'Z';
+      const elapsed = Date.now() - new Date(iso).getTime();
       return elapsed < MIN_POST_GAP_MS;
     } catch {
       return false; // fail open — don't block posting on a query error

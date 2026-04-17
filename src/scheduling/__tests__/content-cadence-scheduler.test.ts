@@ -193,6 +193,49 @@ describe('ContentCadenceScheduler — integration', () => {
     expect(env.engine.executeTask).not.toHaveBeenCalled();
   });
 
+  it('cooldown blocks dispatch when a failed tweet task was created recently (daemon-restart spam guard)', async () => {
+    // Regression: lastPostTooRecent used to filter status='completed' and
+    // key on completed_at. When X blocks a post as duplicate content, the
+    // task ends status='failed' with completed_at=null, so the guard
+    // returned false and every subsequent daemon-restart tick dispatched
+    // another near-duplicate task. This test pins the fix — a recent
+    // dispatch in ANY status blocks the next tick.
+    seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    env.rawDb
+      .prepare(
+        `INSERT INTO agent_workforce_tasks
+          (id, workspace_id, agent_id, title, description, status, created_at)
+         VALUES (?, ?, ?, 'Post one tweet today', 'desc', 'failed', ?)`,
+      )
+      .run('tsk-failed-recent', WORKSPACE_ID, 'a-1', fiveMinAgo);
+
+    await makeScheduler(env).tick();
+
+    // Exactly one task — the pre-seeded failed one. No new dispatch.
+    const newTasks = env.rawDb
+      .prepare("SELECT COUNT(*) AS n FROM agent_workforce_tasks WHERE workspace_id = ?")
+      .get(WORKSPACE_ID) as { n: number };
+    expect(newTasks.n).toBe(1);
+    expect(env.engine.executeTask).not.toHaveBeenCalled();
+  });
+
+  it('cooldown expires after MIN_POST_GAP_MS — a 3h-old task does not block', async () => {
+    seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    env.rawDb
+      .prepare(
+        `INSERT INTO agent_workforce_tasks
+          (id, workspace_id, agent_id, title, description, status, created_at)
+         VALUES (?, ?, ?, 'Post one tweet today', 'desc', 'failed', ?)`,
+      )
+      .run('tsk-failed-old', WORKSPACE_ID, 'a-1', threeHoursAgo);
+
+    await makeScheduler(env).tick();
+
+    expect(env.engine.executeTask).toHaveBeenCalledTimes(1);
+  });
+
   it('dispatches when knob raises postsPerDay above postsToday', async () => {
     seedAgent(env.rawDb, { id: 'a-1', name: 'Content Writer', status: 'idle' });
 
