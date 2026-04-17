@@ -217,6 +217,11 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
     'agent_workforce_routing_stats',
     'agent_workforce_attachments',
     'agent_workforce_shadow_runs',
+    // Phase 5 outcome ledger — baseline rows inserted before
+    // consolidation were previously orphaned (the probe reads under
+    // the canonical id). Unified here so the lift-measurement loop
+    // stays visible across the 'local' → cloud-UUID transition.
+    'lift_measurements',
   ];
   let totalMigrated = 0;
   const perTable: Record<string, number> = {};

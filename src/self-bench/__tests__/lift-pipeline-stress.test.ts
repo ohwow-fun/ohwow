@@ -235,16 +235,18 @@ describe('insertBaseline clock skew', () => {
   });
 });
 
-describe('workspace-id rewrite orphaning', () => {
-  // Tripwire test: if the daemon's consolidation step (src/daemon/
-  // start.ts) ever rewrites workspace_id on lift_measurements along
-  // with agent_workforce_workspaces, this test should flip and be
-  // updated. Today, rows inserted under 'local' become invisible to
-  // the probe once consolidation assigns the workspace a UUID.
-  it('rows inserted under "local" are invisible to a probe reading the cloud UUID', async () => {
+describe('workspace-id rewrite consolidation', () => {
+  // Before the daemon/cloud.ts consolidation pass was extended to
+  // lift_measurements, rows inserted under 'local' stayed orphaned
+  // after the canonical workspace id flipped to a cloud UUID — the
+  // probe (reading under the canonical id) would never see them. This
+  // test exercises the post-consolidation shape: after the UPDATE
+  // pass runs, the pre-consolidation row is visible under the
+  // canonical id and the 'local' sentinel is empty.
+  it('rows inserted under "local" are reachable under the canonical id after a consolidation-shaped UPDATE', async () => {
     const tables: Record<string, Table> = {};
     const db = buildDb(tables);
-    const baselineAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(); // 2 days ago
+    const baselineAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
     await insertBaseline(db, {
       workspaceId: 'local',
       commitSha: 'pre-consol-sha',
@@ -252,15 +254,22 @@ describe('workspace-id rewrite orphaning', () => {
       baselineValue: 100,
       baselineAt,
     });
-    const rewrittenWorkspaceId = 'd6080b9b-c900-4b4f-8171-c144cbf7c006';
+    const canonicalWorkspaceId = 'd6080b9b-c900-4b4f-8171-c144cbf7c006';
+    // Emulate the daemon/cloud.ts UPDATE that runs during
+    // consolidation: rewrite every non-canonical workspace_id to the
+    // canonical one. This is the exact statement in cloud.ts
+    // (UPDATE lift_measurements SET workspace_id=? WHERE workspace_id!=?).
+    for (const row of tables.lift_measurements.rows) {
+      if (row.workspace_id !== canonicalWorkspaceId) row.workspace_id = canonicalWorkspaceId;
+    }
     const nowIso = new Date().toISOString();
-    // Probe reads under the post-consolidation id → sees nothing.
-    const pendingUnderNew = await listPendingMeasurements(db, rewrittenWorkspaceId, nowIso);
-    expect(pendingUnderNew.length).toBe(0);
-    // Row is still there under the old id (orphaned, not lost).
-    const pendingUnderOld = await listPendingMeasurements(db, 'local', nowIso);
-    expect(pendingUnderOld.length).toBe(1);
-    expect(pendingUnderOld[0].commit_sha).toBe('pre-consol-sha');
+    // Probe now reads under the canonical id and finds the migrated row.
+    const pendingUnderCanonical = await listPendingMeasurements(db, canonicalWorkspaceId, nowIso);
+    expect(pendingUnderCanonical.length).toBe(1);
+    expect(pendingUnderCanonical[0].commit_sha).toBe('pre-consol-sha');
+    // 'local' is empty — no orphan left behind.
+    const pendingUnderLocal = await listPendingMeasurements(db, 'local', nowIso);
+    expect(pendingUnderLocal.length).toBe(0);
   });
 });
 
