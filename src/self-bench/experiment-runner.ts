@@ -104,6 +104,57 @@ const JUDGE_HISTORY_LIMIT = 20;
 export const DEFAULT_VALIDATION_DELAY_MS = 5 * 60 * 1000;
 
 /**
+ * Stable shape key for intervention-validation (and rollback) subjects.
+ *
+ * The enqueue path mints a fresh UUID per intervention, and we used to
+ * stamp `subject: intervention:${uuid}` on every validation finding. The
+ * insight distiller keys baselines by (experiment_id, subject), so a
+ * fresh UUID meant a baseline miss → novelty scorer stamped 'first_seen'
+ * on every validation → validations crowned the feed above genuinely
+ * stuck loops (e.g. revenue-pipeline-observer at consecutive_fails=176
+ * scoring 0 and sinking out of sight).
+ *
+ * Deriving the key from the intervention's *shape* instead collapses
+ * repeated validations of the same-shape intervention onto a single
+ * cluster, so novelty scoring can actually tell "new problem" from
+ * "same problem, again."
+ *
+ *   - config-change interventions (baseline.config_keys is an array) →
+ *     key on the sorted, comma-joined keys. Two interventions that
+ *     tweak the same config knob (even with different values) collapse.
+ *   - authoring-gate interventions (baseline.brief_slug is a string) →
+ *     key on the brief_slug. Repeated failures of the same author
+ *     brief collapse into one cluster.
+ *   - anything else → fall back to `${experimentId}:shape-unknown`.
+ *     All shape-unknown validations for one experiment collapse too;
+ *     the alternative (UUID keying) was exactly the bug we're fixing.
+ *
+ * `kind` keeps validation and rollback findings on separate clusters
+ * even when they share the same underlying baseline shape — an operator
+ * looking at a feed mixes the two freely today and we want both to
+ * remain independently visible.
+ */
+export function deriveInterventionSubjectKey(
+  kind: 'intervention' | 'rollback',
+  experimentId: string,
+  baseline: Record<string, unknown>,
+): string {
+  const configKeys = baseline.config_keys;
+  if (Array.isArray(configKeys) && configKeys.length > 0) {
+    const sorted = configKeys
+      .filter((k): k is string => typeof k === 'string' && k.length > 0)
+      .sort()
+      .join(',');
+    if (sorted) return `${kind}:config:${sorted}`;
+  }
+  const briefSlug = baseline.brief_slug;
+  if (typeof briefSlug === 'string' && briefSlug.length > 0) {
+    return `${kind}:brief:${briefSlug}`;
+  }
+  return `${kind}:${experimentId}:shape-unknown`;
+}
+
+/**
  * Map ValidationOutcome → Verdict for the validation finding row.
  * 'held' is the happy path (the intervention is still effective),
  * 'failed' is the action-needed path (the intervention rebounded),
@@ -560,7 +611,7 @@ export class ExperimentRunner implements ExperimentScheduler {
         await writeFinding(this.db, {
           experimentId: exp.id,
           category: 'validation',
-          subject: `intervention:${pending.interventionFindingId}`,
+          subject: deriveInterventionSubjectKey('intervention', exp.id, cleanBaseline),
           hypothesis: `Validation of intervention finding ${pending.interventionFindingId}`,
           verdict: 'error',
           summary: `validate() threw: ${errorMessage ?? 'unknown error'}`,
@@ -584,7 +635,7 @@ export class ExperimentRunner implements ExperimentScheduler {
       validationFindingId = await writeFinding(this.db, {
         experimentId: exp.id,
         category: 'validation',
-        subject: `intervention:${pending.interventionFindingId}`,
+        subject: deriveInterventionSubjectKey('intervention', exp.id, cleanBaseline),
         hypothesis: `Validation of intervention finding ${pending.interventionFindingId}`,
         verdict: verdictForOutcome(result.outcome),
         summary: result.summary,
@@ -649,7 +700,7 @@ export class ExperimentRunner implements ExperimentScheduler {
           const rollbackFindingId = await writeFinding(this.db, {
             experimentId: exp.id,
             category: 'validation',
-            subject: `rollback:${pending.interventionFindingId}`,
+            subject: deriveInterventionSubjectKey('rollback', exp.id, cleanBaseline),
             hypothesis: `Auto-rollback of intervention finding ${pending.interventionFindingId} after validation outcome=failed`,
             verdict: 'warning',
             summary: `rollback: ${rollbackApplied.description}`,
@@ -689,7 +740,7 @@ export class ExperimentRunner implements ExperimentScheduler {
           await writeFinding(this.db, {
             experimentId: exp.id,
             category: 'validation',
-            subject: `rollback:${pending.interventionFindingId}`,
+            subject: deriveInterventionSubjectKey('rollback', exp.id, cleanBaseline),
             hypothesis: `Auto-rollback attempt for ${pending.interventionFindingId}`,
             verdict: 'error',
             summary: `rollback() threw: ${rollbackError}`,
