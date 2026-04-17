@@ -18,14 +18,124 @@
  */
 
 import { Router } from 'express';
+import fs from 'node:fs';
+import { join } from 'node:path';
 import type { TypedEventBus } from '../../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../../tui/types.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ControlPlaneClient } from '../../control-plane/client.js';
+import { resolveActiveWorkspace } from '../../config.js';
+import { ATTRIBUTION_EVENT_SAFELIST } from './attribution.js';
 import { logger } from '../../lib/logger.js';
 
 /** Whitelist a custom_field key before interpolating it into a json_extract() expression. */
 const CUSTOM_FIELD_KEY_RE = /^[a-zA-Z0-9_]{1,64}$/;
+
+/** Parsed shape of what we write/read from agent_workforce_contacts.custom_fields. */
+interface ParsedCustomFields {
+  x_handle?: string;
+  x_permalink?: string;
+  x_bucket?: string;
+  x_intent?: string;
+  x_intent_confidence?: number;
+  x_source?: string;
+  [k: string]: unknown;
+}
+
+interface AuthorLedgerRow {
+  handle?: string;
+  display_name?: string;
+  permalink?: string;
+  bucket?: string;
+  score?: number;
+  replies?: number;
+  likes?: number;
+  tags?: string[];
+  sources?: string[];
+  touches?: number;
+  first_seen_ts?: string;
+  last_seen_ts?: string;
+  qualified_ts?: string | null;
+  crm_contact_id?: string | null;
+}
+
+function safeParseJson<T>(raw: unknown, fallback: T): T {
+  if (raw == null) return fallback;
+  if (typeof raw !== 'string') return raw as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Rehydrate the X posts we've seen from this handle, for provenance. Reads
+ * x-authors-ledger.jsonl (one row per observed author+permalink) and returns
+ * the entries whose handle matches. Empty array if the file isn't present
+ * (non-X workspace, or ledger hasn't been written yet) or the contact has
+ * no x_handle.
+ *
+ * Kept as a jsonl scan rather than a table join because the ledger is the
+ * source of truth that the x-authors-to-crm pipeline writes; the CRM row
+ * is a derivative. Moving to a table would require adding writers in the
+ * pipeline and is v2 scope.
+ */
+function rehydrateXAuthorLedger(xHandle: string | undefined): AuthorLedgerRow[] {
+  if (!xHandle) return [];
+  let dataDir: string;
+  try {
+    dataDir = resolveActiveWorkspace().dataDir;
+  } catch (err) {
+    logger.debug({ err }, '[contacts] dossier: could not resolve workspace');
+    return [];
+  }
+  const path = join(dataDir, 'x-authors-ledger.jsonl');
+  if (!fs.existsSync(path)) return [];
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path, 'utf-8');
+  } catch (err) {
+    logger.debug({ err }, '[contacts] dossier: read ledger failed');
+    return [];
+  }
+  const needle = xHandle.toLowerCase();
+  const matches: AuthorLedgerRow[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    if (!line.toLowerCase().includes(needle)) continue;
+    try {
+      const row = JSON.parse(line) as AuthorLedgerRow;
+      if (typeof row.handle === 'string' && row.handle.toLowerCase() === needle) {
+        matches.push(row);
+      }
+    } catch {
+      // Skip malformed lines — the ledger is append-only and a partial
+      // write on crash shouldn't poison the read path.
+    }
+  }
+  matches.sort((a, b) => {
+    const at = a.last_seen_ts ?? a.first_seen_ts ?? '';
+    const bt = b.last_seen_ts ?? b.first_seen_ts ?? '';
+    return bt.localeCompare(at);
+  });
+  return matches;
+}
+
+/** Derive a one-line summary of how this lead entered the CRM. */
+function summarizeProvenance(cf: ParsedCustomFields): string {
+  if (cf.x_source === 'author-ledger' && cf.x_handle) {
+    const handle = `@${cf.x_handle}`;
+    const bucket = cf.x_bucket ? ` · bucket=${cf.x_bucket}` : '';
+    const intent = cf.x_intent ? ` · intent=${cf.x_intent}` : '';
+    const conf = typeof cf.x_intent_confidence === 'number'
+      ? ` · conf=${cf.x_intent_confidence.toFixed(2)}`
+      : '';
+    return `X author-ledger (${handle})${bucket}${intent}${conf}`;
+  }
+  if (cf.x_handle) return `X (@${cf.x_handle})`;
+  return 'manual or unknown';
+}
 
 export function createContactsRouter(
   db: DatabaseAdapter,
@@ -194,6 +304,92 @@ export function createContactsRouter(
 
       if (error) { res.status(500).json({ error: error.message }); return; }
       res.json({ data: data || [] });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // Contact dossier — the full "who is this person, how did we find them,
+  // and what's happened since" view in one call. Joins the contact row,
+  // parsed custom_fields + tags, the full event timeline (capped at 200),
+  // linked deals, the outreach-token + any attribution hits pulled out of
+  // the timeline, and (for X-sourced contacts) the rehydrated
+  // x-authors-ledger posts for this handle. Designed so an agent or
+  // operator can reconstruct a lead's provenance without fanning out
+  // across five endpoints.
+  router.get('/api/contacts/:id/dossier', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const { data: contactRow, error: contactErr } = await db.from('agent_workforce_contacts')
+        .select('*')
+        .eq('id', req.params.id)
+        .eq('workspace_id', workspaceId)
+        .maybeSingle();
+
+      if (contactErr) { res.status(500).json({ error: contactErr.message }); return; }
+      if (!contactRow) { res.status(404).json({ error: 'contact not found' }); return; }
+
+      const contact = contactRow as Record<string, unknown>;
+      const customFields = safeParseJson<ParsedCustomFields>(contact.custom_fields, {});
+      const tags = safeParseJson<string[]>(contact.tags, []);
+
+      const { data: eventRows } = await db.from('agent_workforce_contact_events')
+        .select('*')
+        .eq('contact_id', req.params.id)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      const events: Record<string, unknown>[] = (eventRows || []).map((row): Record<string, unknown> => {
+        const r = row as Record<string, unknown>;
+        return {
+          ...r,
+          payload: safeParseJson<Record<string, unknown>>(r.payload, {}),
+          metadata: safeParseJson<Record<string, unknown>>(r.metadata, {}),
+        };
+      });
+
+      const { data: dealRows } = await db.from('deals')
+        .select('*')
+        .eq('workspace_id', workspaceId)
+        .eq('contact_id', req.params.id)
+        .order('updated_at', { ascending: false });
+      const deals = dealRows || [];
+
+      const attributionHits = events.filter((e) => {
+        const kind = typeof e.kind === 'string' ? e.kind : null;
+        return kind && ATTRIBUTION_EVENT_SAFELIST.has(kind);
+      });
+
+      const outreachToken = typeof contact.outreach_token === 'string' ? contact.outreach_token : null;
+      const xLedger = rehydrateXAuthorLedger(customFields.x_handle);
+
+      res.json({
+        data: {
+          contact: { ...contact, custom_fields: customFields, tags },
+          provenance: {
+            source: customFields.x_source
+              ? `x:${customFields.x_source}`
+              : customFields.x_handle
+                ? 'x'
+                : 'manual',
+            summary: summarizeProvenance(customFields),
+            x: customFields.x_handle ? {
+              handle: customFields.x_handle,
+              permalink: customFields.x_permalink ?? null,
+              bucket: customFields.x_bucket ?? null,
+              intent: customFields.x_intent ?? null,
+              intent_confidence: customFields.x_intent_confidence ?? null,
+              qualified_source: customFields.x_source ?? null,
+            } : null,
+          },
+          events,
+          deals,
+          outreach: {
+            token: outreachToken,
+            attribution_hits: attributionHits,
+          },
+          source_posts: { x_authors: xLedger },
+        },
+      });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

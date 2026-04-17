@@ -94,12 +94,13 @@ describe('MCP tool registration', () => {
     ]);
   });
 
-  it('registers 3 CRM tools', () => {
+  it('registers 4 CRM tools', () => {
     const server = createMockServer();
     registerCrmTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(3);
+    expect(server.tools).toHaveLength(4);
     expect(server.tools.map(t => t.name)).toEqual([
       'ohwow_list_contacts',
+      'ohwow_get_contact',
       'ohwow_create_contact',
       'ohwow_search_contacts',
     ]);
@@ -186,7 +187,7 @@ describe('MCP tool registration', () => {
   it('registers all tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(83);
+    expect(server.tools).toHaveLength(84);
   });
 
   it('every tool has a unique name', () => {

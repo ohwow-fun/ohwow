@@ -31,6 +31,23 @@ export function registerCrmTools(server: McpServer, client: DaemonApiClient): vo
     },
   );
 
+  // ohwow_get_contact — Full contact dossier (provenance + timeline + deals + source posts)
+  server.tool(
+    'ohwow_get_contact',
+    "[CRM] Full dossier for one contact: the row itself (parsed custom_fields + tags), the complete event timeline (qualifier, outreach, attribution hits), linked deals, the outreach_token, and — for X-sourced leads — every post we've observed from this handle (rehydrated from x-authors-ledger). This is the one-call \"who is this person and how did we find them\" view. Use it before acting on a lead so the decision sits on top of their full provenance.",
+    {
+      id: z.string().min(1).describe('Contact id (from ohwow_list_contacts or ohwow_search_contacts).'),
+    },
+    async ({ id }) => {
+      try {
+        const result = await client.get(`/api/contacts/${encodeURIComponent(id)}/dossier`) as Record<string, unknown>;
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result.data ?? result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
+
   // ohwow_create_contact — Create contact via direct REST
   server.tool(
     'ohwow_create_contact',

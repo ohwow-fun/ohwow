@@ -475,6 +475,102 @@ describe('Contacts Routes', () => {
     expect(res._status).toBe(400);
   });
 
+  it('GET /api/contacts/:id/dossier returns contact + provenance + events + deals', async () => {
+    const contact = {
+      id: 'c-1',
+      workspace_id: 'ws-test',
+      name: 'Test Person',
+      email: null,
+      custom_fields: JSON.stringify({
+        x_handle: 'test_handle_xyz_unlikely_9999',
+        x_permalink: '/test_handle_xyz_unlikely_9999/status/1',
+        x_bucket: 'market_signal',
+        x_intent: 'buyer_intent',
+        x_intent_confidence: 0.82,
+        x_source: 'author-ledger',
+      }),
+      tags: JSON.stringify(['x', 'qualified']),
+      outreach_token: 'tok-abc',
+    };
+    const events = [
+      {
+        id: 'e-1',
+        contact_id: 'c-1',
+        kind: 'x:qualified',
+        source: 'x-authors-to-crm',
+        payload: JSON.stringify({ intent: 'buyer_intent', confidence: 0.82 }),
+        created_at: '2026-04-16T01:10:21.811Z',
+      },
+      {
+        id: 'e-2',
+        contact_id: 'c-1',
+        kind: 'x:reached',
+        source: 'attribution',
+        payload: '{}',
+        created_at: '2026-04-16T03:00:00.000Z',
+      },
+    ];
+    const deals = [{ id: 'd-1', contact_id: 'c-1', title: 'Test trial', stage_id: 's-1' }];
+
+    db = mockDb({
+      agent_workforce_contacts: { data: contact },
+      agent_workforce_contact_events: { data: events },
+      deals: { data: deals },
+    });
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
+
+    const handler = findHandler(router, 'get', '/api/contacts/:id/dossier');
+    const req = makeReq({ params: { id: 'c-1' } as Record<string, string> });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res.status).not.toHaveBeenCalled();
+    const body = res._body as { data: Record<string, unknown> };
+    expect(body.data).toBeDefined();
+    const dossier = body.data as Record<string, unknown>;
+
+    // contact + parsed fields
+    const parsedContact = dossier.contact as Record<string, unknown>;
+    expect(parsedContact.id).toBe('c-1');
+    const cf = parsedContact.custom_fields as Record<string, unknown>;
+    expect(cf.x_handle).toBe('test_handle_xyz_unlikely_9999');
+    expect(parsedContact.tags).toEqual(['x', 'qualified']);
+
+    // provenance summary
+    const prov = dossier.provenance as Record<string, unknown>;
+    expect(prov.source).toBe('x:author-ledger');
+    expect(prov.summary).toContain('@test_handle_xyz_unlikely_9999');
+    expect(prov.summary).toContain('conf=0.82');
+
+    // events with parsed payload
+    const parsedEvents = dossier.events as Array<Record<string, unknown>>;
+    expect(parsedEvents).toHaveLength(2);
+    const qualified = parsedEvents.find((e) => e.kind === 'x:qualified')!;
+    expect((qualified.payload as Record<string, unknown>).confidence).toBe(0.82);
+
+    // deals
+    expect((dossier.deals as unknown[]).length).toBe(1);
+
+    // outreach token + attribution hits (x:reached is in the safelist)
+    const outreach = dossier.outreach as Record<string, unknown>;
+    expect(outreach.token).toBe('tok-abc');
+    expect((outreach.attribution_hits as unknown[]).length).toBe(1);
+  });
+
+  it('GET /api/contacts/:id/dossier returns 404 when contact is missing', async () => {
+    db = mockDb({ agent_workforce_contacts: { data: null } });
+    router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
+
+    const handler = findHandler(router, 'get', '/api/contacts/:id/dossier');
+    const req = makeReq({ params: { id: 'nope' } as Record<string, string> });
+    const res = makeRes();
+
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(404);
+  });
+
   it('POST /api/contacts/:id/events rejects missing kind', async () => {
     router = createContactsRouter(db as unknown as DatabaseAdapter, eventBus as never);
     const handler = findHandler(router, 'post', '/api/contacts/:id/events');
