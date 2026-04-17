@@ -460,7 +460,10 @@ export async function findExistingTabForHost(
   const { ownershipMode = 'any', port = DEFAULT_CDP_PORT } = opts;
   let browser: RawCdpBrowser | null = null;
   try {
-    browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+    // spawnIfDown=false: this is a lookup, not an operation. If Chrome
+    // is down we want to return null and let the caller decide whether
+    // to spawn (they likely will, via their own ensureCdpBrowser call).
+    browser = await ensureCdpBrowser({ port, spawnIfDown: false });
     const targets = await browser.getTargets();
     const needle = hostMatch.toLowerCase();
     // In 'ours' mode, only agent-owned tabs are candidates. A human who
@@ -493,7 +496,7 @@ export async function closeTabById(
   releaseTabOwnership(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
-    browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+    browser = await ensureCdpBrowser({ port, spawnIfDown: false });
     await browser.closeTarget(targetId);
   } catch (err) {
     logger.debug(
@@ -503,6 +506,64 @@ export async function closeTabById(
   } finally {
     try { browser?.close(); } catch { /* ignore */ }
   }
+}
+
+// ---------------------------------------------------------------------------
+// CDP connect helper — self-healing entry point for all browser automation.
+// ---------------------------------------------------------------------------
+//
+// Every CDP consumer used to do this two-step ritual:
+//
+//   RawCdpBrowser.connect('http://localhost:9222', 5000)
+//     -> fails with ECONNREFUSED if Chrome is down
+//     -> caller has to catch + retry + call ensureDebugChrome
+//
+// When the operator closes Chrome (or it crashes), every scheduler
+// tick, scan helper, and manual probe all fail until someone notices
+// and spawns a fresh Chrome. That's not self-healing.
+//
+// ensureCdpBrowser wraps the sequence: probe, spawn-if-needed, connect.
+// All compose/scan/reply paths now flow through this, so closing Chrome
+// is a transient blip (next tick spawns a new one) rather than an
+// outage that requires operator intervention.
+//
+// `spawnIfDown` defaults to true for normal callers. Pass false for
+// best-effort cleanup paths (e.g., closing a tab during shutdown)
+// where spawning a whole browser just to close one tab is overkill.
+
+export interface EnsureCdpBrowserOptions {
+  /** CDP port to probe + connect on. Defaults to DEFAULT_CDP_PORT (9222). */
+  port?: number;
+  /**
+   * When the port isn't responding, spawn a debug Chrome first. Default
+   * true — the common case for schedulers and compose helpers. Set false
+   * for fire-and-forget cleanup where we'd rather fail fast than pay
+   * the 5-10s browser-spawn cost.
+   */
+  spawnIfDown?: boolean;
+}
+
+/**
+ * Acquire a RawCdpBrowser connected to the debug Chrome. Spawns one
+ * first if Chrome isn't running (and spawnIfDown is not explicitly
+ * false). Throws if spawn fails or the connect still times out —
+ * callers should wrap in try/catch or finally for cleanup.
+ */
+export async function ensureCdpBrowser(
+  opts: EnsureCdpBrowserOptions = {},
+): Promise<RawCdpBrowser> {
+  const { port = DEFAULT_CDP_PORT, spawnIfDown = true } = opts;
+  if (spawnIfDown) {
+    try {
+      await ensureDebugChrome({ port });
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : err, port },
+        '[chrome-profile-router] ensureDebugChrome failed; CDP connect will retry anyway',
+      );
+    }
+  }
+  return RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
 }
 
 // ---------------------------------------------------------------------------

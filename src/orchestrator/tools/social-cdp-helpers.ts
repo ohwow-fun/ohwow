@@ -12,8 +12,13 @@
  *   - Every helper that touches the browser is async + error-wrapped
  */
 
-import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
-import { markTabOwned, isTabOwned, type TabOwnershipMode } from '../../execution/browser/chrome-profile-router.js';
+import { type RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import {
+  markTabOwned,
+  isTabOwned,
+  ensureCdpBrowser,
+  type TabOwnershipMode,
+} from '../../execution/browser/chrome-profile-router.js';
 import { logger } from '../../lib/logger.js';
 
 /**
@@ -84,7 +89,12 @@ export async function getCdpPageForPlatform(opts: {
   const isUsable = (targetId: string) => ownershipMode === 'any' || isTabOwned(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
-    browser = await RawCdpBrowser.connect(CDP_URL, 5000);
+    // Self-heal: if the debug Chrome is down (operator quit it, crash,
+    // etc.), ensureCdpBrowser spawns one before connecting. Adds ~50ms
+    // when Chrome is already up (a port probe), ~5-10s when it needs
+    // to be spawned. Without this, every scheduler tick fails with
+    // ECONNREFUSED until the operator manually restarts Chrome.
+    browser = await ensureCdpBrowser();
     const targets = await browser.getTargets();
     const pageTargets = targets.filter((t) => t.type === 'page');
     if (pageTargets.length === 0) {

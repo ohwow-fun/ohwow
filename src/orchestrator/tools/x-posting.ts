@@ -57,8 +57,13 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
-import { RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
-import { markTabOwned, isTabOwned, type TabOwnershipMode } from '../../execution/browser/chrome-profile-router.js';
+import { type RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import {
+  markTabOwned,
+  isTabOwned,
+  ensureCdpBrowser,
+  type TabOwnershipMode,
+} from '../../execution/browser/chrome-profile-router.js';
 import { confirmPostLanded, typeIntoRichTextbox, tagTabAsOwned } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -374,7 +379,11 @@ export async function getCdpPage(
   // keep 'any' so operator-opened DM conversations still work).
   const isUsable = (tid: string) => ownershipMode === 'any' || isTabOwned(tid);
   try {
-    browser = await RawCdpBrowser.connect(CDP_URL, 5000);
+    // Self-heal: spawn debug Chrome if it's down before trying to
+    // connect. Every getCdpPage caller (compose, scan, reply, DM)
+    // flows through here, so closing Chrome is a transient blip
+    // rather than an outage requiring operator intervention.
+    browser = await ensureCdpBrowser();
     const targets = await browser.getTargets();
     const pageTargets = targets.filter((t) => t.type === 'page');
     if (pageTargets.length === 0) {

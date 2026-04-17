@@ -25,13 +25,25 @@
  * current URL. Read-only — never clicks, never navigates.
  */
 
-import { RawCdpBrowser, type CdpTargetInfo, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import { type RawCdpBrowser, type CdpTargetInfo, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import { ensureCdpBrowser } from '../../execution/browser/chrome-profile-router.js';
 import { logger } from '../../lib/logger.js';
 import { detectChallenge, dismissWelcomeDialog, type YTChallenge } from './challenges.js';
 import { YTLoginRequiredError, YTSessionError } from './errors.js';
 import { SEL } from './selectors.js';
 
 export const DEFAULT_CDP_PORT = 9222;
+
+/** Extract the port number from a base URL like http://localhost:9222, or fall back to DEFAULT_CDP_PORT. */
+function parseCdpPort(base: string): number {
+  try {
+    const u = new URL(base);
+    const p = parseInt(u.port, 10);
+    return Number.isFinite(p) && p > 0 ? p : DEFAULT_CDP_PORT;
+  } catch {
+    return DEFAULT_CDP_PORT;
+  }
+}
 const STUDIO_URL = 'https://studio.youtube.com';
 
 export interface EnsureYTStudioOptions {
@@ -121,7 +133,13 @@ function pickFallbackContext(targets: CdpTargetInfo[]): { contextId: string | nu
 
 export async function ensureYTStudio(opts: EnsureYTStudioOptions = {}): Promise<YTSession> {
   const ownsBrowser = !opts.browser;
-  const browser = opts.browser ?? (await RawCdpBrowser.connect(opts.cdpHttpBase ?? `http://localhost:${DEFAULT_CDP_PORT}`, 5_000));
+  // ensureCdpBrowser: self-healing connect that spawns debug Chrome
+  // if it's down. Mirror of the compose/reply helpers' connect path —
+  // if the operator closes Chrome, the next ensureYTStudio call
+  // auto-respawns instead of throwing ECONNREFUSED.
+  const browser = opts.browser ?? (await ensureCdpBrowser({
+    port: parseCdpPort(opts.cdpHttpBase ?? `http://localhost:${DEFAULT_CDP_PORT}`),
+  }));
   const loadTimeoutMs = opts.loadTimeoutMs ?? 15_000;
   const throwOnChallenge = opts.throwOnChallenge ?? true;
 
