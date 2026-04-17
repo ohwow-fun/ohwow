@@ -532,13 +532,21 @@ describe('XDmPollerScheduler', () => {
       const rows = env.rawDb.prepare(
         'SELECT conversation_pair, counterparty_user_id, contact_id FROM x_dm_threads ORDER BY conversation_pair',
       ).all() as Array<{ conversation_pair: string; counterparty_user_id: string; contact_id: string | null }>;
+      // Alice pre-seeded → matches via x_user_id lookup, returns aliceId.
+      // Bob unseeded → auto-upsert (c3acc05) creates a fresh CRM contact,
+      // so contact_id is any non-null string.
       expect(rows).toEqual([
         { conversation_pair: `${SELF}:${ALICE}`, counterparty_user_id: ALICE, contact_id: aliceId },
-        { conversation_pair: `${SELF}:${BOB}`, counterparty_user_id: BOB, contact_id: null },
+        {
+          conversation_pair: `${SELF}:${BOB}`,
+          counterparty_user_id: BOB,
+          contact_id: expect.any(String),
+        },
       ]);
+      expect(rows[1].contact_id).not.toBe(aliceId);
     });
 
-    it('degrades to null counterparty_user_id when self id is not configured', async () => {
+    it('auto-creates a contact via conversation_pair when self id is not configured', async () => {
       // No _seedRuntimeConfigCacheForTests call — cache is empty.
       const lister = listerOf({
         success: true,
@@ -554,10 +562,14 @@ describe('XDmPollerScheduler', () => {
       const row = env.rawDb.prepare(
         'SELECT counterparty_user_id, contact_id FROM x_dm_threads',
       ).get() as { counterparty_user_id: string | null; contact_id: string | null };
-      expect(row).toEqual({ counterparty_user_id: null, contact_id: null });
+      // counterparty_user_id still null (no self id to pick from pair),
+      // but upsertContactFromDm falls back to conversation_pair keying
+      // and creates a lead contact for the thread.
+      expect(row.counterparty_user_id).toBeNull();
+      expect(row.contact_id).toEqual(expect.any(String));
     });
 
-    it('refreshes contact_id when the operator creates the contact between ticks', async () => {
+    it('keeps the auto-created pair contact stable across ticks', async () => {
       _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
       const lister = listerOf({
         success: true,
@@ -570,17 +582,30 @@ describe('XDmPollerScheduler', () => {
       });
       await sched.tick();
 
-      const before = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
-      expect(before.contact_id).toBeNull();
+      // First tick auto-creates a CRM contact keyed on x_user_id + pair
+      // (c3acc05: DMs always auto-create CRM contacts).
+      const before = env.rawDb
+        .prepare('SELECT contact_id FROM x_dm_threads')
+        .get() as { contact_id: string | null };
+      expect(before.contact_id).toEqual(expect.any(String));
 
-      const aliceId = seedContact('Alice', ALICE);
+      // A second tick with the same thread finds the same contact via
+      // findContactByXUserId (since the auto-upsert already stamped
+      // x_user_id on the contact's custom_fields). contact_id is stable.
       await sched.tick();
 
-      const after = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
-      expect(after.contact_id).toBe(aliceId);
+      const after = env.rawDb
+        .prepare('SELECT contact_id FROM x_dm_threads')
+        .get() as { contact_id: string | null };
+      expect(after.contact_id).toBe(before.contact_id);
     });
 
-    it('emits unknown_correspondent signal for inbound on unmatched thread, stops after contact created', async () => {
+    it('does not emit unknown_correspondent — auto-upsert always gives threads a contact', async () => {
+      // Since c3acc05 (DMs always auto-create CRM contacts) the resolve
+      // path fills contact_id for every thread. The unknown_correspondent
+      // signal's emission condition (`counterpartyUserId && !contactId`)
+      // only hits on a DB error during upsert, so in the happy path it
+      // never fires. This test documents that new invariant.
       _seedRuntimeConfigCacheForTests(X_SELF_USER_ID_CONFIG_KEY, SELF);
       const pair = `${SELF}:${ALICE}`;
 
@@ -602,43 +627,22 @@ describe('XDmPollerScheduler', () => {
       });
       await sched.tick();
 
-      const sigs = env.rawDb.prepare(
-        'SELECT message_id, signal_type, contact_id FROM x_dm_signals ORDER BY message_id, signal_type',
-      ).all() as Array<{ message_id: string; signal_type: string; contact_id: string | null }>;
-      expect(sigs).toEqual([
-        { message_id: 'm1', signal_type: 'unknown_correspondent', contact_id: null },
-      ]);
+      const sigs = env.rawDb
+        .prepare(
+          'SELECT message_id, signal_type, contact_id FROM x_dm_signals WHERE signal_type = ?',
+        )
+        .all('unknown_correspondent') as Array<{
+          message_id: string;
+          signal_type: string;
+          contact_id: string | null;
+        }>;
+      expect(sigs).toEqual([]);
 
-      // Now operator creates the contact; second message arrives.
-      const aliceId = seedContact('Alice', ALICE);
-      const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
-        dataDir: env.dir,
-        inboxLister: listerOf({
-          success: true,
-          message: 'ok',
-          threads: [{ pair, primaryName: 'Alice', preview: 'second', hasUnread: true }],
-        }),
-        threadReader: readerOf({
-          [pair]: {
-            success: true,
-            message: 'ok',
-            conversationName: 'Alice',
-            messages: [msg('m1', 'Hey there'), msg('m2', 'Still there?')],
-          },
-        }),
-      });
-      await sched2.tick();
-
-      const sigs2 = env.rawDb.prepare(
-        'SELECT message_id, signal_type, contact_id FROM x_dm_signals ORDER BY message_id, signal_type',
-      ).all() as Array<{ message_id: string; signal_type: string; contact_id: string | null }>;
-      // m1's unknown_correspondent stays (not re-emitted because UNIQUE).
-      // m2 gets no unknown_correspondent because contact_id is set now.
-      expect(sigs2.filter((s) => s.signal_type === 'unknown_correspondent').map((s) => s.message_id)).toEqual(['m1']);
-
-      // Thread row now has contact_id populated.
-      const thread = env.rawDb.prepare('SELECT contact_id FROM x_dm_threads').get() as { contact_id: string | null };
-      expect(thread.contact_id).toBe(aliceId);
+      // Thread row is linked to the auto-created contact.
+      const thread = env.rawDb
+        .prepare('SELECT contact_id FROM x_dm_threads')
+        .get() as { contact_id: string | null };
+      expect(thread.contact_id).toEqual(expect.any(String));
     });
 
     it('includes contact_id on trigger_phrase signals when the counterparty is linked', async () => {
