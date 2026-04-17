@@ -1,0 +1,31 @@
+{
+  "id": "p3-smoke-demo",
+  "version": 1,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "brand": {
+    "colors": { "bg": "#0a1020", "text": "#f4f7fb", "accent": "#e3b58a" },
+    "fonts": {
+      "sans": "Inter, system-ui, sans-serif",
+      "mono": "JetBrains Mono, monospace",
+      "display": "Merriweather, Georgia, serif"
+    },
+    "glass": {
+      "background": "rgba(255,255,255,0.04)",
+      "border": "1px solid rgba(255,255,255,0.08)",
+      "borderRadius": 12,
+      "backdropFilter": "blur(12px)"
+    }
+  },
+  "palette": { "seedHue": 215, "harmony": "complementary", "mood": "electric" },
+  "voiceovers": [],
+  "transitions": [{ "kind": "none" }],
+  "scenes": [
+    {
+      "id": "codegen-demo",
+      "kind": "custom-p3-smoke-demo",
+      "durationInFrames": 90
+    }
+  ]
+}

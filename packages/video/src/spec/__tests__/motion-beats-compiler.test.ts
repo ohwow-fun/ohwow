@@ -15,6 +15,21 @@ describe("motion-beats-compiler/compileSceneBeats", () => {
     expect(out).toEqual(scene);
   });
 
+  it("skips scenes whose kind is a custom-* codegen output", () => {
+    const scene: Scene = {
+      id: "s-codegen",
+      kind: "custom-briefing-story-2a",
+      durationInFrames: 120,
+      motion_beats: [
+        { primitive: "r3f.count-up-bar", params: { target: 13 } },
+      ],
+    };
+    const { scene: out, report } = compileSceneBeats(scene);
+    expect(report.applied).toBe(false);
+    expect(report.note).toMatch(/codegen kind/);
+    expect(out).toEqual(scene);
+  });
+
   it("compiles all-2D beats into visualLayers + chooses composable kind", () => {
     const scene: Scene = {
       id: "s2",

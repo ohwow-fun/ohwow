@@ -1,0 +1,5 @@
+# Generated TSX scenes are ephemeral — rewritten per compose pass by
+# scripts/yt-experiments/_custom-scene-codegen.mjs. The barrel (index.ts)
+# is tracked so fresh clones have something for webpack to import; it
+# starts empty and is regenerated alongside the TSX files.
+*.tsx

@@ -70,6 +70,20 @@ export function compileSceneBeats(scene: Scene): CompileResult {
     return { scene, report: { sceneId: scene.id, applied: false } };
   }
 
+  // Scenes whose kind was already set to a codegen output (custom-*) bypass
+  // the compiler — their TSX component draws the scene directly and the
+  // motion_beats stay on the scene for provenance only.
+  if (typeof scene.kind === "string" && scene.kind.startsWith("custom-")) {
+    return {
+      scene,
+      report: {
+        sceneId: scene.id,
+        applied: false,
+        note: `skipped — scene.kind "${scene.kind}" is a codegen kind; beats preserved for provenance`,
+      },
+    };
+  }
+
   const beats = scene.motion_beats;
   const r3fBeats = beats.filter(isR3FBeat);
   const twoDBeats = beats.filter((b) => !isR3FBeat(b));

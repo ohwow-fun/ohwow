@@ -110,6 +110,15 @@ export interface Scene<K extends string = SceneKind> {
    * the scene's existing `kind` + `params` are used as-is.
    */
   motion_beats?: MotionBeat[];
+  /**
+   * When true, the compose pipeline runs a separate coding-LLM pass to
+   * write a bespoke TSX scene component for this scene, keyed to the
+   * motion_graphic_prompt + narration. The generated file registers a
+   * custom scene kind ("custom-<sceneId>"). Gated by a per-episode
+   * budget (default 1). On any validation failure the scene falls back
+   * to the beats-compiled shape. See scripts/yt-experiments/_custom-scene-codegen.mjs.
+   */
+  custom_codegen?: boolean;
   /** Optional metadata consumed by lints and tools (e.g., voiceDurationMs from the workspace author). */
   metadata?: {
     voiceDurationMs?: number;

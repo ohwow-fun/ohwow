@@ -64,13 +64,15 @@ const MotionBeatSchema = z.object({
 // the envelope; per-kind params are validated by the scene component itself.
 const SceneSchema = z.object({
   id: z.string().min(1),
-  kind: z.string().min(1),
+  // Optional — beats-driven scenes omit kind and the compiler sets it.
+  kind: z.string().min(1).optional(),
   durationInFrames: z.number().int().positive(),
   params: z.record(z.string(), z.unknown()).optional(),
   captions: z.array(CaptionSpecSchema).optional(),
   narration: z.string().optional(),
   motion_graphic_prompt: z.string().optional(),
   motion_beats: z.array(MotionBeatSchema).optional(),
+  custom_codegen: z.boolean().optional(),
   metadata: z
     .object({
       voiceDurationMs: z.number().positive().optional(),

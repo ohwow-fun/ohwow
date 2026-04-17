@@ -54,6 +54,9 @@ const REVIEW_MODEL = 'google/gemini-2.5-flash-lite';
 const VOICE_LEAD_FRAMES = 5;
 const VOICE_TAIL_FRAMES = 20;
 const SCENE_MIN_FRAMES = 90;
+// Hard cap on how many scenes per episode may be handed to the custom-
+// scene codegen LLM. Keeps token spend bounded; beats cover the rest.
+const MAX_CODEGEN_SCENES_PER_EPISODE = 1;
 
 // Global banned phrases that apply to every series. Scoped narrowly to
 // catch OHWOW self-references only — NOT general tech vocabulary. E.g.
@@ -573,11 +576,58 @@ export async function composeEpisode({ slug, env = {} }) {
   // 6. Spec.
   const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });
 
+  // Custom-scene codegen (Phase 3): up to MAX_CODEGEN_SCENES_PER_EPISODE
+  // scenes with custom_codegen:true are handed to the codegen LLM which
+  // writes a bespoke TSX component into packages/video/src/scenes/.generated.
+  // On success, scene.kind becomes "custom-<slug>" and the beats compiler
+  // below skips it. On failure (or over-budget), the flag is cleared and
+  // the scene falls back to beats. All outcomes are logged to brief.json.
+  const codegenOutcomes = [];
+  const codegenScenes = spec.scenes.filter((s) => s?.custom_codegen === true);
+  if (codegenScenes.length > 0) {
+    const { generateCustomScene, resetGenerated } = await import('./_custom-scene-codegen.mjs');
+    resetGenerated();
+    const episodeId = `${slug}-${draft.episode_date || new Date().toISOString().slice(0, 10)}`;
+    const eligible = codegenScenes.slice(0, MAX_CODEGEN_SCENES_PER_EPISODE);
+    const overBudget = codegenScenes.slice(MAX_CODEGEN_SCENES_PER_EPISODE);
+    for (const s of overBudget) {
+      s.custom_codegen = false;
+      codegenOutcomes.push({ sceneId: s.id, ok: false, reason: 'over per-episode budget' });
+      console.log(`[compose-core] codegen: scene ${s.id} over budget (cap=${MAX_CODEGEN_SCENES_PER_EPISODE}) — falling back`);
+    }
+    for (const s of eligible) {
+      try {
+        const r = await generateCustomScene({
+          episodeId,
+          sceneId: s.id,
+          motion_graphic_prompt: s.motion_graphic_prompt,
+          narration: s.narration,
+          durationInFrames: s.durationInFrames,
+          fps: spec.fps,
+        });
+        if (r.ok) {
+          s.kind = r.kind;
+          codegenOutcomes.push({ sceneId: s.id, ok: true, kind: r.kind, filename: r.filename });
+          console.log(`[compose-core] codegen: ${s.id} → ${r.kind} (${r.filename})`);
+        } else {
+          s.custom_codegen = false;
+          codegenOutcomes.push({ sceneId: s.id, ok: false, reason: r.reason });
+          console.log(`[compose-core] codegen: ${s.id} rejected (${r.reason}) — falling back to beats`);
+        }
+      } catch (e) {
+        s.custom_codegen = false;
+        codegenOutcomes.push({ sceneId: s.id, ok: false, reason: `threw: ${e.message}` });
+        console.log(`[compose-core] codegen: ${s.id} threw (${e.message}) — falling back to beats`);
+      }
+    }
+  }
+
   // Motion-beats compilation: translate any scene's high-level
   // motion_beats list into concrete kind + params (visualLayers for 2D,
   // primitives for R3F). Scenes without motion_beats pass through
-  // unchanged. Done BEFORE the video-clip guard so guard sees the
-  // compiled shape.
+  // unchanged. Scenes whose kind is already "custom-*" are skipped by
+  // the compiler so codegen output survives. Done BEFORE the video-clip
+  // guard so guard sees the compiled shape.
   try {
     const { compileSpecBeats } = await import('../../packages/video/src/spec/motion-beats-compiler.js');
     const { scenes: compiledScenes, reports } = compileSpecBeats(spec.scenes);
@@ -684,6 +734,7 @@ export async function composeEpisode({ slug, env = {} }) {
     videoPath: skipRender ? null : videoPath,
     thumbnailPath: !skipRender && fs.existsSync(thumbnailPath) ? thumbnailPath : null,
     visualReview,
+    codegenOutcomes,
     durationMs: Date.now() - t0,
   };
   fs.writeFileSync(path.join(briefDir, 'brief.json'), JSON.stringify(record, null, 2));

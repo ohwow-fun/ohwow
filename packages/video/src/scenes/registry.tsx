@@ -15,6 +15,10 @@ import { QuoteCard } from "./QuoteCard";
 import { WorkflowSteps } from "./WorkflowSteps";
 import { ComposableScene } from "./ComposableScene";
 import { R3FScene } from "./R3FScene";
+// The .generated barrel holds codegen scenes produced by
+// scripts/yt-experiments/_custom-scene-codegen.mjs. It's empty at HEAD;
+// per-render regeneration fills GENERATED_SCENES which we register below.
+import { GENERATED_SCENES } from "./.generated/index";
 
 type SceneComponent = React.FC<{
   params?: Record<string, unknown>;
@@ -38,6 +42,13 @@ const registry = new Map<string, SceneComponent>([
   ["composable", ComposableScene as SceneComponent],
   ["r3f-scene", R3FScene as SceneComponent],
 ]);
+
+// Register any codegen scenes that the .generated barrel populated at
+// bundle-eval time. Silently skip conflicts so the primary registry
+// always wins — codegen should never override a built-in kind.
+for (const [kind, component] of Object.entries(GENERATED_SCENES)) {
+  if (!registry.has(kind)) registry.set(kind, component as SceneComponent);
+}
 
 export class SceneKindConflictError extends Error {
   constructor(kind: string) {
