@@ -299,3 +299,23 @@ Missing experiments:
 - contact-conversation-analyst
 - content-cadence-loop-health
 - dashboard-smoke
+
+## 5. Experiment Inventory
+
+### Active Experiments (as of 2026-04-17T14:20Z)
+
+- **RevenuePulseExperiment** — hourly money outcomes + Next Move
+- **OpsPulseExperiment** — hourly ops-knob snapshot + Next Move
+- **DailySurpriseDigestExperiment** — daily narrative, reads both pulses
+- **revenue-pipeline-observer** — underlying measurement for revenue pulse
+- **attribution-observer** — underlying measurement for revenue pulse
+- **burn-rate** — underlying measurement for revenue pulse
+- **outreach-thermostat** — tier-2 draft-message copy (string-literal)
+- **outreach-policy** — tier-2 cooldown gate (whole-file)
+- **lift-measurement** — Phase 5 credit-assignment probe
+- **adaptive-scheduler** — [NEW] integrated from missing list
+- **agent-cost-watcher** — [NEW] integrated from missing list
+- **agent-coverage-gap** — [NEW] integrated from missing list
+- **agent-lock-contention** — [NEW] integrated from missing list
+- **agent-outcomes** — [NEW] integrated from missing list
+- **agent-state-hygiene-sentinel** — [NEW
