@@ -531,18 +531,27 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
         };
       }
     }
-    await wait(2500);
+    // Confirm publish via polling — composer-close alone gave false
+    // negatives when X is slow. Accept EITHER composer-closed OR our
+    // reply text visible in the rendered feed.
+    const textProbe = text.trim().slice(0, 60).replace(/"/g, '\\"');
+    let publishConfirmed = false;
+    for (let i = 0; i < 20; i++) {
+      publishConfirmed = await page.evaluate<boolean>(`(() => {
+        const stillOpen = !!document.querySelector('[data-testid="tweetTextarea_0"]');
+        if (!stillOpen) return true;
+        const body = document.body?.innerText || '';
+        if (body.includes("${textProbe}")) return true;
+        return false;
+      })()`).catch(() => false);
+      if (publishConfirmed) break;
+      await wait(500);
+    }
 
-    // Confirm the composer actually closed — if tweetTextarea_0 is still
-    // visible we probably didn't publish (rate limit, policy, etc.).
-    const stillOpen = await page.evaluate<boolean>(
-      `!!document.querySelector('[data-testid="tweetTextarea_0"]')`,
-    ).catch(() => false);
-
-    if (stillOpen) {
+    if (!publishConfirmed) {
       return {
         success: false,
-        message: 'Reply button clicked but the composer stayed open. X likely rejected the content.',
+        message: 'Reply button clicked but neither composer closed nor reply text appeared within 10s. X likely rejected the content.',
         screenshotBase64: await captureScreenshot(page),
         replyTyped: 1,
         replyPublished: 0,

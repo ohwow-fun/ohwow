@@ -74,6 +74,8 @@ function buildSystemPrompt(platform: 'x' | 'threads'): string {
     '  5. No em dashes (use periods, commas, semicolons, or line breaks).',
     '     No "please". No sign-offs. No hashtags. No links. No emojis',
     '     unless the post itself used them AND one fits naturally.',
+    '     Do NOT end the reply with a period. Strip any trailing dot.',
+    '     Internal sentence-ending periods are fine; just no final "."',
     `  6. Length cap ${cap} characters. Aim for 120-200. Leave room.`,
     '  7. Never pitch anything. Never describe a product. Never name a',
     '     company or tool unless the post did first. You are a person,',
@@ -159,6 +161,7 @@ export function voiceCheck(text: string, platform: 'x' | 'threads'): { ok: boole
   if (/\bplease\b/i.test(text)) reasons.push('please');
   if (/#\w/.test(text)) reasons.push('hashtag');
   if (/\bhttps?:\/\//.test(text)) reasons.push('link');
+  if (/\.\s*$/.test(text)) reasons.push('trailingPeriod');
   // Corporate softeners
   const softeners = ['great take', 'this is interesting', 'happy to', 'at the end of the day', 'table stakes', 'the real question is', "here's the thing", 'the key is'];
   for (const s of softeners) {
@@ -227,6 +230,14 @@ export async function generateReplyCopy(
       rationale: parsed.rationale,
       modelUsed: llm.data.model_used,
     };
+  }
+
+  // Post-hoc scrub: trim trailing period. The prompt tells the model
+  // to skip it, but we enforce anyway so a voice-check failure never
+  // escapes this function when the violation is trivially fixable.
+  parsed.draft = parsed.draft.replace(/\.\s*$/, '');
+  if (Array.isArray(parsed.alternates)) {
+    parsed.alternates = parsed.alternates.map((a) => a.replace(/\.\s*$/, ''));
   }
 
   const check = voiceCheck(parsed.draft, input.platform);
