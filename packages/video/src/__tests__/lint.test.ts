@@ -113,7 +113,26 @@ describe("lintVideoSpec", () => {
     expect(result.errors.some(e => e.code === "caption/out-of-bounds")).toBe(true);
   });
 
-  it("errors on unknown layer primitive in composable params", () => {
+  it("errors on unknown layer primitive in composable visualLayers", () => {
+    const spec = {
+      ...baseSpec,
+      scenes: [
+        {
+          id: "s1",
+          kind: "composable",
+          durationInFrames: 120,
+          params: {
+            visualLayers: [{ primitive: "no-such-primitive", params: {} }],
+          },
+        },
+        { id: "s2", kind: "composable", durationInFrames: 60 },
+      ],
+    };
+    const result = lintVideoSpec(spec);
+    expect(result.errors.some(e => e.code === "layer/unknown-primitive")).toBe(true);
+  });
+
+  it("also checks legacy 'layers' key as a fallback", () => {
     const spec = {
       ...baseSpec,
       scenes: [
@@ -141,7 +160,7 @@ describe("lintVideoSpec", () => {
           kind: "composable",
           durationInFrames: 120,
           params: {
-            layers: [{ primitive: "aurora", params: { bogusKey: 123 } }],
+            visualLayers: [{ primitive: "aurora", params: { bogusKey: 123 } }],
           },
         },
         { id: "s2", kind: "composable", durationInFrames: 60 },

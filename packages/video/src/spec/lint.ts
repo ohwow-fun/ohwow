@@ -137,11 +137,15 @@ export function lintVideoSpec(
       }
     });
 
-    // Layer primitive checks (for composable scenes or any scene that uses
-    // the "layers" param convention).
-    const layers = (scene.params as { layers?: unknown })?.layers;
-    if (Array.isArray(layers)) {
-      layers.forEach((layer, li) => {
+    // Layer primitive checks. ComposableScene reads params.visualLayers; we
+    // also tolerate a flat "layers" key so LLM outputs don't silently skip
+    // validation.
+    const layersSource =
+      (scene.params as { visualLayers?: unknown })?.visualLayers
+      ?? (scene.params as { layers?: unknown })?.layers;
+    if (Array.isArray(layersSource)) {
+      const key = (scene.params as Record<string, unknown>)?.visualLayers ? "visualLayers" : "layers";
+      layersSource.forEach((layer, li) => {
         if (typeof layer !== "object" || layer === null) return;
         const primitive = (layer as { primitive?: unknown }).primitive;
         const layerParams = (layer as { params?: unknown }).params;
@@ -152,20 +156,20 @@ export function lintVideoSpec(
             code: "layer/unknown-primitive",
             severity: "error",
             message: `Unknown layer primitive "${primitive}". Register via registerLayerPrimitive().`,
-            path: `${pathPrefix}.params.layers[${li}].primitive`,
+            path: `${pathPrefix}.params.${key}[${li}].primitive`,
           });
           return;
         }
         if (layerParams && typeof layerParams === "object") {
           const severity: LintSeverity = options.strictParams ? "error" : "warning";
           const bucket = options.strictParams ? errors : warnings;
-          for (const key of Object.keys(layerParams as Record<string, unknown>)) {
-            if (!entry.paramWhitelist.has(key)) {
+          for (const k of Object.keys(layerParams as Record<string, unknown>)) {
+            if (!entry.paramWhitelist.has(k)) {
               bucket.push({
                 code: "layer/unknown-param",
                 severity,
-                message: `Param "${key}" is not in the whitelist for primitive "${primitive}" (${Array.from(entry.paramWhitelist).join(", ")}).`,
-                path: `${pathPrefix}.params.layers[${li}].params.${key}`,
+                message: `Param "${k}" is not in the whitelist for primitive "${primitive}" (${Array.from(entry.paramWhitelist).join(", ")}).`,
+                path: `${pathPrefix}.params.${key}[${li}].params.${k}`,
               });
             }
           }
