@@ -72,7 +72,7 @@ import { logger } from '../lib/logger.js';
  * the daemon wire point — the default here is conservative (60s) so
  * tests can override it.
  */
-export const DEFAULT_TICK_INTERVAL_MS = 5_000;
+export const DEFAULT_TICK_INTERVAL_MS = 60_000;
 
 /**
  * When a run yields a warning/fail verdict, pull the next run in to
@@ -80,7 +80,7 @@ export const DEFAULT_TICK_INTERVAL_MS = 5_000;
  * the loop real-time reactivity on signal while passing probes stay
  * on their normal schedule.
  */
-export const REACTIVE_RESCHEDULE_MS = 5_000;
+export const REACTIVE_RESCHEDULE_MS = 60_000;
 
 /**
  * Cap on back-to-back synchronous tick() sweeps per outer tick. After
