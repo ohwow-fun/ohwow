@@ -14,6 +14,7 @@
 import { isAbsolute, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { runVideoGeneration, runVideoPreview, type VideoSkillProgress } from '../execution/skills/video_generation.js';
 import { list as listCache, prune as pruneCache, type CacheModality } from '../media/asset-cache.js';
 import {
@@ -111,6 +112,54 @@ async function cmdCachePrune(flags: Record<string, string | true>): Promise<void
   }
   const removed = await pruneCache(days * 24 * 60 * 60 * 1000);
   console.log(`Removed ${removed} cache entries older than ${days} day${days === 1 ? '' : 's'}.`);
+}
+
+async function cmdLint(args: string[]): Promise<void> {
+  const { positional, flags } = parseFlags(args);
+  const specArg = positional[0];
+  if (!specArg) {
+    console.error('Usage: ohwow video lint <spec.json> [--strict]');
+    process.exit(1);
+  }
+  const specPath = resolveSpec(specArg);
+  const strict = flags.strict === true;
+  const packageDir = resolvePackageDir();
+  const runnerPath = join(packageDir, 'scripts', 'lint-cli.cts');
+
+  const childArgs = ['tsx', runnerPath, specPath];
+  if (strict) childArgs.push('--strict');
+
+  const exitCode = await new Promise<number>((resolvePromise, rejectPromise) => {
+    const child = spawn('npx', childArgs, {
+      cwd: packageDir,
+      stdio: 'inherit',
+      env: { ...process.env },
+    });
+    child.on('error', rejectPromise);
+    child.on('close', code => resolvePromise(code ?? 0));
+  });
+  process.exit(exitCode);
+}
+
+async function cmdList(args: string[]): Promise<void> {
+  const kind = args[0];
+  if (!kind || !['primitives', 'scenes', 'transitions'].includes(kind)) {
+    console.error('Usage: ohwow video list <primitives|scenes|transitions>');
+    process.exit(1);
+  }
+  const packageDir = resolvePackageDir();
+  const runnerPath = join(packageDir, 'scripts', 'list-cli.cts');
+
+  const exitCode = await new Promise<number>((resolvePromise, rejectPromise) => {
+    const child = spawn('npx', ['tsx', runnerPath, kind], {
+      cwd: packageDir,
+      stdio: 'inherit',
+      env: { ...process.env },
+    });
+    child.on('error', rejectPromise);
+    child.on('close', code => resolvePromise(code ?? 0));
+  });
+  process.exit(exitCode);
 }
 
 async function cmdPreview(args: string[]): Promise<void> {
@@ -290,6 +339,8 @@ function usage(): void {
   console.log('  ohwow video render <spec.json> [--out=<path>]');
   console.log('  ohwow video generate <spec.json> [--out=<path>]       (alias of render in v1)');
   console.log('  ohwow video preview <spec.json> [--port=<port>]       open in Remotion Studio');
+  console.log('  ohwow video lint <spec.json> [--strict]               validate shape + cross-field rules');
+  console.log('  ohwow video list <primitives|scenes|transitions>      introspect the registry');
   console.log('  ohwow video workspace [--workspace=<name>] [--template=<t>] [--scenes=<k1,k2,...>]');
   console.log('                        [--brief="free-text direction"] [--voice=<v>] [--copy-model=<m>]');
   console.log('                        [--dry-run] [--preview] [--port=<port>] [--out=<path>]');
@@ -310,6 +361,10 @@ export async function runVideoCli(args: string[]): Promise<void> {
     await cmdRender(args.slice(1));
   } else if (sub === 'preview') {
     await cmdPreview(args.slice(1));
+  } else if (sub === 'lint') {
+    await cmdLint(args.slice(1));
+  } else if (sub === 'list') {
+    await cmdList(args.slice(1));
   } else if (sub === 'workspace') {
     await cmdWorkspace(args.slice(1));
   } else if (sub === 'cache') {
