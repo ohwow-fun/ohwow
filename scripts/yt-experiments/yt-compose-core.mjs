@@ -55,12 +55,21 @@ const VOICE_LEAD_FRAMES = 5;
 const VOICE_TAIL_FRAMES = 20;
 const SCENE_MIN_FRAMES = 90;
 
-// Global banned phrases that apply to every series (OHWOW self-references,
-// etc.). Series-specific lists add on top of these via the prompt module.
+// Global banned phrases that apply to every series. Scoped narrowly to
+// catch OHWOW self-references only — NOT general tech vocabulary. E.g.
+// "local-first" (bare) is a legit category (Qwen running locally);
+// "local-first ai runtime" is OHWOW-specific. Be precise.
 const GLOBAL_BANNED_PHRASES = [
-  'our daemon', 'the daemon', 'agent workspaces', 'our runtime',
-  'on your machine', 'with your keys', 'mcp-first', 'multi-workspace',
-  'local-first', 'orchestration layer', 'ohwow runs', 'ohwow uses',
+  'our daemon',
+  'agent workspaces',
+  'our runtime',
+  'ohwow runs',
+  'ohwow uses',
+  'mcp-first routing',
+  'multi-workspace daemon',
+  'local-first ai runtime',
+  'local-first runtime',
+  'orchestration layer',
 ];
 
 // Ambient mood → music track map. Kit default drives the pick when the
@@ -257,9 +266,10 @@ function enrichVisualLayers(scene, primitivePalette) {
  * The kit overrides: brand.colors, brand.fonts, brand.glass. The kit's
  * paletteHue + paletteHarmony + ambientMoodDefault set the palette when
  * the draft hasn't supplied its own. brandKitRef records the kit slug for
- * provenance.
+ * provenance. Aspect ratio is driven by the series config (vertical Shorts
+ * vs horizontal playlist video).
  */
-function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit }) {
+function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series }) {
   let scenes = (draft.spec?.scenes || []).map((s) => enrichVisualLayers({
     ...s,
     durationInFrames: s.durationInFrames || 240,
@@ -274,12 +284,17 @@ function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit }) {
   const mood = draft.spec?.palette?.mood || kit.ambientMoodDefault;
   const ambientSrc = pickAmbientTrack(mood);
 
+  const isHorizontal = series?.format?.aspectRatio === 'horizontal';
+  const width = isHorizontal ? 1920 : 1080;
+  const height = isHorizontal ? 1080 : 1920;
+  const idPrefix = isHorizontal ? 'yt-video' : 'yt-short';
+
   return {
-    id: `yt-short-${Date.now()}`,
+    id: `${idPrefix}-${Date.now()}`,
     version: 1,
     fps: 30,
-    width: 1080,
-    height: 1920,
+    width,
+    height,
     brandKitRef: kit.slug,
     brand: {
       colors: kit.colors,
@@ -471,13 +486,34 @@ export async function composeEpisode({ slug, env = {} }) {
   }
   console.log(`[compose-core] seed: ${seed.title.slice(0, 80)}`);
 
-  // 3. Draft via llm().
+  // 3. Draft via llm(). The compose pipeline auto-shrinks scene
+  //    durations via alignSceneDurations to match actual voice audio,
+  //    so a draft that comes in at 75-90 words (vs the ideal 100-130)
+  //    just produces a tighter 35-40s Short rather than dead air in a
+  //    45s container. We only retry on extreme under-delivery (<65
+  //    words) where the content is genuinely too thin to be useful.
   const userPrompt = promptModule.buildUserPrompt(seed);
+  const WORD_COUNT_FLOOR = 65;
   let draft;
   try {
     const out = await llm({ purpose: 'reasoning', system: promptModule.systemPrompt, prompt: userPrompt });
     draft = extractJson(out.text);
-    console.log(`[compose-core] drafted: "${draft.title}" conf=${draft.confidence} model=${out.model_used}`);
+    const words = (draft?.narration_full || '').trim().split(/\s+/).filter(Boolean).length;
+    console.log(`[compose-core] drafted: "${draft.title}" conf=${draft.confidence} words=${words} model=${out.model_used}`);
+
+    if (words > 0 && words < WORD_COUNT_FLOOR && draft.confidence >= 0.4) {
+      console.log(`[compose-core] narration too thin (${words} < ${WORD_COUNT_FLOOR}) — regenerating with feedback`);
+      const feedback = `Your previous draft was TOO THIN at ${words} words — the story isn't developed enough to fill a 30-45s Short. Rewrite the same story: keep the actor + artifact + hook + takeaway template, but expand the Fact scene to include a second concrete specific (a second number, a named contrast, a specific timeline) AND expand the Implication to name a specific builder segment with a specific timeframe and consequence. Target 100-120 words total. Return the same JSON schema.\n\nSEED:\n${userPrompt}\n\nYOUR PREVIOUS THIN DRAFT (rewrite this fuller):\n${JSON.stringify(draft, null, 2)}`;
+      const retry = await llm({ purpose: 'reasoning', system: promptModule.systemPrompt, prompt: feedback });
+      const retryDraft = extractJson(retry.text);
+      const retryWords = (retryDraft?.narration_full || '').trim().split(/\s+/).filter(Boolean).length;
+      if (retryWords >= WORD_COUNT_FLOOR && retryWords <= 160) {
+        console.log(`[compose-core] regenerated: words=${retryWords} (was ${words})`);
+        draft = retryDraft;
+      } else {
+        console.log(`[compose-core] retry produced ${retryWords} words — keeping original`);
+      }
+    }
   } catch (e) {
     console.log(`[compose-core] draft failed: ${e.message}`);
     return { status: 'draft_failed', briefDir, error: e.message };
@@ -512,7 +548,7 @@ export async function composeEpisode({ slug, env = {} }) {
   }
 
   // 6. Spec.
-  const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit });
+  const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });
   const specPath = path.join(briefDir, 'spec.json');
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   console.log(`[compose-core] spec: ${spec.scenes.length} scenes, kit=${spec.brandKitRef}`);

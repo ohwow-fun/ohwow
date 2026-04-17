@@ -124,12 +124,129 @@ Extract the Briefing seed. Return strict JSON only.`;
 }
 
 /**
- * Top-level: poll HN, try the top N candidates one at a time until
- * LLM synthesis produces a valid seed. Returns a SeriesSeed or null.
+ * Multi-story bundle: fetch the top N AI candidates from HN, synthesize
+ * each one (title + article/comments → structured payload), and return
+ * a single SeriesSeed whose metadata.sources is an array of the
+ * synthesized candidates. The prompt module picks the 2-3 best to
+ * structure into a rundown episode.
  *
- * isSeen(candidate) is an optional predicate the adapter can pass so
- * HN candidates already used by this series are filtered out before
- * LLM synthesis. Dedup by hn_id is stable across ranking changes.
+ * Returns null if fewer than `minQualifying` candidates produce valid
+ * synthesis.
+ */
+export async function pickBundleFromHackerNews({
+  maxAgeHours = 48,
+  seriesSlug = "briefing",
+  isSeen = () => false,
+  maxCandidates = 5,
+  minQualifying = 1,
+} = {}) {
+  let candidates;
+  try {
+    candidates = await fetchRankedNewsCandidates({ maxAgeHours });
+  } catch (e) {
+    console.log(`[hn-fallback] HN fetch failed: ${e.message}`);
+    return null;
+  }
+  if (!candidates.length) {
+    console.log(`[hn-fallback] no AI-relevant HN stories in last ${maxAgeHours}h`);
+    return null;
+  }
+
+  const unseen = candidates.filter((c) => !isSeen(c));
+  const skipped = candidates.length - unseen.length;
+  if (skipped > 0) {
+    console.log(`[hn-fallback] ${skipped} candidates already seen — ${unseen.length} remaining`);
+  }
+  if (!unseen.length) {
+    console.log(`[hn-fallback] all AI candidates exhausted`);
+    return null;
+  }
+
+  const limit = Math.min(maxCandidates, unseen.length);
+  console.log(`[hn-fallback] synthesizing top ${limit} of ${unseen.length} candidates for bundle`);
+
+  const sources = [];
+  const failedIds = [];
+  const usedHnIds = [];
+
+  for (const candidate of unseen.slice(0, limit)) {
+    console.log(`[hn-fallback] bundle candidate: "${candidate.title.slice(0, 60)}" (${candidate.domain}, hn=${candidate.hn_score}, age=${candidate.age_hours}h)`);
+    let articleText = await fetchArticleText(candidate.url);
+    let articleLen = articleText?.length || 0;
+
+    if (articleLen < 200) {
+      const commentsText = await fetchHnCommentsText(candidate.hn_id);
+      if (commentsText && commentsText.length > 200) {
+        articleText = `[ARTICLE UNAVAILABLE — HN discussion thread follows]\n${commentsText}`;
+        articleLen = articleText.length;
+        console.log(`  rescued via HN comments (${articleLen} chars)`);
+      } else {
+        console.log(`  candidate unfetchable — dropping`);
+        failedIds.push(candidate.hn_id);
+        continue;
+      }
+    }
+
+    let parsed;
+    try {
+      const { raw } = await synthesize(candidate, articleText);
+      parsed = extractJson(raw);
+    } catch (e) {
+      console.log(`  synthesis failed: ${e.message}`);
+      continue;
+    }
+    if (!parsed || !parsed.actor) {
+      console.log(`  LLM returned no qualifying story — skipping`);
+      continue;
+    }
+
+    sources.push({
+      actor: parsed.actor,
+      artifact: parsed.artifact,
+      summary: parsed.summary,
+      published_at: parsed.published_at || null,
+      url: candidate.url,
+      domain: candidate.domain,
+      trusted_domain: candidate.trusted,
+      hn_score: candidate.hn_score,
+      hn_id: candidate.hn_id,
+      age_hours: candidate.age_hours,
+      citations: Array.isArray(parsed.citations)
+        ? parsed.citations.slice(0, 3).map((c) => (typeof c === "string" ? { url: c } : c))
+        : [{ url: candidate.url }],
+    });
+    usedHnIds.push(candidate.hn_id);
+
+    if (sources.length >= 3) break; // cap bundle at 3 — prompt picks 2-3 from these
+  }
+
+  if (sources.length < minQualifying) {
+    console.log(`[hn-fallback] only ${sources.length} qualifying (<${minQualifying}) — returning null`);
+    return null;
+  }
+
+  console.log(`[hn-fallback] bundle ready: ${sources.length} candidates`);
+
+  return {
+    kind: "external-url",
+    title: `Briefing bundle · ${sources.length} stories`,
+    body: `Multi-story seed bundle. ${sources.length} candidates assembled from Hacker News. See metadata.sources for details.`,
+    citations: sources.flatMap((s) => s.citations),
+    metadata: {
+      source: "hn-fallback-bundle",
+      series: seriesSlug,
+      fetched_at: new Date().toISOString(),
+      sources,
+      used_hn_ids: usedHnIds,
+      failed_hn_ids: failedIds,
+    },
+  };
+}
+
+/**
+ * Single-story HN pick — LEGACY path kept for series that aren't
+ * rundown-style (Tomorrow Broke, Operator Mode, etc.). Briefing uses
+ * pickBundleFromHackerNews instead.
  */
 export async function pickFromHackerNews({
   maxAgeHours = 48,

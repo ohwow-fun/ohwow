@@ -40,6 +40,21 @@ export interface SeriesCadence {
   perWeek: number;
 }
 
+export interface SeriesFormatConfig {
+  /**
+   * Video aspect. "vertical" = 1080×1920 (YouTube Shorts, mobile feed).
+   * "horizontal" = 1920×1080 (YouTube channel / playlist, desktop feed).
+   */
+  aspectRatio: "vertical" | "horizontal";
+  /** Target runtime band. Pipeline enforces audio-aligned scene durations within this. */
+  targetDurationSeconds: { min: number; max: number };
+  /**
+   * For rundown-style shows (The Briefing), how many distinct stories to
+   * pack per episode. Undefined = single-narrative format.
+   */
+  storyCount?: { min: number; max: number };
+}
+
 export interface SeriesConfig {
   slug: SeriesSlug;
   displayName: string;
@@ -57,6 +72,7 @@ export interface SeriesConfig {
 
   voice: SeriesVoiceConfig;
   cadence: SeriesCadence;
+  format: SeriesFormatConfig;
 
   /** Default visibility for automated uploads until human flips to public. */
   defaultVisibility: "private" | "unlisted" | "public";
@@ -98,8 +114,16 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       slot: "morning",
       perWeek: 7,
     },
+    format: {
+      // The Briefing is a proper YouTube video (horizontal, playlist
+      // item), not a Short. Target 90-180s with 3 stories per episode —
+      // a real morning AI rundown, not a single-story snippet.
+      aspectRatio: "horizontal",
+      targetDurationSeconds: { min: 90, max: 180 },
+      storyCount: { min: 2, max: 3 },
+    },
     defaultVisibility: "unlisted",
-    hashtags: ["#AI", "#AINews", "#Shorts"],
+    hashtags: ["#AI", "#AINews", "#DailyBriefing"],
     goalKpiIds: [
       "yt_briefing_7d_avg_watch_time",
       "yt_briefing_7d_subscribers_gained",
@@ -129,6 +153,10 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       cron: "18 1 * * *",
       slot: "evening",
       perWeek: 7,
+    },
+    format: {
+      aspectRatio: "vertical",
+      targetDurationSeconds: { min: 30, max: 60 },
     },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Future", "#Shorts"],
@@ -161,6 +189,10 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       slot: "afternoon",
       perWeek: 5,
     },
+    format: {
+      aspectRatio: "vertical",
+      targetDurationSeconds: { min: 45, max: 75 },
+    },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Debate", "#Philosophy", "#Shorts"],
     goalKpiIds: [
@@ -192,6 +224,10 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       slot: "late-morning",
       perWeek: 5,
     },
+    format: {
+      aspectRatio: "vertical",
+      targetDurationSeconds: { min: 45, max: 75 },
+    },
     defaultVisibility: "unlisted",
     hashtags: ["#AI", "#Business", "#Ops", "#Shorts"],
     goalKpiIds: [
@@ -222,6 +258,10 @@ export const SERIES: Record<SeriesSlug, SeriesConfig> = {
       cron: "23 5 * * *",
       slot: "night",
       perWeek: 4,
+    },
+    format: {
+      aspectRatio: "vertical",
+      targetDurationSeconds: { min: 15, max: 60 },
     },
     defaultVisibility: "private",
     hashtags: ["#AIMusic", "#Shorts"],

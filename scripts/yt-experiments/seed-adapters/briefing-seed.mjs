@@ -18,7 +18,7 @@ import {
   hash,
 } from "./_common.mjs";
 import { researchViaOrchestrator } from "./_researcher-fallback.mjs";
-import { pickFromHackerNews } from "./_hn-fallback.mjs";
+import { pickBundleFromHackerNews } from "./_hn-fallback.mjs";
 
 const SERIES = "briefing";
 
@@ -82,18 +82,17 @@ export async function pickSeed({ workspace, historyDays = 2, skipFallback = fals
   if (!candidates.length) {
     if (skipFallback) return null;
 
-    console.log(`[briefing-seed] x-intel empty — trying Hacker News fallback`);
-    // Dedup by hn_id: keep HN candidate filtering stable regardless of
-    // what the LLM names the actor/artifact. We also honor the title-
-    // hash seen-set by mapping hn_ids we've seen before.
-    let seed = await pickFromHackerNews({
+    console.log(`[briefing-seed] x-intel empty — trying Hacker News bundle fallback`);
+    // Assemble a multi-story bundle (up to 3 candidates) so the prompt
+    // module can produce a rundown episode. Dedup by hn_id across runs.
+    let seed = await pickBundleFromHackerNews({
       maxAgeHours: 48,
       seriesSlug: SERIES,
       isSeen: (candidate) => seen.has(hash(`hn:${candidate.hn_id}`)),
     });
 
     if (!seed) {
-      console.log(`[briefing-seed] HN produced no seed — trying orchestrator deep_research`);
+      console.log(`[briefing-seed] HN bundle empty — trying orchestrator deep_research`);
       seed = await researchViaOrchestrator({
         researchPrompt: RESEARCH_PROMPT,
         seriesSlug: SERIES,
@@ -101,16 +100,18 @@ export async function pickSeed({ workspace, historyDays = 2, skipFallback = fals
     }
 
     if (!seed) return null;
-    // Mark the fallback seed as seen so we don't re-pick the same story
-    // on the next compose run today. For HN-sourced seeds we dedupe by
-    // hn_id (stable across LLM re-extraction); we also record the title
-    // hash for any other caller that might want it.
+
+    // Mark every hn_id used in the bundle so the next run gets different
+    // candidates.
     markSeen(workspace, SERIES, hash(seed.title), seed.title);
+    for (const hnId of seed.metadata?.used_hn_ids || []) {
+      markSeen(workspace, SERIES, hash(`hn:${hnId}`), `hn:${hnId}`);
+    }
+    // Legacy: single-story seed compatibility.
     if (seed.metadata?.hn_id) {
       markSeen(workspace, SERIES, hash(`hn:${seed.metadata.hn_id}`), `hn:${seed.metadata.hn_id}`);
     }
-    // Also mark HN candidates the fallback tried-and-failed to fetch,
-    // so we don't retry the same JS-rendered / dead URLs on every run.
+    // Mark dead URLs so we don't retry tomorrow.
     for (const failedId of seed.metadata?.failed_hn_ids || []) {
       markSeen(workspace, SERIES, hash(`hn:${failedId}`), `hn:${failedId}:fetch-failed`);
     }

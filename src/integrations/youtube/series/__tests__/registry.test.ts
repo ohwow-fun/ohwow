@@ -56,6 +56,23 @@ describe("series/registry", () => {
     }
   });
 
+  it("every series declares an aspect ratio and duration band", () => {
+    for (const s of Object.values(SERIES)) {
+      expect(["vertical", "horizontal"]).toContain(s.format.aspectRatio);
+      expect(s.format.targetDurationSeconds.min).toBeGreaterThan(0);
+      expect(s.format.targetDurationSeconds.max).toBeGreaterThan(
+        s.format.targetDurationSeconds.min,
+      );
+    }
+  });
+
+  it("The Briefing is horizontal and packs 2-3 stories per episode", () => {
+    expect(SERIES.briefing.format.aspectRatio).toBe("horizontal");
+    expect(SERIES.briefing.format.storyCount?.min).toBeGreaterThanOrEqual(2);
+    expect(SERIES.briefing.format.storyCount?.max).toBeGreaterThanOrEqual(3);
+    expect(SERIES.briefing.format.targetDurationSeconds.min).toBeGreaterThanOrEqual(60);
+  });
+
   it("getSeries throws on unknown slug", () => {
     // @ts-expect-error — runtime guard test
     expect(() => getSeries("not-a-show")).toThrow(/unknown series/);
