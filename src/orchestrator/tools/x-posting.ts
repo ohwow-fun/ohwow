@@ -462,33 +462,43 @@ export async function getCdpPage(
       // Ownership-mode='ours' + no owned tab = can't reuse. But this
       // is the scheduler/scan path (called without a context hint)
       // and it's still legitimate agent work — open our own owned
-      // tab rather than bail. Pick any visible browserContextId from
-      // existing tabs (the debug profile) so the new tab lands in
-      // the same session state. If no existing tabs, Chrome uses
-      // the default context.
+      // tab rather than bail. Try each unique browserContextId (the
+      // first one's sometimes stale from a closed window), then fall
+      // through to the default context as a last resort.
       if (ownershipMode === 'ours') {
-        const ctxIdFromOther = pageTargets.find((t) => t.browserContextId)?.browserContextId;
-        try {
-          const newTargetId = ctxIdFromOther
-            ? await browser.createTargetInContext(ctxIdFromOther, 'https://x.com/home')
-            : null;
-          if (newTargetId) {
-            markTabOwned(newTargetId);
-            logger.info(
-              { targetId: newTargetId.slice(0, 8), ownershipMode },
-              '[x-posting] opened new owned x.com tab (no-context fallback)',
-            );
-            const page = await browser.attachToPage(newTargetId);
-            await page.installUnloadEscapes();
-            await tagTabAsOwned(page);
-            return page;
+        const uniqueCtxIds = [...new Set(pageTargets.map((t) => t.browserContextId).filter(Boolean) as string[])];
+        let newTargetId: string | null = null;
+        let lastErr: unknown = null;
+        for (const ctx of uniqueCtxIds) {
+          try {
+            newTargetId = await browser.createTargetInContext(ctx, 'https://x.com/home');
+            break;
+          } catch (err) {
+            lastErr = err;
           }
-        } catch (err) {
-          logger.warn(
-            { err: err instanceof Error ? err.message : err },
-            '[x-posting] createTargetInContext fallback failed',
-          );
         }
+        if (!newTargetId) {
+          try {
+            newTargetId = await browser.createTargetDefault('https://x.com/home');
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        if (newTargetId) {
+          markTabOwned(newTargetId);
+          logger.info(
+            { targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
+            '[x-posting] opened new owned x.com tab (no-context fallback)',
+          );
+          const page = await browser.attachToPage(newTargetId);
+          await page.installUnloadEscapes();
+          await tagTabAsOwned(page);
+          return page;
+        }
+        logger.warn(
+          { err: lastErr instanceof Error ? lastErr.message : lastErr, contextsTried: uniqueCtxIds.length },
+          '[x-posting] createTarget fallback failed across all contexts',
+        );
       }
       logger.warn(
         { pageUrls: pageTargets.slice(0, 6).map((t) => t.url), ownershipMode },

@@ -163,6 +163,18 @@ export class RawCdpBrowser {
   }
 
   /**
+   * Create a tab without pinning it to a specific browserContextId —
+   * Chrome uses the default context. Used as a last-resort fallback
+   * when a caller tried one or more specific contexts and they all
+   * failed (e.g., the context ID was cached from a now-closed
+   * window).
+   */
+  async createTargetDefault(url = 'about:blank'): Promise<string> {
+    const r = await this.send<{ targetId: string }>('Target.createTarget', { url });
+    return r.targetId;
+  }
+
+  /**
    * Close a browser tab/target by its targetId. The tab disappears from
    * Chrome and any sessions attached to it become invalid. Best-effort:
    * swallows errors so callers can fire-and-forget in finally blocks.
