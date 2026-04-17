@@ -181,6 +181,23 @@ const RULE5_GAP_AGGREGATE_LIMIT = 10;
 /** Max per-paper gap entries — bounded because a 5-paper scan can emit 20+ concepts. */
 const RULE5_GAP_PAPER_LIMIT = 3;
 
+/**
+ * Revenue-keyword whitelist: when <revenue_pulse> is present, only
+ * briefs whose slug contains one of these tokens are accepted. Keeps
+ * the system prompt's HARD RULE enforceable on the parse side so a
+ * misbehaving model cannot sneak a research probe through.
+ */
+const REVENUE_SLUG_TOKENS: readonly string[] = Object.freeze([
+  'revenue', 'sales', 'deal', 'customer', 'conversion', 'outreach',
+  'outbound', 'reply-rate', 'classifier', 'qualified', 'attribution',
+  'thermostat', 'pricing', 'billing', 'burn-rate', 'spend', 'pipeline',
+]);
+
+function slugHasRevenueToken(slug: string): boolean {
+  const s = slug.toLowerCase();
+  return REVENUE_SLUG_TOKENS.some((t) => s.includes(t));
+}
+
 interface LlmCallRow {
   model: string;
   latency_ms: number;
@@ -524,6 +541,16 @@ export class ExperimentProposalGenerator implements Experiment {
       .slice(0, 200)
       .join(', ');
 
+    // Revenue dominates when present. Research only fills the gap when
+    // there is no live revenue signal — otherwise the loop spends its
+    // author budget on ML-research drift probes that don't move the
+    // money needle.
+    const hasRevenuePulse = revenuePulseContext !== null;
+
+    const revenueRules = hasRevenuePulse
+      ? 'HARD RULE — revenue dominates: <revenue_pulse> is present. EVERY brief you return must directly probe the next_move or a revenue-path signal (pipeline, outreach, reply-rate, classifier, attribution, conversion, billing, burn, spend). Each slug MUST contain at least one of these tokens: revenue, sales, deal, customer, conversion, outreach, outbound, reply-rate, classifier, qualified, attribution, thermostat, pricing, billing, burn-rate, spend. Do not propose ML-research, SLAM, unlearning, RL-fine-tuning, embedding-drift, or paper-gap probes this tick — those do not move money. If you cannot think of 1-3 revenue-targeted briefs, return [].'
+      : 'SOFT RULE — research fallback: no live revenue signal this tick. Prefer briefs that target tokens from <paper_gaps> when present — those are techniques papers discuss that do not yet appear in the codebase, so probing them has the highest learning yield. When a paper from <research_papers> directly informs the brief, list its arXiv id in cites_papers.';
+
     const system =
       'You propose novel self-bench experiment briefs for a local-first ' +
       'AI runtime\'s autonomous observation loop. Return ONLY a JSON array ' +
@@ -539,20 +566,8 @@ export class ExperimentProposalGenerator implements Experiment {
       'Rules: propose read-only observation probes; no writes, no subprocess ' +
       'spawns unless the category is tool_reliability; do not duplicate ' +
       'slugs already covered; each probe must target something concrete ' +
-      'the loop can observe via ctx.db or fs. When a paper from ' +
-      '<research_papers> directly informs the brief, list its arXiv id in ' +
-      'cites_papers — that produces a Cites-Research-Paper commit trailer ' +
-      'so operators can measure whether paper-attributed probes hold. ' +
-      'Prefer briefs that target tokens from <paper_gaps> when present — ' +
-      'those are techniques the papers discuss that do not yet appear in ' +
-      'the codebase, so probing them has the highest learning yield. ' +
-      'When <revenue_pulse> is present, prefer briefs that target its ' +
-      'next_move directly — that is the system\'s current read of the ' +
-      'highest-leverage lever to move revenue, and probes whose slugs ' +
-      'contain revenue keywords (revenue, sales, deal, customer, ' +
-      'conversion, outreach, outbound, reply-rate, classifier, ' +
-      'qualified, attribution, thermostat, pricing, billing, burn-rate, ' +
-      'spend) jump the author queue via the revenue bucket.';
+      'the loop can observe via ctx.db or fs. ' +
+      revenueRules;
 
     const promptParts: string[] = [];
     promptParts.push('<already_covered_slugs>');
@@ -600,7 +615,11 @@ export class ExperimentProposalGenerator implements Experiment {
       );
       promptParts.push('</revenue_pulse>');
     }
-    if (paperGapContext && (paperGapContext.aggregate.length > 0 || paperGapContext.papers.length > 0)) {
+    // Paper gaps only appear when there's no live revenue signal.
+    // When revenue_pulse is present the HARD RULE forbids research
+    // probes, so including the gap list would just tempt the model
+    // into violating the rule.
+    if (!hasRevenuePulse && paperGapContext && (paperGapContext.aggregate.length > 0 || paperGapContext.papers.length > 0)) {
       promptParts.push('');
       promptParts.push('<paper_gaps source="code-paper-compare-probe, tokens absent from repo">');
       if (paperGapContext.aggregate.length > 0) {
@@ -671,6 +690,10 @@ export class ExperimentProposalGenerator implements Experiment {
         continue;
       }
       if (existingProposals.has(rec.slug)) continue;
+      // HARD RULE enforcement: when revenue_pulse is live, reject any
+      // brief whose slug doesn't contain a revenue token. The system
+      // prompt tells the model this; this line makes it un-skippable.
+      if (hasRevenuePulse && !slugHasRevenueToken(rec.slug)) continue;
       // cites_papers: optional, tolerant of missing / wrong type. Keep
       // only string entries, cap at 3, strip empties. A malformed
       // value doesn't invalidate the brief — the rest of the brief is
@@ -1045,12 +1068,16 @@ async function readLatestRevenuePulse(
   | null
 > {
   try {
+    // Read a wide window: revenue-pulse runs every ~10min but only
+    // emits real signal ~hourly, so most rows are skipped-dedupe
+    // rows. A limit of 5 almost always returned null. 50 punches
+    // through the skip flood to the most recent real pulse.
     const { data } = await ctx.db
       .from<{ evidence: string }>('self_findings')
       .select('evidence')
       .eq('experiment_id', 'revenue-pulse')
       .order('ran_at', { ascending: false })
-      .limit(5);
+      .limit(50);
     const rows = (data ?? []) as Array<{ evidence: string }>;
     for (const row of rows) {
       const ev = JSON.parse(row.evidence) as {
