@@ -53,6 +53,7 @@ export type ExperimentCategory =
   | 'experiment_proposal'
   | 'business_outcome'
   | 'dm_intel'
+  | 'data_freshness'
   | 'other';
 
 /**
