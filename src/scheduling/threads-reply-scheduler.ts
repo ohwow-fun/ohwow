@@ -7,19 +7,18 @@
  *   2. Check daily cap: count posted_log rows where
  *      platform='threads' AND source LIKE 'reply_to:%' AND posted_at
  *      >= start-of-today. If >= cap, skip this tick.
- *   3. Check cooldown: last such row's posted_at must be >=
- *      min_cooldown_seconds ago. If not, skip.
- *   4. Scan: 3 Threads topic searches (default claude code, AI agents,
+ *   3. Scan: 3 Threads topic searches (default claude code, AI agents,
  *      LLM memory) with filter=recent appended, limit 15 each.
- *   5. Filter + rank via pickReplyTargets (deterministic selector,
+ *   4. Filter + rank via pickReplyTargets (deterministic selector,
  *      with requireTopicMatch=true for noisy search feeds).
- *   6. Walk top-N in score order: for each, enrich with the full
+ *   5. Walk top-N in score order: for each, enrich with the full
  *      detail-page text (search pages are truncated), then generate
  *      a draft via the calibrated voice. First non-SKIP wins.
- *   7. Publish via threads_compose_reply — which auto-dedups against
+ *   6. Publish via threads_compose_reply — which auto-dedups against
  *      posted_log and auto-logs after success.
  *
  * Reentrancy: single in-flight guard. A slow tick never stacks.
+ * Spacing is the tick interval; no separate min-cooldown gate.
  *
  * Failure mode: any exception in a single tick is logged + swallowed;
  * scheduler keeps going. Never takes down the daemon.
@@ -31,7 +30,6 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
-import { parseSqliteTimestamp } from '../lib/sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { scanThreadsPostsViaBrowser, fetchThreadsPostFullText } from '../orchestrator/tools/threads-reply.js';
 import { pickReplyTargets, threadToCandidate } from '../orchestrator/tools/reply-target-selector.js';
@@ -44,7 +42,6 @@ import { threadsPostingExecutor } from '../execution/tool-dispatch/threads-posti
 
 const CFG_ENABLED = 'threads_reply.enabled';
 const CFG_DAILY_CAP = 'threads_reply.daily_cap';
-const CFG_MIN_COOLDOWN_S = 'threads_reply.min_cooldown_seconds';
 const CFG_QUERIES = 'threads_reply.queries';
 const CFG_TOPN = 'threads_reply.topn';
 
@@ -52,7 +49,6 @@ const DEFAULT_TICK_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_WARMUP_MS = 2 * 60 * 1000; // first tick 2 min after boot
 const DEFAULT_QUERIES = ['claude code', 'AI agents', 'LLM memory'];
 const DEFAULT_DAILY_CAP = 10;
-const DEFAULT_MIN_COOLDOWN_S = 8 * 60; // 8 minutes between replies
 const DEFAULT_TOPN = 5;
 const SCAN_LIMIT_PER_QUERY = 15;
 const SCAN_SCROLL_ROUNDS = 3;
@@ -148,19 +144,14 @@ export class ThreadsReplyScheduler {
       return;
     }
 
-    // 3. Cooldown since last reply
-    const minCooldownSec = getRuntimeConfig<number>(CFG_MIN_COOLDOWN_S, DEFAULT_MIN_COOLDOWN_S) || DEFAULT_MIN_COOLDOWN_S;
-    const sinceLastSec = await this.secondsSinceLastReply();
-    if (sinceLastSec !== null && sinceLastSec < minCooldownSec) {
-      logger.debug(
-        { sinceLastSec, minCooldownSec },
-        '[threads-reply-scheduler] cooldown active; skipping',
-      );
-      return;
-    }
+    // The 10-min interval tick + `ticking` reentrancy guard are the
+    // authoritative spacing. A separate min-cooldown gate used to live
+    // here but was redundant — and introduced a real outage when a
+    // timestamp parse sign-flipped and locked the scheduler indefinitely
+    // (2026-04-17). Dropped.
 
     logger.info(
-      { trigger, todayCount, dailyCap, sinceLastSec },
+      { trigger, todayCount, dailyCap },
       '[threads-reply-scheduler] tick entering scan phase',
     );
 
@@ -307,27 +298,6 @@ export class ThreadsReplyScheduler {
       return rows.filter((r) => r.source?.startsWith('reply_to:')).length;
     } catch {
       return 0;
-    }
-  }
-
-  private async secondsSinceLastReply(): Promise<number | null> {
-    try {
-      const { data } = await this.db
-        .from<{ source: string; posted_at: string }>('posted_log')
-        .select('source,posted_at')
-        .eq('platform', 'threads')
-        .order('posted_at', { ascending: false })
-        .limit(50);
-      const rows = Array.isArray(data) ? data : [];
-      const latest = rows.find((r) => r.source?.startsWith('reply_to:'));
-      if (!latest) return null;
-      // SQLite posted_at lacks a TZ suffix; raw Date.parse treats it
-      // as local time and flips the sign. See src/lib/sqlite-time.ts.
-      const last = parseSqliteTimestamp(latest.posted_at);
-      if (isNaN(last)) return null;
-      return Math.floor((Date.now() - last) / 1000);
-    } catch {
-      return null;
     }
   }
 

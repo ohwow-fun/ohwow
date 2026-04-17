@@ -8,16 +8,17 @@
  *   2. Check daily cap: count posted_log rows where platform='x' AND
  *      source LIKE 'reply_to:%' AND posted_at >= start-of-today. If
  *      >= cap, skip this tick.
- *   3. Check cooldown: last such row's posted_at must be >=
- *      min_cooldown_seconds ago. If not, skip.
- *   4. Scan: N X topic searches (default claude code, AI agents, LLM
+ *   3. Scan: N X topic searches (default claude code, AI agents, LLM
  *      memory) via scanXPostsViaBrowser with the live tab.
- *   5. Filter + rank via pickReplyTargets (deterministic selector,
+ *   4. Filter + rank via pickReplyTargets (deterministic selector,
  *      requireTopicMatch=true for noisy search feeds).
- *   6. Walk top-N in score order: generate a draft via the calibrated
+ *   5. Walk top-N in score order: generate a draft via the calibrated
  *      voice for platform='x'. First non-SKIP wins.
- *   7. Publish via x_compose_reply — the executor auto-dedups against
+ *   6. Publish via x_compose_reply — the executor auto-dedups against
  *      posted_log and auto-logs after success.
+ *
+ * Spacing comes from the tick interval + reentrancy guard only; no
+ * separate min-cooldown gate.
  *
  * Why no fetch-full-text enrichment step (which the Threads variant
  * does): X tweets are already short enough that search snippets
@@ -44,7 +45,6 @@
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
-import { parseSqliteTimestamp } from '../lib/sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { scanXPostsViaBrowser } from '../orchestrator/tools/x-reply.js';
 import { pickReplyTargets, tweetToCandidate } from '../orchestrator/tools/reply-target-selector.js';
@@ -57,7 +57,6 @@ import { xPostingExecutor } from '../execution/tool-dispatch/x-posting-executor.
 
 const CFG_ENABLED = 'x_reply.enabled';
 const CFG_DAILY_CAP = 'x_reply.daily_cap';
-const CFG_MIN_COOLDOWN_S = 'x_reply.min_cooldown_seconds';
 const CFG_QUERIES = 'x_reply.queries';
 const CFG_TOPN = 'x_reply.topn';
 
@@ -68,7 +67,6 @@ const DEFAULT_TICK_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_WARMUP_MS = 3.5 * 60 * 1000;
 const DEFAULT_QUERIES = ['claude code', 'AI agents', 'LLM memory'];
 const DEFAULT_DAILY_CAP = 10;
-const DEFAULT_MIN_COOLDOWN_S = 8 * 60; // 8 minutes between replies
 const DEFAULT_TOPN = 5;
 const SCAN_LIMIT_PER_QUERY = 15;
 const SCAN_SCROLL_ROUNDS = 3;
@@ -164,19 +162,14 @@ export class XReplyScheduler {
       return;
     }
 
-    // 3. Cooldown since last reply
-    const minCooldownSec = getRuntimeConfig<number>(CFG_MIN_COOLDOWN_S, DEFAULT_MIN_COOLDOWN_S) || DEFAULT_MIN_COOLDOWN_S;
-    const sinceLastSec = await this.secondsSinceLastReply();
-    if (sinceLastSec !== null && sinceLastSec < minCooldownSec) {
-      logger.debug(
-        { sinceLastSec, minCooldownSec },
-        '[x-reply-scheduler] cooldown active; skipping',
-      );
-      return;
-    }
+    // The 10-min interval tick + `ticking` reentrancy guard are the
+    // authoritative spacing. A separate min-cooldown gate used to live
+    // here but was redundant — and introduced a real outage when a
+    // timestamp parse sign-flipped and locked the scheduler indefinitely
+    // (2026-04-17). Dropped.
 
     logger.info(
-      { trigger, todayCount, dailyCap, sinceLastSec },
+      { trigger, todayCount, dailyCap },
       '[x-reply-scheduler] tick entering scan phase',
     );
 
@@ -326,29 +319,6 @@ export class XReplyScheduler {
       return rows.filter((r) => r.source?.startsWith('reply_to:')).length;
     } catch {
       return 0;
-    }
-  }
-
-  private async secondsSinceLastReply(): Promise<number | null> {
-    try {
-      const { data } = await this.db
-        .from<{ source: string; posted_at: string }>('posted_log')
-        .select('source,posted_at')
-        .eq('platform', 'x')
-        .order('posted_at', { ascending: false })
-        .limit(50);
-      const rows = Array.isArray(data) ? data : [];
-      const latest = rows.find((r) => r.source?.startsWith('reply_to:'));
-      if (!latest) return null;
-      // parseSqliteTimestamp normalizes SQLite's no-TZ string to UTC.
-      // Raw Date.parse would treat it as local, flip the sign, and
-      // lock the cooldown indefinitely (observed 2026-04-17 at
-      // sinceLastSec=-15269).
-      const last = parseSqliteTimestamp(latest.posted_at);
-      if (isNaN(last)) return null;
-      return Math.floor((Date.now() - last) / 1000);
-    } catch {
-      return null;
     }
   }
 
