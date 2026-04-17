@@ -299,6 +299,73 @@ describe('safeSelfCommit — happy path', () => {
     expect(msg).toContain('Self-authored by experiment: sig-writer');
     expect(msg).toContain('ohwow-self-bench <self@ohwow.local>');
   });
+
+  it('expectedLifts appends one Expected-Lift trailer per lift and invokes recorder', async () => {
+    const recorderCalls: Array<Record<string, unknown>> = [];
+    await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/lift-check.ts', content: 'export const z = 3;' }],
+      commitMessage: 'feat(self-bench): lift trailer emission end-to-end sanity pass',
+      experimentId: 'lift-writer',
+      expectedLifts: [
+        { kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 24 },
+        { kpiId: 'qualified_events_24h', direction: 'up', horizonHours: 168 },
+      ],
+      liftBaselineRecorder: async (input) => { recorderCalls.push({ ...input }); },
+    }));
+    const msg = lastCommitMessage(tempRoot);
+    const trailers = msg.split('\n').filter((l) => l.startsWith('Expected-Lift:'));
+    expect(trailers).toHaveLength(2);
+    expect(trailers[0]).toBe('Expected-Lift: reply_ratio_24h up 24h');
+    expect(trailers[1]).toBe('Expected-Lift: qualified_events_24h up 168h');
+    // Recorder fired once per valid lift, with the commit sha + source experiment threaded through.
+    expect(recorderCalls).toHaveLength(2);
+    expect(recorderCalls[0].sourceExperimentId).toBe('lift-writer');
+    expect(recorderCalls[0].commitSha).toBeDefined();
+  });
+
+  it('expectedLifts: invalid entries are dropped before the trailer + recorder fire', async () => {
+    const recorderCalls: Array<Record<string, unknown>> = [];
+    await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/lift-invalid.ts', content: 'export const q = 4;' }],
+      commitMessage: 'feat(self-bench): lift trailer invalid-entry filter sanity pass',
+      experimentId: 'lift-invalid-writer',
+      expectedLifts: [
+        { kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 24 }, // keep
+        { kpiId: '', direction: 'up', horizonHours: 24 } as never,       // empty kpiId
+        { kpiId: 'x', direction: 'sideways' as never, horizonHours: 24 }, // bad direction
+        { kpiId: 'y', direction: 'up', horizonHours: 0 },                 // non-positive horizon
+      ],
+      liftBaselineRecorder: async (input) => { recorderCalls.push({ ...input }); },
+    }));
+    const msg = lastCommitMessage(tempRoot);
+    const trailers = msg.split('\n').filter((l) => l.startsWith('Expected-Lift:'));
+    expect(trailers).toHaveLength(1);
+    expect(recorderCalls).toHaveLength(1);
+  });
+
+  it('omits Expected-Lift trailer when no expectedLifts provided', async () => {
+    await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/no-lift.ts', content: 'export const m = 5;' }],
+      commitMessage: 'feat(self-bench): no-lift baseline regression guard on trailer',
+      experimentId: 'no-lift-writer',
+    }));
+    const msg = lastCommitMessage(tempRoot);
+    expect(msg).not.toContain('Expected-Lift:');
+  });
+
+  it('expectedLifts: recorder errors do not undo the commit', async () => {
+    const result = await safeSelfCommit(baseOpts({
+      files: [{ path: 'src/self-bench/experiments/lift-throw.ts', content: 'export const t = 6;' }],
+      commitMessage: 'feat(self-bench): lift recorder throws but commit still lands sanity',
+      experimentId: 'lift-throw-writer',
+      expectedLifts: [{ kpiId: 'reply_ratio_24h', direction: 'up', horizonHours: 24 }],
+      liftBaselineRecorder: async () => { throw new Error('db offline'); },
+    }));
+    expect(result.ok).toBe(true);
+    expect(result.commitSha).toBeDefined();
+    // Trailer still landed even though recorder threw.
+    expect(lastCommitMessage(tempRoot)).toContain('Expected-Lift: reply_ratio_24h up 24h');
+  });
 });
 
 describe('safeSelfCommit — pre-commit audit log', () => {

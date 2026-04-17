@@ -41,6 +41,10 @@ import {
   safeSelfCommit,
   type FindingLookup,
 } from '../self-commit.js';
+import {
+  buildLiftBaselineRecorder,
+  inferExpectedLifts,
+} from '../lift-inference.js';
 import { buildContextPack } from '../context-pack.js';
 import { workspaceLayoutFor } from '../../config.js';
 import {
@@ -522,6 +526,18 @@ export class PatchAuthorExperiment implements Experiment {
       hypothesisBlock +
       `Summary: ${findingRow.summary ?? '(none)'}\n`;
 
+    // Phase 5b — claim what this patch is expected to move. The
+    // inference is a coarse mapping from patched paths → KPI × horizon;
+    // files without a documented KPI connection get [] (no trailer,
+    // no baseline row). The recorder closure reads the baseline
+    // reading via the KPI registry and writes a lift_measurements
+    // row per entry after the commit lands. Errors in the recorder
+    // never undo the commit.
+    const expectedLifts = inferExpectedLifts([targetPath]);
+    const liftBaselineRecorder = expectedLifts.length > 0
+      ? buildLiftBaselineRecorder(ctx.db, ctx.workspaceId)
+      : undefined;
+
     const commit = await safeSelfCommit({
       files: [{ path: targetPath, content: newContent }],
       commitMessage,
@@ -532,6 +548,8 @@ export class PatchAuthorExperiment implements Experiment {
       fixesFindingId: candidate.findingId,
       citesSalesSignal,
       findingResolver,
+      expectedLifts: expectedLifts.length > 0 ? expectedLifts : undefined,
+      liftBaselineRecorder,
     });
     let loggedPriorities: PriorityDoc[] = [];
     if (commit.ok) {
