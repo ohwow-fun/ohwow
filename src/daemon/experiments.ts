@@ -100,9 +100,11 @@ import path from 'node:path';
 import { dirname } from 'path';
 import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
+import { XDraftDistillerScheduler } from '../scheduling/x-draft-distiller.js';
 
 export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<void> {
-  const { config: _config, db, engine, workspaceId, scraplingService } = ctx as DaemonContext;
+  const { config: _config, db, engine, workspaceId, scraplingService, modelRouter } =
+    ctx as DaemonContext;
 
   // Phase 5-B: runtime config overrides cache. Experiments read
   // runtime-mutable settings via getRuntimeConfig() which
@@ -301,6 +303,18 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     );
     cadenceScheduler.start();
     logger.info({ approvalsJsonlPath }, '[daemon] content-cadence-scheduler started');
+
+    // Market-radar distiller — turns novel market:* findings into
+    // candidate X post drafts (stored in x_post_drafts, operator-
+    // approved via the ohwow_approve_x_draft MCP tool). Default
+    // workspace only; avenued has its own goals.
+    const xDraftDistiller = new XDraftDistillerScheduler(
+      db,
+      modelRouter ?? null,
+      workspaceId,
+    );
+    xDraftDistiller.start();
+    logger.info('[daemon] x-draft-distiller started');
 
     // Phase 8-A.4: XDmPollerScheduler — read-only DM ingest. Polls the
     // X inbox via listDmsViaBrowser, upserts threads + observations
