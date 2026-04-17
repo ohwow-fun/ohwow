@@ -61,54 +61,48 @@ export const Caption: React.FC<CaptionProps> = ({
 
   const words = text.split(" ");
 
+  // Bulletproof centering: position the box at left:50% and translate it
+  // back by 50% of its own width. No nested flex. Text inside uses inline
+  // spans so natural text-wrap + text-align:center work as expected.
   return (
     <div
       style={{
         position: "absolute",
         bottom: bottomOffset,
-        left: 0,
-        right: 0,
-        display: "flex",
-        justifyContent: "center",
+        left: "50%",
+        transform: `translate(-50%, ${y}px)`,
+        maxWidth,
+        width: "max-content",
+        background: "rgba(0,0,0,0.72)",
+        padding: pad,
+        borderRadius: radius,
+        fontFamily: fonts.sans,
+        fontSize,
+        fontWeight: 600,
+        lineHeight: 1.35,
+        textAlign: "center",
         opacity,
-        transform: `translateY(${y}px)`,
+        boxSizing: "border-box",
       }}
     >
-      <div
-        style={{
-          background: "rgba(0,0,0,0.72)",
-          padding: pad,
-          borderRadius: radius,
-          fontFamily: fonts.sans,
-          fontSize,
-          fontWeight: 600,
-          lineHeight: 1.35,
-          maxWidth,
-          textAlign: "center",
-          display: "flex",
-          flexWrap: "wrap",
-          justifyContent: "center",
-          gap: "0 8px",
-        }}
-      >
-        {words.map((word, i) => {
-          const clean = word.replace(/[.,!?]/g, "").toLowerCase();
-          const isHighlighted = highlight.some(
-            (h) => clean === h.toLowerCase()
-          );
-          return (
-            <span
-              key={i}
-              style={{
-                color: isHighlighted ? colors.accent : colors.text,
-                fontWeight: isHighlighted ? 800 : 600,
-              }}
-            >
-              {word}
-            </span>
-          );
-        })}
-      </div>
+      {words.map((word, i) => {
+        const clean = word.replace(/[.,!?]/g, "").toLowerCase();
+        const isHighlighted = highlight.some(
+          (h) => clean === h.toLowerCase()
+        );
+        return (
+          <span
+            key={i}
+            style={{
+              color: isHighlighted ? colors.accent : colors.text,
+              fontWeight: isHighlighted ? 800 : 600,
+            }}
+          >
+            {word}
+            {i < words.length - 1 ? " " : ""}
+          </span>
+        );
+      })}
     </div>
   );
 };

@@ -231,11 +231,15 @@ function getAudioDurationMs(filePath) {
 // ---------------------------------------------------------------------------
 function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
   const totalAudioFrames = Math.ceil((audioDurationMs / 1000) * fps);
-  const words = scenes.map((s) => (s.narration || s.params?.text || '').split(/\s+/).filter(Boolean).length);
-  const totalWords = words.reduce((a, b) => a + b, 0) || 1;
+  // Character count correlates with TTS time better than word count.
+  // "20.9GB GGUF format quantized by Unsloth" has ~6 words but TTS
+  // reads the numbers/acronyms slowly — character count gets us closer.
+  // Strip whitespace so indentation/padding doesn't skew distribution.
+  const chars = scenes.map((s) => (s.narration || s.params?.text || '').replace(/\s+/g, ' ').trim().length);
+  const totalChars = chars.reduce((a, b) => a + b, 0) || 1;
   const padding = VOICE_LEAD_FRAMES + VOICE_TAIL_FRAMES;
   return scenes.map((s, i) => {
-    const proportion = (words[i] || 1) / totalWords;
+    const proportion = (chars[i] || 1) / totalChars;
     const rawFrames = Math.round(proportion * totalAudioFrames) + padding;
     return { ...s, durationInFrames: Math.max(SCENE_MIN_FRAMES, rawFrames) };
   });
