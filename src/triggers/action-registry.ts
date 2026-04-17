@@ -25,6 +25,7 @@ import { takeScreenshotDispatcher } from './dispatchers/take-screenshot.js';
 import { agentPromptDispatcher } from './dispatchers/agent-prompt.js';
 import { a2aCallDispatcher } from './dispatchers/a2a-call.js';
 import { generateChartDispatcher } from './dispatchers/generate-chart.js';
+import { shellScriptDispatcher } from './dispatchers/shell-script.js';
 
 export class ActionDispatcherRegistry {
   private dispatchers = new Map<string, ActionDispatcher>();
@@ -71,5 +72,6 @@ export function createDefaultRegistry(): ActionDispatcherRegistry {
   registry.register(agentPromptDispatcher);
   registry.register(a2aCallDispatcher);
   registry.register(generateChartDispatcher);
+  registry.register(shellScriptDispatcher);
   return registry;
 }

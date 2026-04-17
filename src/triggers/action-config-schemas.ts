@@ -137,6 +137,19 @@ export const GenerateChartConfigSchema = z.object({
   height: z.number().optional(),
 });
 
+export const ShellScriptConfigSchema = z.object({
+  /** Path to a Node script (relative to repo root, or absolute). Run via `npx tsx`. */
+  script_path: z.string().min(1),
+  /** Extra env vars merged onto process.env. OHWOW_WORKSPACE + OHWOW_PORT auto-injected. */
+  env: z.record(z.string(), z.string()).optional(),
+  /** Wall-clock timeout in seconds. Default 900 (15 min). */
+  timeout_seconds: z.number().int().positive().optional(),
+  /** If set, write a JSON heartbeat to <workspace dataDir>/<filename> after the run. */
+  heartbeat_filename: z.string().optional(),
+  /** Override the workspace slug used for OHWOW_WORKSPACE. Default: currently-focused workspace. */
+  workspace_slug: z.string().optional(),
+});
+
 // ============================================================================
 // DERIVED TYPES
 // ============================================================================
@@ -157,6 +170,7 @@ export type TakeScreenshotConfig = z.infer<typeof TakeScreenshotConfigSchema>;
 export type AgentPromptConfig = z.infer<typeof AgentPromptConfigSchema>;
 export type A2ACallConfig = z.infer<typeof A2ACallConfigSchema>;
 export type GenerateChartConfig = z.infer<typeof GenerateChartConfigSchema>;
+export type ShellScriptConfig = z.infer<typeof ShellScriptConfigSchema>;
 
 // ============================================================================
 // ACTION CONFIG MAP
@@ -180,6 +194,7 @@ export interface ActionConfigMap {
   agent_prompt: AgentPromptConfig;
   a2a_call: A2ACallConfig;
   generate_chart: GenerateChartConfig;
+  shell_script: ShellScriptConfig;
 }
 
 export type ActionType = keyof ActionConfigMap;
@@ -202,4 +217,5 @@ export const ACTION_CONFIG_SCHEMAS: Record<ActionType, z.ZodType> = {
   agent_prompt: AgentPromptConfigSchema,
   a2a_call: A2ACallConfigSchema,
   generate_chart: GenerateChartConfigSchema,
+  shell_script: ShellScriptConfigSchema,
 };

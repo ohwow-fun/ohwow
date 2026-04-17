@@ -42,13 +42,14 @@ describe('ActionDispatcherRegistry', () => {
 });
 
 describe('createDefaultRegistry', () => {
-  it('registers all 16 action types', () => {
+  it('registers all default action types', () => {
     const registry = createDefaultRegistry();
     const expectedTypes = [
       'run_agent', 'save_contact', 'update_contact', 'log_contact_event',
       'webhook_forward', 'transform_data', 'conditional', 'run_workflow',
       'create_task', 'send_notification', 'fill_pdf', 'save_attachment',
       'take_screenshot', 'agent_prompt', 'a2a_call', 'generate_chart',
+      'shell_script',
     ];
 
     for (const type of expectedTypes) {
