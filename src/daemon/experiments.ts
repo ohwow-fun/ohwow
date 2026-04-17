@@ -91,6 +91,7 @@ import {
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { ThreadsReplyScheduler } from '../scheduling/threads-reply-scheduler.js';
+import { XReplyScheduler } from '../scheduling/x-reply-scheduler.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
@@ -333,6 +334,16 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     });
     threadsReply.start();
     logger.info('[daemon] threads-reply-scheduler started');
+
+    // XReplyScheduler — sibling of the Threads loop for X post-replies.
+    // Same pipeline (scan → rank → draft → publish), platform='x', its
+    // own runtime_config namespace (x_reply.*), and warmup staggered
+    // ~90s after Threads to avoid CDP-lane contention on daemon boot.
+    const xReply = new XReplyScheduler({
+      db, engine, workspaceId, workspaceSlug,
+    });
+    xReply.start();
+    logger.info('[daemon] x-reply-scheduler started');
 
     // Market-radar distiller — turns novel market:* findings into
     // candidate X post drafts (stored in x_post_drafts, operator-
