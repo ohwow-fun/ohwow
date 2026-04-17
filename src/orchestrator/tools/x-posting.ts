@@ -360,12 +360,14 @@ type CdpPage = RawCdpPage;
  * from the wrong session.
  */
 async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise<CdpPage | null> {
+  let browser: RawCdpBrowser | null = null;
   try {
-    const browser = await RawCdpBrowser.connect(CDP_URL, 5000);
+    browser = await RawCdpBrowser.connect(CDP_URL, 5000);
     const targets = await browser.getTargets();
     const pageTargets = targets.filter((t) => t.type === 'page');
     if (pageTargets.length === 0) {
       logger.warn('[x-posting] CDP browser has no page targets');
+      browser.close();
       return null;
     }
 
@@ -376,12 +378,6 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
       if (!target) target = inContext.find((t) => t.url.startsWith('https://twitter.com'));
 
       if (!target) {
-        // No x.com tab in the target profile yet. Open one in that exact
-        // browserContextId via Target.createTarget — this is the only
-        // way to guarantee the new tab belongs to the right profile.
-        // Without this step the runtime would either return null
-        // (current behavior before the fix) or attach to an unrelated
-        // profile's x.com tab.
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, 'https://x.com/home');
           logger.info(
@@ -396,6 +392,7 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
             { err: err instanceof Error ? err.message : err, ctx: expectedContextId.slice(0, 8) },
             '[x-posting] createTargetInContext failed',
           );
+          browser.close();
           return null;
         }
       }
@@ -409,9 +406,7 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
       return page;
     }
 
-    // Fallback: no context hint. Prefer urlHint match, then x.com, then
-    // twitter.com. Never hijack an unrelated tab because navigating it
-    // would force a profile change.
+    // Fallback: no context hint
     let target = urlHint
       ? pageTargets.find((t) => t.url.includes(urlHint))
       : undefined;
@@ -422,6 +417,7 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
         { pageUrls: pageTargets.slice(0, 6).map((t) => t.url) },
         '[x-posting] no x.com/twitter.com tab in CDP; refusing to hijack an unrelated tab',
       );
+      browser.close();
       return null;
     }
     logger.debug(
@@ -433,6 +429,7 @@ async function getCdpPage(urlHint?: string, expectedContextId?: string): Promise
     return page;
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, '[x-posting] CDP connect failed');
+    if (browser) browser.close();
     return null;
   }
 }

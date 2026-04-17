@@ -27,6 +27,13 @@ export const POST_SETTLE_MS = 3000;
 // CDP connection
 // ---------------------------------------------------------------------------
 
+/** Result of acquiring a CDP page, with ownership tracking. */
+export interface CdpPageHandle {
+  page: RawCdpPage;
+  /** True when this function created the tab (vs finding an existing one). */
+  created: boolean;
+}
+
 /**
  * Acquire a RawCdpPage attached to a tab matching `urlMatcher` in the
  * profile pinned by `expectedContextId`. If no matching tab exists in
@@ -35,20 +42,26 @@ export const POST_SETTLE_MS = 3000;
  * When `expectedContextId` is absent, falls back to URL-only heuristic
  * (first tab whose URL matches). Returns null when nothing matches and
  * we can't safely create a tab.
+ *
+ * The caller is responsible for closing the page after use via
+ * `page.close()` (detach + close WS) or `page.closeAndCleanup()`
+ * (close tab + close WS, for tabs we created).
  */
 export async function getCdpPageForPlatform(opts: {
   urlMatcher: (url: string) => boolean;
   fallbackUrl: string;
   expectedContextId?: string;
   logTag: string;
-}): Promise<RawCdpPage | null> {
+}): Promise<CdpPageHandle | null> {
   const { urlMatcher, fallbackUrl, expectedContextId, logTag } = opts;
+  let browser: RawCdpBrowser | null = null;
   try {
-    const browser = await RawCdpBrowser.connect(CDP_URL, 5000);
+    browser = await RawCdpBrowser.connect(CDP_URL, 5000);
     const targets = await browser.getTargets();
     const pageTargets = targets.filter((t) => t.type === 'page');
     if (pageTargets.length === 0) {
       logger.warn(`[${logTag}] CDP browser has no page targets`);
+      browser.close();
       return null;
     }
 
@@ -57,7 +70,6 @@ export async function getCdpPageForPlatform(opts: {
       const target = inContext.find((t) => urlMatcher(t.url));
 
       if (!target) {
-        // Open a new tab in the target profile context
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, fallbackUrl);
           logger.info(
@@ -66,12 +78,13 @@ export async function getCdpPageForPlatform(opts: {
           );
           const page = await browser.attachToPage(newTargetId);
           await page.installUnloadEscapes();
-          return page;
+          return { page, created: true };
         } catch (err) {
           logger.warn(
             { err: err instanceof Error ? err.message : err, ctx: expectedContextId.slice(0, 8) },
             `[${logTag}] createTargetInContext failed`,
           );
+          browser.close();
           return null;
         }
       }
@@ -82,7 +95,7 @@ export async function getCdpPageForPlatform(opts: {
       );
       const page = await browser.attachToPage(target.targetId);
       await page.installUnloadEscapes();
-      return page;
+      return { page, created: false };
     }
 
     // Fallback: URL-only heuristic
@@ -92,14 +105,46 @@ export async function getCdpPageForPlatform(opts: {
         { pageUrls: pageTargets.slice(0, 6).map((t) => t.url) },
         `[${logTag}] no matching tab in CDP; refusing to hijack an unrelated tab`,
       );
+      browser.close();
       return null;
     }
     const page = await browser.attachToPage(target.targetId);
     await page.installUnloadEscapes();
-    return page;
+    return { page, created: false };
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, `[${logTag}] CDP connect failed`);
+    if (browser) browser.close();
     return null;
+  }
+}
+
+/**
+ * Scoped CDP tab lifecycle: acquire a page, run the callback, then
+ * clean up. If the tab was created by us, close it; if found, just
+ * detach. The browser WebSocket is always closed.
+ *
+ * This is the preferred way to use CDP for operations that don't need
+ * to persist the tab after completion (compose, read, post).
+ */
+export async function withCdpTab<T>(
+  opts: {
+    urlMatcher: (url: string) => boolean;
+    fallbackUrl: string;
+    expectedContextId?: string;
+    logTag: string;
+  },
+  fn: (page: RawCdpPage) => Promise<T>,
+): Promise<T | null> {
+  const handle = await getCdpPageForPlatform(opts);
+  if (!handle) return null;
+  try {
+    return await fn(handle.page);
+  } finally {
+    if (handle.created) {
+      await handle.page.closeAndCleanup();
+    } else {
+      handle.page.close();
+    }
   }
 }
 

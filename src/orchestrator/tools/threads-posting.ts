@@ -34,6 +34,7 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import type { RawCdpPage } from '../../execution/browser/raw-cdp.js';
 import {
+  withCdpTab,
   getCdpPageForPlatform,
   captureScreenshot,
   clickByText,
@@ -42,6 +43,7 @@ import {
   HYDRATION_WAIT_MS,
   POST_SETTLE_MS,
   type ComposeResult,
+  type CdpPageHandle,
 } from './social-cdp-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -152,7 +154,7 @@ function isThreadsUrl(url: string): boolean {
   return url.includes('threads.com') || url.includes('threads.net');
 }
 
-async function getThreadsCdpPage(expectedContextId?: string): Promise<RawCdpPage | null> {
+async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHandle | null> {
   return getCdpPageForPlatform({
     urlMatcher: isThreadsUrl,
     fallbackUrl: THREADS_HOME,
@@ -393,121 +395,129 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
     };
   }
 
-  const page = await getThreadsCdpPage(input.expectedBrowserContextId);
-  if (!page) {
+  const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  if (!handle) {
     return {
       success: false,
       message: 'Could not attach to Chrome CDP at :9222. No threads.com tab open, or debug Chrome is down. Open threads.com in the target profile window and retry.',
     };
   }
 
-  // Ensure we're on Threads
-  const currentUrl = await page.url();
-  if (!isThreadsUrl(currentUrl)) {
-    await page.goto(THREADS_HOME);
-    await wait(HYDRATION_WAIT_MS);
-  }
+  const { page, created } = handle;
+  try {
+    // Ensure we're on Threads
+    const currentUrl = await page.url();
+    if (!isThreadsUrl(currentUrl)) {
+      await page.goto(THREADS_HOME);
+      await wait(HYDRATION_WAIT_MS);
+    }
 
-  // Identity verification
-  if (input.expectedHandle) {
-    const mismatch = await assertSignedInAs(page, input.expectedHandle);
-    if (mismatch) return mismatch;
-  }
+    // Identity verification
+    if (input.expectedHandle) {
+      const mismatch = await assertSignedInAs(page, input.expectedHandle);
+      if (mismatch) return mismatch;
+    }
 
-  // Open compose dialog
-  const dialogOpened = await openComposeDialog(page);
-  if (!dialogOpened) {
-    return {
-      success: false,
-      message: 'Could not open Threads compose dialog. The Create button may not be visible.',
-      screenshotBase64: await captureScreenshot(page),
-      currentUrl: await page.url(),
-    };
-  }
+    // Open compose dialog
+    const dialogOpened = await openComposeDialog(page);
+    if (!dialogOpened) {
+      return {
+        success: false,
+        message: 'Could not open Threads compose dialog. The Create button may not be visible.',
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
 
-  await wait(500);
+    await wait(500);
 
-  // Focus textbox
-  const focused = await focusComposeTextbox(page, 0);
-  if (!focused) {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Could not focus the Threads compose textbox.',
-      screenshotBase64: await captureScreenshot(page),
-      currentUrl: await page.url(),
-    };
-  }
+    // Focus textbox
+    const focused = await focusComposeTextbox(page, 0);
+    if (!focused) {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Could not focus the Threads compose textbox.',
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
 
-  // Clear any residual text (e.g., from a saved draft or a stale dialog)
-  await clearTextbox(page, SEL_TEXTBOX);
-  await wait(200);
+    // Clear any residual text (e.g., from a saved draft or a stale dialog)
+    await clearTextbox(page, SEL_TEXTBOX);
+    await wait(200);
 
-  // Re-focus after clear (selectAll+delete may have moved focus)
-  await focusComposeTextbox(page, 0);
+    // Re-focus after clear (selectAll+delete may have moved focus)
+    await focusComposeTextbox(page, 0);
 
-  // Warmup: space + backspace to avoid first-keystroke-dropped glitch
-  await page.typeText(' ');
-  await page.pressKey('Backspace');
+    // Warmup: space + backspace to avoid first-keystroke-dropped glitch
+    await page.typeText(' ');
+    await page.pressKey('Backspace');
 
-  // Type the post text
-  await page.typeText(text);
-  await wait(400);
+    // Type the post text
+    await page.typeText(text);
+    await wait(400);
 
-  const screenshotBase64 = await captureScreenshot(page);
+    const screenshotBase64 = await captureScreenshot(page);
 
-  if (dryRun) {
-    logger.info(`[${LOG_TAG}] Post dry run — composed but did not publish`);
-    // Don't dismiss — leave it for the user to see
+    if (dryRun) {
+      logger.info(`[${LOG_TAG}] Post dry run — composed but did not publish`);
+      return {
+        success: true,
+        message: `Dry run complete. Composed ${text.length} chars in Threads compose modal. Call again with dry_run=false to publish.`,
+        screenshotBase64,
+        postsTyped: 1,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    // Click Post
+    const clicked = await clickByText(page, 'Post');
+    if (!clicked) {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Post button was not clickable. Threads may have rejected the content.',
+        screenshotBase64,
+        postsTyped: 1,
+        postsPublished: 0,
+      };
+    }
+
+    await wait(POST_SETTLE_MS);
+
+    const outcome = await readPostOutcome(page);
+    const postShot = await captureScreenshot(page);
+
+    if (outcome === 'still_open') {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Post button clicked but the compose dialog did not close. Threads likely rejected the content (rate limit, policy, etc.).',
+        screenshotBase64: postShot || screenshotBase64,
+        postsTyped: 1,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info(`[${LOG_TAG}] Post published`);
     return {
       success: true,
-      message: `Dry run complete. Composed ${text.length} chars in Threads compose modal. Call again with dry_run=false to publish.`,
-      screenshotBase64,
-      postsTyped: 1,
-      postsPublished: 0,
-      currentUrl: await page.url(),
-    };
-  }
-
-  // Click Post
-  const clicked = await clickByText(page, 'Post');
-  if (!clicked) {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Post button was not clickable. Threads may have rejected the content.',
-      screenshotBase64,
-      postsTyped: 1,
-      postsPublished: 0,
-    };
-  }
-
-  await wait(POST_SETTLE_MS);
-
-  const outcome = await readPostOutcome(page);
-  const postShot = await captureScreenshot(page);
-
-  if (outcome === 'still_open') {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Post button clicked but the compose dialog did not close. Threads likely rejected the content (rate limit, policy, etc.).',
+      message: `Threads post published (${text.length} chars).`,
       screenshotBase64: postShot || screenshotBase64,
       postsTyped: 1,
-      postsPublished: 0,
+      postsPublished: 1,
       currentUrl: await page.url(),
     };
+  } finally {
+    if (created) {
+      await page.closeAndCleanup();
+    } else {
+      page.close();
+    }
   }
-
-  logger.info(`[${LOG_TAG}] Post published`);
-  return {
-    success: true,
-    message: `Threads post published (${text.length} chars).`,
-    screenshotBase64: postShot || screenshotBase64,
-    postsTyped: 1,
-    postsPublished: 1,
-    currentUrl: await page.url(),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -528,134 +538,140 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
     }
   }
 
-  const page = await getThreadsCdpPage(input.expectedBrowserContextId);
-  if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
+  const handle2 = await getThreadsCdpPage(input.expectedBrowserContextId);
+  if (!handle2) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
-  // Ensure we're on Threads
-  const currentUrl = await page.url();
-  if (!isThreadsUrl(currentUrl)) {
-    await page.goto(THREADS_HOME);
-    await wait(HYDRATION_WAIT_MS);
-  }
-
-  // Identity verification
-  if (input.expectedHandle) {
-    const mismatch = await assertSignedInAs(page, input.expectedHandle);
-    if (mismatch) return mismatch;
-  }
-
-  // Open compose dialog
-  const dialogOpened = await openComposeDialog(page);
-  if (!dialogOpened) {
-    return {
-      success: false,
-      message: 'Could not open Threads compose dialog.',
-      screenshotBase64: await captureScreenshot(page),
-    };
-  }
-
-  await wait(500);
-
-  // Type first post
-  if (!await focusComposeTextbox(page, 0)) {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Could not focus the first Threads compose textbox.',
-      screenshotBase64: await captureScreenshot(page),
-    };
-  }
-
-  // Clear any residual text from drafts
-  await clearTextbox(page, SEL_TEXTBOX);
-  await wait(200);
-  await focusComposeTextbox(page, 0);
-
-  await page.typeText(' ');
-  await page.pressKey('Backspace');
-  await page.typeText(posts[0]);
-  let postsTyped = 1;
-
-  // Add subsequent posts
-  for (let i = 1; i < posts.length; i++) {
-    // Click "Add to thread"
-    const addClicked = await clickByText(page, 'Add to thread');
-    if (!addClicked) {
-      return {
-        success: false,
-        message: `Could not click "Add to thread" for post ${i + 1}.`,
-        screenshotBase64: await captureScreenshot(page),
-        postsTyped,
-      };
+  const { page, created } = handle2;
+  try {
+    // Ensure we're on Threads
+    const currentUrl = await page.url();
+    if (!isThreadsUrl(currentUrl)) {
+      await page.goto(THREADS_HOME);
+      await wait(HYDRATION_WAIT_MS);
     }
-    await wait(800);
 
-    // Focus the new textbox (it should auto-focus, but be explicit)
-    if (!await focusComposeTextbox(page, i)) {
+    // Identity verification
+    if (input.expectedHandle) {
+      const mismatch = await assertSignedInAs(page, input.expectedHandle);
+      if (mismatch) return mismatch;
+    }
+
+    // Open compose dialog
+    const dialogOpened = await openComposeDialog(page);
+    if (!dialogOpened) {
       return {
         success: false,
-        message: `Could not focus thread post ${i + 1}.`,
+        message: 'Could not open Threads compose dialog.',
         screenshotBase64: await captureScreenshot(page),
-        postsTyped,
       };
     }
 
-    await page.typeText(posts[i]);
-    postsTyped++;
-  }
+    await wait(500);
 
-  await wait(400);
-  const screenshotBase64 = await captureScreenshot(page);
+    // Type first post
+    if (!await focusComposeTextbox(page, 0)) {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Could not focus the first Threads compose textbox.',
+        screenshotBase64: await captureScreenshot(page),
+      };
+    }
 
-  if (dryRun) {
-    logger.info(`[${LOG_TAG}] Thread dry run — typed ${postsTyped} posts`);
+    // Clear any residual text from drafts
+    await clearTextbox(page, SEL_TEXTBOX);
+    await wait(200);
+    await focusComposeTextbox(page, 0);
+
+    await page.typeText(' ');
+    await page.pressKey('Backspace');
+    await page.typeText(posts[0]);
+    let postsTyped = 1;
+
+    // Add subsequent posts
+    for (let i = 1; i < posts.length; i++) {
+      const addClicked = await clickByText(page, 'Add to thread');
+      if (!addClicked) {
+        return {
+          success: false,
+          message: `Could not click "Add to thread" for post ${i + 1}.`,
+          screenshotBase64: await captureScreenshot(page),
+          postsTyped,
+        };
+      }
+      await wait(800);
+
+      if (!await focusComposeTextbox(page, i)) {
+        return {
+          success: false,
+          message: `Could not focus thread post ${i + 1}.`,
+          screenshotBase64: await captureScreenshot(page),
+          postsTyped,
+        };
+      }
+
+      await page.typeText(posts[i]);
+      postsTyped++;
+    }
+
+    await wait(400);
+    const screenshotBase64 = await captureScreenshot(page);
+
+    if (dryRun) {
+      logger.info(`[${LOG_TAG}] Thread dry run — typed ${postsTyped} posts`);
+      return {
+        success: true,
+        message: `Dry run complete. Composed ${postsTyped}-post thread. Call again with dry_run=false to publish.`,
+        screenshotBase64,
+        postsTyped,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    const postClicked = await clickByText(page, 'Post');
+    if (!postClicked) {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Post button was not clickable within timeout.',
+        screenshotBase64,
+        postsTyped,
+        postsPublished: 0,
+      };
+    }
+
+    await wait(POST_SETTLE_MS);
+
+    const outcome = await readPostOutcome(page);
+    if (outcome === 'still_open') {
+      await dismissComposeDialog(page);
+      return {
+        success: false,
+        message: 'Post button clicked but compose dialog did not close. Threads likely rejected the content.',
+        screenshotBase64: await captureScreenshot(page) || screenshotBase64,
+        postsTyped,
+        postsPublished: 0,
+        currentUrl: await page.url(),
+      };
+    }
+
+    logger.info(`[${LOG_TAG}] Thread published (${postsTyped} posts)`);
     return {
       success: true,
-      message: `Dry run complete. Composed ${postsTyped}-post thread. Call again with dry_run=false to publish.`,
-      screenshotBase64,
-      postsTyped,
-      postsPublished: 0,
-      currentUrl: await page.url(),
-    };
-  }
-
-  // Click Post
-  const postClicked = await clickByText(page, 'Post');
-  if (!postClicked) {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Post button was not clickable within timeout.',
-      screenshotBase64,
-      postsTyped,
-      postsPublished: 0,
-    };
-  }
-
-  await wait(POST_SETTLE_MS);
-
-  const outcome = await readPostOutcome(page);
-  if (outcome === 'still_open') {
-    await dismissComposeDialog(page);
-    return {
-      success: false,
-      message: 'Post button clicked but compose dialog did not close. Threads likely rejected the content.',
+      message: `Threads thread published (${postsTyped} posts).`,
       screenshotBase64: await captureScreenshot(page) || screenshotBase64,
       postsTyped,
-      postsPublished: 0,
+      postsPublished: postsTyped,
       currentUrl: await page.url(),
     };
+  } finally {
+    if (created) {
+      await page.closeAndCleanup();
+    } else {
+      page.close();
+    }
   }
-
-  logger.info(`[${LOG_TAG}] Thread published (${postsTyped} posts)`);
-  return {
-    success: true,
-    message: `Threads thread published (${postsTyped} posts).`,
-    screenshotBase64: await captureScreenshot(page) || screenshotBase64,
-    postsTyped,
-    postsPublished: postsTyped,
-    currentUrl: await page.url(),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -663,37 +679,46 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
 // ---------------------------------------------------------------------------
 
 export async function readThreadsProfileViaBrowser(input: ReadThreadsProfileInput): Promise<ComposeResult & { handle?: string }> {
-  const page = await getThreadsCdpPage(input.expectedBrowserContextId);
-  if (!page) {
+  const profileHandle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  if (!profileHandle) {
     return { success: false, message: 'Could not attach to Chrome CDP. No threads.com tab open, or debug Chrome is down.' };
   }
 
-  const currentUrl = await page.url();
-  if (!isThreadsUrl(currentUrl)) {
-    await page.goto(THREADS_HOME);
-    await wait(HYDRATION_WAIT_MS);
-  }
+  const { page, created } = profileHandle;
+  try {
+    const currentUrl = await page.url();
+    if (!isThreadsUrl(currentUrl)) {
+      await page.goto(THREADS_HOME);
+      await wait(HYDRATION_WAIT_MS);
+    }
 
-  let handle: string | null = null;
-  for (let i = 0; i < 4; i++) {
-    handle = await readActiveThreadsHandle(page);
-    if (handle) break;
-    await wait(750);
-  }
+    let handle: string | null = null;
+    for (let i = 0; i < 4; i++) {
+      handle = await readActiveThreadsHandle(page);
+      if (handle) break;
+      await wait(750);
+    }
 
-  if (!handle) {
+    if (!handle) {
+      return {
+        success: false,
+        message: 'Could not read the logged-in Threads handle. The user may not be signed in.',
+        screenshotBase64: await captureScreenshot(page),
+        currentUrl: await page.url(),
+      };
+    }
+
     return {
-      success: false,
-      message: 'Could not read the logged-in Threads handle. The user may not be signed in.',
-      screenshotBase64: await captureScreenshot(page),
+      success: true,
+      message: `Signed in to Threads as @${handle}.`,
+      handle,
       currentUrl: await page.url(),
     };
+  } finally {
+    if (created) {
+      await page.closeAndCleanup();
+    } else {
+      page.close();
+    }
   }
-
-  return {
-    success: true,
-    message: `Signed in to Threads as @${handle}.`,
-    handle,
-    currentUrl: await page.url(),
-  };
 }
