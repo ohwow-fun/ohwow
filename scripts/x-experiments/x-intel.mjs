@@ -31,8 +31,17 @@ import path from 'node:path';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.ts';
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
-import { scrollAndHarvest, scrapeRepliers, loadSeen, appendSeen, filterPosts } from './_x-harvest.mjs';
+import {
+  scrollAndHarvest,
+  scrapeRepliers,
+  loadSeen,
+  appendSeen,
+  filterPosts,
+  buildEngagerRecord,
+  writeEngagersSidecar,
+} from './_x-harvest.mjs';
 import { propose } from './_approvals.mjs';
+import { formatClassifyLine, ENGAGER_CLASSIFIER_GUIDANCE } from './_x-classify.mjs';
 import crypto from 'node:crypto';
 
 function predictionId(bucketId, what) {
@@ -154,12 +163,17 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('profile')) {
   }
 }
 
-// Own-post engager surface: scrape repliers on our own recent posts.
-// The handle comes from the workspace config (own_handle) or falls
-// back to the logged-in handle we can read from the AppTabBar link.
-// This is the natural "audience finds us" loop — once we start
-// posting via x-compose, repliers become engager:own-post rows that
-// the rubric's boost promotes aggressively.
+// Engager surface: repliers on our own recent posts + repliers on
+// configured competitor profiles' threads. Both are the "in-market by
+// behavior" signal the rubric's engager boost was tuned for.
+// We collect them into a single array so we can write the raw-harvest
+// sidecar (x-engagers-<date>.jsonl) BEFORE filter/dedup/classify. The
+// sidecar is the only end-to-end observability for this surface; without
+// it, engager rows are only visible when they survive filter + pass
+// classify, which masks whether the scrape itself produced rows.
+const engagerRows = [];           // for queueing into allPosts (classifier input)
+const engagerSidecarRows = [];    // for the raw-harvest sidecar (pre-filter)
+
 const OWN_POST_ENGAGERS_ENABLED = process.env.OWN_POST_ENGAGERS !== '0';
 if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers'))) {
   let ownHandle = cfg.own_handle || null;
@@ -183,12 +197,14 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
           console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
           for (const r of repliers) {
             if (!r.author || r.author === ownHandle) continue;
-            addPosts([{
+            engagerSidecarRows.push(buildEngagerRecord(r, 'engager:own-post', ownHandle, parent.permalink));
+            engagerRows.push({
               ...r,
               _bucketHint: 'market_signal',
               _engagerSource: 'engager:own-post',
               _parentAuthor: ownHandle,
-            }], 'engagers:own-post');
+              _parentPermalink: parent.permalink,
+            });
           }
         } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
       }
@@ -198,14 +214,8 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
   }
 }
 
-// Engager surface: for each configured competitor profile, take their
-// top recent posts and scrape the replier pool. Repliers to
-// "n8n is too expensive" style threads are very often in-market — the
-// rubric's engager boost is tuned precisely for these rows.
-// Config lives in x-config.json under sources.profiles[].harvest_engagers.
-// We write them to a separate x-engagers-<date>.jsonl sidecar so the
-// funnel can read them without re-scraping.
-const engagerRows = [];
+// Competitor-thread engagers: config-gated per profile via
+// sources.profiles[].harvest_engagers.
 if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
   for (const p of cfg.sources.profiles || []) {
     if (!p.harvest_engagers) continue;
@@ -220,17 +230,31 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
         console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
         for (const r of repliers) {
           if (!r.author || r.author === p.handle) continue;
+          const source = `engager:competitor:${p.handle}`;
+          engagerSidecarRows.push(buildEngagerRecord(r, source, p.handle, parent.permalink));
           engagerRows.push({
             ...r,
             _bucketHint: 'market_signal',
-            _engagerSource: `engager:competitor:${p.handle}`,
+            _engagerSource: source,
             _parentAuthor: p.handle,
+            _parentPermalink: parent.permalink,
           });
         }
       } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
     }
   }
 }
+
+// Write the raw-harvest sidecar before anything downstream mutates the
+// row set. Covers both own-post and competitor surfaces. Empty runs skip
+// the file write so we don't litter the workspace dir.
+const engagerSidecarPath = writeEngagersSidecar(workspace, today, engagerSidecarRows);
+if (engagerSidecarPath) {
+  console.log(`[x-intel] engagers sidecar → ${engagerSidecarPath} (${engagerSidecarRows.length} rows)`);
+} else {
+  console.log('[x-intel] no engager rows harvested this run');
+}
+
 if (engagerRows.length) {
   addPosts(engagerRows, 'engagers');
   console.log(`[x-intel] +${engagerRows.length} engager rows queued for classification`);
@@ -258,7 +282,7 @@ const capped = fresh.slice(0, cfg.budget?.max_posts_per_run ?? 200);
 // 3. CLASSIFY -----------------------------------------------------------
 
 const bucketCatalog = cfg.buckets.map(b => `  ${b.id}: ${b.description}`).join('\n');
-const classifySys = `You classify X posts for this team: ${cfg.workspace_description}
+const classifySysBase = `You classify X posts for this team: ${cfg.workspace_description}
 Assign each post to ONE primary bucket plus zero or more secondary tags.
 Buckets:
 ${bucketCatalog}
@@ -271,10 +295,10 @@ const BATCH = 20;
 const classes = new Map();
 for (let offset = 0; offset < capped.length; offset += BATCH) {
   const batch = capped.slice(offset, offset + BATCH);
-  const body = batch.map((p, i) => {
-    const hint = p._bucketHint ? ` [hint:${p._bucketHint}]` : '';
-    return `#${i} @${p.author}${hint} ${p.likes}♥ ${p.replies}💬: ${p.text.slice(0, 220).replace(/\n/g, ' ')}`;
-  }).join('\n');
+  const body = batch.map((p, i) => formatClassifyLine(p, i)).join('\n');
+  const classifySys = batch.some(p => p._engagerSource)
+    ? classifySysBase + ENGAGER_CLASSIFIER_GUIDANCE
+    : classifySysBase;
   try {
     const resp = await llm({ purpose: 'simple_classification', system: classifySys, prompt: body });
     budget.llmCalls++; budget.tokensIn += resp.tokens?.input || 0; budget.tokensOut += resp.tokens?.output || 0; budget.costCents += resp.cost_cents || 0;

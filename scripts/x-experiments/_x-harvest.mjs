@@ -224,6 +224,49 @@ export async function replyToPost(page, permalink, text) {
   return null;
 }
 
+/**
+ * Build the sidecar record shape for an engager row. Captures the raw
+ * scrape BEFORE filter/dedup/classify, so the engager surface is
+ * provable end-to-end regardless of what downstream steps drop. Fields
+ * are the minimum a human needs to audit: who replied, where, to what
+ * parent, the engagement, and the actual text.
+ */
+export function buildEngagerRecord(row, engagerSource, parentHandle, parentPermalink) {
+  return {
+    handle: row.author || null,
+    display_name: row.displayName || null,
+    permalink: row.permalink || null,
+    parent_permalink: parentPermalink || null,
+    engager_source: engagerSource,
+    parent_author: parentHandle || null,
+    likes: row.likes ?? 0,
+    replies: row.replies ?? 0,
+    reposts: row.reposts ?? 0,
+    lang: row.lang || null,
+    text: (row.text || '').slice(0, 600),
+    datetime: row.datetime || null,
+    first_seen_ts: new Date().toISOString(),
+  };
+}
+
+export function engagersSidecarPath(workspace, date) {
+  return path.join(os.homedir(), '.ohwow', 'workspaces', workspace, `x-engagers-${date}.jsonl`);
+}
+
+/**
+ * Write the raw engager harvest to a per-day JSONL sidecar. Overwrites
+ * rather than appends so a same-day re-run reflects the latest scrape
+ * instead of accumulating duplicates, matching writeAuthorsSidecar's
+ * idempotence. Returns the path written, or null if no records.
+ */
+export function writeEngagersSidecar(workspace, date, records) {
+  if (!records || !records.length) return null;
+  const p = engagersSidecarPath(workspace, date);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, records.map(r => JSON.stringify(r)).join('\n') + '\n');
+  return p;
+}
+
 export function filterPosts(posts, filters) {
   return posts.filter(p => {
     // Engager-sourced rows (repliers scraped from our own posts or competitor
