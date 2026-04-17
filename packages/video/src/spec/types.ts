@@ -87,4 +87,13 @@ export interface VideoSpec {
   voiceovers: AudioRef[];
   transitions: TransitionSpec[];
   scenes: Scene[];
+  /**
+   * Optional reference to a per-series brand kit (e.g., 'briefing',
+   * 'mind-wars'). Purely informational at render time — the compose
+   * pipeline has already merged the kit's colors/fonts/glass into
+   * `brand` above before the spec reaches the renderer. Preserved here
+   * so brief.json files carry traceable provenance ("this was rendered
+   * with the briefing kit").
+   */
+  brandKitRef?: string;
 }
