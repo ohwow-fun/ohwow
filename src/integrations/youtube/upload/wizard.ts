@@ -18,6 +18,32 @@ import { SEL } from '../selectors.js';
 import { waitForPredicate } from '../wait.js';
 import { humanClickAt, sleepRandom } from './human.js';
 
+/**
+ * Wait until a visible, enabled #next-button exists. Studio gates Next
+ * behind processing + content-check completion on the Details step, which
+ * can take 20–40s for a fresh upload. Resolves when a clickable Next is
+ * found; throws YTUploadError on timeout.
+ */
+async function waitForNextEnabled(page: RawCdpPage, timeoutMs = 45_000): Promise<void> {
+  await waitForPredicate(
+    page,
+    `(() => {
+      const btns = document.querySelectorAll(${JSON.stringify(SEL.WIZARD_NEXT_BUTTON)});
+      for (const b of btns) {
+        if (b.offsetParent === null) continue;
+        if (b.hasAttribute('disabled')) continue;
+        const inner = b.querySelector('button');
+        if (inner && inner.disabled) continue;
+        const r = b.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        return true;
+      }
+      return false;
+    })()`,
+    { timeoutMs, label: 'Next button enabled' },
+  );
+}
+
 export async function getCurrentStepIndex(page: RawCdpPage): Promise<number> {
   return page.evaluate<number>(`(() => {
     const badges = document.querySelectorAll(${JSON.stringify(SEL.WIZARD_STEP_BADGES)});
@@ -98,6 +124,10 @@ export async function advanceToStep(page: RawCdpPage, targetStep: number): Promi
   if (step < 0) throw new YTUploadError('step_advance', 'wizard step badges not mounted');
   let guard = 0;
   while (step < targetStep) {
+    // Wait for Studio to enable Next — checks/processing can take 30s+
+    // on a fresh upload. Without this, the 3-attempt retry loop in
+    // clickNextAndAwaitAdvance races the validator and fails early.
+    await waitForNextEnabled(page);
     // "Reading the step" pause before advancing.
     await sleepRandom(900, 2_200);
     step = await clickNextAndAwaitAdvance(page, step);
