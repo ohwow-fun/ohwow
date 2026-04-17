@@ -26,7 +26,18 @@ export const Caption: React.FC<CaptionProps> = ({
   durationFrames,
 }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
+  const { fps, width } = useVideoConfig();
+
+  // Responsive sizing. Defaults (fontSize 26, maxWidth 900) were tuned
+  // for 1080×1920 Shorts — on a 1920×1080 horizontal video they read
+  // like tiny corner labels. Scale up meaningfully for widescreen while
+  // keeping Shorts looking the same.
+  const isHorizontal = width >= 1600;
+  const fontSize = isHorizontal ? 48 : 32;
+  const maxWidth = isHorizontal ? Math.round(width * 0.72) : 900;
+  const pad = isHorizontal ? "18px 38px" : "10px 24px";
+  const bottomOffset = isHorizontal ? 96 : 60;
+  const radius = isHorizontal ? 14 : 10;
 
   const localFrame = frame - startFrame;
   if (localFrame < 0 || localFrame > durationFrames) return null;
@@ -54,7 +65,7 @@ export const Caption: React.FC<CaptionProps> = ({
     <div
       style={{
         position: "absolute",
-        bottom: 60,
+        bottom: bottomOffset,
         left: 0,
         right: 0,
         display: "flex",
@@ -65,19 +76,19 @@ export const Caption: React.FC<CaptionProps> = ({
     >
       <div
         style={{
-          background: "rgba(0,0,0,0.65)",
-          padding: "10px 24px",
-          borderRadius: 10,
+          background: "rgba(0,0,0,0.72)",
+          padding: pad,
+          borderRadius: radius,
           fontFamily: fonts.sans,
-          fontSize: 26,
-          fontWeight: 500,
-          lineHeight: 1.4,
-          maxWidth: 900,
+          fontSize,
+          fontWeight: 600,
+          lineHeight: 1.35,
+          maxWidth,
           textAlign: "center",
           display: "flex",
           flexWrap: "wrap",
           justifyContent: "center",
-          gap: "0 6px",
+          gap: "0 8px",
         }}
       >
         {words.map((word, i) => {
@@ -90,7 +101,7 @@ export const Caption: React.FC<CaptionProps> = ({
               key={i}
               style={{
                 color: isHighlighted ? colors.accent : colors.text,
-                fontWeight: isHighlighted ? 700 : 500,
+                fontWeight: isHighlighted ? 800 : 600,
               }}
             >
               {word}
