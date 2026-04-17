@@ -1,6 +1,12 @@
 /**
- * Animated caption overlay — TikTok-style burned-in subtitles
- * Key words highlighted in accent color
+ * Animated caption overlay.
+ *
+ * HORIZONTAL (1920×1080, Briefing / playlist content): Netflix-style
+ * floating caption — clean centered text, heavy text-shadow for
+ * readability against any backdrop. No box chrome. Premium newsroom feel.
+ *
+ * VERTICAL (1080×1920, Shorts): TikTok-style burned-in subtitle with a
+ * dark background bed. Skim-readable for fast-feed consumption.
  */
 
 import React from "react";
@@ -28,16 +34,7 @@ export const Caption: React.FC<CaptionProps> = ({
   const frame = useCurrentFrame();
   const { fps, width } = useVideoConfig();
 
-  // Responsive sizing. Defaults (fontSize 26, maxWidth 900) were tuned
-  // for 1080×1920 Shorts — on a 1920×1080 horizontal video they read
-  // like tiny corner labels. Scale up meaningfully for widescreen while
-  // keeping Shorts looking the same.
   const isHorizontal = width >= 1600;
-  const fontSize = isHorizontal ? 48 : 32;
-  const maxWidth = isHorizontal ? Math.round(width * 0.72) : 900;
-  const pad = isHorizontal ? "18px 38px" : "10px 24px";
-  const bottomOffset = isHorizontal ? 96 : 60;
-  const radius = isHorizontal ? 14 : 10;
 
   const localFrame = frame - startFrame;
   if (localFrame < 0 || localFrame > durationFrames) return null;
@@ -61,21 +58,75 @@ export const Caption: React.FC<CaptionProps> = ({
 
   const words = text.split(" ");
 
-  // Bulletproof centering: position the box at left:50% and translate it
-  // back by 50% of its own width. No nested flex. Text inside uses inline
-  // spans so natural text-wrap + text-align:center work as expected.
+  // ─── Horizontal: Netflix-style floating caption ──────────────────────
+  // No box. Full-width container + text-align:center = guaranteed centering.
+  // Heavy text-shadow (layered black halos) keeps text legible on any
+  // primitive backdrop — grid-morph, aurora, flow-field — without the box
+  // feeling like a overlay-addon.
+  if (isHorizontal) {
+    const fontSize = 56;
+    const textShadow = [
+      "0 2px 4px rgba(0,0,0,0.95)",
+      "0 4px 12px rgba(0,0,0,0.85)",
+      "0 0 22px rgba(0,0,0,0.7)",
+      "0 0 40px rgba(0,0,0,0.5)",
+    ].join(", ");
+    return (
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 120,
+          textAlign: "center",
+          padding: "0 160px",
+          fontFamily: fonts.sans,
+          fontSize,
+          fontWeight: 800,
+          lineHeight: 1.25,
+          color: colors.text,
+          textShadow,
+          opacity,
+          transform: `translateY(${y}px)`,
+        }}
+      >
+        {words.map((word, i) => {
+          const clean = word.replace(/[.,!?]/g, "").toLowerCase();
+          const isHighlighted = highlight.some(
+            (h) => clean === h.toLowerCase()
+          );
+          return (
+            <span
+              key={i}
+              style={{
+                color: isHighlighted ? colors.accent : colors.text,
+                fontWeight: 800,
+              }}
+            >
+              {word}
+              {i < words.length - 1 ? " " : ""}
+            </span>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ─── Vertical: TikTok-style box ──────────────────────────────────────
+  const fontSize = 32;
+  const maxWidth = 900;
   return (
     <div
       style={{
         position: "absolute",
-        bottom: bottomOffset,
+        bottom: 60,
         left: "50%",
         transform: `translate(-50%, ${y}px)`,
         maxWidth,
         width: "max-content",
         background: "rgba(0,0,0,0.72)",
-        padding: pad,
-        borderRadius: radius,
+        padding: "10px 24px",
+        borderRadius: 10,
         fontFamily: fonts.sans,
         fontSize,
         fontWeight: 600,
