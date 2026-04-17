@@ -166,7 +166,7 @@ export const threadsPostingExecutor: ToolExecutor = {
       replyTyped?: number;
       replyPublished?: number;
       threads?: unknown[];
-    };
+    } | undefined;
     const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
 
     try {
@@ -243,8 +243,17 @@ export const threadsPostingExecutor: ToolExecutor = {
       logger.error({ err: msg, tool: toolName }, '[threads-posting-executor] handler crashed');
       return { content: `Error: threads-posting handler crashed: ${msg}`, is_error: true };
     } finally {
+      // Keep owned tabs alive for reuse across ticks. Mirror of the
+      // x-posting executor: the ownership registry + 'ours' lookup
+      // ensures at most one owned threads.com tab per daemon, and the
+      // next tick attaches to it instead of flashing a new one. On
+      // compose error (result unassigned, or success=false), close
+      // the tab so a broken tab can't permanently block future ticks.
       if (freshTargetId) {
-        await closeTabById(freshTargetId);
+        const composeFailed = !result || result.success === false;
+        if (composeFailed) {
+          await closeTabById(freshTargetId);
+        }
       }
     }
 

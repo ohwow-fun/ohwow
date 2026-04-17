@@ -210,7 +210,7 @@ export const xPostingExecutor: ToolExecutor = {
       threads?: unknown[];
       replyTyped?: number;
       replyPublished?: number;
-    };
+    } | undefined;
     const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
     try {
       result = await withTimeout(`x-posting:${toolName}`, timeoutMs, async () => {
@@ -322,8 +322,19 @@ export const xPostingExecutor: ToolExecutor = {
       );
       return { content: `Error: x-posting handler crashed: ${msg}`, is_error: true };
     } finally {
+      // Keep owned tabs alive for reuse across ticks. The ownership
+      // registry + 'ours' lookup guarantees we won't accumulate more
+      // than one owned x.com tab per daemon lifetime — the next tick
+      // finds this one via findExistingTabForHost and attaches
+      // directly, avoiding the open/close flash and re-hydration that
+      // cost ~1s per cycle. On compose error (result unassigned, or
+      // success=false), close the tab: keeping a broken tab in the
+      // registry would permanently block future ticks.
       if (freshTargetId) {
-        await closeTabById(freshTargetId);
+        const composeFailed = !result || result.success === false;
+        if (composeFailed) {
+          await closeTabById(freshTargetId);
+        }
       }
     }
 
