@@ -343,8 +343,14 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       modelRouter ?? null,
       workspaceId,
     );
-    xDraftDistiller.start();
-    logger.info('[daemon] x-draft-distiller started');
+    registerInternalHandler(X_DRAFT_DISTILLER_HANDLER, async () => {
+      const result = await xDraftDistiller.tick();
+      return { ...result, status: 'ticked' };
+    });
+    await seedXDraftDistillerAutomation(db, workspaceId).catch((err) => {
+      logger.warn({ err }, '[daemon] seed-x-draft-distiller-automation failed');
+    });
+    logger.info('[daemon] x-draft-distiller automation seeded');
 
     // Phase 8-A.4: XDmPollerScheduler — read-only DM ingest. Polls the
     // X inbox via listDmsViaBrowser, upserts threads + observations
