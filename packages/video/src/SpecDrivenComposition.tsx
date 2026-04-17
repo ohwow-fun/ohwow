@@ -7,6 +7,7 @@ import { renderScene } from "./scenes/registry";
 import { resolveTransition } from "./transitions/registry";
 import { Caption } from "./components/Caption";
 import { loadBrandFonts } from "./fonts";
+import { compileSpecBeats } from "./spec/motion-beats-compiler";
 
 loadBrandFonts();
 
@@ -206,7 +207,17 @@ const CaptionLayer: React.FC<{ spec: VideoSpec; totalFrames: number }> = ({
   );
 };
 
-export const SpecDrivenComposition: React.FC<VideoSpec> = (spec) => {
+export const SpecDrivenComposition: React.FC<VideoSpec> = (rawSpec) => {
+  // Compile any motion_beats on scenes into the render-ready shape so direct
+  // `remotion render --props=beats-spec.json` works without the compose
+  // pipeline. Scenes with no beats pass through unchanged.
+  const spec = React.useMemo<VideoSpec>(() => {
+    if (!rawSpec.scenes.some((s) => Array.isArray((s as { motion_beats?: unknown[] }).motion_beats))) {
+      return rawSpec;
+    }
+    const { scenes: compiled } = compileSpecBeats(rawSpec.scenes);
+    return { ...rawSpec, scenes: compiled };
+  }, [rawSpec]);
   const totalFrames = totalDurationFrames(spec);
   const { scenes, transitions, voiceovers, music } = spec;
 
