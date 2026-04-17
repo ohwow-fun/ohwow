@@ -354,8 +354,8 @@ function cmdLintPrompt(args: string[]): void {
 
 async function cmdBlocks(args: string[]): Promise<void> {
   const sub = args[0];
-  if (!sub || !['list', 'get', 'add'].includes(sub)) {
-    console.error('Usage: ohwow video blocks <list|get|add> [args]');
+  if (!sub || !['list', 'get', 'add', 'new'].includes(sub)) {
+    console.error('Usage: ohwow video blocks <list|get|add|new> [args]');
     process.exit(1);
   }
   const packageDir = resolvePackageDir();
@@ -580,6 +580,7 @@ function usage(): void {
   console.log('  ohwow video blocks list [--category=<c>]              browse the block catalog');
   console.log('  ohwow video blocks get <id>                           show details for one block');
   console.log('  ohwow video add <id> [--dest=<path>]                  copy a block source into your repo');
+  console.log('  ohwow video blocks new <id> [--category=<c>] [--dest=<path>]  scaffold a new block');
   console.log('  ohwow video tts "<text>" [--voice=<v>] [--out=<path>] [--speed=<n>]');
   console.log('  ohwow video music "<prompt>" [--duration=<s>] [--genre=<g>] [--mood=<m>] [--bpm=<n>]');
   console.log('  ohwow video clip "<prompt>" [--duration=<s>] [--aspect=<a>] [--provider=<p>] [--seed=<n>] [--max-cost=<cents>] [--dry-run]');

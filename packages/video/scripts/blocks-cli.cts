@@ -115,6 +115,83 @@ function camelize(id: string): string {
   return id.replace(/-(\w)/g, (_, c) => c.toUpperCase());
 }
 
+function printNew(id: string, category: string, dest?: string): void {
+  if (!/^[a-z][a-z0-9-]*$/.test(id)) {
+    process.stderr.write(`Invalid block id "${id}". Use lowercase letters, digits, and dashes (e.g., "hero-card").\n`);
+    process.exit(1);
+  }
+  const validCategories = ["titling", "metrics", "narrative", "overlay", "cta"];
+  if (!validCategories.includes(category)) {
+    process.stderr.write(`Invalid category "${category}". Choose from: ${validCategories.join(", ")}\n`);
+    process.exit(1);
+  }
+  const destDir = dest
+    ? (isAbsolute(dest) ? dest : resolve(process.cwd(), dest))
+    : resolve(process.cwd(), "blocks");
+  mkdirSync(destDir, { recursive: true });
+  const destPath = join(destDir, `${id}.ts`);
+  if (existsSync(destPath)) {
+    process.stderr.write(`Refusing to overwrite existing file: ${destPath}\n`);
+    process.exit(1);
+  }
+
+  const varName = camelize(id);
+  const template = `import type { VideoBlock } from "@ohwow/video";
+
+export interface ${capitalize(varName)}Params {
+  /** TODO: describe the params your block needs. */
+  label: string;
+}
+
+export const ${varName}: VideoBlock<${capitalize(varName)}Params> = {
+  id: "${id}",
+  name: "${capitalize(varName).replace(/([A-Z])/g, " $1").trim()}",
+  category: "${category}",
+  description: "TODO: one-line description shown in \`ohwow video blocks list\`.",
+  defaultDurationFrames: 120,
+  paramSchema: {
+    label: { type: "string", required: true, description: "TODO." },
+  },
+  build(params) {
+    const { label = "TODO" } = params;
+    return {
+      kind: "composable",
+      durationInFrames: ${varName}.defaultDurationFrames,
+      params: {
+        mood: "cool",
+        pacing: "steady",
+        visualLayers: [
+          { primitive: "gradient-wash", params: { speed: 0.002, angle: 45, opacity: 0.2 } },
+          { primitive: "vignette", params: { intensity: 0.4 } },
+        ],
+        text: {
+          content: label,
+          animation: "fade-in",
+          position: "center",
+          fontSize: 72,
+          fontWeight: 600,
+          fontFamily: "sans",
+        },
+      },
+    };
+  },
+};
+`;
+
+  writeFileSync(destPath, template, "utf8");
+  process.stdout.write(`Created ${destPath}\n\n`);
+  process.stdout.write("Next steps:\n");
+  process.stdout.write(`  1. Edit the paramSchema and build() body in ${destPath}\n`);
+  process.stdout.write("  2. Register it where you use it:\n");
+  process.stdout.write(`     import { ${varName} } from "./${id}";\n`);
+  process.stdout.write(`     const scene = { id: "my-${id}", ...${varName}.build({ /* params */ }) };\n`);
+  process.stdout.write("  3. Run `ohwow video lint <your-spec.json>` to verify it renders clean.\n");
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 const { positional, flags } = parseFlags(rest);
 
@@ -143,7 +220,18 @@ switch (cmd) {
     printAdd(id, dest);
     break;
   }
+  case "new": {
+    const id = positional[0];
+    if (!id) {
+      process.stderr.write("Usage: blocks-cli.cts new <block-id> [--category=<c>] [--dest=<path>]\n");
+      process.exit(2);
+    }
+    const category = typeof flags.category === "string" ? flags.category : "overlay";
+    const dest = typeof flags.dest === "string" ? flags.dest : undefined;
+    printNew(id, category, dest);
+    break;
+  }
   default:
-    process.stderr.write("Usage: blocks-cli.cts <list|get|add> [args]\n");
+    process.stderr.write("Usage: blocks-cli.cts <list|get|add|new> [args]\n");
     process.exit(2);
 }
