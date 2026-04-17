@@ -23,7 +23,14 @@ export {
   type LintSeverity,
   type LintOptions,
 } from "./spec/lint";
-export { registerSceneKind, hasSceneKind, listSceneKinds, renderScene } from "./scenes/registry";
+export {
+  registerSceneKind,
+  unregisterSceneKind,
+  hasSceneKind,
+  listSceneKinds,
+  renderScene,
+  SceneKindConflictError,
+} from "./scenes/registry";
 export {
   registerTransition,
   unregisterTransition,

@@ -37,8 +37,20 @@ const registry = new Map<string, SceneComponent>([
   ["composable", ComposableScene as SceneComponent],
 ]);
 
+export class SceneKindConflictError extends Error {
+  constructor(kind: string) {
+    super(`Scene kind "${kind}" is already registered. Call unregisterSceneKind first if you intend to replace it.`);
+    this.name = "SceneKindConflictError";
+  }
+}
+
 export function registerSceneKind(kind: string, component: SceneComponent): void {
+  if (registry.has(kind)) throw new SceneKindConflictError(kind);
   registry.set(kind, component);
+}
+
+export function unregisterSceneKind(kind: string): boolean {
+  return registry.delete(kind);
 }
 
 export function hasSceneKind(kind: string): boolean {
