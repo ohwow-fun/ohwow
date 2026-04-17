@@ -162,4 +162,104 @@ describe('decideStrategy', () => {
     });
     expect(d.overweight_models).toEqual([]);
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 5c — lift-health signal
+  // ---------------------------------------------------------------------------
+
+  it('demotes patch-author when 7d lift has a clear regression pattern', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: { holdRate: 0.9, poolDelta: -10 },
+      burn: null,
+      reflectionCount: 0,
+      liftHealth: {
+        moved_right: 1,
+        moved_wrong: 6,
+        flat: 1,
+        unmeasured: 0,
+        total_closed: 8,
+        window_hours: 168,
+      },
+    });
+    expect(d.demoted_experiments).toContain('patch-author');
+    expect(d.active_focus).toMatch(/lift regression/);
+  });
+
+  it('ignores lift signal when below the min-sample floor', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      reflectionCount: 0,
+      liftHealth: {
+        moved_right: 0,
+        moved_wrong: 2,
+        flat: 0,
+        unmeasured: 0,
+        total_closed: 2, // below the 5-sample floor
+        window_hours: 168,
+      },
+    });
+    expect(d.demoted_experiments).not.toContain('patch-author');
+    expect(d.active_focus).not.toMatch(/lift regression/);
+  });
+
+  it('does NOT demote when lift is healthy (moved_right dominant)', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      reflectionCount: 0,
+      liftHealth: {
+        moved_right: 7,
+        moved_wrong: 1,
+        flat: 2,
+        unmeasured: 0,
+        total_closed: 10,
+        window_hours: 168,
+      },
+    });
+    expect(d.demoted_experiments).not.toContain('patch-author');
+    expect(d.active_focus).toMatch(/steady state/);
+  });
+
+  it('does NOT demote on mixed-but-near-balanced lift (net ratio > -0.2)', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      patchLoop: null,
+      burn: null,
+      reflectionCount: 0,
+      liftHealth: {
+        moved_right: 4,
+        moved_wrong: 5,
+        flat: 1,
+        unmeasured: 0,
+        total_closed: 10, // net ratio = -0.1
+        window_hours: 168,
+      },
+    });
+    expect(d.demoted_experiments).not.toContain('patch-author');
+  });
+
+  it('lift regression removes patch-author from priority too, not just adds to demoted', () => {
+    const d = decideStrategy({
+      topFailing: [],
+      // hold_rate healthy but pool growing would normally put patch-author on priority
+      patchLoop: { holdRate: 0.9, poolDelta: 20 },
+      burn: null,
+      reflectionCount: 0,
+      liftHealth: {
+        moved_right: 1,
+        moved_wrong: 7,
+        flat: 0,
+        unmeasured: 0,
+        total_closed: 8,
+        window_hours: 168,
+      },
+    });
+    // patch-author must NOT be on priority while lift is regressing
+    expect(d.priority_experiments).not.toContain('patch-author');
+    expect(d.demoted_experiments).toContain('patch-author');
+  });
 });

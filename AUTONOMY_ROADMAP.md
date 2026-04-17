@@ -147,100 +147,92 @@ See [roadmap/gaps.md](roadmap/gaps.md) for the prioritized backlog.
 ---
 
 ## 2. Active Focus
-**Honest read of 2026-04-16T22:15Z:**
+**Honest read of 2026-04-16T23:00Z (outcome loop live):**
 
-- 24h autonomous commits: 51. 24h reverts: 1 (hand-done, for a cosmetic
-  regression the loop would have left standing).
-- Paper-cited autonomous commits in 24h: 6. The research→code loop is
-  real and recurrent.
-- **24h revenue: $0. 7d revenue: $0. Active customers: 0. Daily LLM burn: ~$34.**
+- **Outcome feedback is now wired end-to-end.** Every autonomous patch
+  to a revenue-adjacent tier-2 file records a `lift_measurements` row at
+  commit time with baseline KPI value + `Expected-Lift:` trailer, gets
+  re-measured at 24h / 168h, and closes with `moved_right` / `moved_wrong`
+  / `flat` / `unmeasured`. The strategist reads the 7d rolling
+  distribution and demotes `patch-author` when the net signed ratio
+  falls below -0.2 (with a 5-sample floor). The loop can finally see
+  whether its commits produce value, not just whether they pass gates.
+- **Revenue ingest is real.** `ohwow revenue add` writes to
+  `agent_workforce_revenue_entries`; Stripe webhook already did the
+  automated lane. `kpi-registry.ts` is the single reader for all 11
+  outcome KPIs (revenue 24h/7d/mtd, reply_ratio, qualified events,
+  active leads/customers, burn, signal_spend_ratio, ...).
+- **Sales-loop tier-2 widening has started.** `outreach-policy.ts` is
+  now tier-2 whole-file with an `outreach-policy-fuzz` probe emitting
+  `affected_files` on invariant regressions (cooldown range, resolver
+  positivity, event-kind set). Paired with existing `outreach-thermostat`
+  (string-literal copy), the revenue bucket now has two live targets.
 
-The self-modification loop works. It landed ~50 autonomous commits in a day
-and they held. But almost all of that work is cosmetic (em-dash rewrites,
-roadmap self-maintenance, new research-cited observer probes that don't
-change ohwow's behavior). Meanwhile ohwow made no money. That mismatch is
-the thing to fix — not the autonomy machinery, which is sound.
+**Why the gap closed:** before this session, the autonomous author
+landed ~50 commits/day and every one was presumed "held" based on
+absence of regression. The `Expected-Lift` + `lift_measurements` pipeline
+makes outcome the actual loss signal — the strategist can now tell
+`patch-author` to back off when commits are hurting KPIs, not just
+when they're failing tests.
 
-This session landed the first three foundations of the money-telos phase:
+**What this still does NOT do (yet):**
 
-1. **RevenuePulseExperiment** (hourly) — one row per hour showing realized
-   revenue, outreach volume, pipeline, burn, and a heuristic-picked Next
-   Move naming the highest-leverage revenue lever. Verdict is load-bearing
-   (fails when revenue = $0 and burn > $0 and outreach is under-dispatching).
-
-2. **Revenue bucket in the proposal ranker** (experiment-author). Proposals
-   whose slug/name/template/hypothesis contain any REVENUE_KEYWORDS token
-   (revenue, sales, outreach, classifier, thermostat, attribution, …)
-   jump ahead of FIFO but still sit behind explicit priority/roadmap
-   overrides. Paper-derived observer probes no longer compete on equal
-   footing with "why did reply rate drop?".
-
-3. **ops-knobs registry + OpsPulseExperiment** (hourly) — process-side
-   complement to RevenuePulse. Declares operational levers as structured
-   knobs (x_compose weekly target, weekly deficit, burn cap placeholder)
-   so a future mutation experiment has a named, stable contract to target.
-   No mutation yet — visibility first.
-
-**What this session did NOT do (yet):**
-
-- The sales loop (x-authors-to-crm classifier, outbound templates, CRM
-  handoff) is all tier-3 still. The loop can see it but cannot heal it.
-- There is no enforced burn cap. `experiment-cost-observer` ranks spend;
-  nothing throttles it. Paper probes can still outspend the revenue loop.
-- There is no real-revenue ingest (webhook/manual ledger). RevenuePulse
-  reads `agent_workforce_revenue_entries` which is empty, so every row
-  currently says "Result: $0.00 in last 24h" and points at outreach
-  volume as the first lever. That's correct for where we are, but the
-  loop needs to see actual dollars for its Next Move logic to sharpen.
+- The strategist's 7d lift window is empty today; the first real
+  `moved_right` / `moved_wrong` closure fires 24-168h after the first
+  autonomous `outreach-policy.ts` or `outreach-thermostat.ts` patch
+  lands. Until then, the lift branch is dormant (logged but doesn't
+  demote).
+- The value-ranker's weights are still hand-tuned constants. Learning
+  them from the observed lift distribution is the next step
+  (`Phase 5d`).
+- No A/B `Trial` primitive yet — a patch is still a single variant
+  landed without a counterfactual. A proper experimentation primitive
+  (split, outcome, winner) is the biggest remaining structural gap
+  (`Phase 2`).
+- x-authors-to-crm classifier + CRM handoff stay tier-3.
 
 ## 3. Next Steps
-### Phase 2 (next session) — give the loop something to act on
+### Phase 5d — ranker learns weights from lift distribution
 
-1. **Widen tier-2 to cover the sales-loop copy surface.**
-   Target, one at a time, each paired with a fuzz/invariant probe:
-   - x-authors-to-crm prompt templates (string-literal mode)
-   - outreach-thermostat.ts message templates (already tier-2; add a
-     property fuzz that emits affected_files on regressions)
-   - classifier thresholds and their exported constants
-   Each expansion adds a named REVENUE_KEYWORDS-matching slug for the
-   fuzz probe, so the revenue bucket immediately has fuel.
+The strategist now *uses* lift data to demote patch-author on systemic
+regression. The next layer is the value-ranker: instead of hand-tuned
+weights on `revenue_proximity` / `evidence_strength` / `blast_radius` /
+`recency`, update the coefficients from the observed
+`moved_right` / `moved_wrong` split per score component. Start with a
+simple multiplicative adjustment (each component's weight × recent
+moved_right share for candidates where that component was dominant)
+before committing to anything more elaborate.
 
-2. **Budget guard experiment.**
-   Wire `burn.daily_cap_cents` as a real knob (env var + runtime-config
-   override). OpsPulse already names it as the foundation gap. Route
-   experiment-cost-observer's ranked non-revenue spenders into an
-   automatic throttle when the cap is breached. Paper probes and other
-   high-cost low-revenue-adjacency experiments become opt-in above the cap.
+### Phase 2 — A/B Trial primitive
 
-3. **Proposal-generator revenue focus.**
-   Extend the proposal generator to consume RevenuePulse's `next_move`
-   string as context in its LLM prompt. Today the generator inlines
-   arXiv abstracts and code-paper gaps; add the current revenue Next
-   Move as a first-class input so new proposals are shaped by "what
-   would move the needle" rather than paper concepts alone.
+Biggest remaining structural gap. Today every "experiment" is
+`probe + judge`. Build `Trial { variants, splitKey, metricId,
+minSamples, decisionRule }` plus `trials` table + `TrialAssigner` +
+`TrialEvaluator`. Retrofit outreach-thermostat templates and x-reply
+as the first two trials, each splitting by `contact_id` or
+`thread_id` and measuring `reply_ratio_24h` / `qualified_events_24h`.
 
-### Phase 3 — close the outcome loop
+### Phase 1 continuation — widen tier-2 further
 
-4. **Real-revenue ingest.** A webhook or a one-keystroke CLI
-   (`ohwow revenue add 5000 --contact X --note "..."`) so the system
-   can see actual dollars move. Without this, RevenuePulse is
-   optimizing proxies. With it, the full outcome feedback closes:
-   outreach change → reply-rate shift → qualified event → revenue row
-   → next-hour pulse sees the delta → next author tick reasons over it.
+`outreach-policy.ts` landed. Next targets, each paired with a fuzz probe:
+- x-authors-to-crm prompt templates (string-literal mode; .mjs, so
+  the L4 AST gate is a no-op — tier-2 path + fuzz still protects)
+- classifier thresholds + exported constants
+- outreach dispatch cadence config
 
-5. **Ops-knob mutator experiment.** A Phase-2-depedent step. Once
-   tier-2 covers the sales copy and the budget guard is in place,
-   add an experiment that reads ops-pulse warnings and proposes knob
-   deltas (with a Fixes-Finding-Id receipt against the specific
-   warning). Same safety envelope as patch-author; new tier-2
-   surface = OPS_KNOBS entries.
+### Phase 3 — operator visibility
+
+TUI/web widget that reads the latest `lift-measurement` finding and
+shows `moved_right` / `moved_wrong` / `flat` per recent autonomous
+commit. Right now the data lands in `self_findings`; operators need
+to grep. A small evolution-cockpit addition fixes that.
 
 ### Long-term (do not rush)
 
-6. Deterministic patch replay / pre-commit simulation (P3).
-7. Multi-file patch coordination across the sales loop.
-8. User-impact metrics (session duration, feature adoption) once
-   revenue signal is established.
+- Deterministic patch replay / pre-commit simulation (roadmap P3).
+- Multi-file patch coordination across the sales loop.
+- Ops-knob mutator experiment (reads OpsPulse warnings → proposes
+  knob-delta patches with Fixes-Finding-Id receipts).
 
 ---
 

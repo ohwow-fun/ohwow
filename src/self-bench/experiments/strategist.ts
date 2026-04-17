@@ -43,6 +43,7 @@ import type {
 } from '../experiment-types.js';
 import { setRuntimeConfig, deleteRuntimeConfig, getRuntimeConfig } from '../runtime-config.js';
 import { STRATEGY_PERFORMATIVE_KEY } from './intervention-audit.js';
+import { summarizeRecentVerdicts } from '../lift-measurements-store.js';
 
 export const STRATEGY_ACTIVE_FOCUS_KEY = 'strategy.active_focus';
 export const STRATEGY_PRIORITY_KEY = 'strategy.priority_experiments';
@@ -75,8 +76,33 @@ export interface StrategistEvidence {
     total_cents_today: number;
   };
   reflection_count_24h: number;
+  /** Phase 5c — 7d rolling lift verdict distribution from lift_measurements. */
+  lift_health?: LiftHealthFacts;
   decision: StrategyDecision;
 }
+
+/**
+ * Shape the strategist consumes from lift_measurements. Counts come
+ * from summarizeRecentVerdicts and feed the "commits are hurting KPIs"
+ * decision branch below.
+ */
+export interface LiftHealthFacts {
+  moved_right: number;
+  moved_wrong: number;
+  flat: number;
+  unmeasured: number;
+  total_closed: number;
+  window_hours: number;
+}
+
+/**
+ * Minimum sample size before lift data is considered decision-quality.
+ * Below this, a single noisy ripple looks like a trend. 5 matches the
+ * revenue pulse's "we're seeing real signal" floor.
+ */
+const LIFT_HEALTH_MIN_SAMPLES = 5;
+/** Net signed ratio: (right - wrong) / total. Below this → regression concern. */
+const LIFT_HEALTH_REGRESSION_NET_RATIO = -0.2;
 
 export interface BurnConcentration {
   topModel: string | null;
@@ -103,6 +129,14 @@ export function decideStrategy(facts: {
   burnConcentration?: BurnConcentration | null;
   performativeExperiments?: string[];
   reflectionCount: number;
+  /**
+   * Phase 5c — 7d rolling lift verdict counts. When total_closed crosses
+   * LIFT_HEALTH_MIN_SAMPLES and the net signed ratio drops below
+   * LIFT_HEALTH_REGRESSION_NET_RATIO, the strategist treats patch-author's
+   * recent commits as outcome-harming and demotes it ahead of the
+   * existing hold-rate / burn gates.
+   */
+  liftHealth?: LiftHealthFacts | null;
 }): StrategyDecision {
   const priority: string[] = [];
   const demoted: string[] = [];
@@ -185,6 +219,31 @@ export function decideStrategy(facts: {
     }
   }
 
+  // 4b. Phase 5c — lift health. When the closed-lift ledger has enough
+  //     samples and the net signed ratio is negative, recent autonomous
+  //     commits have been moving KPIs the wrong way. Demote patch-author
+  //     so the scheduler backs off until the operator can review the
+  //     ranker weights or the expected-lift inference. This fires ahead
+  //     of the performative gate below because a moved_wrong pattern is
+  //     a stronger signal than "intervention didn't hold" — the KPI
+  //     itself is regressing, not just the finding.
+  if (
+    facts.liftHealth
+    && facts.liftHealth.total_closed >= LIFT_HEALTH_MIN_SAMPLES
+    && facts.liftHealth.total_closed > 0
+  ) {
+    const lh = facts.liftHealth;
+    const netRatio = (lh.moved_right - lh.moved_wrong) / lh.total_closed;
+    if (netRatio <= LIFT_HEALTH_REGRESSION_NET_RATIO) {
+      reasons.push(
+        `lift regression: ${lh.moved_right}↑ / ${lh.moved_wrong}↓ of ${lh.total_closed} closed (${Math.round(netRatio * 100)}%)`,
+      );
+      if (!demoted.includes('patch-author')) demoted.push('patch-author');
+      const idx = priority.indexOf('patch-author');
+      if (idx >= 0) priority.splice(idx, 1);
+    }
+  }
+
   // 5. Performative experiments — their interventions don't hold per
   //    the InterventionAudit probe. Demote them so the scheduler
   //    stops spending budget running them on their normal cadence.
@@ -235,6 +294,7 @@ export class StrategistExperiment implements Experiment {
     const burn = await this.readBurn(ctx);
     const burnConcentration = await this.readBurnConcentration(ctx);
     const reflectionCount = await this.readReflectionCount(ctx);
+    const liftHealth = await this.readLiftHealth(ctx);
     const performativeExperiments = getRuntimeConfig<string[]>(
       STRATEGY_PERFORMATIVE_KEY,
       [],
@@ -250,6 +310,7 @@ export class StrategistExperiment implements Experiment {
       burnConcentration,
       performativeExperiments,
       reflectionCount,
+      liftHealth,
     });
 
     const evidence: StrategistEvidence = {
@@ -274,6 +335,7 @@ export class StrategistExperiment implements Experiment {
           }
         : undefined,
       reflection_count_24h: reflectionCount,
+      lift_health: liftHealth ?? undefined,
       decision,
     };
 
@@ -436,6 +498,25 @@ export class StrategistExperiment implements Experiment {
       return ((data ?? []) as ReflectionRow[]).length;
     } catch {
       return 0;
+    }
+  }
+
+  /**
+   * Phase 5c — 7d rolling lift distribution from lift_measurements.
+   * Returns null on read failure so the decision path gracefully
+   * skips the lift branch (mirrors the existing readLatestPatchLoop
+   * null-return pattern).
+   */
+  private async readLiftHealth(
+    ctx: ExperimentContext,
+  ): Promise<LiftHealthFacts | null> {
+    try {
+      const windowHours = 7 * 24;
+      const since = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+      const counts = await summarizeRecentVerdicts(ctx.db, ctx.workspaceId, since);
+      return { ...counts, window_hours: windowHours };
+    } catch {
+      return null;
     }
   }
 }
