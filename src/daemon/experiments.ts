@@ -76,6 +76,7 @@ import { LiftMeasurementExperiment } from '../self-bench/experiments/lift-measur
 import { BurnGuardExperiment } from '../self-bench/experiments/burn-guard.js';
 import { RoadmapShapeProbeExperiment } from '../self-bench/experiments/roadmap-shape-probe.js';
 import { VitestHealthProbeExperiment } from '../self-bench/experiments/vitest-health-probe.js';
+import { DeviceAuditExperiment } from '../self-bench/experiments/device-audit.js';
 import { LoopCadenceProbeExperiment } from '../self-bench/experiments/loop-cadence-probe.js';
 import { TestCoverageProbeExperiment } from '../self-bench/experiments/test-coverage-probe.js';
 import { FindingsGcExperiment } from '../self-bench/experiments/findings-gc.js';
@@ -231,6 +232,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new BurnGuardExperiment());
   experimentRunner.register(new RoadmapShapeProbeExperiment());
   experimentRunner.register(new VitestHealthProbeExperiment());
+  experimentRunner.register(new DeviceAuditExperiment());
   experimentRunner.register(new LoopCadenceProbeExperiment());
   experimentRunner.register(new TestCoverageProbeExperiment());
   // Storage reaper: hard-deletes superseded self_findings older than
