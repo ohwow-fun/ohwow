@@ -28,6 +28,7 @@
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import type { RawCdpPage } from '../../execution/browser/raw-cdp.js';
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import {
   getCdpPageForPlatform,
   captureScreenshot,
@@ -37,6 +38,7 @@ import {
   HYDRATION_WAIT_MS,
   type CdpPageHandle,
 } from './social-cdp-helpers.js';
+import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -150,6 +152,10 @@ export interface ReplyThreadsInput {
   dryRun?: boolean;
   expectedHandle?: string;
   expectedBrowserContextId?: string;
+  /** Optional. When provided, enables deterministic dedup via posted_log. */
+  db?: DatabaseAdapter;
+  /** Workspace id for posted_log row. Resolved positionally if null. */
+  workspaceId?: string;
 }
 
 export interface ReplyThreadsResult {
@@ -198,7 +204,11 @@ export function resolveThreadsSourceUrl(source: string): string {
   if (s.startsWith('search:')) {
     const query = s.slice(7).trim();
     if (!query) throw new Error(`scanThreadsPosts: empty search query in "${source}"`);
-    return `${THREADS_HOME}search?q=${encodeURIComponent(query)}`;
+    // Append filter=recent so Threads returns the "Recent" tab instead of
+    // the default "Top". Recent is what we want for reply automation —
+    // fresh posts that can actually receive a reply before the thread
+    // becomes a feed graveyard.
+    return `${THREADS_HOME}search?q=${encodeURIComponent(query)}&filter=recent`;
   }
   if (s.startsWith('url:')) return s.slice(4).trim();
   throw new Error(
@@ -434,6 +444,23 @@ export async function composeThreadsReplyViaBrowser(
     };
   }
 
+  // Deterministic dedup: refuse to re-publish an identical text to the
+  // same target. Prevents the retry-after-false-negative class of bug.
+  const source = `reply_to:${normalized}`;
+  const textHash = hashText(text);
+  if (input.db && !dryRun) {
+    const already = await hasIdenticalPublished(input.db, 'threads', textHash, source);
+    if (already) {
+      logger.info({ replyToUrl: normalized }, `[${LOG_TAG}] duplicate blocked by posted_log`);
+      return {
+        success: false,
+        message: `Already replied to this post with identical text. Skipped to avoid duplicate (posted_log guard).`,
+        replyTyped: 0,
+        replyPublished: 0,
+      };
+    }
+  }
+
   const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
   if (!handle) {
     return {
@@ -451,41 +478,57 @@ export async function composeThreadsReplyViaBrowser(
       return { success: false, message: `Threads redirected to login (${currentUrl}).`, currentUrl };
     }
 
-    // Click the reply button on the target post. Threads renders an
-    // SVG with aria-label="Reply" inside the primary post's action bar.
-    // Walk up to the clickable ancestor and click it.
-    const opened = await clickReplyIcon(page);
-    if (!opened) {
-      return {
-        success: false,
-        message: 'Could not find or click Threads Reply icon on the post detail page.',
-        screenshotBase64: await captureScreenshot(page),
-        currentUrl: await page.url(),
-      };
+    // Threads renders the reply composer two ways depending on layout:
+    //   A) modal: click Reply → [role="dialog"] [role="textbox"] appears
+    //   B) inline: post-detail page shows an always-visible textbox at
+    //      the bottom. No click needed. The DOM already has
+    //      [role="textbox"][contenteditable="true"] on load.
+    // Accept either. Prefer dialog-scoped selector when both exist.
+    const TEXTBOX_SEL_INLINE = '[role="textbox"][contenteditable="true"]';
+    const TEXTBOX_SEL_DIALOG = '[role="dialog"] [role="textbox"][contenteditable="true"]';
+
+    const alreadyOpen = await page.evaluate<boolean>(
+      `!!document.querySelector('${TEXTBOX_SEL_INLINE}')`,
+    );
+
+    if (!alreadyOpen) {
+      const opened = await clickReplyIcon(page);
+      if (!opened) {
+        return {
+          success: false,
+          message: 'Could not find an inline reply textbox OR a clickable Reply icon on the post detail page.',
+          screenshotBase64: await captureScreenshot(page),
+          currentUrl: await page.url(),
+        };
+      }
+      // Wait for the textbox to mount (either layout).
+      const ready = await page.waitForSelector(TEXTBOX_SEL_INLINE, 5000);
+      if (!ready) {
+        return {
+          success: false,
+          message: 'Threads reply textbox did not appear within 5s after clicking Reply.',
+          screenshotBase64: await captureScreenshot(page),
+          currentUrl: await page.url(),
+        };
+      }
     }
 
-    // Dialog should appear. Textbox is [role="textbox"][contenteditable="true"].
-    const dialogReady = await page.waitForSelector(
-      '[role="dialog"] [role="textbox"][contenteditable="true"]',
-      5000,
+    // If a dialog version also exists, prefer it — the modal composer
+    // is what Threads uses when you click Reply on the primary post.
+    const hasDialog = await page.evaluate<boolean>(
+      `!!document.querySelector('${TEXTBOX_SEL_DIALOG}')`,
     );
-    if (!dialogReady) {
-      return {
-        success: false,
-        message: 'Threads reply dialog did not appear within 5s after clicking Reply.',
-        screenshotBase64: await captureScreenshot(page),
-        currentUrl: await page.url(),
-      };
-    }
+    const textboxSel = hasDialog ? TEXTBOX_SEL_DIALOG : TEXTBOX_SEL_INLINE;
 
     // Clear any residual / draft text.
-    await clearTextbox(page, '[role="dialog"] [role="textbox"][contenteditable="true"]');
+    await clearTextbox(page, textboxSel);
     await wait(200);
 
     // Focus + warmup + type.
     await page.evaluate<boolean>(`(() => {
-      const tb = document.querySelector('[role="dialog"] [role="textbox"][contenteditable="true"]');
+      const tb = document.querySelector('${textboxSel}');
       if (!(tb instanceof HTMLElement)) return false;
+      tb.scrollIntoView({ block: 'center' });
       tb.focus();
       return true;
     })()`);
@@ -511,28 +554,111 @@ export async function composeThreadsReplyViaBrowser(
       };
     }
 
-    // Submit — Threads labels the button "Post" inside the reply dialog too.
-    const clicked = await clickByText(page, 'Post');
-    if (!clicked) {
+    // Submit. Threads labels the composer submit "Post". The dialog
+    // renders 3 overlapping DIVs with that text (wrapper / role=button
+    // / label span). clickByText has ambiguously picked the wrapper or
+    // label, which either missed the handler OR was interpreted as a
+    // cancel by adjacent listeners — leading to the "Discard thread?"
+    // confirmation overwriting the publish intent.
+    //
+    // Direct fix: in an evaluate(), find the node that has role="button"
+    // AND textContent==="Post" AND is inside [role="dialog"], then call
+    // .click() on that exact node. No text click, no keyboard fallback.
+    const submitted = await page.evaluate<boolean>(`(() => {
+      const dialog = document.querySelector('[role="dialog"]');
+      const scope = dialog || document;
+      const candidates = Array.from(scope.querySelectorAll('[role="button"]'));
+      for (const el of candidates) {
+        if ((el.textContent || '').trim() !== 'Post') continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        if (el.getAttribute('aria-disabled') === 'true') continue;
+        if (typeof el.click === 'function') {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    })()`).catch(() => false);
+
+    await wait(1500);
+
+    // If Threads threw up a "Discard thread?" confirmation (which can
+    // happen when a competing click landed on Cancel earlier), preserve
+    // the draft by clicking Cancel on that dialog — NOT Discard.
+    await page.evaluate(`(() => {
+      const dialogs = Array.from(document.querySelectorAll('[role="dialog"]'));
+      for (const d of dialogs) {
+        const hasDiscardPrompt = /discard thread/i.test(d.textContent || '');
+        if (!hasDiscardPrompt) continue;
+        const btns = Array.from(d.querySelectorAll('[role="button"], button'));
+        const cancel = btns.find((b) => (b.textContent || '').trim() === 'Cancel');
+        if (cancel instanceof HTMLElement) cancel.click();
+      }
+      return true;
+    })()`).catch(() => {});
+
+    // Check if the composer published: textbox cleared OR composer gone.
+    let composerCleared = await page.evaluate<boolean>(`(() => {
+      const tb = document.querySelector('${textboxSel}');
+      if (!tb) return true;
+      return ((tb.textContent || '').trim().length === 0);
+    })()`).catch(() => false);
+
+    if (!composerCleared) {
+      // Try one more time — sometimes Threads needs a second click.
+      await wait(800);
+      await page.evaluate(`(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        const scope = dialog || document;
+        const candidates = Array.from(scope.querySelectorAll('[role="button"]'));
+        for (const el of candidates) {
+          if ((el.textContent || '').trim() !== 'Post') continue;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          if (el.getAttribute('aria-disabled') === 'true') continue;
+          el.click();
+          return true;
+        }
+        return false;
+      })()`).catch(() => {});
+      await wait(2000);
+      composerCleared = await page.evaluate<boolean>(`(() => {
+        const tb = document.querySelector('${textboxSel}');
+        if (!tb) return true;
+        return ((tb.textContent || '').trim().length === 0);
+      })()`).catch(() => false);
+    }
+
+    if (!composerCleared && !submitted) {
       return {
         success: false,
-        message: 'Reply submit button ("Post") was not clickable.',
+        message: 'Reply submit: could not find a clickable Post button inside the dialog.',
         screenshotBase64,
         replyTyped: 1,
         replyPublished: 0,
       };
     }
-    await wait(2500);
+    await wait(1000);
 
-    // Confirm dialog closed.
-    const stillOpen = await page.evaluate<boolean>(
-      `!!document.querySelector('[role="dialog"] [role="textbox"][contenteditable="true"]')`,
-    ).catch(() => false);
+    // Confirm publish succeeded. Threads' post-submit behavior varies:
+    //   - Dialog layout: sometimes closes the dialog, sometimes keeps the
+    //     dialog open with the textbox emptied (ready for the next reply).
+    //   - Inline layout: textbox stays, content empties.
+    // Success signal is CONTENT-EMPTY, not DOM-absence — we could be
+    // staring at an empty composer for 3 seconds and still be published.
+    const stillLooksUnpublished = await page.evaluate<boolean>(`(() => {
+      const tb = document.querySelector('[role="dialog"] [role="textbox"][contenteditable="true"]')
+               || document.querySelector('[role="textbox"][contenteditable="true"]');
+      if (!tb) return false; // textbox gone — definitely published / dismissed
+      const txt = (tb.textContent || '').trim();
+      return txt.length > 0; // content remains → not submitted
+    })()`).catch(() => false);
 
-    if (stillOpen) {
+    if (stillLooksUnpublished) {
       return {
         success: false,
-        message: 'Reply Post click accepted but the dialog stayed open. Threads likely rejected the content.',
+        message: 'Reply Post click accepted but the composer did not clear. Threads likely rejected the content.',
         screenshotBase64: await captureScreenshot(page),
         replyTyped: 1,
         replyPublished: 0,
@@ -541,6 +667,19 @@ export async function composeThreadsReplyViaBrowser(
     }
 
     logger.info({ replyToUrl: normalized, chars: text.length }, `[${LOG_TAG}] reply published`);
+
+    // Record in posted_log so future calls with the same (platform,
+    // text_hash, source) skip via the dedup gate above.
+    if (input.db) {
+      await recordPost(input.db, input.workspaceId ?? null, {
+        platform: 'threads',
+        textHash,
+        textPreview: text,
+        textLength: text.length,
+        source,
+      });
+    }
+
     return {
       success: true,
       message: `Reply published to ${normalized} (${text.length} chars).`,
@@ -555,16 +694,62 @@ export async function composeThreadsReplyViaBrowser(
 }
 
 /**
- * Click the primary post's Reply icon. Threads renders it as
- * svg[aria-label="Reply"] inside the action bar. Walk up to the
- * clickable ancestor (a or button or role=button).
+ * Click the Reply trigger that opens the composer on a Threads post
+ * detail page.
+ *
+ * Strategy, in priority order:
+ *   1. Visible element whose textContent is exactly "Reply". Threads
+ *      renders this as a DIV wrapper with role=button styling, sitting
+ *      under the post (not in the fold). Picks the one closest to the
+ *      top of the page (= for the target post, not a nested reply).
+ *   2. Fallback: svg[aria-label="Reply"] inside an article[data-*], walk
+ *      up to the clickable ancestor. Most svgs are hidden decorations on
+ *      the current layout but left as a safety net for older renders.
  */
 async function clickReplyIcon(page: RawCdpPage): Promise<boolean> {
   try {
-    const tagged = await page.evaluate<boolean>(`(() => {
+    // Find + click in a SINGLE evaluate(). We use element.click() (synthetic
+    // MouseEvent dispatch on the exact node) rather than CDP coordinate
+    // clicks, because Threads overlays an invisible hit-target layer above
+    // the action bar that intercepts coordinate-based clicks without
+    // forwarding them to React's handler. Synthetic .click() bypasses the
+    // overlay entirely and fires the handler on the real target element.
+    // Empirically confirmed 2026-04-17: CDP clickSelector → no composer;
+    // .click() via evaluate → composer mounts within 500ms.
+    const clicked = await page.evaluate<boolean>(`(() => {
+      // Strategy 1: visible "Reply" text button, preferring role="button".
+      // Threads renders the Reply trigger as 3 stacked DIVs (wrapper /
+      // role=button / label) sharing the same rect. Only the role="button"
+      // node has React's click handler bound.
+      const all = Array.from(document.querySelectorAll('[role="button"], button, a, div'));
+      const visibleReply = all
+        .filter((e) => (e.textContent || '').trim() === 'Reply')
+        .filter((e) => !!e.offsetParent)
+        .filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+      const groups = new Map();
+      for (const el of visibleReply) {
+        const r = el.getBoundingClientRect();
+        const key = Math.round(r.top) + ':' + Math.round(r.left) + ':' + Math.round(r.width);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(el);
+      }
+      // Sort groups top → bottom so the target post's action bar wins.
+      const sortedGroups = Array.from(groups.values()).sort((a, b) =>
+        a[0].getBoundingClientRect().top - b[0].getBoundingClientRect().top
+      );
+      for (const group of sortedGroups) {
+        const target = group.find((e) => e.getAttribute('role') === 'button') || group[0];
+        target.scrollIntoView({ block: 'center' });
+        if (typeof target.click === 'function') {
+          target.click();
+          return true;
+        }
+      }
+      // Strategy 2 fallback: svg[aria-label="Reply"] → walk up to clickable.
       const svgs = Array.from(document.querySelectorAll('svg[aria-label="Reply"]'));
-      // Prefer the first one inside an article-like container at the
-      // top of the page (the target post's action bar).
       for (const svg of svgs) {
         let el = svg;
         for (let i = 0; i < 6; i++) {
@@ -572,21 +757,13 @@ async function clickReplyIcon(page: RawCdpPage): Promise<boolean> {
           if (!el) break;
           const role = el.getAttribute('role');
           if (el.tagName === 'BUTTON' || el.tagName === 'A' || role === 'button' || role === 'link') {
-            el.setAttribute('data-threads-reply-target', '1');
             el.scrollIntoView({ block: 'center' });
-            return true;
+            if (typeof el.click === 'function') { el.click(); return true; }
           }
         }
       }
       return false;
     })()`);
-    if (!tagged) return false;
-    const clicked = await page.clickSelector('[data-threads-reply-target="1"]', 5000);
-    await page.evaluate(`(() => {
-      const el = document.querySelector('[data-threads-reply-target="1"]');
-      if (el) el.removeAttribute('data-threads-reply-target');
-      return true;
-    })()`).catch(() => {});
     return clicked;
   } catch {
     return false;

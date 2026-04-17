@@ -37,6 +37,7 @@
 
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import {
   getCdpPage,
   focusByTestid,
@@ -48,6 +49,7 @@ import {
   MAX_TWEET_LENGTH,
   X_HYDRATION_WAIT_MS,
 } from './x-posting.js';
+import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -176,6 +178,10 @@ export interface ReplyXInput {
   expectedHandle?: string;
   /** Context pin from the executor. */
   expectedBrowserContextId?: string;
+  /** Optional. Enables deterministic dedup via posted_log. */
+  db?: DatabaseAdapter;
+  /** Workspace id for posted_log row. Resolved positionally if null. */
+  workspaceId?: string;
 }
 
 export interface ReplyXResult {
@@ -429,6 +435,23 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     };
   }
 
+  // Deterministic dedup: posted_log guards against retry-after-false-
+  // negative duplicate posts. Same guard shape as threads-reply.
+  const source = `reply_to:${normalized}`;
+  const textHash = hashText(text);
+  if (input.db && !dryRun) {
+    const already = await hasIdenticalPublished(input.db, 'x', textHash, source);
+    if (already) {
+      logger.info({ replyToUrl: normalized }, '[x-reply] duplicate blocked by posted_log');
+      return {
+        success: false,
+        message: `Already replied to this tweet with identical text. Skipped to avoid duplicate (posted_log guard).`,
+        replyTyped: 0,
+        replyPublished: 0,
+      };
+    }
+  }
+
   const page = await getCdpPage('x.com', input.expectedBrowserContextId);
   if (!page) {
     return {
@@ -528,6 +551,15 @@ export async function composeTweetReplyViaBrowser(input: ReplyXInput): Promise<R
     }
 
     logger.info({ replyToUrl: normalized, chars: text.length }, '[x-reply] reply published');
+    if (input.db) {
+      await recordPost(input.db, input.workspaceId ?? null, {
+        platform: 'x',
+        textHash,
+        textPreview: text,
+        textLength: text.length,
+        source,
+      });
+    }
     return {
       success: true,
       message: `Reply published to ${normalized} (${text.length} chars).`,

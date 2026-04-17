@@ -53,6 +53,7 @@ import {
   scanXPostsViaBrowser,
   composeTweetReplyViaBrowser,
 } from '../../orchestrator/tools/x-reply.js';
+import { deleteXReplyViaBrowser } from '../../orchestrator/tools/x-delete.js';
 import {
   ensureDebugChrome,
   findProfileByIdentity,
@@ -74,6 +75,7 @@ const X_POSTING_TOOL_NAMES = new Set([
   'x_delete_tweet',
   'x_scan_posts',
   'x_compose_reply',
+  'x_delete_reply',
 ]);
 
 // Per-tool deadline. X DOM ops that take longer than this are either
@@ -89,6 +91,7 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   x_delete_tweet: 60_000,
   x_scan_posts: 45_000,
   x_compose_reply: 90_000,
+  x_delete_reply: 60_000,
 };
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
@@ -255,7 +258,24 @@ export const xPostingExecutor: ToolExecutor = {
             dryRun,
             expectedHandle,
             expectedBrowserContextId,
+            db: ctx.db,
+            workspaceId: ctx.workspaceId,
           });
+        }
+        if (toolName === 'x_delete_reply') {
+          const del = await deleteXReplyViaBrowser({
+            postUrl: String(input.post_url || ''),
+            authorHandle: String(input.author_handle || ''),
+            containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
+            dryRun,
+            expectedBrowserContextId,
+          });
+          return {
+            success: del.success,
+            message: del.message,
+            screenshotBase64: del.screenshotBase64,
+            currentUrl: del.currentUrl,
+          };
         }
         // x_delete_tweet
         return deleteLastTweetViaBrowser({

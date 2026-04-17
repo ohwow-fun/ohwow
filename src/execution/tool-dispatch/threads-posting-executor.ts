@@ -19,6 +19,7 @@ import {
   scanThreadsPostsViaBrowser,
   composeThreadsReplyViaBrowser,
 } from '../../orchestrator/tools/threads-reply.js';
+import { deleteThreadsReplyViaBrowser } from '../../orchestrator/tools/threads-delete.js';
 import {
   ensureDebugChrome,
   findProfileByIdentity,
@@ -37,6 +38,7 @@ const THREADS_TOOL_NAMES = new Set([
   'threads_read_profile',
   'threads_scan_posts',
   'threads_compose_reply',
+  'threads_delete_reply',
 ]);
 
 const TOOL_TIMEOUT_MS: Record<string, number> = {
@@ -45,6 +47,7 @@ const TOOL_TIMEOUT_MS: Record<string, number> = {
   threads_read_profile: 30_000,
   threads_scan_posts: 45_000,
   threads_compose_reply: 90_000,
+  threads_delete_reply: 60_000,
 };
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
@@ -187,7 +190,25 @@ export const threadsPostingExecutor: ToolExecutor = {
             dryRun,
             expectedHandle,
             expectedBrowserContextId,
+            db: ctx.db,
+            workspaceId: ctx.workspaceId,
           });
+        }
+        if (toolName === 'threads_delete_reply') {
+          const del = await deleteThreadsReplyViaBrowser({
+            postUrl: String(input.post_url || ''),
+            authorHandle: String(input.author_handle || ''),
+            containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
+            index: typeof input.index === 'number' ? input.index : undefined,
+            dryRun,
+            expectedBrowserContextId,
+          });
+          return {
+            success: del.success,
+            message: del.message,
+            screenshotBase64: del.screenshotBase64,
+            currentUrl: del.currentUrl,
+          };
         }
         // threads_read_profile
         return readThreadsProfileViaBrowser({ expectedBrowserContextId });
