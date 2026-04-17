@@ -914,15 +914,32 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
  */
 async function readPostOutcome(page: CdpPage): Promise<'duplicate' | 'still_open' | 'published'> {
   try {
-    const result = await page.evaluate<{ duplicate: boolean; modalOpen: boolean }>(`(() => {
+    const result = await page.evaluate<{
+      duplicate: boolean;
+      publishedBanner: boolean;
+      composeModal: boolean;
+    }>(`(() => {
       const bodyText = (document.body?.innerText || '').toLowerCase();
       const duplicate = bodyText.includes('you already said that')
         || bodyText.includes('whoops! you already said that');
-      const modalOpen = !!document.querySelector('[data-testid="tweetTextarea_0"]');
-      return { duplicate, modalOpen };
+      // Positive publish signal: X shows a "Your post was sent" toast
+      // after a successful submit. Unambiguous — if it's on the page,
+      // the post landed. Takes priority over any textarea-presence
+      // check because x.com/home has its own inline compose textarea
+      // with the same testid as the modal's, which used to false-
+      // positive the still_open branch even after successful publish.
+      const publishedBanner = /your post was sent/i.test(document.body?.innerText || '');
+      // Compose MODAL specifically (role=dialog containing the
+      // textarea), not the home-feed inline compose input.
+      const composeModal = !!document.querySelector('[role="dialog"] [data-testid="tweetTextarea_0"]');
+      return { duplicate, publishedBanner, composeModal };
     })()`);
     if (result.duplicate) return 'duplicate';
-    if (result.modalOpen) return 'still_open';
+    if (result.publishedBanner) return 'published';
+    if (result.composeModal) return 'still_open';
+    // No banner, no modal dialog — post-navigate state. Treat as
+    // published; the subsequent confirmPostLanded() call catches any
+    // false positives by probing for our text in the feed.
     return 'published';
   } catch {
     return 'published';
