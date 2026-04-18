@@ -106,7 +106,16 @@ function backoffForHits(hits: number): number {
 // Default paths
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_X_THROTTLE_STATE_FILE = path.join(os.homedir(), '.ohwow', 'x-search-throttle.json');
+// Module-load default. Honours OHWOW_X_SEARCH_THROTTLE_FILE so test harnesses
+// that do `process.env.OHWOW_X_SEARCH_THROTTLE_FILE = ...; vi.resetModules();
+// await import('./x-search-throttle.js')` pick up the override. Runtime
+// callers go through resolveDefaultXStateFile() instead so HOME changes
+// after load also take effect.
+export const DEFAULT_X_THROTTLE_STATE_FILE =
+  process.env.OHWOW_X_SEARCH_THROTTLE_FILE ??
+  path.join(os.homedir(), '.ohwow', 'x-search-throttle.json');
+// Alias kept for the CLI + scripts that only care about the X tracker.
+export const STATE_FILE_PATH = DEFAULT_X_THROTTLE_STATE_FILE;
 export const DEFAULT_THREADS_THROTTLE_STATE_FILE = path.join(
   os.homedir(),
   '.ohwow',
@@ -287,6 +296,18 @@ export function createThrottleTracker(opts: ThrottleTrackerOptions = {}): Thrott
   function assertNotThrottled(now: Date = new Date()): void {
     const status = isThrottled(now);
     if (status.throttled && status.until) {
+      // Centralised x_search_deferred log so every deferred operation is
+      // visible without duplicating pino calls at each call site.
+      logger.info(
+        {
+          event: 'x_search_deferred',
+          platform: logTag,
+          caller: captureCaller(),
+          until: status.until.toISOString(),
+          remainingMs: status.remainingMs,
+        },
+        '[x-search-throttle] deferred by active cooldown',
+      );
       throw new XSearchThrottledError(status.until, status.remainingMs);
     }
   }
@@ -303,35 +324,47 @@ export function createThrottleTracker(opts: ThrottleTrackerOptions = {}): Thrott
 
 // ---------------------------------------------------------------------------
 // Default X tracker — the public functions named in the interface doc.
+//
+// Path resolution is LAZY so that (a) tests that override process.env.HOME
+// after module load still see the right path, and (b) the env var
+// OHWOW_X_SEARCH_THROTTLE_FILE can redirect the state file without a
+// restart. Callers that want a stable injected path should use
+// createThrottleTracker({ stateFile }) directly.
 // ---------------------------------------------------------------------------
 
-const defaultXTracker = createThrottleTracker({
-  stateFile: DEFAULT_X_THROTTLE_STATE_FILE,
-  logTag: 'x',
-});
+function resolveDefaultXStateFile(): string {
+  return (
+    process.env.OHWOW_X_SEARCH_THROTTLE_FILE ??
+    path.join(os.homedir(), '.ohwow', 'x-search-throttle.json')
+  );
+}
+
+function defaultXTracker(): ThrottleTracker {
+  return createThrottleTracker({ stateFile: resolveDefaultXStateFile(), logTag: 'x' });
+}
 
 export function readThrottleState(): ThrottleState {
-  return defaultXTracker.readState();
+  return defaultXTracker().readState();
 }
 
 export function writeThrottleState(state: ThrottleState): void {
-  defaultXTracker.writeState(state);
+  defaultXTracker().writeState(state);
 }
 
 export function isThrottled(now?: Date): { throttled: boolean; until: Date | null; remainingMs: number } {
-  return defaultXTracker.isThrottled(now);
+  return defaultXTracker().isThrottled(now);
 }
 
 export function markThrottled(url: string, now?: Date): ThrottleState {
-  return defaultXTracker.markThrottled(url, now);
+  return defaultXTracker().markThrottled(url, now);
 }
 
 export function markRecovered(now?: Date): ThrottleState {
-  return defaultXTracker.markRecovered(now);
+  return defaultXTracker().markRecovered(now);
 }
 
 export function assertNotThrottled(now?: Date): void {
-  defaultXTracker.assertNotThrottled(now);
+  defaultXTracker().assertNotThrottled(now);
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +391,106 @@ export const threadsThrottleTracker = createThrottleTracker({
  * Keeping detection a pure function here keeps x-reply.ts / threads-reply.ts
  * lean and lets us unit-test the rule without spinning up a browser.
  */
+// ---------------------------------------------------------------------------
+// waitForThrottleClear — cooperative wait for the default X tracker.
+// Callers that prefer to fail fast use assertNotThrottled; callers that
+// want to sleep through the window (long-running scripts, on-demand tools)
+// use this. Re-reads state each tick so a sibling process calling
+// markRecovered() wakes us up on the next poll.
+// ---------------------------------------------------------------------------
+
+export interface WaitForThrottleClearOptions {
+  /** Maximum total time to wait before throwing. Defaults to 4h (max backoff). */
+  maxWaitMs?: number;
+  /** How often to re-check the state file. Defaults to 30s. */
+  pollIntervalMs?: number;
+  /** Abort signal to interrupt the wait cooperatively. */
+  signal?: AbortSignal;
+  /** Injectable clock + sleep for tests. */
+  now?: () => number;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+export interface WaitForThrottleClearResult {
+  waited: boolean;
+  waitedMs: number;
+}
+
+const DEFAULT_MAX_WAIT_MS = 4 * 60 * 60 * 1_000;
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(t);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort);
+  });
+}
+
+export async function waitForThrottleClear(
+  opts: WaitForThrottleClearOptions = {},
+): Promise<WaitForThrottleClearResult> {
+  const maxWaitMs = opts.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const now = opts.now ?? (() => Date.now());
+  const sleep = opts.sleep ?? defaultSleep;
+
+  const start = now();
+  const initial = isThrottled(new Date(start));
+  if (!initial.throttled) return { waited: false, waitedMs: 0 };
+
+  while (true) {
+    if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+    const elapsedMs = now() - start;
+    if (elapsedMs >= maxWaitMs) {
+      const status = isThrottled(new Date(now()));
+      if (status.throttled && status.until) {
+        throw new XSearchThrottledError(status.until, status.remainingMs);
+      }
+      return { waited: true, waitedMs: elapsedMs };
+    }
+
+    const status = isThrottled(new Date(now()));
+    if (!status.throttled) return { waited: true, waitedMs: elapsedMs };
+
+    const tickRemaining = Math.min(pollIntervalMs, maxWaitMs - elapsedMs);
+    logger.info(
+      {
+        event: 'x_search_waiting',
+        remainingMs: status.remainingMs,
+        pollIntervalMs: tickRemaining,
+        elapsedMs,
+      },
+      '[x-search-throttle] waiting for cooldown to clear',
+    );
+
+    await sleep(tickRemaining, opts.signal);
+  }
+}
+
+function captureCaller(): string {
+  const stack = new Error().stack?.split('\n') ?? [];
+  // Skip: Error, captureCaller, assertNotThrottled (closure), exported wrapper.
+  const frame = stack.slice(4).find((line) => line.trim().startsWith('at '));
+  return frame ? frame.trim() : 'unknown';
+}
+
+// ---------------------------------------------------------------------------
+// Detection helpers — shared signature across production scrapers.
+// ---------------------------------------------------------------------------
+
 export function looksLikeXSearchRateLimit(bodyText: string | null | undefined, articleCount: number): boolean {
   if (articleCount > 0) return false;
   const body = (bodyText ?? '').toLowerCase();
