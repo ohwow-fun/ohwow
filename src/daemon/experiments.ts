@@ -68,6 +68,7 @@ import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engag
 import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
 import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
 import { RevenuePulseExperiment } from '../self-bench/experiments/revenue-pulse.js';
+import { LlmBudgetPulseExperiment } from '../self-bench/experiments/llm-budget-pulse.js';
 import { OpsPulseExperiment } from '../self-bench/experiments/ops-pulse.js';
 import { OutreachCopyFuzzExperiment } from '../self-bench/experiments/outreach-copy-fuzz.js';
 import { OutreachPolicyFuzzExperiment } from '../self-bench/experiments/outreach-policy-fuzz.js';
@@ -234,6 +235,11 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // doesn't spawn duplicates.
   experimentRunner.register(new DailySurpriseDigestExperiment());
   experimentRunner.register(new RevenuePulseExperiment());
+  // Gap 13: weekly autonomous-spend rollup. Mirrors revenue-pulse shape
+  // (60min cadence, inner day-key dedupe) so one finding emits per UTC
+  // day — names the top-3 experiment_ids by 7d cost so defund decisions
+  // have a concrete list to look at. Observer-only; verdict is always pass.
+  experimentRunner.register(new LlmBudgetPulseExperiment());
   experimentRunner.register(new OpsPulseExperiment());
   experimentRunner.register(new OutreachCopyFuzzExperiment());
   experimentRunner.register(new OutreachPolicyFuzzExperiment());
