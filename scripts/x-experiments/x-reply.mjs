@@ -35,8 +35,13 @@ import path from 'node:path';
 import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
 import { buildOutboundGate } from './_outbound-gate.mjs';
-import { replyToPost } from './_x-harvest.mjs';
+import { replyToPost, XSearchRateLimitedError } from './_x-harvest.mjs';
 import { ensureXReady } from './_x-browser.mjs';
+import {
+  assertNotThrottled,
+  markThrottled as markXSearchThrottled,
+  XSearchThrottledError,
+} from '../../src/lib/x-search-throttle.js';
 
 const DRY = process.env.DRY !== '0';
 // 1-2 replies per run. Rapid-fire replies from the same account look
@@ -169,6 +174,22 @@ Draft the reply.`;
 
 async function main() {
   const t0 = Date.now();
+
+  // x-reply reads a sidecar written by x-intel (no direct search calls
+  // today), but it lives on the same per-account X RPC surface as the
+  // scrapers. If a prior run tripped the throttle we skip this one too
+  // — queuing more traffic extends the cooldown even when the work
+  // itself looks cheap.
+  try {
+    assertNotThrottled();
+  } catch (e) {
+    if (e instanceof XSearchThrottledError) {
+      console.log(`[x-reply] x search is throttled until ${e.retryAfter.toISOString()} (${Math.ceil(e.remainingMs / 60000)} min remaining) — skipping run.`);
+      process.exit(0);
+    }
+    throw e;
+  }
+
   const { workspace } = resolveOhwow();
   const cfg = JSON.parse(fs.readFileSync(workspaceConfigPath(workspace), 'utf8'));
 
@@ -200,7 +221,9 @@ async function main() {
 
   const drafted = [];
   let llmSpendEstimate = 0;
+  let throttleAborted = false;
   for (const post of candidates) {
+    if (throttleAborted) break;
     let draft;
     try {
       draft = await draftReply({ brandVoice: cfg.brand_voice, workspaceDesc: cfg.workspace_description, post });
@@ -258,9 +281,19 @@ async function main() {
           appendReplied(workspace, { permalink: post.permalink, ts: new Date().toISOString() });
           console.log(`    posted reply live via Chrome`);
         } catch (e) {
-          console.log(`    reply post failed: ${e.message}`);
-          record.posted = false;
-          record.post_error = e.message;
+          if (e instanceof XSearchRateLimitedError) {
+            // Unlikely on a permalink page, but persist + abort the rest
+            // of the run if X ever serves the rate-limit shell here.
+            const state = markXSearchThrottled(e.url || post.permalink);
+            console.log(`    x search throttle tripped while posting reply — cooldown until ${state.throttled_until}. Aborting remaining drafts.`);
+            record.posted = false;
+            record.post_error = 'throttled';
+            throttleAborted = true;
+          } else {
+            console.log(`    reply post failed: ${e.message}`);
+            record.posted = false;
+            record.post_error = e.message;
+          }
         }
       }
     }

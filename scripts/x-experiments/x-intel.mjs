@@ -40,7 +40,12 @@ import {
   filterPosts,
   buildEngagerRecord,
   writeEngagersSidecar,
+  XSearchRateLimitedError,
 } from './_x-harvest.mjs';
+import {
+  isThrottled as isXSearchThrottled,
+  markThrottled as markXSearchThrottled,
+} from '../../src/lib/x-search-throttle.js';
 import { propose } from './_approvals.mjs';
 import { formatClassifyLine, ENGAGER_CLASSIFIER_GUIDANCE } from './_x-classify.mjs';
 import crypto from 'node:crypto';
@@ -163,12 +168,28 @@ if ((!SOURCE_FILTER.size || SOURCE_FILTER.has('home')) && cfg.sources.home_feed?
 }
 
 if (!SOURCE_FILTER.size || SOURCE_FILTER.has('search')) {
-  for (const s of cfg.sources.searches || []) {
-    console.log(`\n[x-intel] source=search "${s.query}"`);
-    const url = `https://x.com/search?q=${encodeURIComponent(s.query)}&f=live`;
-    const posts = await scrollAndHarvest(page, url, s.max_scrolls ?? 6);
-    console.log(`  +${posts.length} posts`);
-    addPosts(posts.map(p => ({ ...p, _bucketHint: s.bucket_hint })), `search:${s.query}`);
+  const gate = isXSearchThrottled();
+  if (gate.throttled) {
+    console.log(`[x-intel] skipping search sources — x search throttled until ${gate.until?.toISOString?.()} (${Math.ceil(gate.remainingMs / 60000)} min remaining)`);
+  } else {
+    for (const s of cfg.sources.searches || []) {
+      console.log(`\n[x-intel] source=search "${s.query}"`);
+      const url = `https://x.com/search?q=${encodeURIComponent(s.query)}&f=live`;
+      try {
+        const posts = await scrollAndHarvest(page, url, s.max_scrolls ?? 6);
+        console.log(`  +${posts.length} posts`);
+        addPosts(posts.map(p => ({ ...p, _bucketHint: s.bucket_hint })), `search:${s.query}`);
+      } catch (e) {
+        if (e instanceof XSearchRateLimitedError) {
+          // Persist the trip and abort remaining search queries. Profile
+          // + engager harvests hit different RPCs and proceed normally.
+          const state = markXSearchThrottled(e.url || url);
+          console.log(`[x-intel] x search throttle tripped on "${s.query}" — cooldown until ${state.throttled_until} (consecutive_hits=${state.consecutive_hits}). Skipping remaining search queries.`);
+          break;
+        }
+        throw e;
+      }
+    }
   }
 }
 
