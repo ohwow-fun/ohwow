@@ -26,6 +26,8 @@ src/self-bench/experiments/subprocess-smoke-*.ts
 packages/video/node_modules/
 packages/video/out/
 packages/video/public/voice/
+packages/video/public/audio/ohwow-tracks/
+packages/video/specs/*.compiled.json
 packages/video/.remotion/
 packages/video/dist/
 
