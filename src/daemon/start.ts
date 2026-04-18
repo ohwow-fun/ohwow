@@ -21,6 +21,7 @@ import { initializeScheduling } from './scheduling.js';
 import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
+import { wireConductor } from '../autonomy/wire-daemon.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -85,6 +86,11 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // 13. Cloudflare tunnel + 13b. OpenClaw integration
   await setupOptionalIntegrations(ctx);
+
+  // 13c. Autonomy Conductor (Phase 5, dark-launched). No-op unless
+  // OHWOW_AUTONOMY_CONDUCTOR=1; ImprovementScheduler runs unchanged.
+  const conductorHandle = wireConductor({ db: ctx.db, workspace_id: ctx.workspaceId });
+  if (conductorHandle) ctx.bus.once('shutdown', () => conductorHandle.stop());
 
   logger.info('[daemon] Ready');
 
