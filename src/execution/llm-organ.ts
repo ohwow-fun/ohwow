@@ -19,6 +19,26 @@ import type {
   OpenAITool,
   RoutingHistory,
 } from './model-router.js';
+import {
+  isSelectableModel,
+  resolveRouterDefault,
+  type TaskClass,
+} from './router-defaults.js';
+
+const VALID_TASK_CLASSES: readonly TaskClass[] = [
+  'agentic_coding',
+  'computer_use',
+  'hardest_reasoning',
+  'agentic_search',
+  'bulk_cost_sensitive',
+  'private_offline',
+] as const;
+
+function asTaskClass(value: unknown): TaskClass | undefined {
+  return typeof value === 'string' && (VALID_TASK_CLASSES as readonly string[]).includes(value)
+    ? (value as TaskClass)
+    : undefined;
+}
 
 export const VALID_PURPOSES: readonly Purpose[] = [
   'orchestrator_chat',
@@ -207,6 +227,15 @@ export interface LlmCallInput {
   prefer_model?: unknown;
   max_cost_cents?: unknown;
   difficulty?: unknown;
+  /**
+   * Optional TaskClass hint. When set and `prefer_model` is unset, the
+   * organ resolves the class's default via `resolveRouterDefault` and
+   * passes that model string down as `preferModel`. Opt-in Opus 4.7 is
+   * surfaced by passing the opt-in model string explicitly via
+   * `prefer_model`; the organ validates it against `isOptInModel` for
+   * the task class before honoring it.
+   */
+  task_class?: unknown;
 }
 
 /**
@@ -521,13 +550,38 @@ export async function runLlmCall(
     purpose,
   );
 
+  // Task-class default resolution. When the caller tags a call with
+  // `task_class` (eg "agentic_coding", "hardest_reasoning") and did not
+  // supply an explicit `prefer_model`, the router-defaults table picks
+  // the cheap-enough-for-the-loop default for that class. Callers that
+  // want to opt into a registered alternative (eg claude-opus-4-7 on
+  // hardest_reasoning) pass the model string via `prefer_model`. The
+  // organ validates it against `isSelectableModel` for the task class
+  // and logs a breadcrumb if it's unknown so the budget meter added in
+  // gap 13 can surface the rate of off-allowlist overrides.
+  const taskClass = asTaskClass(input.task_class);
+  const explicitPreferModel = asString(input.prefer_model);
+  let preferModel = explicitPreferModel;
+  if (!preferModel && taskClass) {
+    preferModel = resolveRouterDefault(taskClass).model;
+  }
+  if (explicitPreferModel && taskClass && !isSelectableModel(taskClass, explicitPreferModel)) {
+    // Not an error — per-agent / workspace overrides are allowed to
+    // reach beyond the allow-list. Just log it so the budget meter
+    // added in gap 13 has the breadcrumb.
+    logger.debug(
+      { taskClass, preferModel: explicitPreferModel },
+      'llm organ: prefer_model is not registered as an opt-in for this task_class',
+    );
+  }
+
   let selection;
   try {
     selection = await deps.modelRouter.selectForPurpose({
       purpose,
       agent: agentPolicy,
       constraints: {
-        preferModel: asString(input.prefer_model),
+        preferModel,
         localOnly: asBool(input.local_only),
         maxCostCents: asNumber(input.max_cost_cents),
         difficulty: asDifficulty(input.difficulty),
