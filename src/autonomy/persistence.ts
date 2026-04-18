@@ -241,6 +241,22 @@ export async function loadTrio(
   return { trio: rowToTrioRecord(trioRes.data), rounds };
 }
 
+export async function listTriosForPhase(
+  db: DatabaseAdapter,
+  phase_report_id: string,
+): Promise<TrioRecord[]> {
+  const { data, error } = await db
+    .from<TrioRow>('phase_trios')
+    .select()
+    .eq('phase_id', phase_report_id)
+    .order('started_at', { ascending: true });
+  if (error) {
+    throw new Error(`listTriosForPhase failed: ${error.message}`);
+  }
+  if (!data) return [];
+  return data.map(rowToTrioRecord);
+}
+
 export async function listRoundsForTrio(
   db: DatabaseAdapter,
   trioId: string,
