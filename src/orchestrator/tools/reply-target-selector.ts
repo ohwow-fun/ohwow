@@ -74,6 +74,15 @@ export interface SelectorFilters {
   maxLikes?: number;
   /** Drop posts with replies > this. Default 40. */
   maxReplies?: number;
+  /**
+   * Drop posts with likes < this. Used by viral-piggyback mode to require
+   * a crowded thread (dozens of ICP lurkers in replies). Default 0.
+   */
+  minLikes?: number;
+  /**
+   * Drop posts with replies < this. Same use-case as minLikes. Default 0.
+   */
+  minReplies?: number;
   /** Drop posts older than this. Default 48h. */
   maxAgeHours?: number;
   /** Drop replies from the feed. Default true. */
@@ -88,6 +97,12 @@ export interface SelectorFilters {
   maxPitchWeight?: number;
   /** Drop posts that don't match any topic keyword. Useful for noisy search feeds. Default false. */
   requireTopicMatch?: boolean;
+  /**
+   * After filter + score, keep at most N posts per author. Prevents a
+   * single high-performer (e.g. the same thought-leader appearing 5x in
+   * a viral query) from monopolizing the top-N slice. Default 1.
+   */
+  maxPerAuthor?: number;
 }
 
 export interface ScoringWeights {
@@ -114,6 +129,8 @@ export const DEFAULT_FILTERS: Required<SelectorFilters> = {
   excludeKeywords: [],
   maxLikes: 500,
   maxReplies: 40,
+  minLikes: 0,
+  minReplies: 0,
   maxAgeHours: 48,
   excludeReplies: true,
   excludeReposts: true,
@@ -121,6 +138,7 @@ export const DEFAULT_FILTERS: Required<SelectorFilters> = {
   maxCapsRatio: 0.45,
   maxPitchWeight: 3,
   requireTopicMatch: false,
+  maxPerAuthor: 1,
 };
 
 export const DEFAULT_WEIGHTS: Required<ScoringWeights> = {
@@ -363,6 +381,15 @@ export function filterCandidate(
   if (c.replies != null && c.replies > filters.maxReplies) {
     return { keep: false, reason: `repliesTooHigh(${c.replies})` };
   }
+  // Engagement floor — used by viral piggyback mode to require a
+  // crowded thread. Direct mode leaves these at 0 so low-engagement
+  // vents from real operators still pass.
+  if (filters.minLikes > 0 && (c.likes ?? 0) < filters.minLikes) {
+    return { keep: false, reason: `likesTooLow(${c.likes ?? 0})` };
+  }
+  if (filters.minReplies > 0 && (c.replies ?? 0) < filters.minReplies) {
+    return { keep: false, reason: `repliesTooLow(${c.replies ?? 0})` };
+  }
 
   if (c.postedAt) {
     const posted = Date.parse(c.postedAt);
@@ -400,7 +427,14 @@ export interface SelectorOutput {
 export function pickReplyTargets(input: SelectorInput): SelectorOutput {
   const filters: Required<SelectorFilters> = { ...DEFAULT_FILTERS, ...(input.filters ?? {}) };
   const weights: Required<ScoringWeights> = { ...DEFAULT_WEIGHTS, ...(input.weights ?? {}) };
-  const topicKeywords = input.topicKeywords ?? OHWOW_TOPIC_KEYWORDS;
+  // Topic keywords drive the topicMatch score component. If the caller
+  // passes an explicit [], we skip topic scoring entirely — that's the
+  // new pain-finder flow (classifier replaces topic-keyword gating).
+  // Undefined (omitted) falls back to the legacy OHWOW_TOPIC_KEYWORDS
+  // list so existing callers that don't pass topicKeywords still work.
+  const topicKeywords = input.topicKeywords === undefined
+    ? OHWOW_TOPIC_KEYWORDS
+    : input.topicKeywords;
   const topN = Math.max(1, Math.min(input.topN ?? 3, 20));
   const now = input.now ?? Date.now();
 
@@ -420,8 +454,24 @@ export function pickReplyTargets(input: SelectorInput): SelectorOutput {
   // Stable sort: primary by score desc, tiebreaker by id asc so repeat
   // runs on identical scans pick the same winner.
   accepted.sort((a, b) => (b.score - a.score) || a.candidate.id.localeCompare(b.candidate.id));
-  const topSlice = accepted.slice(0, topN);
+
+  // Author dedup: keep at most maxPerAuthor posts per author. One
+  // high-performer can monopolize a viral-query top-N if this is
+  // skipped (observed: `siddharthwv` took 5/16 slots on "quit my 9-5"
+  // in the sandbox). Dedup AFTER sorting so the highest-scored post
+  // from each author is the one we keep.
+  const perAuthor = new Map<string, number>();
+  const deduped: ScoredCandidate[] = [];
+  for (const s of accepted) {
+    const key = (s.candidate.authorHandle || 'unknown').toLowerCase();
+    const seen = perAuthor.get(key) ?? 0;
+    if (seen >= filters.maxPerAuthor) continue;
+    perAuthor.set(key, seen + 1);
+    deduped.push(s);
+  }
+
+  const topSlice = deduped.slice(0, topN);
   const chosen = topSlice.length > 0 && topSlice[0].score > 0 ? topSlice[0] : null;
 
-  return { accepted, rejected, topN: topSlice, chosen };
+  return { accepted: deduped, rejected, topN: topSlice, chosen };
 }

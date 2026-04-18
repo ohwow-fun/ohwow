@@ -50,12 +50,26 @@ import {
   buildVoicePrinciples,
   buildLengthDirective,
   voiceCheck as voiceCoreCheck,
+  autoFixCosmetic,
   LENGTH_CAPS,
 } from '../../lib/voice/voice-core.js';
+
+export type ReplyMode = 'direct' | 'viral';
 
 export interface GenerateReplyInput {
   target: ReplyCandidate;
   platform: 'x' | 'threads';
+  /**
+   * Reply mode drives the system prompt.
+   *   - direct: 1:1 reply to a real operator (genuine_pain or
+   *     solo_service_provider). Prompts for one observation + one
+   *     concrete mechanism.
+   *   - viral: broadcast reply into a crowded ICP-packed thread. Prompts
+   *     for a sharp counter / unexpected cost / category-mistake that
+   *     stands out against 30-150 other replies.
+   * Default 'direct' for backward compat with existing callers.
+   */
+  mode?: ReplyMode;
   /** Optional extra steering per-call. Kept short; long prompts drift. */
   extraGuidance?: string;
   /** How many alt drafts to generate alongside the primary. Default 2. */
@@ -75,6 +89,11 @@ export interface GenerateReplyOutput {
 // directly. voiceCheck uses LENGTH_CAPS from voice-core under the hood.
 const X_MAX = LENGTH_CAPS.x.reply;
 const THREADS_MAX = LENGTH_CAPS.threads.reply;
+
+// Exported for testing and for the classifier's rationale prompts.
+export function buildReplySystemPrompt(platform: 'x' | 'threads', mode: ReplyMode = 'direct'): string {
+  return mode === 'viral' ? buildViralPiggybackSystemPrompt(platform) : buildSystemPrompt(platform);
+}
 
 function buildSystemPrompt(platform: 'x' | 'threads'): string {
   return [
@@ -106,6 +125,61 @@ function buildSystemPrompt(platform: 'x' | 'threads'): string {
     '    "draft":      string  // primary reply, ready to post as-is',
     '    "alternates": string[]  // 0-2 differently-angled drafts',
     '    "rationale":  string  // one sentence on why this lands',
+    '  }',
+    '  or on skip:',
+    '  { "draft": "SKIP", "rationale": "one sentence on why" }',
+  ].join('\n');
+}
+
+/**
+ * Viral-piggyback system prompt. Used when replying into a crowded ICP-
+ * packed thread where the POSTER isn't the target but the REPLY CROWD
+ * is. Replies must stand out against 30-150 other comments, not be
+ * helpful 1:1 to the poster. Sandbox-validated pattern.
+ */
+function buildViralPiggybackSystemPrompt(platform: 'x' | 'threads'): string {
+  return [
+    'You draft replies to viral social-media threads from creator-economy voices.',
+    'The POSTER is not the target — the *reply crowd* is. Dozens to hundreds of',
+    'solopreneurs, indie hackers, and small-business operators are scrolling the',
+    'comment section. Your reply has to stand out against 30-150 other replies and',
+    'make those lurkers stop and think. Nobody remembers the 40th "great point!"',
+    'reply.',
+    '',
+    buildVoicePrinciples(),
+    '',
+    'VIRAL-REPLY SHAPE — pick ONE of these. The example framings are for shape',
+    'only; do NOT copy them verbatim. Find your own words so the reply feels',
+    'original, not templated:',
+    '',
+    '  - Specific counter. Push back on the dominant framing in a precise way.',
+    '    Must name the missing variable, not just disagree.',
+    '  - Sharp reduction. Restate the post\'s claim in a smaller, truer form.',
+    '    Makes the lurker feel the claim click.',
+    '  - Unexpected cost. Name a hidden cost the post ignored. Vary the phrasing;',
+    '    "the real cost of X isn\'t Y" is stale — find fresher construction.',
+    '  - Minimum viable rule. If the post is a poll/question, answer it with a',
+    '    one-line rule that\'s obviously right once said.',
+    '  - Category mistake. Point out the post is asking about Level-1 when the',
+    '    real problem is Level-2.',
+    '',
+    'AVOID in viral mode:',
+    '  - Agreement. "Great point" / "so true" / "100%" is invisible.',
+    '  - Generic advice (focus on customers / keep shipping). Everyone says this.',
+    '  - Long explanations. 1-2 sentences. Density beats completeness.',
+    '  - Cleverness without substance. If it doesn\'t teach a mechanism, cut it.',
+    '',
+    buildLengthDirective({ platform, useCase: 'reply' }),
+    '',
+    'WHEN TO SKIP (return draft: "SKIP"):',
+    '  - The post is pure self-promotion with no substantive claim to counter.',
+    '  - You would have to misread the post to reply usefully.',
+    '',
+    'OUTPUT (JSON, nothing else):',
+    '  {',
+    '    "draft":      string  // primary reply, ready to post as-is',
+    '    "alternates": string[]  // 0-2 differently-angled drafts',
+    '    "rationale":  string  // one sentence on why this stops the scroll',
     '  }',
     '  or on skip:',
     '  { "draft": "SKIP", "rationale": "one sentence on why" }',
@@ -184,7 +258,10 @@ export async function generateReplyCopy(
     return { ok: false, error: 'modelRouter not available' };
   }
 
-  const system = buildSystemPrompt(input.platform);
+  const mode: ReplyMode = input.mode ?? 'direct';
+  const system = mode === 'viral'
+    ? buildViralPiggybackSystemPrompt(input.platform)
+    : buildSystemPrompt(input.platform);
   const prompt = buildUserPrompt(input.target, input.platform, input.extraGuidance);
 
   const llm = await runLlmCall(
@@ -230,12 +307,14 @@ export async function generateReplyCopy(
     };
   }
 
-  // Post-hoc scrub: trim trailing period. The prompt tells the model
-  // to skip it, but we enforce anyway so a voice-check failure never
-  // escapes this function when the violation is trivially fixable.
-  parsed.draft = parsed.draft.replace(/\.\s*$/, '');
+  // Post-hoc cosmetic scrub (voice-core.autoFixCosmetic): strip trailing
+  // period, replace em/en dash with ", ". These are the two rules the
+  // model routinely ignores despite being in every prompt. Other voice
+  // violations (first-person, product names, corporate softeners) still
+  // hard-fail the gate below.
+  parsed.draft = autoFixCosmetic(parsed.draft);
   if (Array.isArray(parsed.alternates)) {
-    parsed.alternates = parsed.alternates.map((a) => a.replace(/\.\s*$/, ''));
+    parsed.alternates = parsed.alternates.map(autoFixCosmetic);
   }
 
   // Voice-check is a gate, not a warning. If a draft contains

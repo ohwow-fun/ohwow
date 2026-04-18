@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { voiceCheck } from '../reply-copy-generator.js';
+import { voiceCheck, buildReplySystemPrompt } from '../reply-copy-generator.js';
 
 describe('voiceCheck', () => {
   describe('first-person pronouns', () => {
@@ -101,5 +101,35 @@ describe('voiceCheck', () => {
       const result = voiceCheck(threads, 'threads');
       expect(result.reasons.filter((r) => r.startsWith('length'))).toEqual([]);
     });
+  });
+});
+
+describe('buildReplySystemPrompt', () => {
+  it('direct mode includes REPLY-SPECIFIC rules', () => {
+    const p = buildReplySystemPrompt('x', 'direct');
+    expect(p).toContain('REPLY-SPECIFIC');
+    expect(p).toContain('one idea + one concrete mechanism');
+  });
+
+  it('viral mode includes viral-specific framing rules', () => {
+    const p = buildReplySystemPrompt('x', 'viral');
+    expect(p).toContain('VIRAL-REPLY SHAPE');
+    expect(p).toContain('reply crowd');
+    expect(p).toContain('Specific counter');
+    expect(p).toContain('Sharp reduction');
+    expect(p).toContain('Unexpected cost');
+  });
+
+  it('default mode is direct', () => {
+    const withoutMode = buildReplySystemPrompt('x');
+    const direct = buildReplySystemPrompt('x', 'direct');
+    expect(withoutMode).toBe(direct);
+  });
+
+  it('viral mode uses the right platform length cap', () => {
+    const xp = buildReplySystemPrompt('x', 'viral');
+    const tp = buildReplySystemPrompt('threads', 'viral');
+    expect(xp).toContain('240');
+    expect(tp).toContain('280');
   });
 });
