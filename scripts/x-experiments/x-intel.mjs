@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
 import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.ts';
+import { openFreshXTab } from './_x-browser.mjs';
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
 import {
   scrollAndHarvest,
@@ -171,11 +172,33 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('profile')) {
 // sidecar is the only end-to-end observability for this surface; without
 // it, engager rows are only visible when they survive filter + pass
 // classify, which masks whether the scrape itself produced rows.
+//
+// Replier scraping happens on a DEDICATED FRESH TAB: x.com's SPA caches
+// per-tab state, and a tab that previously rendered the home feed,
+// compose/post, or a profile timeline refuses to hydrate the replies
+// section on subsequent status-permalink navigations. Reused tabs
+// reproducibly surface `1 raw · 0 external` on threads with visible
+// community replies; a fresh tab in the same profile context returns
+// the real reply set. See _probe-scrape.mjs for the A/B. Diagnosed in
+// the 17th pass after the 16th-pass scroll-depth tuning produced no
+// behavior change.
 const engagerRows = [];           // for queueing into allPosts (classifier input)
 const engagerSidecarRows = [];    // for the raw-harvest sidecar (pre-filter)
 
 const OWN_POST_ENGAGERS_ENABLED = process.env.OWN_POST_ENGAGERS !== '0';
-if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers'))) {
+const ENGAGERS_WANTED = !SOURCE_FILTER.size || SOURCE_FILTER.has('engagers');
+const competitorProfiles = (cfg.sources.profiles || []).filter(p => p.harvest_engagers);
+
+let replierPage = null;
+if (ENGAGERS_WANTED && (OWN_POST_ENGAGERS_ENABLED || competitorProfiles.length)) {
+  try {
+    replierPage = await openFreshXTab(browser);
+  } catch (e) {
+    console.log(`[x-intel] engager surface unavailable: ${e.message}`);
+  }
+}
+
+if (replierPage && OWN_POST_ENGAGERS_ENABLED) {
   let ownHandle = cfg.own_handle || null;
   if (!ownHandle) {
     try {
@@ -188,13 +211,13 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
   if (ownHandle) {
     console.log(`\n[x-intel] engagers for own-handle @${ownHandle}`);
     try {
-      const ownPosts = await scrollAndHarvest(page, `https://x.com/${ownHandle}`, 2);
+      const ownPosts = await scrollAndHarvest(replierPage, `https://x.com/${ownHandle}`, 2);
       const myPosts = ownPosts.filter(p => p.author === ownHandle && !p.isRetweet).slice(0, 3);
       console.log(`  found ${myPosts.length} own recent posts to scan for repliers`);
       const ownScrolls = cfg.own_post_engager_scrolls ?? 6;
       for (const parent of myPosts) {
         try {
-          const repliers = await scrapeRepliers(page, parent.permalink, ownScrolls);
+          const repliers = await scrapeRepliers(replierPage, parent.permalink, ownScrolls);
           let external = 0;
           let selfSkipped = 0;
           for (const r of repliers) {
@@ -221,9 +244,8 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
 
 // Competitor-thread engagers: config-gated per profile via
 // sources.profiles[].harvest_engagers.
-if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
-  for (const p of cfg.sources.profiles || []) {
-    if (!p.harvest_engagers) continue;
+if (replierPage && competitorProfiles.length) {
+  for (const p of competitorProfiles) {
     const parentPosts = Array.from(allPosts.values())
       .filter(x => x.author === p.handle)
       .slice(0, p.engager_parent_posts ?? 3);
@@ -231,7 +253,7 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
     console.log(`\n[x-intel] engagers for @${p.handle} over ${parentPosts.length} recent posts`);
     for (const parent of parentPosts) {
       try {
-        const repliers = await scrapeRepliers(page, parent.permalink, p.engager_max_scrolls ?? 6);
+        const repliers = await scrapeRepliers(replierPage, parent.permalink, p.engager_max_scrolls ?? 6);
         let external = 0;
         let selfSkipped = 0;
         for (const r of repliers) {
@@ -252,6 +274,12 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
       } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
     }
   }
+}
+
+if (replierPage) {
+  // Close just the tab, NOT the shared browser WebSocket — the main
+  // `browser` is still in use for downstream classification/synthesis.
+  try { await browser.closeTarget(replierPage.targetId); } catch { /* best effort */ }
 }
 
 // Write the raw-harvest sidecar before anything downstream mutates the

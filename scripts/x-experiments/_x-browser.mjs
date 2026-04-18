@@ -104,3 +104,32 @@ export async function ensureXReady() {
   await page.installUnloadEscapes();
   return { browser, page };
 }
+
+/**
+ * Open a FRESH x.com tab inside the same Chrome profile the anchor tab
+ * uses. Required for conversation-replies scraping: x.com's SPA caches
+ * per-tab state, and a reused tab that previously rendered compose/post
+ * or a profile feed won't hydrate the replies section on a subsequent
+ * navigation to a status permalink. A fresh tab sidesteps that entirely.
+ *
+ * The `anchorPage` is the existing `findOrOpenXTab` tab, used only to
+ * read the `browserContextId` of the signed-in profile — we do not
+ * navigate it. Returns the new page and its targetId; callers are
+ * expected to `page.closeAndCleanup()` when finished.
+ *
+ * Background: 17th pass reproduced the wall with an A/B test. Reused
+ * tab returned `1 raw · 0 external` on every zapier thread; fresh tab
+ * returned 3-4 raw · 1-2 external on the same threads. See scripts/
+ * x-experiments/_probe-scrape.mjs for the repro.
+ */
+export async function openFreshXTab(browser) {
+  const targets = await browser.getTargets();
+  const anchor = targets.find(t => t.type === 'page' && /https:\/\/(x|twitter)\.com/.test(t.url));
+  if (!anchor || !anchor.browserContextId) {
+    throw new Error('[x-browser] openFreshXTab: no signed-in x.com tab to anchor the profile context');
+  }
+  const targetId = await browser.createTargetInContext(anchor.browserContextId, 'about:blank');
+  const page = await browser.attachToPage(targetId);
+  await page.installUnloadEscapes();
+  return page;
+}

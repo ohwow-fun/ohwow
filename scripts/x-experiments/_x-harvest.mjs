@@ -118,6 +118,14 @@ export function appendSeen(workspace, newRecords) {
  * source='engager:competitor' (or 'engager:own-post'). Downstream,
  * _qualify's engagerBoost reduces the score floor for these rows so
  * low-score repliers who are nevertheless in-market get through.
+ *
+ * IMPORTANT: `page` must be a FRESH tab dedicated to replier scraping.
+ * x.com's SPA caches per-tab state; a tab that previously rendered
+ * compose/post, home feed, or a profile timeline reproducibly fails to
+ * hydrate the conversation view, returning only the focal tweet article
+ * with zero external repliers regardless of scroll depth. Callers
+ * should open a dedicated tab via `openFreshXTab(browser)` and close
+ * it when done. See _probe-scrape.mjs for the A/B repro.
  */
 export async function scrapeRepliers(page, permalink, maxScrolls = 6) {
   const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
