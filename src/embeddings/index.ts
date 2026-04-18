@@ -11,3 +11,8 @@ export type {
   EmbedderConfig,
   EmbedOptions,
 } from './model.js';
+export {
+  getSharedEmbedder,
+  warmSharedEmbedder,
+  resetSharedEmbedderForTests,
+} from './singleton.js';

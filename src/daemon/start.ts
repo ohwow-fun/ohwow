@@ -22,6 +22,8 @@ import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
 import { wireConductor } from '../autonomy/wire-daemon.js';
+import { warmSharedEmbedder } from '../embeddings/singleton.js';
+import { createEmbedRouter } from '../api/routes/embed.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -75,6 +77,13 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // 11. Start Express server + WebSocket + register daemon status endpoints
   await setupHttpServer(ctx, inferenceState);
 
+  // 11a. Mount the in-daemon embedder HTTP route on the live app. Kept
+  // out of createServer() so the route can live alongside the shared
+  // embedder singleton without threading new deps through the server
+  // factory. The route is a thin wrapper around getSharedEmbedder() —
+  // see src/api/routes/embed.ts.
+  ctx.app.use(createEmbedRouter());
+
   // 12. Initialize messaging channels (WhatsApp + Telegram auto-connect)
   await initializeMessagingChannels(ctx);
 
@@ -93,6 +102,12 @@ export async function startDaemon(): Promise<DaemonHandle> {
   if (conductorHandle) ctx.bus.once('shutdown', () => conductorHandle.stop());
 
   logger.info('[daemon] Ready');
+
+  // 13d. Fire-and-forget warmup for the in-daemon embedder. The first
+  // user-facing embed() call pays a ~30s ONNX cold load on M-series; do
+  // it here so the daemon-ready signal fires on time but actual requests
+  // hit warm. Failures are logged + swallowed by warmSharedEmbedder.
+  void warmSharedEmbedder();
 
   // 14. Shutdown handler (defined before route so it can be referenced)
   const shutdown = createShutdownHandler(ctx);

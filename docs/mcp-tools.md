@@ -35,6 +35,7 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | [Workflows](#workflows) | 2 | Workflow execution |
 | [Automations](#automations) | 2 | Automation management |
 | [Knowledge](#knowledge) | 4 | Knowledge base (RAG) |
+| [Embeddings](#embeddings) | 1 | In-daemon text → vector encoding |
 | [Research](#research) | 2 | Web research and scraping |
 | [Messaging](#messaging) | 2 | WhatsApp and Telegram |
 | [Cloud](#cloud) | 2 | Cloud dashboard |
@@ -206,6 +207,12 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | `ohwow_get_knowledge` | Direct | Fetch a single document by id with full compiled body text (~50ms). Returns an error result for unknown ids. |
 | `ohwow_search_knowledge` | AI | Semantic RAG search with source attribution (~15s). |
 | `ohwow_add_knowledge_url` | AI | Ingest a web page into the knowledge base (~30s). |
+
+## Embeddings
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `ohwow_embed` | Direct | Encode 1-256 texts into 1024-dim L2-normalized vectors via the daemon's in-process Qwen3-Embedding-0.6B ONNX model. Sub-second warm; the first call after a fresh daemon boot may block up to ~30s if the background warmup hasn't finished. Supports `is_query` + `instruction` for asymmetric query encoding. |
 
 ## Research
 

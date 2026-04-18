@@ -203,6 +203,9 @@ KNOWLEDGE (~5-30s, list/get instant)
   ohwow_search_knowledge  Semantic search
   ohwow_add_knowledge_url Ingest web page
 
+EMBEDDINGS (sub-second warm; ~30s on first call if daemon just started)
+  ohwow_embed             Encode 1-256 texts into 1024-dim L2-normalized vectors (in-daemon Qwen3)
+
 RESEARCH (slow)
   ohwow_deep_research     Web research (30-120s depending on depth)
   ohwow_scrape_url        Scrape page (~10s)

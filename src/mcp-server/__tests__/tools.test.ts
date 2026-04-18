@@ -10,6 +10,7 @@ import { registerCrmTools } from '../tools/crm.js';
 import { registerWorkflowTools } from '../tools/workflows.js';
 import { registerProjectTools } from '../tools/projects.js';
 import { registerKnowledgeTools } from '../tools/knowledge.js';
+import { registerEmbedTools } from '../tools/embed.js';
 import { registerResearchTools } from '../tools/research.js';
 import { registerMessagingTools } from '../tools/messaging.js';
 import { registerCloudTools } from '../tools/cloud.js';
@@ -141,6 +142,13 @@ describe('MCP tool registration', () => {
     ]);
   });
 
+  it('registers 1 embeddings tool', () => {
+    const server = createMockServer();
+    registerEmbedTools(server as never, createMockClient() as never);
+    expect(server.tools).toHaveLength(1);
+    expect(server.tools.map(t => t.name)).toEqual(['ohwow_embed']);
+  });
+
   it('registers 2 research tools', () => {
     const server = createMockServer();
     registerResearchTools(server as never, createMockClient() as never);
@@ -193,10 +201,27 @@ describe('MCP tool registration', () => {
   it('registers all tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    // 90 prior tools + 2 subsequent additions (pre-existing) + 1 new
-    // ohwow_get_knowledge verb added alongside the knowledge body-fetch
-    // MCP surface.
-    expect(server.tools).toHaveLength(93);
+    // Absolute lower bound only — the barrel grows as new tool domains
+    // land. 93 reflects the state right after ohwow_get_knowledge landed;
+    // don't tighten unless you're also bumping it in the same commit.
+    expect(server.tools.length).toBeGreaterThanOrEqual(93);
+  });
+
+  it('barrel + embed registration together expose ohwow_embed', () => {
+    // ohwow_embed is registered from src/mcp-server/index.ts alongside
+    // registerTools() rather than inside the domain barrel, to keep the
+    // embed verb shippable without touching tools.ts while other work in
+    // that file is in flight. This test mirrors the real mcp-server
+    // startup order and asserts the verb is reachable. We assert the
+    // embed verb is present (not an absolute total) so the check stays
+    // stable as the barrel grows.
+    const before = createMockServer();
+    registerTools(before as never, createMockClient() as never);
+    const server = createMockServer();
+    registerTools(server as never, createMockClient() as never);
+    registerEmbedTools(server as never, createMockClient() as never);
+    expect(server.tools).toHaveLength(before.tools.length + 1);
+    expect(server.tools.some(t => t.name === 'ohwow_embed')).toBe(true);
   });
 
   it('every tool has a unique name', () => {

@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { DaemonApiClient } from './api-client.js';
 import { registerTools } from './tools.js';
+import { registerEmbedTools } from './tools/embed.js';
 import { registerResources } from './resources.js';
 import { startSamplingBridge } from './sampling-bridge.js';
 import { VERSION } from '../version.js';
@@ -28,6 +29,10 @@ export async function startMcpServer(): Promise<void> {
   });
 
   registerTools(server, client);
+  // Registered separately from the domain barrel so the embed verb can
+  // ship in a single commit without touching src/mcp-server/tools.ts
+  // while other work in that file is in flight.
+  registerEmbedTools(server, client);
   registerResources(server, client);
 
   const transport = new StdioServerTransport();
