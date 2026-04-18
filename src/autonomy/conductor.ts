@@ -55,7 +55,17 @@ export function isConductorEnabled(): boolean {
   return process.env[CONDUCTOR_ENV_FLAG] === '1';
 }
 
-// ---- stub executor (TODO(phase-6): swap for real sub-orchestrator) ----
+// ---- stub executor (TODO(phase-7+): swap for real sub-orchestrator) ----
+//
+// Phase 6.9 landed a real-LLM PLAN executor in
+// `src/autonomy/executors/llm-executor.ts` behind `OHWOW_AUTONOMY_EVAL_REAL=1`
+// (eval-only; NOT wired here). When production is ready to go real-LLM,
+// build a per-phase `LlmMeter` in `wireConductor` and pass
+// `makeLlmPlanExecutor({ model, client, fallback: StubConductorExecutor, meter })`
+// as `makeExecutor`. The meter's cents must then be plumbed into
+// `updatePhaseReport({ cost_llm_cents })` in `director.ts` (same shape the
+// eval harness demonstrates in `harness-llm.ts`). Do NOT flip this without
+// the Phase 7 self-commit allowlist + kill switch verified.
 
 /**
  * Stub executor used until Phase 6/7 wires the sub-orchestrator-backed

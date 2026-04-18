@@ -639,6 +639,29 @@ export async function runScenario(
   scenario: Scenario,
   opts: RunOptions = {},
 ): Promise<ScenarioTranscript> {
+  const held = await runScenarioKeepOpen(scenario, opts);
+  held.close();
+  return held.transcript;
+}
+
+export interface RunScenarioKeepOpenResult {
+  transcript: ScenarioTranscript;
+  db: ReturnType<typeof createSqliteAdapter>;
+  workspace_id: string;
+  /** Closes the underlying raw DB + restores env. Call when done asserting. */
+  close: () => void;
+}
+
+/**
+ * Same as `runScenario` but keeps the in-memory DB open after the run
+ * so callers (Phase 6.9 real-LLM scenarios) can assert against live
+ * rows — especially `director_phase_reports.cost_llm_cents` after the
+ * meter has been plumbed through. The caller MUST invoke `close()`.
+ */
+export async function runScenarioKeepOpen(
+  scenario: Scenario,
+  opts: RunOptions = {},
+): Promise<RunScenarioKeepOpenResult> {
   const silent = opts.silent ?? true;
   const prevLogLevel = logger.level;
   if (silent) logger.level = 'silent';
@@ -671,6 +694,7 @@ export async function runScenario(
     },
   };
 
+  let threw = false;
   try {
     await applySeed(ctx, scenario.initial_seed);
 
@@ -695,17 +719,46 @@ export async function runScenario(
     }
 
     transcript.finals = await readFinals(adapter, workspace_id);
-  } finally {
-    rawDb.close();
+  } catch (err) {
+    threw = true;
+    // Make sure we still clean up the DB + env when the run throws; the
+    // caller would otherwise never see `close()` called.
+    try {
+      rawDb.close();
+    } catch {
+      /* already closed */
+    }
     if (prevFlag === undefined) {
       delete process.env.OHWOW_AUTONOMY_CONDUCTOR;
     } else {
       process.env.OHWOW_AUTONOMY_CONDUCTOR = prevFlag;
     }
     if (silent) logger.level = prevLogLevel;
+    throw err;
   }
 
-  return transcript;
+  // Normal exit: caller owns the DB. Restore the silence flag now; the
+  // env flag + rawDb live until `close()` is invoked.
+  if (silent) logger.level = prevLogLevel;
+  void threw;
+
+  return {
+    transcript,
+    db: adapter,
+    workspace_id,
+    close: () => {
+      try {
+        rawDb.close();
+      } catch {
+        /* already closed */
+      }
+      if (prevFlag === undefined) {
+        delete process.env.OHWOW_AUTONOMY_CONDUCTOR;
+      } else {
+        process.env.OHWOW_AUTONOMY_CONDUCTOR = prevFlag;
+      }
+    },
+  };
 }
 
 async function applyStep(
@@ -1036,6 +1089,20 @@ async function discoverScenarios(): Promise<DiscoveredScenario[]> {
 export interface RunAllOptions extends RunOptions {
   /** Write golden files instead of diffing. */
   update?: boolean;
+  /**
+   * Phase 6.9: when true, also discover and run the real-LLM scenarios
+   * under `src/autonomy/eval/scenarios-llm/`. Requires
+   * `OHWOW_AUTONOMY_EVAL_REAL=1` in the environment; otherwise the LLM
+   * suite is skipped even if this flag is set. Deterministic scenarios
+   * always run (unless `skip_deterministic` is true).
+   */
+  real?: boolean;
+  /** Skip the deterministic scenario suite (pairs with `real=true`). */
+  skip_deterministic?: boolean;
+  /** Passed through to the LLM suite. Default 10c. */
+  llm_spend_cap_cents?: number;
+  /** Passed through to the LLM suite. Default 'claude-haiku-4-5-20251001'. */
+  llm_model?: string;
 }
 
 export async function runAllScenarios(
@@ -1043,7 +1110,8 @@ export async function runAllScenarios(
 ): Promise<RunAllResult> {
   const startedMs = Date.now();
   const update = opts.update ?? process.env.OHWOW_AUTONOMY_EVAL_UPDATE === '1';
-  const scenarios = await discoverScenarios();
+  const runDeterministic = !opts.skip_deterministic;
+  const scenarios = runDeterministic ? await discoverScenarios() : [];
 
   const pass: string[] = [];
   const fail: RunAllResult['fail'] = [];
@@ -1101,6 +1169,30 @@ export async function runAllScenarios(
       continue;
     }
     pass.push(scenario.name);
+  }
+
+  // Phase 6.9 — optionally append the real-LLM suite. The LLM runner
+  // prints its own per-scenario cost lines; here we fold its
+  // pass/fail into the combined result so callers can still branch on
+  // `result.fail.length`.
+  if (opts.real) {
+    const { isRealLlmEvalEnabled, runAllLlmScenarios } = await import(
+      './harness-llm.js'
+    );
+    if (!isRealLlmEvalEnabled()) {
+      fail.push({
+        name: 'real-llm-suite',
+        reason:
+          '--real requested but OHWOW_AUTONOMY_EVAL_REAL=1 is not set; refusing to run real LLM calls.',
+      });
+    } else {
+      const llm = await runAllLlmScenarios({
+        model: opts.llm_model,
+        spendCapCents: opts.llm_spend_cap_cents,
+      });
+      for (const name of llm.pass) pass.push(name);
+      for (const f of llm.fail) fail.push({ name: f.name, reason: f.reason });
+    }
   }
 
   return {

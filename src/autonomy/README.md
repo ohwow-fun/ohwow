@@ -49,6 +49,58 @@ To flip it:
 The flag does NOT need to be flipped to run the eval suite — the
 harness sets the env internally for each scenario.
 
+Dark-launch checklist (flip only after every step passes):
+
+1. Deterministic eval green: `npx tsx scripts/autonomy-eval.ts` → 16/16 ok.
+2. `ohwow_autonomy_dry_run` returns a sensible next pick for your workspace.
+3. Open MCP `ohwow_autonomy_status`; confirm `flag_on: false` and no open arcs.
+4. Set `OHWOW_AUTONOMY_CONDUCTOR=1` in the daemon env and restart.
+5. Watch `ohwow_autonomy_status` for the first arc — a dry-run-predicted mode should open.
+6. After Phase 6.9, run `--real` once against live pulse samples and confirm
+   plan rounds return a valid RoundReturn with cost_llm_cents > 0 under $0.10
+   per scenario. Rollback path: unset the env var and restart.
+
+## Real-LLM eval
+
+Phase 6.9 lands a real-LLM executor for the PLAN round only. Impl and QA
+stay stubbed — impl intersects `safeSelfCommit` (Phase 7 work) and QA
+needs a test-runner sandbox. The executor routes through the project's
+`ModelRouter` (no direct Anthropic SDK import) and targets
+`claude-haiku-4-5-20251001` by default.
+
+Run:
+
+```bash
+OHWOW_AUTONOMY_EVAL_REAL=1 npx tsx scripts/autonomy-eval.ts --real
+# fast iteration — skip deterministic suite:
+OHWOW_AUTONOMY_EVAL_REAL=1 npx tsx scripts/autonomy-eval.ts --real-only
+```
+
+Double opt-in: `--real` alone errors out; `OHWOW_AUTONOMY_EVAL_REAL=1`
+alone is ignored. The vitest wrapper (`eval.test.ts`) never runs LLM
+scenarios — CI stays cheap.
+
+Cost caveat: each LLM scenario caps at $0.10 (~10c). Real-LLM output
+varies run-to-run, so LLM scenarios assert STRUCTURAL shape
+(status='continue', non-empty next_round_brief, summary mentions the
+seeded subject, cost_llm_cents > 0) rather than byte-stable goldens.
+Never enable on CI.
+
+Adding a new real-LLM scenario:
+
+1. Copy `src/autonomy/eval/scenarios-llm/00-revenue-approval-plan-real.ts`.
+2. Keep assertions SHAPE-based, not text-based.
+3. Re-use `ctx.captured_plan_return`, `ctx.meter`, and `ctx.phase_reports`.
+4. Run with `--real-only` and confirm cost is well under the cap before
+   committing.
+
+What's NOT yet tested against a real LLM:
+
+- Impl rounds (they write code / run tools; Phase 7 extends
+  `safeSelfCommit` + path trust tiers before this is safe).
+- QA rounds (need a sandboxed test-runner shape).
+- Multi-phase arcs (needs a real re-plan path across trios).
+
 ## Operating
 
 Three commands cover day-to-day operator work:
