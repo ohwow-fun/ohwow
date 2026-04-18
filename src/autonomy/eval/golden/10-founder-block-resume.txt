@@ -1,14 +1,16 @@
 SCENARIO: 10-founder-block-resume
-DESCRIBE: Plan needs-input -> founder_inbox row -> mid-arc hook answers it -> next iteration picks the founder-answer candidate.
+DESCRIBE: Tick 1: plan needs-input -> founder_inbox row -> arc closes with row open. answer-founder. Tick 2: new arc picks up the answered row via workspace-wide pre-fetch.
 INITIAL_SEED: approvals=1
-STEP 0 [tick] // tick: needs-input writes inbox; mid-arc hook answers; resume picks founder-answer
-  result: ran=true arc=arc_001 status=closed exit=budget
+STEP 0 [tick] // tick 1: needs-input writes inbox; per-arc dedupe means arc exits with the inbox row open
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
   arc arc_001:
     phase_001 mode=revenue status=phase-blocked-on-founder trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+  inbox: fi_001->open
+STEP 1 [answer-founder] // founder answers between ticks
+STEP 2 [tick] // tick 2: new arc opens; workspace-wide pre-fetch surfaces fi_001; founder-answer runs first
+  result: ran=true arc=arc_002 status=closed exit=nothing-queued
+  arc arc_002:
     phase_002 mode=revenue status=phase-closed trios=1 goal="resume after founder answer (fi_001) [source=founder-answer; id=fi_001]"
     phase_003 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
-    phase_004 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
-    phase_005 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
-    phase_006 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
   inbox: fi_001->resolved
-FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0
+FINALS: arcs(open=0 closed=2 aborted=0) phase_reports=3 open_inbox=0

@@ -31,6 +31,7 @@ import {
   closeArc,
   countInboxAddedForPhase,
   listAnsweredFounderInbox,
+  listAnsweredUnresolvedFounderInbox,
   listOpenArcs,
   listOpenFounderInbox,
   listPhaseReportsForArc,
@@ -198,6 +199,10 @@ interface HarnessTickState {
   scenario_name: string;
 }
 
+// MIRROR OF conductor.ts:conductorTick + director.ts:runArc — keep in lockstep.
+// Bug fixes that change conductor/director behavior MUST be reflected here
+// (Phase 6.5 Bugs #1 and #2 are mirrored below: per-arc picked_keys dedupe
+// and cross-arc workspace-wide answered seed).
 async function runDeterministicTick(
   state: HarnessTickState,
 ): Promise<ConductorTickResult> {
@@ -211,10 +216,18 @@ async function runDeterministicTick(
   const pulse = await readFullPulse(state.db, state.workspace_id);
   const ledger = await readLedgerSnapshot(state.db, state.workspace_id);
   const refMs = state.clock.getMs();
+
+  // Bug #2 (mirror): pre-fetch workspace-wide answered+unresolved inbox
+  // rows so the first picker call resumes cross-arc answers.
+  const seedAnswered = await listAnsweredUnresolvedFounderInbox(
+    state.db,
+    state.workspace_id,
+  );
+
   const probe = rankNextPhase({
     pulse,
     ledger,
-    newly_answered: [],
+    newly_answered: seedAnswered,
     refTimeMs: refMs,
   });
   const thesis =
@@ -223,7 +236,15 @@ async function runDeterministicTick(
       : 'autonomous: scan for next-best phase';
 
   // 3. Build a deterministic picker. Mirrors conductor.ts but uses our
-  //    id factory for phase ids and our clock for refTimeMs.
+  //    id factory for phase ids and our clock for refTimeMs. Phase 6.5
+  //    additions:
+  //      - per-arc picked_keys dedupe (Bug #1)
+  //      - one-shot seedAnswered drain merged into newly_answered, with
+  //        seeded rows resolved so subsequent picker calls don't see
+  //        them again (Bug #2)
+  const picked_keys = new Set<string>();
+  let seedAnsweredPending: FounderInboxRecord[] = seedAnswered;
+
   const picker = async ({
     newly_answered,
   }: {
@@ -232,14 +253,43 @@ async function runDeterministicTick(
     const curRefMs = state.clock.getMs();
     const fresh = await readFullPulse(state.db, state.workspace_id);
     const freshLedger = await readLedgerSnapshot(state.db, state.workspace_id);
+
+    let mergedAnswered = newly_answered;
+    if (seedAnsweredPending.length > 0) {
+      const seen = new Set(newly_answered.map((r) => r.id));
+      const merged = [...newly_answered];
+      for (const row of seedAnsweredPending) {
+        if (!seen.has(row.id)) {
+          merged.push(row);
+          seen.add(row.id);
+        }
+      }
+      mergedAnswered = merged;
+      for (const row of seedAnsweredPending) {
+        try {
+          await state.db
+            .from('founder_inbox')
+            .update({ status: 'resolved' })
+            .eq('id', row.id);
+        } catch {
+          /* swallow */
+        }
+      }
+      seedAnsweredPending = [];
+    }
+
     const ranked: RankedPhase[] = rankNextPhase({
       pulse: fresh,
       ledger: freshLedger,
-      newly_answered,
+      newly_answered: mergedAnswered,
       refTimeMs: curRefMs,
     });
-    if (ranked.length === 0) return null;
-    const top = ranked[0];
+    const filtered = ranked.filter(
+      (c) => !picked_keys.has(`${c.mode}|${c.source}|${c.source_id ?? ''}`),
+    );
+    if (filtered.length === 0) return null;
+    const top = filtered[0];
+    picked_keys.add(`${top.mode}|${top.source}|${top.source_id ?? ''}`);
     return {
       phase_id: state.ids.next('phase'),
       mode: top.mode,

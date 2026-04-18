@@ -1,0 +1,9 @@
+SCENARIO: 13-cross-arc-answer-resume
+DESCRIBE: Closed prior arc with one answered (unresolved) inbox row + a low-priority pulse trigger -> new arc picks the founder-answer first.
+INITIAL_SEED: failing_triggers=1; inbox=1
+STEP 0 [tick] // new arc opens; founder-answer outranks the trigger; row resolved
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001:
+    phase_001 mode=plumbing status=phase-closed trios=1 goal="resume after founder answer (fi_cross) [source=founder-answer; id=fi_cross]"
+  inbox: fi_cross->resolved
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=1 open_inbox=0

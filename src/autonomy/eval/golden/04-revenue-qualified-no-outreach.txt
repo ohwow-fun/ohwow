@@ -2,12 +2,7 @@ SCENARIO: 04-revenue-qualified-no-outreach
 DESCRIBE: Only signal is a qualified contact with no outreach -> revenue phase.
 INITIAL_SEED: qualified=1
 STEP 0 [tick]
-  result: ran=true arc=arc_001 status=closed exit=budget
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
   arc arc_001:
     phase_001 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-    phase_002 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-    phase_003 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-    phase_004 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-    phase_005 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-    phase_006 mode=revenue status=phase-closed trios=1 goal="outreach to qualified contact_alice [source=qualified-no-outreach; id=contact_alice]"
-FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=1 open_inbox=0

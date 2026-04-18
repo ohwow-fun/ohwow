@@ -32,9 +32,11 @@ import {
 import {
   answerFounderQuestion,
   listAnsweredFounderInbox,
+  listAnsweredUnresolvedFounderInbox,
   listOpenFounderInbox,
   loadArc,
   loadFounderQuestion,
+  writeFounderQuestion,
   type FounderInboxRecord,
   type PulseSnapshot,
 } from '../director-persistence.js';
@@ -644,6 +646,46 @@ describe('founder-inbox MCP/persistence happy path', () => {
     const reloaded = await loadFounderQuestion(adapter, open[0].id);
     expect(reloaded?.status).toBe('answered');
     expect(reloaded?.answer).toBe('option A');
+  });
+
+  it('listAnsweredUnresolvedFounderInbox returns answered rows regardless of arc (Bug #2)', async () => {
+    // Pre-Phase-6.5 the only available helper was per-arc-scoped, so an
+    // answer that landed after the originating arc closed was stranded.
+    // The workspace-wide variant returns rows in any arc as long as
+    // status='answered' (i.e. answered but not yet resolved).
+    await writeFounderQuestion(adapter, {
+      id: 'fi_x',
+      workspace_id: 'ws-test',
+      arc_id: 'arc_orphan',
+      phase_id: null,
+      mode: 'plumbing',
+      blocker: 'orphan blocker',
+      context: 'orphan context',
+      options: [],
+      recommended: null,
+      screenshot_path: null,
+      asked_at: new Date().toISOString(),
+    });
+    await answerFounderQuestion(adapter, {
+      id: 'fi_x',
+      answer: 'go',
+      answered_at: new Date().toISOString(),
+    });
+    // Per-arc scoped helper still works for the originating arc id.
+    const perArc = await listAnsweredFounderInbox(adapter, 'arc_orphan');
+    expect(perArc.map((r) => r.id)).toEqual(['fi_x']);
+    // Workspace-wide variant finds it without knowing the arc id.
+    const wsWide = await listAnsweredUnresolvedFounderInbox(
+      adapter,
+      'ws-test',
+    );
+    expect(wsWide.map((r) => r.id)).toEqual(['fi_x']);
+    // Different workspace returns nothing.
+    const otherWs = await listAnsweredUnresolvedFounderInbox(
+      adapter,
+      'ws-other',
+    );
+    expect(otherWs).toEqual([]);
   });
 });
 

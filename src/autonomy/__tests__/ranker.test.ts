@@ -230,6 +230,98 @@ describe('rankNextPhase — adjustments', () => {
     expect(b.score - a.score).toBeGreaterThanOrEqual(30);
   });
 
+  it('worst-status-in-window: a recent phase-closed does NOT mask an earlier phase-aborted on the same key (Bug #3)', () => {
+    // Pre-Phase-6.5 the ranker broke on the first key match in
+    // started_at DESC order. So a recent phase-closed shadowed an
+    // earlier phase-aborted, and a flapping bug looked clean. Phase
+    // 6.5 scans up to REGRESSION_LOOKBACK_REPORTS matching reports and
+    // takes the worst status.
+    const pulse = emptyPulse({
+      failing_triggers: [failingTrigger({ id: 'trig_flap', failure_count: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        // Most recent: phase-closed (would have masked under old code).
+        fakeReport({
+          id: 'pr_recent',
+          mode: 'plumbing',
+          goal: 'unstick cron-x-intel [source=failing-trigger; id=trig_flap]',
+          status: 'phase-closed',
+          started_at: new Date(REF_TIME_MS - 8 * 3_600_000).toISOString(),
+        }),
+        // Earlier: phase-aborted (must still be caught).
+        fakeReport({
+          id: 'pr_earlier',
+          mode: 'plumbing',
+          goal: 'unstick cron-x-intel [source=failing-trigger; id=trig_flap]',
+          status: 'phase-aborted',
+          started_at: new Date(REF_TIME_MS - 24 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    const c = out.find((x) => x.source_id === 'trig_flap')!;
+    // Base 40 + novelty 0 (seen) - regression 30 (worst-status=aborted)
+    // = 10. Pre-fix would have been 40 - 0 = 40.
+    expect(c.score).toBe(10);
+  });
+
+  it('worst-status-in-window: phase-partial in window yields -15 when no aborted exists', () => {
+    const pulse = emptyPulse({
+      failing_triggers: [failingTrigger({ id: 'trig_part', failure_count: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        fakeReport({
+          id: 'pr_part',
+          mode: 'plumbing',
+          goal: 'unstick cron-x-intel [source=failing-trigger; id=trig_part]',
+          status: 'phase-partial',
+          started_at: new Date(REF_TIME_MS - 24 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    const c = out.find((x) => x.source_id === 'trig_part')!;
+    // 40 + novelty 0 (seen) - 15 = 25.
+    expect(c.score).toBe(25);
+  });
+
+  it('worst-status-in-window: phase-blocked-on-founder yields -5 when no aborted/partial exists', () => {
+    const pulse = emptyPulse({
+      failing_triggers: [
+        failingTrigger({ id: 'trig_block', failure_count: 0 }),
+      ],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        fakeReport({
+          id: 'pr_block',
+          mode: 'plumbing',
+          goal: 'unstick cron-x-intel [source=failing-trigger; id=trig_block]',
+          status: 'phase-blocked-on-founder',
+          started_at: new Date(REF_TIME_MS - 24 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    const c = out.find((x) => x.source_id === 'trig_block')!;
+    // 40 + novelty 0 (seen) - 5 = 35.
+    expect(c.score).toBe(35);
+  });
+
   it('cadence penalty drops a recently-touched candidate below alternatives', () => {
     const pulse = emptyPulse({
       failing_triggers: [

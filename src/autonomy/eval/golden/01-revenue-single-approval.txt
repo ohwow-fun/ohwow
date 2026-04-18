@@ -1,13 +1,8 @@
 SCENARIO: 01-revenue-single-approval
-DESCRIBE: One pending approval -> revenue arc opens, runs phases until budget cap, exits budget.
+DESCRIBE: One pending approval -> revenue arc opens, runs ONE phase, then exits nothing-queued (per-arc dedupe).
 INITIAL_SEED: approvals=1
-STEP 0 [tick] // first tick should pick the approval
-  result: ran=true arc=arc_001 status=closed exit=budget
+STEP 0 [tick] // first tick should pick the approval exactly once
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
   arc arc_001:
     phase_001 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-    phase_002 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-    phase_003 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-    phase_004 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-    phase_005 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-    phase_006 mode=revenue status=phase-closed trios=1 goal="fire approval ap_demo [source=approval; id=ap_demo]"
-FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=1 open_inbox=0

@@ -1,8 +1,8 @@
 SCENARIO: 09-recent-regression
-DESCRIBE: Failing trigger + prior phase-aborted on the same id 6h ago -> regression penalty applied; still picked (downranked).
-INITIAL_SEED: failing_triggers=1; prior_reports=1
+DESCRIBE: Failing trigger + prior phase-aborted then phase-closed on the same id -> worst-status regression penalty applied; still picked (downranked).
+INITIAL_SEED: failing_triggers=1; prior_reports=2
 STEP 0 [tick]
   result: ran=true arc=arc_001 status=closed exit=nothing-queued
   arc arc_001:
     phase_001 mode=plumbing status=phase-closed trios=1 goal="unstick cron-foo [source=failing-trigger; id=trig_y]"
-FINALS: arcs(open=0 closed=2 aborted=0) phase_reports=2 open_inbox=0
+FINALS: arcs(open=0 closed=2 aborted=0) phase_reports=3 open_inbox=0

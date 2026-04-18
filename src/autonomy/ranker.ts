@@ -1,5 +1,5 @@
 /**
- * Conductor pulse-aware ranker (Phase 5).
+ * Conductor pulse-aware ranker (Phase 5; Phase 6.5 sharpens regression).
  *
  * Mirrors the spec's "Conductor ranking" pseudo-code:
  *   - Tier 1 REVENUE: approvals (100+age_h), rotting deals (80+idle*2),
@@ -12,8 +12,17 @@
  * Per-candidate adjustments:
  *   noveltyBonus              +10 if (mode, source) never appeared in the
  *                             recent phase reports window.
- *   recentRegressionPenalty   -30 if the last touch of that (mode, source)
- *                             returned phase-aborted or phase-partial.
+ *   recentRegressionPenalty   Scans the last REGRESSION_LOOKBACK_REPORTS
+ *                             phase reports matching this candidate's key
+ *                             and returns the WORST-status penalty:
+ *                               any phase-aborted            -> -30
+ *                               else any phase-partial       -> -15
+ *                               else any phase-blocked-on-founder -> -5
+ *                               else (clean / all-closed)    ->   0
+ *                             (Pre-Phase-6.5 it stopped at the first key
+ *                             match, which let a stale phase-closed mask
+ *                             a recent phase-aborted; see Phase 6.5
+ *                             report Bug #3.)
  *   cadencePenalty            -50 if (mode, source) was touched within 4h.
  *
  * Newly-answered founder questions get a hard +200 bias and source
@@ -122,9 +131,17 @@ const DEFAULT_FINDING_LIMIT = 100;
 const NOVELTY_LOOKBACK_HOURS = 72;
 const CADENCE_WINDOW_HOURS = 4;
 const REGRESSION_LOOKBACK_HOURS = 72;
+/**
+ * Bug #3 (Phase 6.5): scan up to this many recent matching reports for
+ * the worst status, instead of stopping at the first match (which let a
+ * recent phase-closed mask an earlier phase-aborted on the same key).
+ */
+export const REGRESSION_LOOKBACK_REPORTS = 7;
 
 const NOVELTY_BONUS = 10;
-const REGRESSION_PENALTY = 30;
+const REGRESSION_PENALTY_ABORTED = 30;
+const REGRESSION_PENALTY_PARTIAL = 15;
+const REGRESSION_PENALTY_BLOCKED = 5;
 const CADENCE_PENALTY = 50;
 const FOUNDER_ANSWER_BONUS = 200;
 
@@ -458,15 +475,26 @@ function recentRegressionPenalty(
   c: RankedPhase,
   ref = nowMs(),
 ): number {
+  // Scan up to REGRESSION_LOOKBACK_REPORTS matching reports inside the
+  // lookback window and take the WORST-status penalty. Pre-Phase-6.5
+  // this broke on the first key match, so a recent phase-closed shadowed
+  // an earlier phase-aborted on the same key.
+  let sawAborted = false;
+  let sawPartial = false;
+  let sawBlocked = false;
+  let scanned = 0;
   for (const r of ledger.recent_phase_reports) {
     if (hoursSince(r.started_at, ref) > REGRESSION_LOOKBACK_HOURS) continue;
     if (reportKey(r) !== candidateKey(c)) continue;
-    if (r.status === 'phase-aborted' || r.status === 'phase-partial') {
-      return REGRESSION_PENALTY;
-    }
-    // Most-recent matching report wins; further rows are older.
-    break;
+    scanned += 1;
+    if (r.status === 'phase-aborted') sawAborted = true;
+    else if (r.status === 'phase-partial') sawPartial = true;
+    else if (r.status === 'phase-blocked-on-founder') sawBlocked = true;
+    if (scanned >= REGRESSION_LOOKBACK_REPORTS) break;
   }
+  if (sawAborted) return REGRESSION_PENALTY_ABORTED;
+  if (sawPartial) return REGRESSION_PENALTY_PARTIAL;
+  if (sawBlocked) return REGRESSION_PENALTY_BLOCKED;
   return 0;
 }
 

@@ -1,29 +1,29 @@
 /**
  * 10-founder-block-resume
  *
- * The full inbox loop within a single arc. Setup:
+ * The full cross-arc inbox loop. Phase 6.5 Bug #2 fix means an answered
+ * inbox row whose originating arc has CLOSED is still picked up by the
+ * next conductor tick (workspace-wide pre-fetch, not per-arc poll).
+ * Setup:
  *   - One pending approval triggers a revenue arc.
  *   - The first plan round returns `needs-input` → orchestrator writes
  *     a `founder_inbox` row keyed to this phase + arc; trio exits
  *     `awaiting-founder`; phase comes back `phase-blocked-on-founder`.
- *   - A mid-arc hook simulates the founder answering the row
- *     (status='answered') between iterations — the live counterpart of
- *     a human invoking `ohwow_answer_founder_inbox`.
- *   - On the next iteration, the Director's `listAnsweredFounderInbox`
- *     surfaces the row in `newly_answered`. The ranker emits a
- *     `founder-answer` candidate at score topPulse + 200; picker picks
- *     it first; the new phase's plan brief carries the answer text.
+ *   - With per-arc dedupe (Bug #1), the picker drops the same approval
+ *     for the rest of this arc and the arc closes `nothing-queued`
+ *     leaving an open inbox row behind.
+ *   - An `answer-founder` step resolves the inbox row to `answered`.
+ *   - A second tick opens a NEW arc. The conductor's workspace-wide
+ *     answered pre-fetch surfaces the row, the picker emits the
+ *     founder-answer candidate at score 200+, and the new arc runs the
+ *     founder-answer phase.
  *
- * Proves: needs-input → founder_inbox row written; in-arc resume via
- * `newly_answered` lifts the answered row to top priority.
- *
- * Within-arc only: cross-arc resume (when the arc closes before the
- * answer lands) is a known gap — see SUGGESTED-RANKER-FIXES in the
- * Phase 6 report.
+ * Proves: needs-input → founder_inbox row written; cross-arc resume via
+ * workspace-wide answered pre-fetch lifts the answered row to top
+ * priority on the next tick.
  */
 import { defaultMakeStubExecutor } from '../../conductor.js';
 import type { RoundBrief, RoundExecutor, RoundReturn } from '../../types.js';
-import { setMidArcHook } from '../mid-arc-hook.js';
 import type { Scenario } from '../types.js';
 
 class NeedsInputOnceExecutor implements RoundExecutor {
@@ -44,15 +44,10 @@ class NeedsInputOnceExecutor implements RoundExecutor {
   }
 }
 
-// makeExecutor returns a fresh instance each call so state (the `fired`
-// flag) resets between the transcript run and the assertions re-run.
-// The harness invokes makeExecutor once per scenario run, so this still
-// preserves "fire once per run" semantics inside a single tick.
-
 const scenario: Scenario = {
   name: '10-founder-block-resume',
   describe:
-    'Plan needs-input -> founder_inbox row -> mid-arc hook answers it -> next iteration picks the founder-answer candidate.',
+    'Tick 1: plan needs-input -> founder_inbox row -> arc closes with row open. answer-founder. Tick 2: new arc picks up the answered row via workspace-wide pre-fetch.',
   initial_seed: {
     approvals: [
       { id: 'ap_block', subject: 'fire blocked DM', age_hours: 6, mode: 'revenue' },
@@ -61,72 +56,85 @@ const scenario: Scenario = {
   steps: [
     {
       kind: 'tick',
-      note: 'tick: needs-input writes inbox; mid-arc hook answers; resume picks founder-answer',
+      note: 'tick 1: needs-input writes inbox; per-arc dedupe means arc exits with the inbox row open',
+    },
+    {
+      kind: 'answer-founder',
+      founder_inbox_id: 'fi_001',
+      founder_answer: 'tighten scope to one caller',
+      note: 'founder answers between ticks',
+    },
+    {
+      kind: 'tick',
+      note: 'tick 2: new arc opens; workspace-wide pre-fetch surfaces fi_001; founder-answer runs first',
     },
   ],
   assertions: [
     async (t) => {
-      // The arc should close (not abort) and at some point have written
-      // an inbox row that ended in resolved (the Director resolves
-      // answered rows on next iteration).
-      const tick = t.steps[0]?.tick_result;
-      if (!tick?.ran) throw new Error('expected tick to run');
-      if (tick.arc_status !== 'closed') {
+      const tick1 = t.steps[0]?.tick_result;
+      if (!tick1?.ran) throw new Error('expected tick 1 to run');
+      if (tick1.arc_status !== 'closed') {
         throw new Error(
-          `expected arc closed, got ${tick.arc_status} (${tick.exit_reason})`,
+          `expected tick 1 arc closed, got ${tick1.arc_status} (${tick1.exit_reason})`,
+        );
+      }
+      // Tick 1's only candidate was the approval; first plan returned
+      // needs-input, leaving the approval as a "picked once" key. The
+      // picker then has nothing else to pick and exits nothing-queued.
+      if (tick1.exit_reason !== 'nothing-queued') {
+        throw new Error(
+          `expected tick 1 exit_reason=nothing-queued (per-arc dedupe), got ${tick1.exit_reason}`,
+        );
+      }
+      const phases1 = t.steps[0]?.arc_summary?.phases ?? [];
+      if (phases1.length !== 1) {
+        throw new Error(
+          `expected exactly 1 phase in tick 1's arc, got ${phases1.length}`,
+        );
+      }
+      if (phases1[0].status !== 'phase-blocked-on-founder') {
+        throw new Error(
+          `expected phase-blocked-on-founder, got ${phases1[0].status}`,
         );
       }
     },
-    async (t, ctx) => {
-      // At least one founder-answer-sourced phase must have run on this
-      // arc, proving the resume path is active.
-      const phases = t.steps[0]?.arc_summary?.phases ?? [];
-      const founderAnswerPhase = phases.find((p) =>
+    async (t) => {
+      const tick2 = t.steps[2]?.tick_result;
+      if (!tick2?.ran) throw new Error('expected tick 2 to run');
+      if (tick2.arc_status !== 'closed') {
+        throw new Error(
+          `expected tick 2 arc closed, got ${tick2.arc_status} (${tick2.exit_reason})`,
+        );
+      }
+      const phases2 = t.steps[2]?.arc_summary?.phases ?? [];
+      const founderAnswerPhase = phases2.find((p) =>
         p.goal.includes('source=founder-answer'),
       );
       if (!founderAnswerPhase) {
         throw new Error(
-          'expected at least one founder-answer-sourced phase; got: ' +
-            phases.map((p) => p.goal).join(' | '),
+          'expected at least one founder-answer-sourced phase in tick 2; got: ' +
+            phases2.map((p) => p.goal).join(' | '),
         );
       }
-      // And the inbox row must be in 'resolved' state by run end.
+    },
+    async (t, ctx) => {
+      // The inbox row must be in 'resolved' state by run end (the
+      // picker resolves seeded rows after merging them).
       const { data } = await ctx.db
         .from<{ id: string; status: string }>('founder_inbox')
         .select('id, status')
-        .eq('workspace_id', ctx.workspace_id);
-      const resolved = (data ?? []).filter((r) => r.status === 'resolved');
-      if (resolved.length === 0) {
-        throw new Error('expected at least one founder_inbox row to be resolved');
+        .eq('workspace_id', ctx.workspace_id)
+        .eq('id', 'fi_001');
+      const row = (data ?? [])[0];
+      if (!row) throw new Error('expected fi_001 inbox row to exist');
+      if (row.status !== 'resolved') {
+        throw new Error(
+          `expected fi_001 to be resolved by tick 2, got ${row.status}`,
+        );
       }
     },
   ],
   makeExecutor: () => new NeedsInputOnceExecutor(),
 };
-
-// Mid-arc hook: after each phase closes, simulate the founder
-// answering any still-open inbox rows. Idempotent: a no-op when no
-// open rows remain. The harness invokes this hook on every iteration,
-// so we don't clear it; subsequent calls find nothing to answer and
-// short-circuit.
-setMidArcHook(scenario.name, async (db, ctx) => {
-  const { data } = await db
-    .from<{ id: string; status: string; asked_at: string }>('founder_inbox')
-    .select('id, status, asked_at')
-    .eq('workspace_id', ctx.workspace_id)
-    .eq('status', 'open')
-    .order('asked_at', { ascending: false })
-    .limit(1);
-  const row = (data ?? [])[0];
-  if (!row) return;
-  await db
-    .from('founder_inbox')
-    .update({
-      status: 'answered',
-      answer: 'tighten scope to one caller',
-      answered_at: ctx.now().toISOString(),
-    })
-    .eq('id', row.id);
-});
 
 export default scenario;

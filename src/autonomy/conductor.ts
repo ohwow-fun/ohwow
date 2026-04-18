@@ -32,9 +32,10 @@ import {
   type PickerOutput,
 } from './director.js';
 import {
-  listAnsweredFounderInbox,
+  listAnsweredUnresolvedFounderInbox,
   listOpenArcs,
   type ArcExitReason,
+  type FounderInboxRecord,
 } from './director-persistence.js';
 import {
   rankNextPhase,
@@ -127,6 +128,21 @@ function genPhaseId(workspace_id: string, mode: string, seq: number): string {
 }
 
 /**
+ * Stable per-pick key. Mirrors `ranker.candidateKey` but lives here too
+ * so the conductor doesn't need to import a private ranker helper.
+ * Bug #1 (Phase 6.5): the picker tracks already-picked keys in this arc
+ * to prevent the same source candidate from running back-to-back inside
+ * one arc. Cadence penalty alone (-50) doesn't suppress an approval at
+ * 100+age_h, so the spec-intent of "one phase per source per arc" was
+ * not enforced. Keys are seeded by every successful pick, including
+ * founder-answer (which still gets +200 priority but cannot stack on
+ * the same inbox row).
+ */
+function pickedKey(p: RankedPhase): string {
+  return `${p.mode}|${p.source}|${p.source_id ?? ''}`;
+}
+
+/**
  * Build the Picker closure that the Director will call on every iteration.
  * Re-reads inbox / pulse / ledger each time so a long-running arc sees
  * fresh signals between phases.
@@ -134,11 +150,34 @@ function genPhaseId(workspace_id: string, mode: string, seq: number): string {
  * Note: Phase 4's Director already lifts `newly_answered` rows out of the
  * inbox before calling the picker, so this closure does NOT need to
  * re-poll for them itself — it just consumes `input.newly_answered`.
+ *
+ * Phase 6.5 additions:
+ *   - `picked_keys` (Bug #1): per-arc memory of every (mode, source,
+ *     source_id) the picker has already returned. Filters them out before
+ *     returning the next pick.
+ *   - `seedAnsweredQueue` (Bug #2): the conductor pre-fetches workspace-
+ *     wide answered inbox rows BEFORE entering `runArc` and seeds them
+ *     here so the FIRST picker call sees answers that originated in a
+ *     prior (now-closed) arc.
  */
-function buildConductorPicker(deps: ConductorDeps): Picker {
+interface ConductorPickerOpts {
+  /**
+   * Workspace-wide answered inbox rows pre-fetched by the conductor.
+   * Drained on the first picker call and merged into the Director's
+   * own per-arc `newly_answered` so the first phase resumes them.
+   */
+  seedAnswered?: FounderInboxRecord[];
+}
+
+function buildConductorPicker(
+  deps: ConductorDeps,
+  opts: ConductorPickerOpts = {},
+): Picker {
   const pulseReader = deps.pulseReader ?? readFullPulse;
   const ledgerReader = deps.ledgerReader ?? readLedgerSnapshot;
   let seq = 0;
+  const picked_keys = new Set<string>();
+  let seedAnsweredPending: FounderInboxRecord[] = opts.seedAnswered ?? [];
 
   return async ({ newly_answered }) => {
     seq += 1;
@@ -163,15 +202,56 @@ function buildConductorPicker(deps: ConductorDeps): Picker {
       ledger = { recent_phase_reports: [], recent_findings: [] };
     }
 
+    // Merge seeded cross-arc answers (drained once) with the Director's
+    // per-arc newly_answered. De-dupe by id.
+    let mergedAnswered = newly_answered;
+    if (seedAnsweredPending.length > 0) {
+      const seen = new Set(newly_answered.map((r) => r.id));
+      const merged = [...newly_answered];
+      for (const row of seedAnsweredPending) {
+        if (!seen.has(row.id)) {
+          merged.push(row);
+          seen.add(row.id);
+        }
+      }
+      mergedAnswered = merged;
+      // Resolve the seeded rows so they don't re-surface on the next
+      // picker call (the in-arc poll won't see them either; arc_id
+      // doesn't match this new arc).
+      for (const row of seedAnsweredPending) {
+        try {
+          await deps.db
+            .from('founder_inbox')
+            .update({ status: 'resolved' })
+            .eq('id', row.id);
+        } catch (err) {
+          logger.warn(
+            {
+              workspace_id: deps.workspace_id,
+              inbox_id: row.id,
+              err: (err as Error).message,
+            },
+            'conductor.seed_answered.resolve.failed',
+          );
+        }
+      }
+      seedAnsweredPending = [];
+    }
+
     const ranked: RankedPhase[] = rankNextPhase({
       pulse,
       ledger,
-      newly_answered,
+      newly_answered: mergedAnswered,
       refTimeMs: deps.refTimeMs,
     });
-    if (ranked.length === 0) return null;
 
-    const top = ranked[0];
+    // Bug #1 (Phase 6.5): drop already-picked keys for this arc so the
+    // same approval / deal / trigger doesn't run back-to-back.
+    const filtered = ranked.filter((c) => !picked_keys.has(pickedKey(c)));
+    if (filtered.length === 0) return null;
+
+    const top = filtered[0];
+    picked_keys.add(pickedKey(top));
     const out: PickerOutput = {
       phase_id: genPhaseId(deps.workspace_id, top.mode, seq),
       mode: top.mode,
@@ -226,6 +306,24 @@ export async function conductorTick(
     );
   }
 
+  // Bug #2 (Phase 6.5): pre-fetch workspace-wide answered+unresolved
+  // inbox rows so the first picker call can resume answers whose arc
+  // closed before the answer landed (e.g. inbox-cap exit). The in-arc
+  // `listAnsweredFounderInbox(arc_id)` still handles within-arc
+  // answers; this seeds the FIRST picker call only.
+  let seedAnswered: FounderInboxRecord[] = [];
+  try {
+    seedAnswered = await listAnsweredUnresolvedFounderInbox(
+      deps.db,
+      deps.workspace_id,
+    );
+  } catch (err) {
+    logger.warn(
+      { workspace_id: deps.workspace_id, err: (err as Error).message },
+      'conductor.answered_inbox.read.failed',
+    );
+  }
+
   // Probe the ranker once to pick the thesis line. The Director will
   // re-call the picker on its first iteration (which will re-read pulse
   // / ledger / newly_answered) and may return a different RankedPhase if
@@ -234,14 +332,14 @@ export async function conductorTick(
   const probe = rankNextPhase({
     pulse,
     ledger,
-    newly_answered: [],
+    newly_answered: seedAnswered,
     refTimeMs: deps.refTimeMs,
   });
   const thesis = probe.length > 0
     ? `autonomous: ${probe[0].goal}`
     : 'autonomous: scan for next-best phase';
 
-  const picker = buildConductorPicker(deps);
+  const picker = buildConductorPicker(deps, { seedAnswered });
   const executor = deps.makeExecutor();
 
   const arcInput: ArcInput = {

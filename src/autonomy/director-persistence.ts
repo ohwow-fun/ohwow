@@ -556,6 +556,36 @@ export async function listAnsweredFounderInbox(
   return (data ?? []).map(rowToFounderInbox);
 }
 
+/**
+ * Workspace-scoped variant of `listAnsweredFounderInbox` (Bug #2,
+ * Phase 6.5). Returns answered-and-unresolved inbox rows regardless of
+ * which arc they originated in. The Conductor uses this BEFORE opening
+ * a new arc to seed the first picker call so a founder answer that
+ * lands after the originating arc closed (e.g. inbox-cap exit) still
+ * gets resumed on the next tick.
+ *
+ * Index coverage: `idx_inbox_workspace_open(workspace_id, status,
+ * asked_at DESC)` from migration 144 already covers this query — no
+ * new index needed.
+ */
+export async function listAnsweredUnresolvedFounderInbox(
+  db: DatabaseAdapter,
+  workspace_id: string,
+): Promise<FounderInboxRecord[]> {
+  const { data, error } = await db
+    .from<FounderInboxRow>('founder_inbox')
+    .select()
+    .eq('workspace_id', workspace_id)
+    .eq('status', 'answered')
+    .order('answered_at', { ascending: true });
+  if (error) {
+    throw new Error(
+      `listAnsweredUnresolvedFounderInbox failed: ${error.message}`,
+    );
+  }
+  return (data ?? []).map(rowToFounderInbox);
+}
+
 export async function loadFounderQuestion(
   db: DatabaseAdapter,
   id: string,

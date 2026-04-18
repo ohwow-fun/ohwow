@@ -1,0 +1,9 @@
+SCENARIO: 12-within-arc-no-double-pick
+DESCRIBE: Two distinct approvals -> both run as separate phases inside one arc; no same-source repeats; arc closes nothing-queued.
+INITIAL_SEED: approvals=2
+STEP 0 [tick] // one arc runs both approvals (older first), then exits nothing-queued
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001:
+    phase_001 mode=revenue status=phase-closed trios=1 goal="fire approval ap_aaa [source=approval; id=ap_aaa]"
+    phase_002 mode=revenue status=phase-closed trios=1 goal="fire approval ap_bbb [source=approval; id=ap_bbb]"
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=2 open_inbox=0

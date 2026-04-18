@@ -201,12 +201,11 @@ describe('conductorTick — flag on, one pending approval', () => {
     const r = await conductorTick(deps);
     expect(r.ran).toBe(true);
     expect(r.arc_status).toBe('closed');
+    // Phase 6.5 contract change (Bug #1): per-arc picked_keys dedupe
+    // means the same approval source cannot re-pick inside one arc, so
+    // the second iteration sees no fresh candidate and exits cleanly.
+    expect(r.exit_reason).toBe('nothing-queued');
 
-    // After the first phase ran, the picker re-reads pulse, which is
-    // *the same stubbed FullPulseSnapshot* (no inbox writes from the
-    // stub executor), so the same approval comes back. The Director's
-    // budget caps will eventually stop it; we just want at least one
-    // phase report row.
     const arcRow = (await listOpenArcs(adapter, 'ws-test')).concat();
     expect(arcRow).toHaveLength(0); // arc closed
 
@@ -215,8 +214,7 @@ describe('conductorTick — flag on, one pending approval', () => {
         'SELECT id, status, mode FROM director_phase_reports WHERE workspace_id = ? ORDER BY started_at',
       )
       .all('ws-test') as Array<{ id: string; status: string; mode: string }>;
-    expect(reports.length).toBeGreaterThanOrEqual(1);
-    // First phase: revenue / approval.
+    expect(reports).toHaveLength(1);
     expect(reports[0].status).toBe('phase-closed');
     expect(reports[0].mode).toBe('revenue');
   });
@@ -300,6 +298,191 @@ describe('startConductorLoop — multiple ticks', () => {
       expect(a.status).toBe('closed');
       expect(a.exit_reason).toBe('nothing-queued');
     }
+  });
+});
+
+describe('conductorTick — within-arc dedupe (Bug #1, Phase 6.5)', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+    vi.stubEnv('OHWOW_AUTONOMY_CONDUCTOR', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rawDb.close();
+  });
+
+  it('one approval drives EXACTLY one phase per arc; second iteration sees no new key and exits nothing-queued', async () => {
+    // Pre-Phase-6.5 the same approval would re-pick to the budget cap (6
+    // phases). With per-arc picked_keys, the picker sees the approval
+    // already-picked and returns null on the second iteration.
+    const deps = makeDeps(adapter, {
+      pulse: emptyPulse({
+        approvals_pending: [
+          {
+            id: 'apr_only',
+            mode: 'revenue',
+            age_hours: 6,
+            subject: 'fire DM approval',
+          },
+        ],
+      }),
+    });
+    const r = await conductorTick(deps);
+    expect(r.ran).toBe(true);
+    expect(r.arc_status).toBe('closed');
+    expect(r.exit_reason).toBe('nothing-queued');
+
+    const reports = rawDb
+      .prepare(
+        'SELECT id, status, mode, goal FROM director_phase_reports WHERE workspace_id = ? ORDER BY started_at',
+      )
+      .all('ws-test') as Array<{
+      id: string;
+      status: string;
+      mode: string;
+      goal: string;
+    }>;
+    expect(reports).toHaveLength(1);
+    expect(reports[0].mode).toBe('revenue');
+    expect(reports[0].goal).toContain('apr_only');
+  });
+
+  it('two distinct approvals -> two phases (one each), then nothing-queued', async () => {
+    // Both approvals must run as separate phases inside one arc; no
+    // same-source repeats. Order: older approval first (higher score).
+    const deps = makeDeps(adapter, {
+      pulse: emptyPulse({
+        approvals_pending: [
+          {
+            id: 'apr_old',
+            mode: 'revenue',
+            age_hours: 24,
+            subject: 'old',
+          },
+          {
+            id: 'apr_new',
+            mode: 'revenue',
+            age_hours: 4,
+            subject: 'new',
+          },
+        ],
+      }),
+    });
+    const r = await conductorTick(deps);
+    expect(r.exit_reason).toBe('nothing-queued');
+    const reports = rawDb
+      .prepare(
+        'SELECT goal FROM director_phase_reports WHERE workspace_id = ? ORDER BY started_at',
+      )
+      .all('ws-test') as Array<{ goal: string }>;
+    expect(reports).toHaveLength(2);
+    expect(reports[0].goal).toContain('apr_old');
+    expect(reports[1].goal).toContain('apr_new');
+  });
+});
+
+describe('conductorTick — cross-arc workspace-wide answered seed (Bug #2, Phase 6.5)', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+    vi.stubEnv('OHWOW_AUTONOMY_CONDUCTOR', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rawDb.close();
+  });
+
+  it('founder-answer on a closed arc is picked up by the next conductor tick (new arc) ahead of pulse work', async () => {
+    // Simulate a previous arc that closed (e.g. inbox-cap exit) leaving
+    // an answered+unresolved row behind. Pre-Phase-6.5 the per-arc
+    // listAnsweredFounderInbox(arc_id) would never see this row in the
+    // new arc; the workspace-wide pre-fetch fixes that.
+    await openArc(adapter, {
+      id: 'arc_prev',
+      workspace_id: 'ws-test',
+      mode_of_invocation: 'autonomous',
+      thesis: 'pre-existing arc',
+      budget_max_phases: 6,
+      budget_max_minutes: 240,
+      budget_max_inbox_qs: 3,
+      kill_on_pulse_regression: true,
+      pulse_at_entry: { ts: new Date().toISOString() },
+      opened_at: new Date(Date.now() - 7200_000).toISOString(),
+    });
+    // Close it via direct UPDATE so listOpenArcs sees no open arc.
+    rawDb
+      .prepare(
+        "UPDATE director_arcs SET status='closed', closed_at=?, exit_reason='founder-returned' WHERE id=?",
+      )
+      .run(new Date().toISOString(), 'arc_prev');
+
+    await writeFounderQuestion(adapter, {
+      id: 'fi_cross',
+      workspace_id: 'ws-test',
+      arc_id: 'arc_prev',
+      phase_id: null,
+      mode: 'plumbing',
+      blocker: 'should we tighten scope?',
+      context: 'cross-arc context',
+      options: [],
+      recommended: null,
+      screenshot_path: null,
+      asked_at: new Date(Date.now() - 3600_000).toISOString(),
+    });
+    await answerFounderQuestion(adapter, {
+      id: 'fi_cross',
+      answer: 'tighten to one caller',
+      answered_at: new Date().toISOString(),
+    });
+
+    // Sanity-check: the seeded answered+unresolved row is visible to
+    // the workspace-wide pre-fetch the conductor will run.
+    const { listAnsweredUnresolvedFounderInbox } = await import(
+      '../director-persistence.js'
+    );
+    const seeded = await listAnsweredUnresolvedFounderInbox(adapter, 'ws-test');
+    expect(seeded.map((r) => r.id)).toContain('fi_cross');
+
+    // New tick with a low-priority pulse signal too.
+    const deps = makeDeps(adapter, {
+      pulse: emptyPulse({
+        failing_triggers: [
+          {
+            id: 'trig_low',
+            class: 'low',
+            failure_count: 0,
+            last_failure_at: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+    const r = await conductorTick(deps);
+    expect(r.ran).toBe(true);
+
+    // The new arc should run a founder-answer phase first. Order by
+    // id (monotonic) to avoid started_at ms collisions on real clock.
+    const newArcId = r.arc_id!;
+    expect(newArcId).not.toBe('arc_prev');
+    const reports = rawDb
+      .prepare(
+        'SELECT id, goal FROM director_phase_reports WHERE arc_id = ? ORDER BY id',
+      )
+      .all(newArcId) as Array<{ id: string; goal: string }>;
+    expect(reports.length).toBeGreaterThanOrEqual(1);
+    expect(reports[0].goal).toContain('source=founder-answer');
+    expect(reports[0].goal).toContain('fi_cross');
+
+    // The seeded inbox row should have been resolved by the picker
+    // (so subsequent picker calls / next tick don't re-process it).
+    const row = rawDb
+      .prepare('SELECT status FROM founder_inbox WHERE id = ?')
+      .get('fi_cross') as { status: string };
+    expect(row.status).toBe('resolved');
   });
 });
 
