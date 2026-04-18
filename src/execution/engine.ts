@@ -65,6 +65,7 @@ import { extractMemories as extractMemoriesFromTask } from './memory-sync.js';
 import { getContextLimit } from './message-summarization.js';
 import { createDefaultToolRegistry } from './tool-dispatch/index.js';
 import type { ToolExecutionContext, ToolCallResult } from './tool-dispatch/index.js';
+import type { BudgetMiddlewareDeps } from './budget-middleware.js';
 import { LocalLLMCache } from './llm-cache.js';
 
 // ============================================================================
@@ -133,6 +134,16 @@ export class RuntimeEngine {
   anthropic: Anthropic | null;
   emitter: TypedEventBus<RuntimeEvents> | null;
   modelRouter: ModelRouter | null;
+  /**
+   * Gap 13 budget-middleware deps. Populated by the daemon init phase
+   * once the SQLite db + EventBus are available. Threaded into every
+   * `ToolExecutionContext` via `buildToolContext` so `llm-executor.ts`
+   * can pass it into `runLlmCall`. Stays null for test harnesses that
+   * do not wire the middleware explicitly.
+   */
+  budgetDeps: BudgetMiddlewareDeps | null = null;
+  /** Per-workspace daily cap override in USD. Undefined = DEFAULT_AUTONOMOUS_SPEND_LIMIT_USD. */
+  budgetLimitUsd: number | undefined = undefined;
   scraplingService: ScraplingService;
   semaphore: Semaphore;
   pendingElicitations = new Map<string, (result: Record<string, unknown> | null) => void>();
@@ -148,6 +159,18 @@ export class RuntimeEngine {
   /** Set the device data fetcher for device-pinned memory retrieval */
   setDeviceFetcher(fetcher: import('../data-locality/fetch-client.js').DeviceDataFetcher): void {
     this.deviceFetcher = fetcher;
+  }
+
+  /**
+   * Wire the gap-13 budget middleware + per-workspace daily cap. Called
+   * by `daemon/init.ts` once the SQLite adapter and EventBus are up.
+   * Every subsequent `buildToolContext` returns a ctx that carries
+   * these deps, so `llm-executor.ts` automatically consults the cap
+   * and fans transitions through the notifier.
+   */
+  setBudgetDeps(deps: BudgetMiddlewareDeps | null, limitUsd?: number): void {
+    this.budgetDeps = deps;
+    this.budgetLimitUsd = limitUsd;
   }
 
   db: DatabaseAdapter;
@@ -231,6 +254,8 @@ export class RuntimeEngine {
       docMountManager: this.docMountManager,
       gitEnabled: opts.gitEnabled,
       modelRouter: this.modelRouter,
+      budgetDeps: this.budgetDeps,
+      budgetLimitUsd: this.budgetLimitUsd,
     };
   }
 

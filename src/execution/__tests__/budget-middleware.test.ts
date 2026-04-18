@@ -216,6 +216,77 @@ describe('budget-middleware threshold chain', () => {
       expect(e.message).not.toMatch(/^Failed to /i);
     }
   });
+
+  it('fires a budget.pause pulse exactly once before throwing BudgetPausedError', async () => {
+    const deps = buildDeps(stubMeter(LIMIT * 0.96), capturePulse);
+    await expect(
+      applyBudgetMiddleware(deps, {
+        workspaceId: WS,
+        limitUsd: LIMIT,
+        origin: 'autonomous',
+        taskClass: 'agentic_coding',
+      }),
+    ).rejects.toBeInstanceOf(BudgetPausedError);
+
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('budget.pause');
+
+    // A second autonomous call on the same day must still throw but
+    // must NOT double-fire the pause pulse (idempotency guard so a
+    // stuck autonomous loop cannot spam the operator toast).
+    await expect(
+      applyBudgetMiddleware(deps, {
+        workspaceId: WS,
+        limitUsd: LIMIT,
+        origin: 'autonomous',
+        taskClass: 'bulk_cost_sensitive',
+      }),
+    ).rejects.toBeInstanceOf(BudgetPausedError);
+    expect(events).toHaveLength(1);
+  });
+
+  it('fires a budget.halt pulse exactly once before throwing BudgetExceededError', async () => {
+    const deps = buildDeps(stubMeter(LIMIT * 1.05), capturePulse);
+    await expect(
+      applyBudgetMiddleware(deps, {
+        workspaceId: WS,
+        limitUsd: LIMIT,
+        origin: 'autonomous',
+        taskClass: 'agentic_coding',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('budget.halt');
+
+    // Second autonomous call over the cap: still throws, pulse
+    // does not double-fire.
+    await expect(
+      applyBudgetMiddleware(deps, {
+        workspaceId: WS,
+        limitUsd: LIMIT,
+        origin: 'autonomous',
+        taskClass: 'hardest_reasoning',
+      }),
+    ).rejects.toBeInstanceOf(BudgetExceededError);
+    expect(events).toHaveLength(1);
+  });
+
+  it('does not fire a pause pulse when bypass=revenue_critical escapes the 95-100% band', async () => {
+    // When the caller opts out of the pause via bypass, the call goes
+    // through (demoted), which means no operator notification should
+    // fire for a pause that never happened. The pulse tracks the
+    // OPERATOR-VISIBLE transition, not the utilization number.
+    const deps = buildDeps(stubMeter(LIMIT * 0.97), capturePulse);
+    const result = await applyBudgetMiddleware(deps, {
+      workspaceId: WS,
+      limitUsd: LIMIT,
+      origin: 'autonomous',
+      taskClass: 'agentic_coding',
+      bypass: 'revenue_critical',
+    });
+    expect(result.demoted).toBe(true);
+    expect(events).toHaveLength(0);
+  });
 });
 
 describe('budget-middleware meter-error isolation (detailed)', () => {

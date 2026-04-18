@@ -54,6 +54,13 @@ const FORWARDED_EVENTS: RuntimeEventName[] = [
   'credits:exhausted',
   'budget:warning',
   'budget:exceeded',
+  // Gap 13 LLM daily cap — four band transitions. See
+  // `src/execution/budget-notifications.ts` for payload shape and
+  // `src/web/src/hooks/useEventToasts.ts` for the render path.
+  'budget:llm-warn',
+  'budget:llm-degrade',
+  'budget:llm-pause',
+  'budget:llm-halt',
 ];
 
 interface WsClient extends WebSocket {

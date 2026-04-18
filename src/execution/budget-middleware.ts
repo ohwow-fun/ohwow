@@ -48,7 +48,39 @@ export interface BudgetDegradeEvent {
   substitutedModel: string;
 }
 
-export type BudgetPulseEvent = BudgetWarnEvent | BudgetDegradeEvent;
+/**
+ * Emitted once per workspace per day when an autonomous call is PAUSED
+ * in the 95-100% band (no revenue_critical bypass). Fires on the same
+ * code path that throws BudgetPausedError so the operator sees the
+ * pause in the dashboard, not just in pino logs.
+ */
+export interface BudgetPauseEvent {
+  type: 'budget.pause';
+  workspaceId: string;
+  spentUsd: number;
+  limitUsd: number;
+  utilization: number;
+}
+
+/**
+ * Emitted once per workspace per day when an autonomous call is HALTED
+ * at 100%+ of the cap. Fires on the same code path that throws
+ * BudgetExceededError. Revenue_critical bypass does NOT escape this
+ * band, so the halt notice is the final operator signal of the day.
+ */
+export interface BudgetHaltEvent {
+  type: 'budget.halt';
+  workspaceId: string;
+  spentUsd: number;
+  limitUsd: number;
+  utilization: number;
+}
+
+export type BudgetPulseEvent =
+  | BudgetWarnEvent
+  | BudgetDegradeEvent
+  | BudgetPauseEvent
+  | BudgetHaltEvent;
 
 /**
  * Thrown when a workspace is between 95% and 100% of its cap and the
@@ -155,10 +187,18 @@ export interface BudgetMiddlewareDeps {
   emitPulse?: (event: BudgetPulseEvent) => void;
 }
 
-/** Simple per-day, per-workspace once-set for pulse de-duplication. */
+/**
+ * Simple per-day, per-workspace once-set for pulse de-duplication.
+ *
+ * `kind` covers all four band transitions — warn (70%), degrade (85%),
+ * pause (95%), halt (100%+). Each fires at most once per workspace per
+ * UTC day, so a stuck autonomous loop cannot spam the operator with
+ * duplicate toasts for the same transition.
+ */
+export type BudgetTransitionKind = 'warn' | 'degrade' | 'pause' | 'halt';
 export interface EmittedTodayTracker {
   /** Returns true and records the emission; false if this key already fired today. */
-  claim(workspaceId: string, kind: 'warn' | 'degrade', now?: number): boolean;
+  claim(workspaceId: string, kind: BudgetTransitionKind, now?: number): boolean;
 }
 
 /** Factory for the default in-memory tracker. Resets naturally as the day turns. */
@@ -223,14 +263,40 @@ export async function applyBudgetMiddleware(
     return { routerDefault: fallbackForUnknownClass, demoted: false };
   }
 
-  // >= 100%: hard halt. bypass flag does NOT escape this band.
+  // >= 100%: hard halt. bypass flag does NOT escape this band. Fire a
+  // one-shot budget.halt pulse so the operator surface (toast, email,
+  // wherever the notifier routes) sees the halt, not just the stderr
+  // pino log that comes from the error throw below.
   if (utilization >= 1.0) {
+    const haltEvent: BudgetHaltEvent = {
+      type: 'budget.halt',
+      workspaceId: input.workspaceId,
+      spentUsd,
+      limitUsd,
+      utilization,
+    };
+    if (deps.emittedToday.claim(input.workspaceId, 'halt', input.now)) {
+      deps.emitPulse?.(haltEvent);
+    }
     throw new BudgetExceededError(input.workspaceId, spentUsd, limitUsd);
   }
 
-  // 95-100%: pause unless bypass='revenue_critical' is set.
+  // 95-100%: pause unless bypass='revenue_critical' is set. Fire a
+  // one-shot budget.pause pulse before the throw so an operator who
+  // did not wire bypass='revenue_critical' still sees the pause land
+  // somewhere user-visible.
   if (utilization >= 0.95) {
     if (input.bypass !== 'revenue_critical') {
+      const pauseEvent: BudgetPauseEvent = {
+        type: 'budget.pause',
+        workspaceId: input.workspaceId,
+        spentUsd,
+        limitUsd,
+        utilization,
+      };
+      if (deps.emittedToday.claim(input.workspaceId, 'pause', input.now)) {
+        deps.emitPulse?.(pauseEvent);
+      }
       throw new BudgetPausedError(input.workspaceId, spentUsd, limitUsd);
     }
     // revenue-critical: pass through, but still demote if eligible.

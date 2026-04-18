@@ -35,6 +35,9 @@ import { ensureInternetDeps } from '../lib/internet-installer.js';
 import { findPythonCommand } from '../lib/platform-utils.js';
 import { RuntimeEngine } from '../execution/engine.js';
 import { installDiaryHook } from '../execution/diary-hook.js';
+import { createBudgetMeter } from '../execution/budget-meter.js';
+import { createEmittedTodayTracker } from '../execution/budget-middleware.js';
+import { createEventBusBudgetNotifier } from '../execution/budget-notifications.js';
 import type { DaemonContext } from './context.js';
 
 export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
@@ -197,6 +200,21 @@ export function createEngine(ctx: Partial<DaemonContext>): void {
   // readable "what did my agents do today" log for the operator. Subscribe
   // on the bus the engine emits through.
   installDiaryHook(bus, rawDb, { dataDir });
+
+  // Gap 13: wire the per-workspace autonomous LLM daily cap middleware.
+  // The meter sums today's `llm_calls.cost_cents` rows (origin='autonomous').
+  // The tracker keeps each of the four band transitions firing at most
+  // once per workspace per UTC day. The notifier adapts pulse events
+  // onto the runtime EventBus as `budget:llm-*` events so the TUI + web
+  // dashboard render them as in-app toasts instead of them living only
+  // in pino logs. Every agent-task LLM call now flows through this
+  // path via `llm-executor.ts` reading `ctx.budgetDeps`.
+  const budgetDeps = {
+    meter: createBudgetMeter(db),
+    emittedToday: createEmittedTodayTracker(),
+    emitPulse: createEventBusBudgetNotifier(bus),
+  };
+  engine.setBudgetDeps(budgetDeps, config.autonomousSpendLimitUsd);
 
   ctx.engine = engine;
 }

@@ -26,6 +26,13 @@ export const llmExecutor: ToolExecutor = {
       };
     }
 
+    // Gap 13: wire the per-workspace autonomous daily cap. Agent-task
+    // invocations default to origin='autonomous' so the meter sums them
+    // toward the cap. When the daemon passes a populated `budgetDeps`,
+    // the middleware will demote or halt the call and the pulse events
+    // will fan out through the EventBus notifier attached in
+    // `daemon/orchestration.ts`. When `budgetDeps` is null (unit test
+    // contexts), the middleware is skipped so legacy tests stay green.
     const result = await runLlmCall(
       {
         modelRouter: ctx.modelRouter,
@@ -33,6 +40,15 @@ export const llmExecutor: ToolExecutor = {
         workspaceId: ctx.workspaceId,
         currentAgentId: ctx.agentId,
         currentTaskId: ctx.taskId,
+        budget: ctx.budgetDeps
+          ? {
+              meter: ctx.budgetDeps.meter,
+              emittedToday: ctx.budgetDeps.emittedToday,
+              emitPulse: ctx.budgetDeps.emitPulse,
+              limitUsd: ctx.budgetLimitUsd,
+              origin: 'autonomous',
+            }
+          : undefined,
       },
       input,
     );

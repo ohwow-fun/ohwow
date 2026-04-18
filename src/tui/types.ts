@@ -230,9 +230,52 @@ export interface RuntimeEvents {
   // Credits
   'credits:exhausted': Record<string, never>;
 
-  // Budget guard
+  // Budget guard (per-agent AutonomyBudget; see budget-guard.ts)
   'budget:warning': { agentId: string; taskId: string; pct: number };
   'budget:exceeded': { agentId: string; taskId: string; reason: string };
+
+  // Gap 13: per-workspace autonomous LLM daily cap — four band
+  // transitions emitted by `applyBudgetMiddleware` and adapted via
+  // `createEventBusBudgetNotifier`. Shape mirrors
+  // `BudgetNotificationPayload` in src/execution/budget-notifications.ts.
+  'budget:llm-warn': {
+    workspaceId: string;
+    band: 'warn';
+    spentUsd: number;
+    limitUsd: number;
+    utilization: number;
+    summary: string;
+    ts: string;
+  };
+  'budget:llm-degrade': {
+    workspaceId: string;
+    band: 'degrade';
+    spentUsd: number;
+    limitUsd: number;
+    utilization: number;
+    taskClass?: string;
+    substitutedModel?: string;
+    summary: string;
+    ts: string;
+  };
+  'budget:llm-pause': {
+    workspaceId: string;
+    band: 'pause';
+    spentUsd: number;
+    limitUsd: number;
+    utilization: number;
+    summary: string;
+    ts: string;
+  };
+  'budget:llm-halt': {
+    workspaceId: string;
+    band: 'halt';
+    spentUsd: number;
+    limitUsd: number;
+    utilization: number;
+    summary: string;
+    ts: string;
+  };
 
   // Presence (phone eye → presence engine)
   'presence:event': { eventType: 'arrival' | 'departure' | 'still_here'; confidence: number; deviceId: string; timestamp: number };

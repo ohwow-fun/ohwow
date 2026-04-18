@@ -15,6 +15,7 @@ import type { DesktopServiceOptions } from '../desktop/desktop-types.js';
 import type { CircuitBreaker } from '../../orchestrator/error-recovery.js';
 import type { DocMountManager } from '../doc-mounts/mount-manager.js';
 import type { ModelRouter } from '../model-router.js';
+import type { BudgetMiddlewareDeps } from '../budget-middleware.js';
 
 /** Context shared across all tool executors for a single task execution */
 export interface ToolExecutionContext {
@@ -47,6 +48,24 @@ export interface ToolExecutionContext {
    * sub-orchestrators instead of being pinned to a single model.
    */
   modelRouter: ModelRouter | null;
+  /**
+   * Gap 13 budget-middleware deps. When set, `llm-executor.ts` passes
+   * them into `runLlmCall` so the per-workspace autonomous daily cap
+   * consults the meter, demotes eligible task classes in the 85-95%
+   * band, and throws BudgetPausedError / BudgetExceededError at the
+   * pause / halt bands. `emitPulse` is wired to the runtime EventBus
+   * via `createEventBusBudgetNotifier` so transitions surface as
+   * in-app toasts instead of living only in pino logs.
+   *
+   * Null/undefined when the daemon boot has not built a meter yet
+   * (e.g. a stripped-down unit test or worker device role without a
+   * DB). `llm-executor.ts` skips the middleware in that case to
+   * preserve the pre-gap-13 back-compat behavior, so legacy tool-
+   * executor tests that construct a bare context still work.
+   */
+  budgetDeps?: BudgetMiddlewareDeps | null;
+  /** Per-workspace daily cap override in USD for the budget middleware. Undefined = DEFAULT_AUTONOMOUS_SPEND_LIMIT_USD. */
+  budgetLimitUsd?: number;
 }
 
 /** Result from a tool execution */

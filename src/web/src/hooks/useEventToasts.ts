@@ -30,6 +30,21 @@ export function useEventToasts() {
       case 'budget:exceeded':
         toast('error', `Budget exceeded: ${d?.reason || 'Limit reached'}`);
         break;
+      // Gap 13 — per-workspace autonomous LLM daily cap. Every payload
+      // carries a `summary` string built by budget-notifications.ts, so
+      // the toast renders verbatim. Severity maps to the band.
+      case 'budget:llm-warn':
+        toast('info', d?.summary || "Today's autonomous LLM spend is approaching the cap.");
+        break;
+      case 'budget:llm-degrade':
+        toast('info', d?.summary || 'Autonomous LLM work is routing to a cheaper model for the rest of the day.');
+        break;
+      case 'budget:llm-pause':
+        toast('error', d?.summary || 'Autonomous LLM work is paused for today. Raise the cap or wait for the day to roll over.');
+        break;
+      case 'budget:llm-halt':
+        toast('error', d?.summary || 'Autonomous LLM work is halted for today. Raise the cap to resume.');
+        break;
       case 'model:switch-started':
         toast('info', `Switching model to ${d?.model || 'new model'}...`);
         break;
