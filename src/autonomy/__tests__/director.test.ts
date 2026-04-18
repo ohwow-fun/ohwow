@@ -818,6 +818,66 @@ describe('founder-inbox HTTP route happy path', () => {
   });
 });
 
+// ----------------------------------------------------------------------------
+// File-mirror hook — fires once per runArc, never fatal
+// ----------------------------------------------------------------------------
+
+describe('runArc — file-mirror hook', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+  });
+  afterEach(() => {
+    rawDb.close();
+  });
+
+  it('mirrorArc fires exactly once on close with the arc_id', async () => {
+    const calls: string[] = [];
+    const baseIO = makeFakeIO();
+    const io: DirectorIO = {
+      ...baseIO,
+      mirrorArc: async (arc_id: string) => {
+        calls.push(arc_id);
+      },
+    };
+    const picker = staticQueuePicker([
+      basePicked({ phase_id: 'phase_A' }),
+      basePicked({ phase_id: 'phase_B' }),
+    ]);
+    const exec = new StubExecutor({
+      plan: [planContinue, planContinue],
+      impl: [implContinue, implContinue],
+      qa: [qaPassed, qaPassed],
+    });
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('closed');
+    expect(calls).toEqual([result.arc_id]);
+  });
+
+  it('mirrorArc throwing does not propagate; runArc still returns the closed result', async () => {
+    const baseIO = makeFakeIO();
+    const io: DirectorIO = {
+      ...baseIO,
+      mirrorArc: async () => {
+        throw new Error('disk full');
+      },
+    };
+    const picker = staticQueuePicker([basePicked()]);
+    const exec = allPassExec();
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('closed');
+    expect(result.exit_reason).toBe('nothing-queued');
+    expect(result.phases_run).toBe(1);
+    expect(result.reports).toHaveLength(1);
+  });
+});
+
 // Silence unused-import lint while keeping the executor types in scope
 // for future extensions of the suite.
 void TrioScriptedExecutor;
