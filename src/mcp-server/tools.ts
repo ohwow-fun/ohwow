@@ -28,6 +28,7 @@ import { registerDocumentTools } from './tools/documents.js';
 import { registerTicketTools } from './tools/tickets.js';
 import { registerBookkeepingTools } from './tools/bookkeeping.js';
 import { registerXDraftTools } from './tools/x-drafts.js';
+import { registerXReplyDraftTools } from './tools/x-reply-drafts.js';
 import { registerXDmDraftTools } from './tools/x-dm-drafts.js';
 import { registerApprovalTools } from './tools/approvals.js';
 
@@ -55,6 +56,7 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerTicketTools(server, client);
   registerBookkeepingTools(server, client);
   registerXDraftTools(server, client);
+  registerXReplyDraftTools(server, client);
   registerXDmDraftTools(server, client);
   registerApprovalTools(server, client);
 }

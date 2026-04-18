@@ -92,6 +92,7 @@ import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
 import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler.js';
 import { ThreadsReplyScheduler } from '../scheduling/threads-reply-scheduler.js';
 import { XReplyScheduler } from '../scheduling/x-reply-scheduler.js';
+import { ReplyDispatcher } from '../scheduling/x-reply-dispatcher.js';
 import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
 import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
@@ -344,6 +345,25 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     });
     xReply.start();
     logger.info('[daemon] x-reply-scheduler started');
+
+    // ReplyDispatchers — 5-min tick consumers that pick up approved rows
+    // from x_reply_drafts and post them via the platform's posting
+    // executor. The schedulers above now write drafts (pending or
+    // auto_applied depending on x_reply.approval_required); these
+    // dispatchers are the only path from draft → published reply. Daily
+    // cap (x_reply.daily_cap / threads_reply.daily_cap, default 10) is
+    // enforced here at dispatch time.
+    const xReplyDispatcher = new ReplyDispatcher({
+      db, workspaceId, workspaceSlug, platform: 'x',
+    });
+    xReplyDispatcher.start();
+    logger.info('[daemon] x-reply-dispatcher started');
+
+    const threadsReplyDispatcher = new ReplyDispatcher({
+      db, workspaceId, workspaceSlug, platform: 'threads',
+    });
+    threadsReplyDispatcher.start();
+    logger.info('[daemon] threads-reply-dispatcher started');
 
     // Market-radar distiller — turns novel market:* findings into
     // candidate X post drafts (stored in x_post_drafts, operator-

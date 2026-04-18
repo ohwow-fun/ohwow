@@ -1,57 +1,135 @@
 /**
- * ThreadsReplyScheduler — 10-minute autonomous Threads reply loop.
+ * ThreadsReplyScheduler — 10-minute autonomous Threads reply pipeline.
  *
- * Pipeline per tick (default every 10 min):
- *   1. Check enablement: runtime_config key `threads_reply.enabled`.
- *      Defaults to true on the `default` workspace.
- *   2. Check daily cap: count posted_log rows where
- *      platform='threads' AND source LIKE 'reply_to:%' AND posted_at
- *      >= start-of-today. If >= cap, skip this tick.
- *   3. Scan: 3 Threads topic searches (default claude code, AI agents,
- *      LLM memory) with filter=recent appended, limit 15 each.
- *   4. Filter + rank via pickReplyTargets (deterministic selector,
- *      with requireTopicMatch=true for noisy search feeds).
- *   5. Walk top-N in score order: for each, enrich with the full
- *      detail-page text (search pages are truncated), then generate
- *      a draft via the calibrated voice. First non-SKIP wins.
- *   6. Publish via threads_compose_reply — which auto-dedups against
- *      posted_log and auto-logs after success.
+ * Mirrors XReplyScheduler but direct-mode only (Threads has no `f=top`
+ * equivalent search tab for viral-piggyback mode, per v1 decision).
  *
- * Reentrancy: single in-flight guard. A slow tick never stacks.
- * Spacing is the tick interval; no separate min-cooldown gate.
+ * Produces draft rows in `x_reply_drafts` (platform='threads'); the
+ * ThreadsReplyDispatcher consumes approved rows and publishes via
+ * threadsPostingExecutor.
  *
- * Failure mode: any exception in a single tick is logged + swallowed;
- * scheduler keeps going. Never takes down the daemon.
- *
- * Workspace guard: designed for the `default` workspace. Other
- * workspaces should wire their own if they want this behavior.
+ * Per tick:
+ *   1. Check enablement (`threads_reply.enabled`, default true).
+ *   2. Load queries (`threads_reply.queries`, default seeded from the
+ *      sandbox direct-ICP set).
+ *   3. Scan each query via scanThreadsPostsViaBrowser.
+ *   4. Dedup against existing drafts.
+ *   5. Filter + score via pickReplyTargets (per-query filters).
+ *   6. Classifier pass (all direct mode on Threads).
+ *   7. For each keeper: enrich via fetchThreadsPostFullText, draft
+ *      (direct mode), voice-gate, insert into x_reply_drafts.
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import { logger } from '../lib/logger.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
-import { scanThreadsPostsViaBrowser, fetchThreadsPostFullText } from '../orchestrator/tools/threads-reply.js';
-import { pickReplyTargets, threadToCandidate } from '../orchestrator/tools/reply-target-selector.js';
+import {
+  scanThreadsPostsViaBrowser,
+  fetchThreadsPostFullText,
+} from '../orchestrator/tools/threads-reply.js';
+import {
+  pickReplyTargets,
+  threadToCandidate,
+  type ReplyCandidate,
+  type SelectorFilters,
+} from '../orchestrator/tools/reply-target-selector.js';
 import { generateReplyCopy } from '../orchestrator/tools/reply-copy-generator.js';
-import { threadsPostingExecutor } from '../execution/tool-dispatch/threads-posting-executor.js';
+import {
+  classifyReplyTargetsBatch,
+  isKeeper,
+  type ReplyClassifierVerdict,
+} from '../orchestrator/tools/reply-target-classifier.js';
+import {
+  insertReplyDraft,
+  findReplyDraftByUrl,
+} from './x-reply-store.js';
 
 // ---------------------------------------------------------------------------
-// Runtime config keys (all optional; sane defaults below)
+// Runtime config keys
 // ---------------------------------------------------------------------------
 
 const CFG_ENABLED = 'threads_reply.enabled';
-const CFG_DAILY_CAP = 'threads_reply.daily_cap';
 const CFG_QUERIES = 'threads_reply.queries';
 const CFG_TOPN = 'threads_reply.topn';
+const CFG_APPROVAL_REQUIRED = 'threads_reply.approval_required';
 
-const DEFAULT_TICK_MS = 10 * 60 * 1000; // 10 minutes
-const DEFAULT_WARMUP_MS = 2 * 60 * 1000; // first tick 2 min after boot
-const DEFAULT_QUERIES = ['claude code', 'AI agents', 'LLM memory'];
-const DEFAULT_DAILY_CAP = 10;
-const DEFAULT_TOPN = 5;
-const SCAN_LIMIT_PER_QUERY = 15;
+const DEFAULT_TICK_MS = 10 * 60 * 1000;
+const DEFAULT_WARMUP_MS = 2 * 60 * 1000;
+const DEFAULT_TOPN = 6;
+const SCAN_LIMIT_PER_QUERY = 20;
 const SCAN_SCROLL_ROUNDS = 3;
+const CLASSIFIER_CONCURRENCY = 8;
+
+// ---------------------------------------------------------------------------
+// Query shape + defaults
+// ---------------------------------------------------------------------------
+
+export interface ThreadsReplyQuery {
+  q: string;
+  /** Direct-only for Threads v1. Retained for schema parity with X. */
+  mode: 'direct';
+  min_likes?: number;
+  min_replies?: number;
+  max_age_hours?: number;
+}
+
+/**
+ * Default direct-ICP query set for Threads (mirrors X direct queries).
+ * Threads' search tab has no `top` sort, so viral-piggyback queries are
+ * deferred to a future iteration.
+ */
+export const DEFAULT_THREADS_REPLY_QUERIES: ThreadsReplyQuery[] = [
+  { q: 'accepting new clients', mode: 'direct' },
+  { q: 'taking on new clients', mode: 'direct' },
+  { q: 'now booking', mode: 'direct' },
+  { q: 'available for freelance', mode: 'direct' },
+  { q: 'looking for more clients', mode: 'direct' },
+  { q: 'open to projects', mode: 'direct' },
+  { q: 'open for commissions', mode: 'direct' },
+  { q: 'as a solopreneur', mode: 'direct' },
+  { q: 'hiring a VA', mode: 'direct' },
+  { q: 'should I hire', mode: 'direct' },
+  { q: 'wish I could clone myself', mode: 'direct' },
+  { q: 'doing everything myself', mode: 'direct' },
+];
+
+function normalizeQueries(raw: unknown): ThreadsReplyQuery[] {
+  if (!Array.isArray(raw)) return DEFAULT_THREADS_REPLY_QUERIES;
+  const out: ThreadsReplyQuery[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      out.push({ q: entry, mode: 'direct' });
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      const obj = entry as Record<string, unknown>;
+      const q = typeof obj.q === 'string' ? obj.q : null;
+      if (!q) continue;
+      out.push({
+        q,
+        mode: 'direct',
+        min_likes: typeof obj.min_likes === 'number' ? obj.min_likes : undefined,
+        min_replies: typeof obj.min_replies === 'number' ? obj.min_replies : undefined,
+        max_age_hours: typeof obj.max_age_hours === 'number' ? obj.max_age_hours : undefined,
+      });
+    }
+  }
+  return out.length > 0 ? out : DEFAULT_THREADS_REPLY_QUERIES;
+}
+
+function filtersFor(q: ThreadsReplyQuery): SelectorFilters {
+  return {
+    excludeHandles: ['ohwow_fun', 'aidreammm'],
+    maxLikes: 500,
+    maxReplies: 40,
+    minLikes: q.min_likes ?? 0,
+    minReplies: q.min_replies ?? 0,
+    maxAgeHours: q.max_age_hours ?? 52,
+    minTextLength: 20,
+    maxPerAuthor: 1,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Class
@@ -62,10 +140,13 @@ export interface ThreadsReplySchedulerOpts {
   engine: RuntimeEngine;
   workspaceId: string;
   workspaceSlug: string;
-  /** Override default 10-minute cadence (tests + fast-mode). */
   tickIntervalMs?: number;
-  /** Override warm-up delay before first tick. */
   warmupMs?: number;
+}
+
+interface TaggedCandidate {
+  candidate: ReplyCandidate;
+  query: ThreadsReplyQuery;
 }
 
 export class ThreadsReplyScheduler {
@@ -107,8 +188,6 @@ export class ThreadsReplyScheduler {
     logger.info('[threads-reply-scheduler] stopped');
   }
 
-  // ---- tick ----
-
   private async tick(trigger: 'warmup' | 'interval'): Promise<void> {
     if (this.stopped) return;
     if (this.ticking) {
@@ -129,137 +208,162 @@ export class ThreadsReplyScheduler {
   }
 
   private async attempt(trigger: 'warmup' | 'interval'): Promise<void> {
-    // 1. Enablement gate
     const enabled = getRuntimeConfig<boolean>(CFG_ENABLED, true);
     if (!enabled) {
       logger.debug('[threads-reply-scheduler] disabled via runtime_config');
       return;
     }
 
-    // 2. Daily cap
-    const dailyCap = getRuntimeConfig<number>(CFG_DAILY_CAP, DEFAULT_DAILY_CAP) || DEFAULT_DAILY_CAP;
-    const todayCount = await this.countRepliesToday();
-    if (todayCount >= dailyCap) {
-      logger.info({ todayCount, dailyCap }, '[threads-reply-scheduler] daily cap reached; skipping');
-      return;
-    }
-
-    // The 10-min interval tick + `ticking` reentrancy guard are the
-    // authoritative spacing. A separate min-cooldown gate used to live
-    // here but was redundant — and introduced a real outage when a
-    // timestamp parse sign-flipped and locked the scheduler indefinitely
-    // (2026-04-17). Dropped.
+    const queries = normalizeQueries(getRuntimeConfig<unknown>(CFG_QUERIES, DEFAULT_THREADS_REPLY_QUERIES));
+    const approvalRequired = getRuntimeConfig<boolean>(CFG_APPROVAL_REQUIRED, true);
+    const topN = getRuntimeConfig<number>(CFG_TOPN, DEFAULT_TOPN) || DEFAULT_TOPN;
 
     logger.info(
-      { trigger, todayCount, dailyCap },
+      { trigger, queries: queries.length, topN, approvalRequired },
       '[threads-reply-scheduler] tick entering scan phase',
     );
 
-    // 4. Scan
-    const queries = getRuntimeConfig<string[]>(CFG_QUERIES, DEFAULT_QUERIES) || DEFAULT_QUERIES;
     const pool = await this.scanPool(queries);
     if (pool.length === 0) {
       logger.info('[threads-reply-scheduler] pool empty; skipping tick');
       return;
     }
 
-    // 5. Filter + rank. Exclude posts we've already replied to via posted_log.
-    const repliedUrls = await this.loadRepliedUrls();
-    const freshPool = pool.filter((c) => !repliedUrls.has(c.url));
+    const draftedUrls = await this.loadDraftedUrls();
+    const freshPool = pool.filter((t) => !draftedUrls.has(t.candidate.url));
+    if (freshPool.length === 0) {
+      logger.info('[threads-reply-scheduler] all pool URLs already have drafts');
+      return;
+    }
 
-    const topN = getRuntimeConfig<number>(CFG_TOPN, DEFAULT_TOPN) || DEFAULT_TOPN;
-    const sel = pickReplyTargets({
-      candidates: freshPool,
-      filters: {
-        excludeHandles: ['ohwow_fun', 'aidreammm'],
-        requireTopicMatch: true,
-        maxAgeHours: 336,
-        maxLikes: 500,
-        maxReplies: 40,
-        minTextLength: 20,
-      },
-      topN,
+    const perQuerySurvivors: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery }> = [];
+    for (const q of queries) {
+      const qPool = freshPool.filter((t) => t.query.q === q.q).map((t) => t.candidate);
+      if (qPool.length === 0) continue;
+      const sel = pickReplyTargets({
+        candidates: qPool,
+        filters: filtersFor(q),
+        topicKeywords: [],
+        topN: 100,
+      });
+      for (const s of sel.accepted) {
+        perQuerySurvivors.push({ candidate: s.candidate, score: s.score, query: q });
+      }
+    }
+    if (perQuerySurvivors.length === 0) {
+      logger.info('[threads-reply-scheduler] no posts survived per-query filters');
+      return;
+    }
+
+    const seenAuthors = new Set<string>();
+    perQuerySurvivors.sort((a, b) => b.score - a.score);
+    const crossDedup = perQuerySurvivors.filter((s) => {
+      const key = (s.candidate.authorHandle || 'unknown').toLowerCase();
+      if (seenAuthors.has(key)) return false;
+      seenAuthors.add(key);
+      return true;
     });
     logger.info(
-      { poolSize: freshPool.length, accepted: sel.accepted.length, topN: sel.topN.length },
-      '[threads-reply-scheduler] selector results',
+      { perQuery: perQuerySurvivors.length, dedupd: crossDedup.length },
+      '[threads-reply-scheduler] survivors after cross-author dedup',
     );
-    if (sel.topN.length === 0) return;
 
-    // 6. Walk top-N, generate first non-SKIP draft.
-    for (const pick of sel.topN) {
-      const { candidate, score } = pick;
-      // Enrich with full text (search snippets are truncated).
-      const full = await fetchThreadsPostFullText(candidate.url).catch(() => null);
-      if (full && full.length > (candidate.text?.length ?? 0)) {
-        candidate.text = full;
+    const classifyBudget = Math.min(crossDedup.length, topN * 3);
+    const toClassify = crossDedup.slice(0, classifyBudget);
+    const verdicts = await classifyReplyTargetsBatch(
+      { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
+      toClassify.map((s) => s.candidate),
+      CLASSIFIER_CONCURRENCY,
+    );
+
+    const keepers: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery; verdict: ReplyClassifierVerdict }> = [];
+    for (let i = 0; i < toClassify.length; i++) {
+      if (isKeeper(verdicts[i])) {
+        keepers.push({ ...toClassify[i], verdict: verdicts[i] });
       }
+    }
+    keepers.sort((a, b) => b.score - a.score);
+
+    logger.info(
+      { classified: toClassify.length, keepers: keepers.length },
+      '[threads-reply-scheduler] classifier results',
+    );
+    if (keepers.length === 0) return;
+
+    const toDraft = keepers.slice(0, topN);
+    let inserted = 0;
+    for (const k of toDraft) {
+      const existing = await findReplyDraftByUrl(this.db, this.workspaceId, k.candidate.url);
+      if (existing) continue;
+
+      // Enrich with full Threads post text — search snippets are truncated.
+      const full = await fetchThreadsPostFullText(k.candidate.url).catch(() => null);
+      const enrichedCandidate: ReplyCandidate = full && full.length > (k.candidate.text?.length ?? 0)
+        ? { ...k.candidate, text: full }
+        : k.candidate;
 
       const gen = await generateReplyCopy(
         { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
-        { target: candidate, platform: 'threads' },
+        { target: enrichedCandidate, platform: 'threads', mode: 'direct' },
       );
       if (!gen.ok) {
-        logger.warn({ err: gen.error, url: candidate.url }, '[threads-reply-scheduler] generator failed');
+        logger.warn({ err: gen.error, url: k.candidate.url }, '[threads-reply-scheduler] generator failed');
         continue;
       }
       if (gen.draft === 'SKIP') {
         logger.info(
-          { url: candidate.url, rationale: gen.rationale },
+          { url: k.candidate.url, rationale: gen.rationale },
           '[threads-reply-scheduler] candidate skipped by generator',
         );
         continue;
       }
 
-      // 7. Publish — the executor path writes posted_log on success
-      //    and dedups against the log before attempting.
-      const result = await threadsPostingExecutor.execute(
-        'threads_compose_reply',
-        {
-          reply_to_url: candidate.url,
-          text: gen.draft!,
-          dry_run: false,
-        },
-        { db: this.db, workspaceId: this.workspaceId } as never,
-      );
-      const parsed = this.safeParse(String(result.content));
-      if (result.is_error || !parsed?.success) {
-        logger.warn(
-          { url: candidate.url, message: parsed?.message },
-          '[threads-reply-scheduler] publish failed; trying next candidate',
+      const row = await insertReplyDraft(this.db, {
+        workspaceId: this.workspaceId,
+        platform: 'threads',
+        replyToUrl: k.candidate.url,
+        replyToAuthor: k.candidate.authorHandle,
+        replyToText: enrichedCandidate.text,
+        replyToLikes: k.candidate.likes,
+        replyToReplies: k.candidate.replies,
+        mode: 'direct',
+        body: gen.draft!,
+        alternates: gen.alternates,
+        verdict: k.verdict,
+        score: k.score,
+        initialStatus: approvalRequired ? 'pending' : 'auto_applied',
+      });
+      if (row) {
+        inserted++;
+        logger.info(
+          { id: row.id, url: k.candidate.url, score: k.score, approvalRequired },
+          '[threads-reply-scheduler] draft inserted',
         );
-        continue;
       }
-      logger.info(
-        { url: candidate.url, score, chars: gen.draft!.length, model: gen.modelUsed },
-        '[threads-reply-scheduler] reply published',
-      );
-      return; // one reply per tick, done
     }
-
-    logger.info('[threads-reply-scheduler] tick completed with no publish (all skipped or failed)');
+    logger.info({ inserted, drafted: toDraft.length }, '[threads-reply-scheduler] tick complete');
   }
 
   // ---- helpers ----
 
-  private async scanPool(queries: string[]) {
-    const pool = [] as ReturnType<typeof threadToCandidate>[];
+  private async scanPool(queries: ThreadsReplyQuery[]): Promise<TaggedCandidate[]> {
+    const pool: TaggedCandidate[] = [];
     const seen = new Set<string>();
     for (const q of queries) {
       try {
         const res = await scanThreadsPostsViaBrowser({
-          source: `search:${q}`,
+          source: `search:${q.q}`,
           limit: SCAN_LIMIT_PER_QUERY,
           scrollRounds: SCAN_SCROLL_ROUNDS,
         });
         for (const p of res.posts.map(threadToCandidate)) {
           if (seen.has(p.id)) continue;
           seen.add(p.id);
-          pool.push(p);
+          pool.push({ candidate: p, query: q });
         }
       } catch (err) {
         logger.warn(
-          { err: err instanceof Error ? err.message : err, q },
+          { err: err instanceof Error ? err.message : err, q: q.q },
           '[threads-reply-scheduler] scan query failed',
         );
       }
@@ -267,41 +371,17 @@ export class ThreadsReplyScheduler {
     return pool;
   }
 
-  private async loadRepliedUrls(): Promise<Set<string>> {
+  private async loadDraftedUrls(): Promise<Set<string>> {
     try {
       const { data } = await this.db
-        .from<{ source: string }>('posted_log')
-        .select('source')
+        .from<{ reply_to_url: string }>('x_reply_drafts')
+        .select('reply_to_url')
+        .eq('workspace_id', this.workspaceId)
         .eq('platform', 'threads');
       const rows = Array.isArray(data) ? data : [];
-      const urls = new Set<string>();
-      for (const r of rows) {
-        if (r.source?.startsWith('reply_to:')) urls.add(r.source.slice('reply_to:'.length));
-      }
-      return urls;
+      return new Set(rows.map((r) => r.reply_to_url).filter(Boolean));
     } catch {
       return new Set<string>();
     }
-  }
-
-  private async countRepliesToday(): Promise<number> {
-    try {
-      const startOfDay = new Date();
-      startOfDay.setUTCHours(0, 0, 0, 0);
-      const { data } = await this.db
-        .from<{ source: string; posted_at: string }>('posted_log')
-        .select('source,posted_at')
-        .eq('platform', 'threads')
-        .gte('posted_at', startOfDay.toISOString());
-      const rows = Array.isArray(data) ? data : [];
-      // Filter reply_to:* in JS — adapter has no LIKE.
-      return rows.filter((r) => r.source?.startsWith('reply_to:')).length;
-    } catch {
-      return 0;
-    }
-  }
-
-  private safeParse(s: string): { success?: boolean; message?: string } | null {
-    try { return JSON.parse(s); } catch { return null; }
   }
 }

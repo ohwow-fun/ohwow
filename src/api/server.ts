@@ -55,6 +55,7 @@ import { createPermissionRequestsRouter } from './routes/permission-requests.js'
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createXDraftsRouter } from './routes/x-drafts.js';
+import { createXReplyDraftsRouter } from './routes/x-reply-drafts.js';
 import { createContentQueueRouter } from './routes/content-queue.js';
 import { createXDmDraftsRouter } from './routes/x-dm-drafts.js';
 import { createPulseRouter } from './routes/pulse.js';
@@ -615,6 +616,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createExpensesRouter(db, eventBus));
   app.use(createTimeTrackingRouter(db, eventBus));
   app.use(createXDraftsRouter(db, workspaceId || 'local'));
+  app.use(createXReplyDraftsRouter(db, workspaceId || 'local'));
   app.use(createContentQueueRouter(db));
   app.use(createXDmDraftsRouter(db));
   app.use(createPulseRouter(rawDb, startTime, config.dataDir));
