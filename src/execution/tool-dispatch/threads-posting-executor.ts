@@ -30,6 +30,7 @@ import {
 } from '../browser/chrome-profile-router.js';
 import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
 import { withProfileLock } from '../browser/profile-mutex.js';
+import { withTabRecovery } from '../browser/tab-recovery.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
@@ -123,9 +124,23 @@ export const threadsPostingExecutor: ToolExecutor = {
     // sequence so two concurrent tasks on the same profile don't both
     // see "no match" and open duplicate windows.
     const claimOwner = ctx.taskId;
-    let expectedBrowserContextId: string | undefined;
+    // Tracks the fresh tab we opened (if any) on the most recent acquire
+    // attempt so the post-run cleanup can close it when the composer
+    // failed. Updated each attempt; earlier attempts' ids are no longer
+    // live (destroyed by whatever killed the tab).
     let freshTargetId: string | null = null;
-    try {
+
+    async function acquireThreadsTab(): Promise<{
+      page: { expectedBrowserContextId: string | undefined };
+      targetId: string;
+      release: () => void;
+    }> {
+      // Clear any claim from a previous attempt so findReusable isn't
+      // confused by our own stale ownership under this owner.
+      releaseAllForOwner(claimOwner);
+      freshTargetId = null;
+      let localContextId: string | undefined;
+      let localFreshTargetId: string | null = null;
       await withProfileLock(target.directory, async () => {
         await ensureDebugChrome({ preferredProfile: target.directory });
         const reusable = await findReusableTabForHost({
@@ -135,7 +150,7 @@ export const threadsPostingExecutor: ToolExecutor = {
           resetUrl: 'https://www.threads.com/',
         });
         if (reusable) {
-          expectedBrowserContextId = reusable.browserContextId ?? undefined;
+          localContextId = reusable.browserContextId ?? undefined;
           reusable.page.close();
           reusable.closeBrowser();
           return;
@@ -145,8 +160,8 @@ export const threadsPostingExecutor: ToolExecutor = {
           profileDir: target.directory,
           url: 'https://www.threads.com/',
         });
-        expectedBrowserContextId = opened.browserContextId ?? undefined;
-        freshTargetId = opened.targetId;
+        localContextId = opened.browserContextId ?? undefined;
+        localFreshTargetId = opened.targetId;
         const claim = claimTarget(
           { profileDir: target.directory, targetId: opened.targetId },
           claimOwner,
@@ -160,9 +175,16 @@ export const threadsPostingExecutor: ToolExecutor = {
           throw new Error('Couldn\'t claim threads.com tab (racing task holds it). Retry.');
         }
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { content: `Error: Couldn't open Chrome profile for Threads: ${msg}`, is_error: true };
+      freshTargetId = localFreshTargetId;
+      return {
+        page: { expectedBrowserContextId: localContextId },
+        targetId: localFreshTargetId ?? 'reused',
+        release: () => {
+          // Release task-scoped claims so retries can re-claim a fresh
+          // tab. Safe to call when no claim was created (returns 0).
+          releaseAllForOwner(claimOwner);
+        },
+      };
     }
 
     // ---- 3. Read expected handle for identity verification ----
@@ -193,64 +215,77 @@ export const threadsPostingExecutor: ToolExecutor = {
     const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
 
     try {
-      result = await withTimeout(`threads-posting:${toolName}`, timeoutMs, async () => {
-        if (toolName === 'threads_compose_post') {
-          return composeThreadsPostViaBrowser({
-            text: String(input.text || ''),
-            dryRun,
-            expectedHandle,
-            expectedBrowserContextId,
+      // Acquisition runs inside `withTabRecovery` so a tab closed
+      // mid-call triggers a re-acquire + retry. Stage-boundary log
+      // lines make the retry trail visible in daemon logs.
+      logger.debug({ tool: toolName, taskId: ctx.taskId }, '[threads-posting-executor] acquiring threads.com tab');
+      result = await withTabRecovery(
+        { acquire: acquireThreadsTab, label: 'threads-posting', maxRetries: 2 },
+        async ({ expectedBrowserContextId }) => {
+          logger.debug(
+            { tool: toolName, taskId: ctx.taskId, ctx: expectedBrowserContextId?.slice(0, 8) },
+            '[threads-posting-executor] tab acquired; dispatching composer',
+          );
+          return withTimeout(`threads-posting:${toolName}`, timeoutMs, async () => {
+            if (toolName === 'threads_compose_post') {
+              return composeThreadsPostViaBrowser({
+                text: String(input.text || ''),
+                dryRun,
+                expectedHandle,
+                expectedBrowserContextId,
+              });
+            }
+            if (toolName === 'threads_compose_thread') {
+              const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
+              return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId });
+            }
+            if (toolName === 'threads_scan_posts') {
+              const scanned = await scanThreadsPostsViaBrowser({
+                source: String(input.source || ''),
+                limit: typeof input.limit === 'number' ? input.limit : undefined,
+                scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
+                expectedBrowserContextId,
+              });
+              return {
+                success: scanned.success,
+                message: scanned.message,
+                screenshotBase64: scanned.screenshotBase64,
+                currentUrl: scanned.currentUrl,
+                threads: scanned.posts as unknown[],
+              };
+            }
+            if (toolName === 'threads_compose_reply') {
+              return composeThreadsReplyViaBrowser({
+                replyToUrl: String(input.reply_to_url || ''),
+                text: String(input.text || ''),
+                dryRun,
+                expectedHandle,
+                expectedBrowserContextId,
+                db: ctx.db,
+                workspaceId: ctx.workspaceId,
+              });
+            }
+            if (toolName === 'threads_delete_reply') {
+              const del = await deleteThreadsReplyViaBrowser({
+                postUrl: String(input.post_url || ''),
+                authorHandle: String(input.author_handle || ''),
+                containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
+                index: typeof input.index === 'number' ? input.index : undefined,
+                dryRun,
+                expectedBrowserContextId,
+              });
+              return {
+                success: del.success,
+                message: del.message,
+                screenshotBase64: del.screenshotBase64,
+                currentUrl: del.currentUrl,
+              };
+            }
+            // threads_read_profile
+            return readThreadsProfileViaBrowser({ expectedBrowserContextId });
           });
-        }
-        if (toolName === 'threads_compose_thread') {
-          const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
-          return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId });
-        }
-        if (toolName === 'threads_scan_posts') {
-          const scanned = await scanThreadsPostsViaBrowser({
-            source: String(input.source || ''),
-            limit: typeof input.limit === 'number' ? input.limit : undefined,
-            scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
-            expectedBrowserContextId,
-          });
-          return {
-            success: scanned.success,
-            message: scanned.message,
-            screenshotBase64: scanned.screenshotBase64,
-            currentUrl: scanned.currentUrl,
-            threads: scanned.posts as unknown[],
-          };
-        }
-        if (toolName === 'threads_compose_reply') {
-          return composeThreadsReplyViaBrowser({
-            replyToUrl: String(input.reply_to_url || ''),
-            text: String(input.text || ''),
-            dryRun,
-            expectedHandle,
-            expectedBrowserContextId,
-            db: ctx.db,
-            workspaceId: ctx.workspaceId,
-          });
-        }
-        if (toolName === 'threads_delete_reply') {
-          const del = await deleteThreadsReplyViaBrowser({
-            postUrl: String(input.post_url || ''),
-            authorHandle: String(input.author_handle || ''),
-            containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
-            index: typeof input.index === 'number' ? input.index : undefined,
-            dryRun,
-            expectedBrowserContextId,
-          });
-          return {
-            success: del.success,
-            message: del.message,
-            screenshotBase64: del.screenshotBase64,
-            currentUrl: del.currentUrl,
-          };
-        }
-        // threads_read_profile
-        return readThreadsProfileViaBrowser({ expectedBrowserContextId });
-      });
+        },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (err instanceof TimeoutError) {
