@@ -70,6 +70,22 @@ export class LocalScheduler {
   private biosDeferCheck: (() => boolean) | null = null;
   /** Last epoch-ms a defer was logged; used to coalesce spam when the gate is stuck true. */
   private lastDeferLogMs = 0;
+  /**
+   * Global bounded concurrency gate for scheduled automation dispatch.
+   * Complements the per-profile mutex (profile-mutex.ts) added in commit 3:
+   * within a profile everything serializes, but without a global cap N
+   * profiles would each start in parallel, flooding CPU/CDP when a burst
+   * of schedules all come due in the same tick. Cap defaults to 3; overflow
+   * defers to the next tick (cron-paced) rather than blocking.
+   */
+  private readonly runningAutomations = new Set<Promise<unknown>>();
+
+  /** Read the automation concurrency cap from env, clamped to a sane positive default. */
+  private get automationConcurrency(): number {
+    const raw = process.env.OHWOW_AUTOMATION_CONCURRENCY;
+    const n = raw ? Number.parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 3;
+  }
 
   get isRunning(): boolean {
     return this.running;
@@ -342,6 +358,8 @@ export class LocalScheduler {
 
       if (!triggers) return;
 
+      const cap = this.automationConcurrency;
+
       for (const row of triggers ?? []) {
         try {
           const config = parseTriggerConfig(row.trigger_config);
@@ -358,11 +376,29 @@ export class LocalScheduler {
           );
           if (!nextRun || nextRun > now) continue;
 
+          // Global concurrency cap: complement commit 3's per-profile mutex so a
+          // burst of due schedules does not flood Chrome/CDP/CPU across profiles.
+          // The scheduler ticks on a cron + 5m heartbeat, so deferred rows stay
+          // past-due (last_fired_at is only updated inside executeById) and get
+          // picked up on the next tick. `break` rather than `continue` keeps
+          // dispatch order stable and avoids wasted cron parses on the tail.
+          if (this.runningAutomations.size >= cap) {
+            logger.debug(
+              `[LocalScheduler] Concurrency cap hit (${this.runningAutomations.size}/${cap}); deferring ${row.id} to next tick`,
+            );
+            break;
+          }
+
           // Fire the automation via trigger evaluator
           logger.info(`[LocalScheduler] Firing scheduled automation: ${row.name} (${cron})`);
-          this.triggerEvaluator!.executeById(row.id).catch((err) => {
-            logger.error(`[LocalScheduler] Automation schedule ${row.id} error: ${err}`);
-          });
+          const p: Promise<unknown> = this.triggerEvaluator!.executeById(row.id)
+            .catch((err) => {
+              logger.error(`[LocalScheduler] Automation schedule ${row.id} error: ${err}`);
+            })
+            .finally(() => {
+              this.runningAutomations.delete(p);
+            });
+          this.runningAutomations.add(p);
         } catch (err) {
           logger.error(`[LocalScheduler] Error evaluating automation schedule ${row.id}: ${err}`);
         }
