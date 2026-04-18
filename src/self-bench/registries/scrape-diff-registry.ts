@@ -76,10 +76,18 @@ export const SCRAPE_DIFF_REGISTRY: readonly ScrapeDiffProbeConfig[] = [
   },
   {
     id: 'scrape-diff:hn-local-first-ai',
-    name: 'HN — "local-first AI" last 24h',
-    url: 'https://hn.algolia.com/?q=local-first+AI&dateRange=pastDay',
+    name: 'HN — "local-first AI" Algolia JSON',
+    url: 'https://hn.algolia.com/api/v1/search_by_date?query=local-first%20AI&tags=story&hitsPerPage=20',
     subjectKey: 'market:hn.algolia.com/local-first-AI',
     category: 'business_outcome',
     hypothesis: 'HN conversation on local-first AI surfaces positioning signal.',
+  },
+  {
+    id: 'scrape-diff:hn-ai-agent-pain',
+    name: 'HN — AI-agent pain-phrase search',
+    url: 'https://hn.algolia.com/api/v1/search_by_date?query=AI%20agent&tags=story&hitsPerPage=20',
+    subjectKey: 'market:hn.algolia.com/ai-agent-pain',
+    category: 'business_outcome',
+    hypothesis: 'New HN stories about AI agents surface founder pain we can speak to.',
   },
 ];
