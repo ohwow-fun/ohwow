@@ -249,4 +249,51 @@ describe('gap 13 follow-up 1b: interactive origin tagging', () => {
       );
     });
   });
+
+  describe('direct-telemetry agent loops (gap 13)', () => {
+    // Both of these agent-dispatch loops bypass runLlmCall and write
+    // llm_calls rows directly through recordLlmCallTelemetry. Their
+    // rows are autonomous by definition — the dispatcher invoked them
+    // outside any interactive human loop. recordLlmCallTelemetry's
+    // deps default is already 'autonomous', but we pin the literal at
+    // each site so the gap-13 audit story is grep-complete: a reader
+    // searching for `origin: 'autonomous'` finds every agent loop.
+    //
+    // These canaries fail if either site stops emitting the literal.
+    // Source-grep (not behavioral) mirrors the openrouter canary above
+    // so we don't have to stand up either full loop to assert a deps
+    // field shape.
+
+    it("model-router-loop.ts pins origin='autonomous' on the telemetry write", async () => {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const filePath = path.resolve(
+        __dirname,
+        '../model-router-loop.ts',
+      );
+      const src = await fs.readFile(filePath, 'utf8');
+
+      // Only one recordLlmCallTelemetry site in this file; its deps
+      // literal MUST carry `origin: 'autonomous'` for grep-auditability.
+      expect(src).toMatch(
+        /recordLlmCallTelemetry\(\s*\{[^}]*origin:\s*'autonomous'[^}]*\}/,
+      );
+    });
+
+    it("react-loop.ts pins origin='autonomous' on the telemetry write", async () => {
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const filePath = path.resolve(
+        __dirname,
+        '../react-loop.ts',
+      );
+      const src = await fs.readFile(filePath, 'utf8');
+
+      // Only one recordLlmCallTelemetry site in this file; its deps
+      // literal MUST carry `origin: 'autonomous'` for grep-auditability.
+      expect(src).toMatch(
+        /recordLlmCallTelemetry\(\s*\{[^}]*origin:\s*'autonomous'[^}]*\}/,
+      );
+    });
+  });
 });
