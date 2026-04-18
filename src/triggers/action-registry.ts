@@ -22,6 +22,7 @@ import { sendNotificationDispatcher } from './dispatchers/send-notification.js';
 import { fillPdfDispatcher } from './dispatchers/fill-pdf.js';
 import { generatePptxDispatcher } from './dispatchers/generate-pptx.js';
 import { generateXlsxDispatcher } from './dispatchers/generate-xlsx.js';
+import { generateDocxDispatcher } from './dispatchers/generate-docx.js';
 import { saveAttachmentDispatcher } from './dispatchers/save-attachment.js';
 import { takeScreenshotDispatcher } from './dispatchers/take-screenshot.js';
 import { agentPromptDispatcher } from './dispatchers/agent-prompt.js';
@@ -72,6 +73,7 @@ export function createDefaultRegistry(): ActionDispatcherRegistry {
   registry.register(fillPdfDispatcher);
   registry.register(generatePptxDispatcher);
   registry.register(generateXlsxDispatcher);
+  registry.register(generateDocxDispatcher);
   registry.register(saveAttachmentDispatcher);
   registry.register(takeScreenshotDispatcher);
   registry.register(agentPromptDispatcher);

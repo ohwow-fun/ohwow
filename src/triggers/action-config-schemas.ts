@@ -182,6 +182,40 @@ export const GenerateXlsxConfigSchema = z.object({
   auto_save: z.boolean().optional(),
 });
 
+export const GenerateDocxConfigSchema = z.object({
+  title: z.string().optional(),
+  author: z.string().optional(),
+  blocks: z.array(z.union([
+    z.object({
+      type: z.literal('heading'),
+      level: z.union([
+        z.literal(1),
+        z.literal(2),
+        z.literal(3),
+        z.literal(4),
+        z.literal(5),
+        z.literal(6),
+      ]),
+      text: z.string(),
+    }),
+    z.object({
+      type: z.literal('paragraph'),
+      runs: z.array(z.object({
+        text: z.string(),
+        bold: z.boolean().optional(),
+        italic: z.boolean().optional(),
+        underline: z.boolean().optional(),
+      })),
+    }),
+    z.object({
+      type: z.literal('bullets'),
+      items: z.array(z.string()),
+    }),
+  ])).min(1),
+  filename: z.string().optional(),
+  auto_save: z.boolean().optional(),
+});
+
 export const RunInternalConfigSchema = z.object({
   /** Name of the handler to invoke. Must be registered via registerInternalHandler() on daemon boot. */
   handler_name: z.string().min(1),
@@ -214,6 +248,7 @@ export type GenerateChartConfig = z.infer<typeof GenerateChartConfigSchema>;
 export type ShellScriptConfig = z.infer<typeof ShellScriptConfigSchema>;
 export type GeneratePptxConfig = z.infer<typeof GeneratePptxConfigSchema>;
 export type GenerateXlsxConfig = z.infer<typeof GenerateXlsxConfigSchema>;
+export type GenerateDocxConfig = z.infer<typeof GenerateDocxConfigSchema>;
 export type RunInternalConfig = z.infer<typeof RunInternalConfigSchema>;
 
 // ============================================================================
@@ -241,6 +276,7 @@ export interface ActionConfigMap {
   shell_script: ShellScriptConfig;
   generate_pptx: GeneratePptxConfig;
   generate_xlsx: GenerateXlsxConfig;
+  generate_docx: GenerateDocxConfig;
   run_internal: RunInternalConfig;
 }
 
@@ -267,5 +303,6 @@ export const ACTION_CONFIG_SCHEMAS: Record<ActionType, z.ZodType> = {
   shell_script: ShellScriptConfigSchema,
   generate_pptx: GeneratePptxConfigSchema,
   generate_xlsx: GenerateXlsxConfigSchema,
+  generate_docx: GenerateDocxConfigSchema,
   run_internal: RunInternalConfigSchema,
 };
