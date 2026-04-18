@@ -1,0 +1,7 @@
+SCENARIO: 08-cadence-cooldown
+DESCRIBE: Tooling friction + recent matching phase report -> cadence drops it below zero, nothing queued.
+INITIAL_SEED: findings=2; prior_reports=1
+STEP 0 [tick] // cadence should suppress the tooling candidate to nothing-queued
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001: (no phases)
+FINALS: arcs(open=0 closed=2 aborted=0) phase_reports=1 open_inbox=0

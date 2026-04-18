@@ -1,0 +1,14 @@
+SCENARIO: 10-founder-block-resume
+DESCRIBE: Plan needs-input -> founder_inbox row -> mid-arc hook answers it -> next iteration picks the founder-answer candidate.
+INITIAL_SEED: approvals=1
+STEP 0 [tick] // tick: needs-input writes inbox; mid-arc hook answers; resume picks founder-answer
+  result: ran=true arc=arc_001 status=closed exit=budget
+  arc arc_001:
+    phase_001 mode=revenue status=phase-blocked-on-founder trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+    phase_002 mode=revenue status=phase-closed trios=1 goal="resume after founder answer (fi_001) [source=founder-answer; id=fi_001]"
+    phase_003 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+    phase_004 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+    phase_005 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+    phase_006 mode=revenue status=phase-closed trios=1 goal="fire approval ap_block [source=approval; id=ap_block]"
+  inbox: fi_001->resolved
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0

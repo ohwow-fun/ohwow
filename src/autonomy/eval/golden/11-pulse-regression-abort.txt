@@ -1,0 +1,8 @@
+SCENARIO: 11-pulse-regression-abort
+DESCRIBE: Arc opens with mrr=10000; mid-arc hook drops mrr to 8000; next iteration trips kill_on_pulse_regression and arc aborts pulse-ko.
+INITIAL_SEED: approvals=1; vitals(mrr=10000)
+STEP 0 [tick] // arc opens; mid-arc hook injects mrr=8000; second iteration aborts pulse-ko
+  result: ran=true arc=arc_001 status=aborted exit=pulse-ko
+  arc arc_001:
+    phase_001 mode=revenue status=phase-closed trios=1 goal="fire approval ap_kill [source=approval; id=ap_kill]"
+FINALS: arcs(open=0 closed=0 aborted=1) phase_reports=1 open_inbox=0

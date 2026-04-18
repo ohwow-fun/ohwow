@@ -1,0 +1,7 @@
+SCENARIO: 00-empty-quiet
+DESCRIBE: Empty pulse: tick opens an arc that closes with nothing-queued and no phase reports.
+INITIAL_SEED: empty
+STEP 0 [tick] // baseline empty tick
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001: (no phases)
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=0 open_inbox=0

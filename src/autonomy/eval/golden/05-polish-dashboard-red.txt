@@ -1,0 +1,8 @@
+SCENARIO: 05-polish-dashboard-red
+DESCRIBE: Dashboard smoke fail in last 24h -> polish-mode arc keyed off the failure surface.
+INITIAL_SEED: findings=1
+STEP 0 [tick]
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001:
+    phase_001 mode=polish status=phase-closed trios=1 goal="polish /dashboard/agents [source=dashboard-red; id=/dashboard/agents]"
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=1 open_inbox=0

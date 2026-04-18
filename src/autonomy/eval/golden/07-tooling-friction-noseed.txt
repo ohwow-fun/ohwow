@@ -1,0 +1,7 @@
+SCENARIO: 07-tooling-friction-noseed
+DESCRIBE: Empty pulse + no tooling-friction findings -> tooling never picked, arc no-ops.
+INITIAL_SEED: empty
+STEP 0 [tick]
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001: (no phases)
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=0 open_inbox=0

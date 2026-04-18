@@ -71,6 +71,8 @@
     "probe-loop-health": "tsx scripts/probe-loop-health.ts",
     "regen:migration-registry": "node scripts/regen-migration-schema-registry.mjs",
     "check:migration-registry": "node scripts/regen-migration-schema-registry.mjs --check",
+    "autonomy:eval": "tsx scripts/autonomy-eval.ts",
+    "autonomy:eval:update": "tsx scripts/autonomy-eval.ts --update",
     "prepare": "husky || true"
   },
   "lint-staged": {

@@ -1,0 +1,13 @@
+SCENARIO: 03-revenue-rotting-deal
+DESCRIBE: No approvals + one rotting deal -> revenue arc keyed off deal id.
+INITIAL_SEED: deals=1
+STEP 0 [tick]
+  result: ran=true arc=arc_001 status=closed exit=budget
+  arc arc_001:
+    phase_001 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+    phase_002 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+    phase_003 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+    phase_004 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+    phase_005 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+    phase_006 mode=revenue status=phase-closed trios=1 goal="move deal deal_alpha [source=rotting-deal; id=deal_alpha]"
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0

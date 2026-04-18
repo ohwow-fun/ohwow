@@ -1,0 +1,13 @@
+SCENARIO: 02-revenue-two-approvals-age-tiebreak
+DESCRIBE: Two approvals: ranker picks the older one first by age score (100 + age_hours).
+INITIAL_SEED: approvals=2
+STEP 0 [tick] // tick should pick the older approval first
+  result: ran=true arc=arc_001 status=closed exit=budget
+  arc arc_001:
+    phase_001 mode=revenue status=phase-closed trios=1 goal="fire approval ap_old [source=approval; id=ap_old]"
+    phase_002 mode=revenue status=phase-closed trios=1 goal="fire approval ap_fresh [source=approval; id=ap_fresh]"
+    phase_003 mode=revenue status=phase-closed trios=1 goal="fire approval ap_old [source=approval; id=ap_old]"
+    phase_004 mode=revenue status=phase-closed trios=1 goal="fire approval ap_old [source=approval; id=ap_old]"
+    phase_005 mode=revenue status=phase-closed trios=1 goal="fire approval ap_old [source=approval; id=ap_old]"
+    phase_006 mode=revenue status=phase-closed trios=1 goal="fire approval ap_old [source=approval; id=ap_old]"
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=6 open_inbox=0

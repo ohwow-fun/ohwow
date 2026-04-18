@@ -1,0 +1,8 @@
+SCENARIO: 06-plumbing-failing-trigger
+DESCRIBE: One failing trigger -> plumbing arc keyed off trigger id.
+INITIAL_SEED: failing_triggers=1
+STEP 0 [tick]
+  result: ran=true arc=arc_001 status=closed exit=nothing-queued
+  arc arc_001:
+    phase_001 mode=plumbing status=phase-closed trios=1 goal="unstick cron-x-intel [source=failing-trigger; id=trig_x]"
+FINALS: arcs(open=0 closed=1 aborted=0) phase_reports=1 open_inbox=0
