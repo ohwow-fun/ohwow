@@ -54,6 +54,16 @@ const REVIEW_MODEL = 'google/gemini-2.5-flash-lite';
 const VOICE_LEAD_FRAMES = 5;
 const VOICE_TAIL_FRAMES = 20;
 const SCENE_MIN_FRAMES = 90;
+// Extra lead for the intro scene — gives the kinetic title a beat to spring
+// in before the anchor's first word. Applied only to scenes whose id is
+// "intro"; other narrated scenes use VOICE_LEAD_FRAMES directly.
+const INTRO_VOICE_LEAD_FRAMES = 30;
+// YouTube loudness target. The YouTube engine normalizes uploads to
+// ~-14 LUFS; mastering at -14 LUFS / -1 dBTP means no further pumping
+// and keeps headroom for their peak limiter.
+const LOUDNORM_TARGET_I = -14;
+const LOUDNORM_TARGET_TP = -1;
+const LOUDNORM_TARGET_LRA = 11;
 // Signature cold-open: a 2-second r3f.logo-reveal ritual that plays
 // before the host's first word. Injected at position 0 by the pipeline
 // (not drafted by the LLM) so every horizontal episode opens with the
@@ -238,19 +248,25 @@ function getAudioDurationMs(filePath) {
 // ---------------------------------------------------------------------------
 // Scene alignment
 // ---------------------------------------------------------------------------
-function alignSceneDurations(scenes, audioDurationMs, fps = 30) {
-  const totalAudioFrames = Math.ceil((audioDurationMs / 1000) * fps);
-  // Character count correlates with TTS time better than word count.
-  // "20.9GB GGUF format quantized by Unsloth" has ~6 words but TTS
-  // reads the numbers/acronyms slowly — character count gets us closer.
-  // Strip whitespace so indentation/padding doesn't skew distribution.
-  const chars = scenes.map((s) => (s.narration || s.params?.text || '').replace(/\s+/g, ' ').trim().length);
-  const totalChars = chars.reduce((a, b) => a + b, 0) || 1;
-  const padding = VOICE_LEAD_FRAMES + VOICE_TAIL_FRAMES;
-  return scenes.map((s, i) => {
-    const proportion = (chars[i] || 1) / totalChars;
-    const rawFrames = Math.round(proportion * totalAudioFrames) + padding;
-    return { ...s, durationInFrames: Math.max(SCENE_MIN_FRAMES, rawFrames) };
+/**
+ * Per-scene alignment: each narrated scene's duration is set to
+ * lead + voiceFrames + tail, where voiceFrames comes from ffprobe on
+ * that scene's own TTS file. Scenes without a voice clip (cold-open,
+ * non-narrated) keep their authored duration.
+ *
+ * This replaces the older character-proportion blob alignment. With one
+ * voice file per scene the drift between captions and voice is zero by
+ * construction — the caption window lives inside the scene window which
+ * is sized to the voice clip.
+ */
+function alignScenesPerVoice(scenes, voiceByScene, fps = 30) {
+  return scenes.map((s) => {
+    const v = voiceByScene.get(s.id);
+    if (!v) return s;
+    const voiceFrames = Math.ceil((v.voiceMs / 1000) * fps);
+    const lead = s.id === 'intro' ? INTRO_VOICE_LEAD_FRAMES : VOICE_LEAD_FRAMES;
+    const duration = Math.max(SCENE_MIN_FRAMES, lead + voiceFrames + VOICE_TAIL_FRAMES);
+    return { ...s, durationInFrames: duration };
   });
 }
 
@@ -298,7 +314,7 @@ function buildColdOpenScene() {
   };
 }
 
-function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series }) {
+function buildFullSpec({ draft, voiceByScene, kit, series }) {
   // Strip any LLM-emitted "cold-open" scene — the pipeline injects it
   // at position 0 below, so a draft-provided one would double up.
   const rawScenes = (draft.spec?.scenes || []).filter((s) => s?.id !== 'cold-open');
@@ -306,25 +322,42 @@ function buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series }) {
     ...s,
     durationInFrames: s.durationInFrames || 240,
   }, kit.primitivePalette || []));
-  if (audioDurationMs && audioDurationMs > 0) {
-    scenes = alignSceneDurations(scenes, audioDurationMs);
+  // Per-scene alignment: voice clip length drives scene length so captions
+  // (which are derived from scene.narration + scene duration) stay in sync
+  // with the voice by construction.
+  if (voiceByScene && voiceByScene.size > 0) {
+    scenes = alignScenesPerVoice(scenes, voiceByScene);
   }
 
   // Inject the signature cold-open at position 0 for horizontal series.
   // Done AFTER voice alignment so the cold-open's fixed 60-frame
-  // duration isn't rescaled against narration char counts (it has none).
+  // duration isn't rescaled against narration pacing.
   const isHorizontal = series?.format?.aspectRatio === 'horizontal';
-  const coldOpenFrames = isHorizontal ? COLD_OPEN_FRAMES : 0;
   if (isHorizontal) {
     scenes = [buildColdOpenScene(), ...scenes];
   }
 
-  // Voiceover starts after the cold-open. VOICE_LEAD_FRAMES is a small
-  // additional pad so the intro scene's kinetic title has a beat to
-  // settle before narration begins.
-  const voiceovers = voiceoverRef
-    ? [{ src: voiceoverRef, startFrame: coldOpenFrames + VOICE_LEAD_FRAMES, volume: 0.9 }]
-    : [];
+  // Build per-scene voiceover entries with absolute startFrames + explicit
+  // durationFrames. The renderer's MusicLayer requires durationFrames to
+  // register a duck window; without it, music ducking is skipped entirely.
+  // Walk the scene timeline and place each voice clip at cursor + lead.
+  const fps = 30;
+  const voiceovers = [];
+  let cursor = 0;
+  for (const scene of scenes) {
+    const v = voiceByScene ? voiceByScene.get(scene.id) : null;
+    if (v) {
+      const voiceFrames = Math.ceil((v.voiceMs / 1000) * fps);
+      const lead = scene.id === 'intro' ? INTRO_VOICE_LEAD_FRAMES : VOICE_LEAD_FRAMES;
+      voiceovers.push({
+        src: v.voiceRef,
+        startFrame: cursor + lead,
+        durationFrames: voiceFrames,
+        volume: 1.0,
+      });
+    }
+    cursor += scene.durationInFrames;
+  }
   const mood = draft.spec?.palette?.mood || kit.ambientMoodDefault;
   const ambientSrc = pickAmbientTrack(mood);
 
@@ -372,6 +405,52 @@ function renderVideo(specPath, outPath) {
       else reject(new Error(`remotion render exited ${code}: ${stderr.slice(-500)}`));
     });
   });
+}
+
+/**
+ * Two-pass ffmpeg loudnorm on the rendered mp4 to hit the YouTube
+ * -14 LUFS / -1 dBTP target. Pass 1 measures integrated loudness / true
+ * peak / LRA / threshold; pass 2 applies linear normalization using the
+ * measured values, which avoids the pumping artifacts you get from the
+ * single-pass dynamic mode.
+ *
+ * Writes to a sibling .normalized.mp4 then atomically replaces the
+ * input. Copies the video stream (no re-encode) and re-encodes audio
+ * only. Gated by env SKIP_LOUDNORM=1 — useful if you want the raw
+ * unmastered mix for a diagnostic.
+ */
+function loudnormPostProcess(videoPath) {
+  const pass1Raw = execSync(
+    `ffmpeg -hide_banner -nostats -i "${videoPath}" ` +
+    `-af loudnorm=I=${LOUDNORM_TARGET_I}:TP=${LOUDNORM_TARGET_TP}:LRA=${LOUDNORM_TARGET_LRA}:print_format=json ` +
+    `-f null - 2>&1`,
+    { encoding: 'utf8', timeout: 180_000 },
+  );
+  // The loudnorm JSON is printed after the filter's log banner — extract
+  // the last {...} block from the combined stderr.
+  const jsonMatch = pass1Raw.match(/\{[^{}]*"input_i"[^{}]*\}/);
+  if (!jsonMatch) {
+    throw new Error(`loudnorm pass1 did not emit JSON: ${pass1Raw.slice(-400)}`);
+  }
+  const m = JSON.parse(jsonMatch[0]);
+  const pass2Filter =
+    `loudnorm=I=${LOUDNORM_TARGET_I}:TP=${LOUDNORM_TARGET_TP}:LRA=${LOUDNORM_TARGET_LRA}` +
+    `:measured_I=${m.input_i}:measured_TP=${m.input_tp}` +
+    `:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}` +
+    `:offset=${m.target_offset}:linear=true:print_format=summary`;
+  const tmpOut = videoPath.replace(/\.mp4$/, '.normalized.mp4');
+  execSync(
+    `ffmpeg -y -hide_banner -nostats -i "${videoPath}" ` +
+    `-af "${pass2Filter}" -c:v copy -c:a aac -b:a 192k -movflags +faststart "${tmpOut}"`,
+    { stdio: 'pipe', timeout: 300_000 },
+  );
+  fs.renameSync(tmpOut, videoPath);
+  return {
+    inputLufs: parseFloat(m.input_i),
+    inputTp: parseFloat(m.input_tp),
+    targetLufs: LOUDNORM_TARGET_I,
+    targetTp: LOUDNORM_TARGET_TP,
+  };
 }
 
 function captureKeyFrames(videoPath, spec, outputDir) {
@@ -521,6 +600,7 @@ export async function composeEpisode({ slug, env = {} }) {
   const dry = env.DRY !== '0';
   const skipRender = env.SKIP_RENDER === '1';
   const skipVoice = env.SKIP_VOICE === '1';
+  const skipLoudnorm = env.SKIP_LOUDNORM === '1';
   const visibility = env.VISIBILITY || series.defaultVisibility;
 
   const { workspace } = resolveOhwow();
@@ -597,38 +677,52 @@ export async function composeEpisode({ slug, env = {} }) {
     return { status: 'banned', briefDir, offender };
   }
 
-  // 5. Voice.
-  // Derive the TTS text from per-scene narrations, NOT draft.narration_full.
-  // Observed: the LLM emits draft.narration_full and scene.narration strings
-  // as SEPARATE scripts that often diverge — one may include intro/outro
-  // lines the other lacks, or reword specifics differently. When voice is
-  // generated from narration_full but captions come from scene.narration,
-  // they desync from frame 1. Joining per-scene narrations guarantees
-  // voice-caption alignment by construction.
-  const sceneNarrations = (draft.spec?.scenes || [])
-    .map((s) => (s.narration || '').trim())
-    .filter(Boolean);
-  const voiceText = sceneNarrations.length
-    ? sceneNarrations.join('\n\n')  // paragraph break = natural inter-scene pause
-    : (draft.narration_full || '');
-
-  let voiceoverRef = null, audioDurationMs = null;
-  if (!skipVoice && voiceText) {
-    const voicePath = await generateVoiceOver({ text: voiceText, voiceConfig: series.voice });
-    if (voicePath) {
-      voiceoverRef = stageVoiceFile(voicePath);
-      audioDurationMs = getAudioDurationMs(voicePath);
-      console.log(`[compose-core] voice: ${voiceoverRef} · ${audioDurationMs}ms (from ${sceneNarrations.length} scene narrations)`);
+  // 5. Voice — one TTS file per narrated scene, generated in parallel.
+  // Single-blob TTS plus caption-at-scene-offsets drifts: the blob plays
+  // end-to-end while per-scene captions fire at scene boundaries chosen
+  // from rough char-proportion alignment, so voice and captions diverge
+  // after the first scene. Per-scene TTS pins each voice clip to its
+  // own scene: the scene's duration is sized to fit the clip (lead +
+  // voiceFrames + tail), captions inside the scene align to that voice
+  // clip, and the MusicLayer gets per-scene voice windows (with
+  // durationFrames) it can actually duck against.
+  const narratedScenes = (draft.spec?.scenes || []).filter(
+    (s) => (s.narration || '').trim().length > 0,
+  );
+  const voiceByScene = new Map();
+  if (!skipVoice && narratedScenes.length > 0) {
+    console.log(`[compose-core] voice: generating ${narratedScenes.length} per-scene TTS clips in parallel…`);
+    const results = await Promise.all(
+      narratedScenes.map(async (scene) => {
+        const text = scene.narration.trim();
+        try {
+          const voicePath = await generateVoiceOver({ text, voiceConfig: series.voice });
+          if (!voicePath) return { sceneId: scene.id, ok: false, reason: 'no voice path' };
+          const voiceRef = stageVoiceFile(voicePath);
+          const voiceMs = getAudioDurationMs(voicePath);
+          return { sceneId: scene.id, ok: true, voiceRef, voiceMs };
+        } catch (e) {
+          return { sceneId: scene.id, ok: false, reason: e.message };
+        }
+      }),
+    );
+    for (const r of results) {
+      if (r.ok) {
+        voiceByScene.set(r.sceneId, { voiceRef: r.voiceRef, voiceMs: r.voiceMs });
+        console.log(`[compose-core]   ${r.sceneId}: ${r.voiceMs}ms → ${r.voiceRef}`);
+      } else {
+        console.log(`[compose-core]   ${r.sceneId}: FAILED (${r.reason})`);
+      }
     }
   }
 
-  // Overwrite narration_full with the actual voice script so downstream
-  // (brief.json, visual review, approval queue payload) reflects what
-  // was spoken, not the LLM's possibly-divergent narration_full field.
+  // Keep narration_full in sync with the spoken per-scene narrations so
+  // brief.json + approval payload reflect what the anchor actually says.
+  const voiceText = narratedScenes.map((s) => s.narration.trim()).join('\n\n');
   draft.narration_full = voiceText;
 
   // 6. Spec.
-  const spec = buildFullSpec({ draft, voiceoverRef, audioDurationMs, kit, series });
+  const spec = buildFullSpec({ draft, voiceByScene, kit, series });
 
   // Custom-scene codegen (Phase 3): up to MAX_CODEGEN_SCENES_PER_EPISODE
   // scenes with custom_codegen:true are handed to the codegen LLM which
@@ -743,6 +837,18 @@ export async function composeEpisode({ slug, env = {} }) {
     } catch (e) {
       console.log(`[compose-core] render failed: ${e.message}`);
       return { status: 'render_failed', briefDir, error: e.message };
+    }
+
+    // Loudnorm to -14 LUFS / -1 dBTP (YouTube's normalization target).
+    // Runs by default on every render. Skip with SKIP_LOUDNORM=1 when
+    // you want to inspect the raw pre-master mix.
+    if (!skipLoudnorm) {
+      try {
+        const result = loudnormPostProcess(videoPath);
+        console.log(`[compose-core] loudnorm: ${result.inputLufs} LUFS / ${result.inputTp} dBTP → ${result.targetLufs} / ${result.targetTp}`);
+      } catch (e) {
+        console.log(`[compose-core] loudnorm skipped: ${e.message}`);
+      }
     }
 
     const ssDir = path.join(briefDir, 'keyframes');
