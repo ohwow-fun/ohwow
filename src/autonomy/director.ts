@@ -36,6 +36,7 @@ import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { runPhase } from './phase-orchestrator.js';
 import type { PhaseInput, PhaseResult, PhaseStatus } from './phase-orchestrator.js';
+import { mirrorArcToDisk } from './file-mirror.js';
 import type { Mode, RoundExecutor } from './types.js';
 import {
   answerFounderQuestion as _answerFounderQuestion,
@@ -99,6 +100,13 @@ export interface DirectorIO {
   readRuntimeSha: () => Promise<string | null>;
   readCloudSha: () => Promise<string | null>;
   now: () => Date;
+  /**
+   * Optional hook fired AFTER the arc is closed and its phase reports
+   * are read back. Defaults to a markdown file mirror under
+   * `~/.ohwow/workspaces/<slug>/autonomy/arcs/<arc_id>/`. Errors are
+   * caught + logged by the Director, never thrown.
+   */
+  mirrorArc?: (arc_id: string) => Promise<void>;
 }
 
 export interface ArcInput {
@@ -212,6 +220,12 @@ export interface DefaultDirectorIOOptions {
   /** Path to the cloud repo. Defaults to `<repoRoot>/../ohwow.fun`. */
   cloudRepoRoot?: string;
   db: DatabaseAdapter;
+  /**
+   * Workspace slug (filesystem-safe directory name under
+   * `~/.ohwow/workspaces/`). REQUIRED for the file-mirror hook. When
+   * omitted the file mirror is skipped (everything else still works).
+   */
+  workspace_slug?: string;
 }
 
 interface BusinessVitalsRow {
@@ -251,11 +265,23 @@ export function defaultDirectorIO(
   const cloudRepoRoot =
     opts.cloudRepoRoot ?? path.resolve(repoRoot, '..', 'ohwow.fun');
   const db = opts.db;
+  const workspaceSlug = opts.workspace_slug;
+
+  const mirrorArc = workspaceSlug
+    ? async (arc_id: string): Promise<void> => {
+        await mirrorArcToDisk({
+          db,
+          workspace_slug: workspaceSlug,
+          arc_id,
+        });
+      }
+    : undefined;
 
   return {
     now: () => new Date(),
     readRuntimeSha: async () => readGitShaSafely(repoRoot),
     readCloudSha: async () => readGitShaSafely(cloudRepoRoot),
+    mirrorArc,
     readPulse: async (workspace_id: string): Promise<PulseSnapshot> => {
       const ts = new Date().toISOString();
       try {
@@ -729,6 +755,20 @@ export async function runArc(
     },
     'director.arc.close',
   );
+
+  // File mirror: regenerate the cat-able tree under
+  // `~/.ohwow/workspaces/<slug>/autonomy/arcs/<arc_id>/`. Best-effort —
+  // a filesystem hiccup must not crash arc close.
+  if (io.mirrorArc) {
+    try {
+      await io.mirrorArc(arc_id);
+    } catch (err) {
+      logger.warn(
+        { arc_id, err: (err as Error).message },
+        'director.arc.mirror.failed',
+      );
+    }
+  }
 
   return {
     arc_id,

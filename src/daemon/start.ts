@@ -22,6 +22,7 @@ import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
 import { wireConductor } from '../autonomy/wire-daemon.js';
+import { resolveActiveWorkspace } from '../config.js';
 import { getSharedEmbedder, warmSharedEmbedder } from '../embeddings/singleton.js';
 import { runEmbeddingBackfill } from '../embeddings/backfill.js';
 import { createEmbedRouter } from '../api/routes/embed.js';
@@ -99,7 +100,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
 
   // 13c. Autonomy Conductor (Phase 5, dark-launched). No-op unless
   // OHWOW_AUTONOMY_CONDUCTOR=1; ImprovementScheduler runs unchanged.
-  const conductorHandle = wireConductor({ db: ctx.db, workspace_id: ctx.workspaceId });
+  // ctx.workspaceId is the cloud-canonical workspace UUID after
+  // consolidation; the file mirror needs the on-disk slug, so resolve
+  // it separately from the active-workspace pointer / env.
+  const activeWorkspace = resolveActiveWorkspace();
+  const conductorHandle = wireConductor({
+    db: ctx.db,
+    workspace_id: ctx.workspaceId,
+    workspace_slug: activeWorkspace.name,
+  });
   if (conductorHandle) ctx.bus.once('shutdown', () => conductorHandle.stop());
 
   logger.info('[daemon] Ready');

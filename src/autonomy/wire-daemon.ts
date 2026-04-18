@@ -11,6 +11,7 @@
  */
 import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { isValidWorkspaceName } from '../config.js';
 import {
   CONDUCTOR_ENV_FLAG,
   defaultMakeStubExecutor,
@@ -27,6 +28,15 @@ export const DEFAULT_CONDUCTOR_INTERVAL_MS = 60 * 60 * 1000;
 export interface WireConductorOptions {
   db: DatabaseAdapter;
   workspace_id: string;
+  /**
+   * Workspace slug (the on-disk directory name under
+   * `~/.ohwow/workspaces/`). Distinct from `workspace_id`, which after
+   * cloud consolidation is the canonical workspace UUID. The slug is
+   * needed to resolve the per-arc file-mirror layout. When missing /
+   * invalid, the file mirror is skipped (a `pino.warn` is logged and
+   * the rest of the conductor still runs).
+   */
+  workspace_slug?: string;
   /** Defaults to DEFAULT_CONDUCTOR_INTERVAL_MS. */
   intervalMs?: number;
   /** Path to the runtime repo for SHA capture. */
@@ -50,10 +60,24 @@ export function wireConductor(
     );
     return null;
   }
+  let workspaceSlug: string | undefined;
+  if (opts.workspace_slug && isValidWorkspaceName(opts.workspace_slug)) {
+    workspaceSlug = opts.workspace_slug;
+  } else if (opts.workspace_slug) {
+    logger.warn(
+      { workspace_slug: opts.workspace_slug },
+      '[daemon] Autonomy file mirror disabled: invalid workspace slug',
+    );
+  } else {
+    logger.warn(
+      '[daemon] Autonomy file mirror disabled: no workspace slug supplied',
+    );
+  }
   const io = defaultDirectorIO({
     db: opts.db,
     repoRoot: opts.repoRoot,
     cloudRepoRoot: opts.cloudRepoRoot,
+    workspace_slug: workspaceSlug,
   });
   const handle = startConductorLoop({
     db: opts.db,
