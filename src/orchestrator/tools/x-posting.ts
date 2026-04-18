@@ -59,11 +59,13 @@ import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages';
 import { logger } from '../../lib/logger.js';
 import { type RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
 import {
-  markTabOwned,
-  isTabOwned,
   ensureCdpBrowser,
   type TabOwnershipMode,
 } from '../../execution/browser/chrome-profile-router.js';
+import {
+  claimTarget,
+  hasAnyClaimForTarget,
+} from '../../execution/browser/browser-claims.js';
 import {
   confirmPostLanded,
   typeIntoRichTextbox,
@@ -382,7 +384,10 @@ export async function getCdpPage(
   // stay fully off-limits to the caller. 'any' is the legacy behavior
   // (compose/scan inherits 'ours' through caller threading; DM tools
   // keep 'any' so operator-opened DM conversations still work).
-  const isUsable = (tid: string) => ownershipMode === 'any' || isTabOwned(tid);
+  // `hasAnyClaimForTarget` preserves the pre-claims behavior exactly:
+  // "is this tab claimed by ANY agent owner?" — the composer doesn't
+  // know its own task id, so it can't ask for same-owner-only.
+  const isUsable = (tid: string) => ownershipMode === 'any' || hasAnyClaimForTarget(tid);
   try {
     // Self-heal: spawn debug Chrome if it's down before trying to
     // connect. Every getCdpPage caller (compose, scan, reply, DM)
@@ -421,7 +426,14 @@ export async function getCdpPage(
       if (!target) {
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, 'https://x.com/home');
-          markTabOwned(newTargetId);
+          // TODO(claim-owner): composer-level calls don't receive a task
+          // id, so we fall back to a pid+context-scoped owner. Replace
+          // with a threaded owner when the composer signatures carry
+          // one (see spec Step C).
+          claimTarget(
+            { profileDir: expectedContextId, targetId: newTargetId },
+            `x-composer:${process.pid}`,
+          );
           logger.info(
             { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             '[x-posting] opened new x.com tab in target profile context',
@@ -485,7 +497,13 @@ export async function getCdpPage(
           }
         }
         if (newTargetId) {
-          markTabOwned(newTargetId);
+          // TODO(claim-owner): same fallback rationale as the context-
+          // pinned branch above — no profileDir/taskId threaded into
+          // getCdpPage, so claim with a pid-scoped sentinel.
+          claimTarget(
+            { profileDir: '__composer_unpinned__', targetId: newTargetId },
+            `x-composer:${process.pid}`,
+          );
           logger.info(
             { targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
             '[x-posting] opened new owned x.com tab (no-context fallback)',

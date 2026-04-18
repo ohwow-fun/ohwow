@@ -53,6 +53,10 @@ import {
 } from './chrome-lifecycle.js';
 import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
 import { RawCdpBrowser } from './raw-cdp.js';
+import {
+  hasAnyClaimForTarget,
+  releaseTarget,
+} from './browser-claims.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -472,7 +476,7 @@ export async function findExistingTabForHost(
     const matches = targets.filter((t) =>
       t.type === 'page'
       && t.url.toLowerCase().includes(needle)
-      && (ownershipMode === 'any' || isTabOwned(t.targetId)),
+      && (ownershipMode === 'any' || hasAnyClaimForTarget(t.targetId)),
     );
     if (matches.length === 0) return null;
     const [match] = matches;
@@ -488,12 +492,17 @@ export async function findExistingTabForHost(
  * Close a specific CDP page target. Best-effort; swallows errors so callers
  * can use this in a `finally` block without risk. Used by posting executors
  * to drop the tab they opened via `openProfileWindow` so tabs don't leak.
+ *
+ * Any claim on the targetId is also released so a future task re-attaching
+ * at the same id doesn't see a stale claim.
  */
 export async function closeTabById(
   targetId: string,
   port: number = DEFAULT_CDP_PORT,
 ): Promise<void> {
-  releaseTabOwnership(targetId);
+  // Release any claim for this target regardless of owner — the tab is
+  // about to disappear, so keeping the claim around is meaningless.
+  releaseTarget(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
     browser = await ensureCdpBrowser({ port, spawnIfDown: false });
@@ -567,49 +576,29 @@ export async function ensureCdpBrowser(
 }
 
 // ---------------------------------------------------------------------------
-// Tab ownership registry — Layer 1 of shared-browser cooperation.
+// Tab ownership — Layer 1 of shared-browser cooperation.
 // ---------------------------------------------------------------------------
 //
 // The human operator and the autonomous agents share the same debug Chrome
 // at :9222. Without ownership tracking, agents' `findExistingTabForHost`
-// calls return ANY matching tab — including ones the human is actively using
-// — and the compose/scan/reply flow clobbers those tabs with a navigation.
+// calls return ANY matching tab — including ones the human is actively
+// using — and the compose/scan/reply flow clobbers those tabs with a
+// navigation.
 //
-// This registry is the first defense: when we create a tab for agent use,
-// we add its targetId to `ownedTargets`. Tools that should never touch a
-// human's tab call `findExistingTabForHost(host, { ownershipMode: 'ours' })`
-// which filters to registry entries only. Tabs the human opened never enter
-// the registry and are therefore invisible to ownership-gated lookups.
+// Ownership lives in `browser-claims.ts` now: a task-scoped, atomic
+// registry keyed by `{profileDir, targetId}` → owner (typically a task
+// id). The old process-wide Set<string> couldn't distinguish between
+// two concurrent tasks racing on the same target; claims fix that.
 //
-// Lifetime: in-memory, per-daemon-process. A daemon restart clears the
-// registry — by design. After a restart, any pre-existing tab is treated
-// as potentially the human's (safer); new tabs opened by the fresh
-// daemon become ours from birth. The DOM-level marker (window.name set
-// to 'ohwow-owned' by callers) survives restart and could be used to
-// rehydrate the registry later, but we skip that for now: cheaper to
-// just open fresh tabs and let orphans age out.
-
-const ownedTargets = new Set<string>();
-
-/** Mark a targetId as agent-owned. Call this right after creating a tab. */
-export function markTabOwned(targetId: string): void {
-  ownedTargets.add(targetId);
-}
-
-/** Drop ownership — call this before closing a tab or when releasing it back. */
-export function releaseTabOwnership(targetId: string): void {
-  ownedTargets.delete(targetId);
-}
-
-/** True if the targetId is in the registry (i.e., we created this tab). */
-export function isTabOwned(targetId: string): boolean {
-  return ownedTargets.has(targetId);
-}
-
-/** Snapshot of all owned target IDs. Useful for diagnostics + dashboards. */
-export function listOwnedTargets(): string[] {
-  return Array.from(ownedTargets);
-}
+// Router-internal checks only need the "is this tab agent-owned at all?"
+// semantics that the old Set encoded. They use `hasAnyClaimForTarget`
+// from browser-claims for that. The per-task claim/release lives at the
+// executor layer (x-posting-executor, threads-posting-executor).
+//
+// Lifetime: in-memory, per-daemon-process. A daemon restart clears
+// claims — by design; restart implies no in-flight tasks. The DOM-level
+// marker (window.name='ohwow-owned' set by callers) survives restart
+// and could rehydrate claims lazily later.
 
 /** How strict the tab search should be about ownership. */
 export type TabOwnershipMode =

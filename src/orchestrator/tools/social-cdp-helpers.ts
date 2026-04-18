@@ -14,11 +14,13 @@
 
 import { type RawCdpBrowser, type RawCdpPage } from '../../execution/browser/raw-cdp.js';
 import {
-  markTabOwned,
-  isTabOwned,
   ensureCdpBrowser,
   type TabOwnershipMode,
 } from '../../execution/browser/chrome-profile-router.js';
+import {
+  claimTarget,
+  hasAnyClaimForTarget,
+} from '../../execution/browser/browser-claims.js';
 import { logger } from '../../lib/logger.js';
 
 /**
@@ -76,17 +78,20 @@ export async function getCdpPageForPlatform(opts: {
   logTag: string;
   /**
    * Ownership gate: 'ours' filters reuse candidates to agent-owned tabs
-   * only (tabs registered via markTabOwned). Defaults to 'any' to keep
-   * existing callers working; compose/scan/reply paths should opt in
-   * to 'ours' so they never touch a tab the human is actively using.
+   * only (tabs with a live claim in browser-claims). Defaults to 'any'
+   * to keep existing callers working; compose/scan/reply paths should
+   * opt in to 'ours' so they never touch a tab the human is actively
+   * using.
    */
   ownershipMode?: TabOwnershipMode;
 }): Promise<CdpPageHandle | null> {
   const { urlMatcher, fallbackUrl, expectedContextId, logTag, ownershipMode = 'any' } = opts;
-  // Tabs we create during this call are auto-added to the ownership
-  // registry + DOM-tagged with window.name='ohwow-owned', so subsequent
-  // 'ours' lookups recognize them.
-  const isUsable = (targetId: string) => ownershipMode === 'any' || isTabOwned(targetId);
+  // Tabs we create during this call are claimed in the browser-claims
+  // registry + DOM-tagged with window.name='ohwow-owned'. The lookup
+  // uses `hasAnyClaimForTarget` to match the pre-claims semantics
+  // ("is this tab agent-owned at all?") — the composer layer doesn't
+  // know a task id, so it can't ask for same-owner-only.
+  const isUsable = (targetId: string) => ownershipMode === 'any' || hasAnyClaimForTarget(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
     // Self-heal: if the debug Chrome is down (operator quit it, crash,
@@ -110,7 +115,14 @@ export async function getCdpPageForPlatform(opts: {
       if (!target) {
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, fallbackUrl);
-          markTabOwned(newTargetId);
+          // TODO(claim-owner): composer-level, no task id threaded.
+          // Use the browser context id as a pseudo profileDir and a
+          // pid-scoped owner. See spec Step C for the replacement
+          // plan (thread owner through composer signatures).
+          claimTarget(
+            { profileDir: expectedContextId, targetId: newTargetId },
+            `social-composer:${process.pid}`,
+          );
           logger.info(
             { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             `[${logTag}] opened new tab in target profile context`,
@@ -175,7 +187,11 @@ export async function getCdpPageForPlatform(opts: {
           }
         }
         if (newTargetId) {
-          markTabOwned(newTargetId);
+          // TODO(claim-owner): same fallback rationale as above.
+          claimTarget(
+            { profileDir: '__composer_unpinned__', targetId: newTargetId },
+            `social-composer:${process.pid}`,
+          );
           logger.info(
             { targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
             `[${logTag}] opened new owned tab (no-context fallback)`,

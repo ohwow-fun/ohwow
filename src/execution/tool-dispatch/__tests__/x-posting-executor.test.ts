@@ -7,7 +7,6 @@ const profileRouterMocks = vi.hoisted(() => ({
   findProfileByIdentity: vi.fn(),
   findExistingTabForHost: vi.fn(),
   closeTabById: vi.fn(),
-  markTabOwned: vi.fn(),
 }));
 const lifecycleMocks = vi.hoisted(() => ({
   profileByHandleHint: vi.fn(),

@@ -27,8 +27,8 @@ import {
   openProfileWindow,
   findExistingTabForHost,
   closeTabById,
-  markTabOwned,
 } from '../browser/chrome-profile-router.js';
+import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
@@ -121,6 +121,10 @@ export const threadsPostingExecutor: ToolExecutor = {
     // we mark it owned so subsequent ticks reuse it. `freshTargetId` is
     // set ONLY when we opened the tab ourselves in THIS call; the
     // finally block closes it after compose so tabs don't leak.
+    // Owner string for claim scoping — see x-posting-executor for
+    // rationale. Scopes the CDP attach to this task so a concurrent
+    // task on the same profile can't clobber our session.
+    const claimOwner = ctx.taskId;
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
@@ -135,7 +139,18 @@ export const threadsPostingExecutor: ToolExecutor = {
         });
         expectedBrowserContextId = opened.browserContextId ?? undefined;
         freshTargetId = opened.targetId;
-        markTabOwned(opened.targetId);
+        const claim = claimTarget(
+          { profileDir: target.directory, targetId: opened.targetId },
+          claimOwner,
+        );
+        if (!claim) {
+          logger.warn(
+            { targetId: opened.targetId.slice(0, 8), profileDir: target.directory, owner: claimOwner },
+            '[threads-posting-executor] freshly opened tab already claimed by another owner — racing task likely; closing and bailing',
+          );
+          await closeTabById(opened.targetId);
+          return { content: 'Error: Couldn\'t claim threads.com tab (racing task holds it). Retry.', is_error: true };
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -255,6 +270,9 @@ export const threadsPostingExecutor: ToolExecutor = {
           await closeTabById(freshTargetId);
         }
       }
+      // Release task-scoped claims so the next task run can re-claim
+      // the same tab. Safe to call when no claim exists (returns 0).
+      releaseAllForOwner(claimOwner);
     }
 
     // ---- 5. Shape the result for the agent ----

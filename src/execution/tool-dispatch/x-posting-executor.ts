@@ -61,8 +61,8 @@ import {
   openProfileWindow,
   findExistingTabForHost,
   closeTabById,
-  markTabOwned,
 } from '../browser/chrome-profile-router.js';
+import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
@@ -164,6 +164,12 @@ export const xPostingExecutor: ToolExecutor = {
     // tabs don't leak across fires.
     const dmToolNames = new Set(['x_send_dm', 'x_list_dms', 'x_delete_reply', 'x_delete_tweet']);
     const ownershipMode = dmToolNames.has(toolName) ? 'any' : 'ours';
+    // Owner string for claim scoping. `ctx.taskId` scopes each claim to
+    // the task that created the tab so two concurrent tasks can't
+    // clobber each other's CDP attaches. Parallel runs of the SAME task
+    // id (shouldn't happen, but defensively) re-use the same owner and
+    // get idempotent claim semantics.
+    const claimOwner = ctx.taskId;
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
@@ -178,7 +184,18 @@ export const xPostingExecutor: ToolExecutor = {
         });
         expectedBrowserContextId = opened.browserContextId ?? undefined;
         freshTargetId = opened.targetId;
-        markTabOwned(opened.targetId);
+        const claim = claimTarget(
+          { profileDir: target.directory, targetId: opened.targetId },
+          claimOwner,
+        );
+        if (!claim) {
+          logger.warn(
+            { targetId: opened.targetId.slice(0, 8), profileDir: target.directory, owner: claimOwner },
+            '[x-posting-executor] freshly opened tab already claimed by another owner — racing task likely; closing and bailing',
+          );
+          await closeTabById(opened.targetId);
+          return { content: 'Error: Couldn\'t claim x.com tab (racing task holds it). Retry.', is_error: true };
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -336,6 +353,10 @@ export const xPostingExecutor: ToolExecutor = {
           await closeTabById(freshTargetId);
         }
       }
+      // Release task-scoped claims so the next task run (a retry, or
+      // the next cadence fire) can re-claim the same tab. Safe to call
+      // even when no claim was created (returns 0).
+      releaseAllForOwner(claimOwner);
     }
 
     // ---- 5. Shape the result for the agent ----
