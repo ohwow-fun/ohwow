@@ -535,26 +535,50 @@ export async function conductorTick(
   }
 }
 
+/**
+ * Default debounce window for `requestImmediateTick()`. Two requests
+ * landing inside this window collapse to a single tick — the second is
+ * dropped with a `conductor.tick.debounced` log line. Independent of
+ * the `setInterval` idle floor, which keeps firing at `intervalMs`.
+ */
+export const DEFAULT_CONDUCTOR_DEBOUNCE_MS = 30_000;
+
 export interface StartConductorLoopOptions extends ConductorDeps {
   intervalMs: number;
   /** Optional AbortSignal; aborting also clears the interval. */
   signal?: AbortSignal;
+  /**
+   * Minimum gap between two `requestImmediateTick()` invocations. The
+   * `setInterval` idle floor is unaffected. Defaults to
+   * `DEFAULT_CONDUCTOR_DEBOUNCE_MS` (30s).
+   */
+  debounceMs?: number;
 }
 
 export interface ConductorLoopHandle {
   stop: () => void;
+  /**
+   * Event-driven wake. Triggers a `tickOnce()` immediately unless one
+   * is already in flight or the last tick started inside the debounce
+   * window. Safe to call from any async hook (Director arc-close,
+   * inbox-answer, pulse-delta, etc.). Never throws.
+   */
+  requestImmediateTick: () => void;
 }
 
 export function startConductorLoop(
   opts: StartConductorLoopOptions,
 ): ConductorLoopHandle {
-  const { intervalMs, signal, ...deps } = opts;
+  const { intervalMs, signal, debounceMs, ...deps } = opts;
+  const effectiveDebounceMs = debounceMs ?? DEFAULT_CONDUCTOR_DEBOUNCE_MS;
   let stopped = false;
   let inflight: Promise<void> | null = null;
+  let lastTickStartedAtMs = 0;
 
   const tickOnce = (): Promise<void> => {
     if (stopped) return Promise.resolve();
     if (inflight) return inflight;
+    lastTickStartedAtMs = Date.now();
     inflight = (async () => {
       try {
         const r = await conductorTick(deps);
@@ -581,6 +605,34 @@ export function startConductorLoop(
     return inflight;
   };
 
+  const requestImmediateTick = (): void => {
+    if (stopped) return;
+    if (inflight) {
+      logger.info(
+        {
+          workspace_id: deps.workspace_id,
+          reason: 'inflight',
+        },
+        'conductor.tick.debounced',
+      );
+      return;
+    }
+    const sinceLastMs = Date.now() - lastTickStartedAtMs;
+    if (sinceLastMs < effectiveDebounceMs) {
+      logger.info(
+        {
+          workspace_id: deps.workspace_id,
+          since_last_ms: sinceLastMs,
+          debounce_ms: effectiveDebounceMs,
+          reason: 'within-window',
+        },
+        'conductor.tick.debounced',
+      );
+      return;
+    }
+    void tickOnce();
+  };
+
   const timer = setInterval(() => {
     void tickOnce();
   }, intervalMs);
@@ -603,6 +655,7 @@ export function startConductorLoop(
       stopped = true;
       clearInterval(timer);
     },
+    requestImmediateTick,
   };
 }
 
