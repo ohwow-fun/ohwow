@@ -34,7 +34,7 @@ import {
   type ReplyCandidate,
   type SelectorFilters,
 } from '../orchestrator/tools/reply-target-selector.js';
-import { generateReplyCopy } from '../orchestrator/tools/reply-copy-generator.js';
+import { generateReplyCopy, drafterModeForClass } from '../orchestrator/tools/reply-copy-generator.js';
 import {
   classifyReplyTargetsBatch,
   isKeeper,
@@ -325,9 +325,14 @@ export class ThreadsReplyScheduler {
         ? { ...k.candidate, text: full }
         : k.candidate;
 
+      // Pick drafter mode from classifier verdict (Threads is direct-only
+      // today; viral-piggyback is deferred until Threads exposes a top-sort
+      // tab). buyer_intent → ohwow-naming drafter; adjacent_prospect →
+      // praise drafter; else the default observational drafter.
+      const drafterMode = drafterModeForClass('direct', k.verdict.class);
       const gen = await generateReplyCopy(
         { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
-        { target: enrichedCandidate, platform: 'threads', mode: 'direct' },
+        { target: enrichedCandidate, platform: 'threads', mode: drafterMode },
       );
       if (!gen.ok) {
         logger.warn({ err: gen.error, url: k.candidate.url }, '[threads-reply-scheduler] generator failed');

@@ -36,7 +36,25 @@ import {
   LENGTH_CAPS,
 } from '../../lib/voice/voice-core.js';
 
-export type ReplyMode = 'direct' | 'viral';
+export type ReplyMode = 'direct' | 'viral' | 'buyer_intent' | 'praise';
+
+/**
+ * Map a classifier verdict class to the right drafter mode. The scheduler
+ * calls this after classification to pick the prompt that matches the
+ * post's audience. Keep the mapping narrow: if the classifier confidently
+ * labels the post as a hiring-intent buyer or an adjacent prospect, we
+ * switch voice; everything else stays on the 'direct' observational
+ * drafter.
+ */
+export function drafterModeForClass(
+  queryMode: 'direct' | 'viral',
+  classifierClass: string,
+): ReplyMode {
+  if (queryMode === 'viral') return 'viral';
+  if (classifierClass === 'buyer_intent') return 'buyer_intent';
+  if (classifierClass === 'adjacent_prospect') return 'praise';
+  return 'direct';
+}
 
 export interface GenerateReplyInput {
   target: ReplyCandidate;
@@ -74,7 +92,13 @@ const THREADS_MAX = LENGTH_CAPS.threads.reply;
 
 // Exported for testing and for the classifier's rationale prompts.
 export function buildReplySystemPrompt(platform: 'x' | 'threads', mode: ReplyMode = 'direct'): string {
-  return mode === 'viral' ? buildViralPiggybackSystemPrompt(platform) : buildSystemPrompt(platform);
+  switch (mode) {
+    case 'viral': return buildViralPiggybackSystemPrompt(platform);
+    case 'buyer_intent': return buildBuyerIntentSystemPrompt(platform);
+    case 'praise': return buildPraiseSystemPrompt(platform);
+    case 'direct':
+    default: return buildSystemPrompt(platform);
+  }
 }
 
 function buildSystemPrompt(platform: 'x' | 'threads'): string {
@@ -219,6 +243,160 @@ function buildViralPiggybackSystemPrompt(platform: 'x' | 'threads'): string {
   ].join('\n');
 }
 
+/**
+ * Buyer-intent system prompt. Used when the classifier labels the post
+ * `buyer_intent` — someone actively hiring for an AI-automatable role
+ * (virtual assistant, copywriter, video editor, social media manager,
+ * etc.). Unlike the default direct drafter (observational, statements
+ * over questions, no product names), this drafter names ohwow directly
+ * and frames it as a concrete, cheaper, better alternative to the human
+ * hire they were about to make. Tone is warm and matter-of-fact, not
+ * salesy.
+ *
+ * The voice gate (voice-core) still applies: no first-person ("we offer",
+ * "I use"), no softeners, no em-dashes, no sign-offs, no hashtags/links.
+ * "ohwow" the product name is allowed. Mentioning a price or concrete
+ * comparison is encouraged when it helps the buyer see the fit quickly.
+ */
+function buildBuyerIntentSystemPrompt(platform: 'x' | 'threads'): string {
+  return [
+    'You draft replies to posts where the author is actively hiring (or',
+    'about to hire) for a task ohwow can do cheaper and better — virtual',
+    'assistant, copywriter, content writer, video editor, social media',
+    'manager, community manager, researcher, executive assistant,',
+    'customer support, ghostwriter, UGC creator, thumbnail artist,',
+    'podcast editor, and similar AI-automatable roles.',
+    '',
+    'The author has already decided the task is worth paying for. They',
+    'are not asking for opinions or pain-relief advice. They want a',
+    'concrete option. Your reply names ohwow as that option — warm,',
+    'matter-of-fact, one specific capability.',
+    '',
+    buildVoicePrinciples(),
+    '',
+    'BUYER-INTENT SHAPE — pick ONE:',
+    '  - Concrete fit. "ohwow does [their exact task] for [price or',
+    '    simple comparison]." Keep it factual, not salesy.',
+    '  - Capability name-drop. "For [role] work, ohwow handles [one',
+    '    specific mechanism they\'ll recognise]." One mechanism, not a',
+    '    feature list.',
+    '  - Cost contrast. "[Annualized cost of human hire] for a [role]',
+    '    vs. ohwow\'s [lower tier]. Worth a look." Only when the post',
+    '    mentions a budget or standard-market price.',
+    '  - Gentle suggestion. "Might be worth a look at ohwow before',
+    '    committing to the full-time hire — [one reason tailored to',
+    '    their task]."',
+    '',
+    'CRITICAL — ohwow (lowercase, one word) is the product name. Use it',
+    'exactly once in the draft. Do not link, do not add hashtags, do not',
+    'write "ohwow.fun" or "@ohwow_fun" — the name alone is enough; the',
+    'reader can search.',
+    '',
+    'AVOID:',
+    '  - Questions. The author already knows what they want.',
+    '  - Qualification probes ("What\'s your budget?", "What tools do',
+    '    you use now?"). Cold-email energy.',
+    '  - Hedging / "might want to consider" / "you should look at".',
+    '    Flat recommendation reads as a peer sharing a tip.',
+    '  - Restating the author\'s own post back at them.',
+    '  - More than one sentence when one will do. Two sentences max.',
+    '  - First-person ("we", "I", "our") — the voice gate rejects these.',
+    '  - Links, hashtags, em-dashes, "please", trailing periods.',
+    '',
+    buildLengthDirective({ platform, useCase: 'reply' }),
+    '',
+    'WHEN TO SKIP (return draft: "SKIP"):',
+    '  - The role is physical, licensed, or credential-gated (nurse,',
+    '    teacher, construction engineer, architect, clinician, driver,',
+    '    pathologist, postdoc). ohwow cannot replace these.',
+    '  - The post is actually a supplier pitch in question form ("Hiring',
+    '    a video editor? DM me") — those got mislabeled; skip.',
+    '  - The author is clearly an enterprise with a formal HR pipeline.',
+    '    Cold-replies to official careers accounts read as spam.',
+    '',
+    'OUTPUT (JSON, nothing else):',
+    '  {',
+    '    "draft":      string  // primary reply, ready to post as-is',
+    '    "alternates": string[]  // 0-2 differently-angled drafts',
+    '    "rationale":  string  // one sentence on why this lands',
+    '  }',
+    '  or on skip:',
+    '  { "draft": "SKIP", "rationale": "one sentence on why" }',
+  ].join('\n');
+}
+
+/**
+ * Praise system prompt. Used when the classifier labels the post
+ * `adjacent_prospect` — someone in ohwow's audience (founder, builder,
+ * small-team operator, creator) sharing an observation, win, or lesson
+ * that resonates, but NOT actively hiring and NOT in pain. The reply's
+ * job is to affirm, not to teach, advise, probe, or pitch. Leave a
+ * warm mark on someone who might be a future customer without pushing
+ * them.
+ */
+function buildPraiseSystemPrompt(platform: 'x' | 'threads'): string {
+  return [
+    'You draft replies to posts from founders, builders, and operators',
+    'sharing an insight, observation, lesson, or win. The author is not',
+    'in pain and not hiring. They are thinking out loud in ohwow\'s',
+    'audience. Your reply is a warm acknowledgement — a peer noticing',
+    'what made the post good.',
+    '',
+    'This is NOT a teaching moment, an advice slot, or a pitch. It is',
+    'presence. Somebody said something thoughtful; you noticed.',
+    '',
+    buildVoicePrinciples(),
+    '',
+    'PRAISE SHAPE — pick ONE:',
+    '  - Specific noticing. "[Specific line or idea] is the part',
+    '    [audience] usually skip." Names the underappreciated detail.',
+    '  - Sharp affirmation. "Rare take. [One-sentence reason it lands.]"',
+    '  - Quiet agreement with a concrete hook. Agree once, then name',
+    '    the concrete thing that makes it true. No pivot to advice.',
+    '  - Recognition of the shape, not just the content. "The move',
+    '    inside that lesson — [name it] — is what separates [a] from',
+    '    [b]."',
+    '',
+    'CRITICAL — do NOT mention ohwow, do NOT name any product, do NOT',
+    'link anything. This post is not a buyer; naming a product here',
+    'breaks trust.',
+    '',
+    'AVOID:',
+    '  - Generic praise ("great point!", "so true", "100%", "this is',
+    '    gold", "love this"). Invisible.',
+    '  - Questions. Do not make the author do more work to get your',
+    '    response over the line. Silence ends the reply.',
+    '  - Advice ("you should also", "have you tried", "pro tip"). They',
+    '    are not asking.',
+    '  - Corporate softeners ("at the end of the day", "here\'s the',
+    '    thing", "table stakes"). Voice gate rejects these anyway.',
+    '  - Emojis. One in ten replies at most, never as a substitute for',
+    '    substance.',
+    '  - First-person ("I", "we", "me") — voice gate rejects these.',
+    '  - More than one sentence. A praise reply is a touch, not a',
+    '    speech.',
+    '',
+    buildLengthDirective({ platform, useCase: 'reply' }),
+    '',
+    'WHEN TO SKIP (return draft: "SKIP"):',
+    '  - The post is a meme, shitpost, or pure opinion without a',
+    '    graspable observation.',
+    '  - The post is performative ("grinding at 5am" / "just signed a',
+    '    client" with no insight). Nothing specific to notice.',
+    '  - You would have to generate content not in the post to reply.',
+    '    Say nothing rather than manufacture praise.',
+    '',
+    'OUTPUT (JSON, nothing else):',
+    '  {',
+    '    "draft":      string  // primary reply, ready to post as-is',
+    '    "alternates": string[]  // 0-2 differently-angled drafts',
+    '    "rationale":  string  // one sentence on what you noticed',
+    '  }',
+    '  or on skip:',
+    '  { "draft": "SKIP", "rationale": "one sentence on why" }',
+  ].join('\n');
+}
+
 function buildUserPrompt(target: ReplyCandidate, platform: 'x' | 'threads', extra?: string): string {
   return [
     `Platform: ${platform}`,
@@ -292,9 +470,7 @@ export async function generateReplyCopy(
   }
 
   const mode: ReplyMode = input.mode ?? 'direct';
-  const system = mode === 'viral'
-    ? buildViralPiggybackSystemPrompt(input.platform)
-    : buildSystemPrompt(input.platform);
+  const system = buildReplySystemPrompt(input.platform, mode);
   const prompt = buildUserPrompt(input.target, input.platform, input.extraGuidance);
 
   const llm = await runLlmCall(

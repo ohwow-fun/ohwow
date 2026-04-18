@@ -45,7 +45,7 @@ import {
   type ReplyCandidate,
   type SelectorFilters,
 } from '../orchestrator/tools/reply-target-selector.js';
-import { generateReplyCopy } from '../orchestrator/tools/reply-copy-generator.js';
+import { generateReplyCopy, drafterModeForClass } from '../orchestrator/tools/reply-copy-generator.js';
 import {
   classifyReplyTargetsBatch,
   isKeeper,
@@ -428,9 +428,15 @@ export class XReplyScheduler {
       const existing = await findReplyDraftByUrl(this.db, this.workspaceId, k.candidate.url);
       if (existing) continue;
 
+      // Pick drafter mode from the classifier verdict. Viral-mode queries
+      // keep the viral drafter (engagement-crowd piggyback). Direct-mode
+      // queries route buyer_intent → direct-friendly ohwow-naming drafter,
+      // adjacent_prospect → praise drafter, everything else → the default
+      // observational direct drafter.
+      const drafterMode = drafterModeForClass(k.query.mode, k.verdict.class);
       const gen = await generateReplyCopy(
         { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
-        { target: k.candidate, platform: 'x', mode: k.query.mode },
+        { target: k.candidate, platform: 'x', mode: drafterMode },
       );
       if (!gen.ok) {
         logger.warn({ err: gen.error, url: k.candidate.url }, '[x-reply-scheduler] generator failed');

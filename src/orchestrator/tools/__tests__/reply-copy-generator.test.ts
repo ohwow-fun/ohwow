@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { voiceCheck, buildReplySystemPrompt } from '../reply-copy-generator.js';
+import { voiceCheck, buildReplySystemPrompt, drafterModeForClass } from '../reply-copy-generator.js';
 
 describe('voiceCheck', () => {
   describe('first-person pronouns', () => {
@@ -131,5 +131,45 @@ describe('buildReplySystemPrompt', () => {
     const tp = buildReplySystemPrompt('threads', 'viral');
     expect(xp).toContain('240');
     expect(tp).toContain('280');
+  });
+
+  it('buyer_intent mode names ohwow and forbids qualification questions', () => {
+    const p = buildReplySystemPrompt('x', 'buyer_intent');
+    expect(p).toContain('BUYER-INTENT SHAPE');
+    expect(p).toContain('ohwow');
+    expect(p).toMatch(/[Qq]ualification probes/);
+    // Must still respect voice-core principles (no first-person)
+    expect(p).toContain('voice gate rejects');
+  });
+
+  it('praise mode bans ohwow mentions and questions', () => {
+    const p = buildReplySystemPrompt('x', 'praise');
+    expect(p).toContain('PRAISE SHAPE');
+    expect(p).toContain('do NOT mention ohwow');
+    expect(p).toContain('Do not make the author do more work');
+    expect(p).toContain('warm acknowledgement');
+  });
+});
+
+describe('drafterModeForClass', () => {
+  it('viral-mode query always stays viral', () => {
+    expect(drafterModeForClass('viral', 'genuine_pain')).toBe('viral');
+    expect(drafterModeForClass('viral', 'buyer_intent')).toBe('viral');
+    expect(drafterModeForClass('viral', 'adjacent_prospect')).toBe('viral');
+  });
+
+  it('direct-mode query routes buyer_intent → buyer_intent drafter', () => {
+    expect(drafterModeForClass('direct', 'buyer_intent')).toBe('buyer_intent');
+  });
+
+  it('direct-mode query routes adjacent_prospect → praise drafter', () => {
+    expect(drafterModeForClass('direct', 'adjacent_prospect')).toBe('praise');
+  });
+
+  it('direct-mode query on other classes stays on default direct drafter', () => {
+    expect(drafterModeForClass('direct', 'genuine_pain')).toBe('direct');
+    expect(drafterModeForClass('direct', 'solo_service_provider')).toBe('direct');
+    expect(drafterModeForClass('direct', 'ai_seller')).toBe('direct');
+    expect(drafterModeForClass('direct', 'unknown_class_string')).toBe('direct');
   });
 });
