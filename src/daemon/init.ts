@@ -37,7 +37,9 @@ import { RuntimeEngine } from '../execution/engine.js';
 import { installDiaryHook } from '../execution/diary-hook.js';
 import { createBudgetMeter } from '../execution/budget-meter.js';
 import { createEmittedTodayTracker } from '../execution/budget-middleware.js';
-import { createEventBusBudgetNotifier } from '../execution/budget-notifications.js';
+import { createEmailBudgetNotifier, createEventBusBudgetNotifier } from '../execution/budget-notifications.js';
+import { createResendSender } from '../integrations/email/resend.js';
+import type { BudgetPulseEvent } from '../execution/budget-middleware.js';
 import type { DaemonContext } from './context.js';
 
 export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
@@ -170,7 +172,7 @@ export function createServices(ctx: Partial<DaemonContext>): void {
   ctx.voiceboxService = voiceboxService;
 }
 
-export function createEngine(ctx: Partial<DaemonContext>): void {
+export async function createEngine(ctx: Partial<DaemonContext>): Promise<void> {
   const { config, db, rawDb, bus, sessionToken, dataDir, businessContext, modelRouter, scraplingService, controlPlane } = ctx as DaemonContext;
 
   const engine = new RuntimeEngine(db, {
@@ -204,17 +206,86 @@ export function createEngine(ctx: Partial<DaemonContext>): void {
   // Gap 13: wire the per-workspace autonomous LLM daily cap middleware.
   // The meter sums today's `llm_calls.cost_cents` rows (origin='autonomous').
   // The tracker keeps each of the four band transitions firing at most
-  // once per workspace per UTC day. The notifier adapts pulse events
+  // once per workspace per UTC day. The bus notifier adapts pulse events
   // onto the runtime EventBus as `budget:llm-*` events so the TUI + web
-  // dashboard render them as in-app toasts instead of them living only
-  // in pino logs. Every agent-task LLM call now flows through this
-  // path via `llm-executor.ts` reading `ctx.budgetDeps`.
+  // dashboard render them as in-app toasts. Every agent-task LLM call
+  // now flows through this path via `llm-executor.ts` reading
+  // `ctx.budgetDeps`.
+  //
+  // Follow-up: pause/halt also email the operator (warn/degrade stay
+  // dashboard-only). The email leg resolves three pieces via runtime
+  // settings or env; missing any one of them skips email silently.
+  const emailNotifier = await resolveEmailBudgetNotifier(ctx as DaemonContext);
+  const busNotifier = createEventBusBudgetNotifier(bus);
+  const emitPulse = emailNotifier
+    ? (event: BudgetPulseEvent) => { busNotifier(event); emailNotifier(event); }
+    : busNotifier;
   const budgetDeps = {
     meter: createBudgetMeter(db),
     emittedToday: createEmittedTodayTracker(),
-    emitPulse: createEventBusBudgetNotifier(bus),
+    emitPulse,
   };
   engine.setBudgetDeps(budgetDeps, config.autonomousSpendLimitUsd);
 
   ctx.engine = engine;
+}
+
+/**
+ * Resolve the optional email-budget-notifier from runtime settings + env.
+ * Returns undefined when any of the three pieces is missing (API key,
+ * operator inbox, from-address); skip is silent with an info log so the
+ * operator sees why no email is going out without a noisy warn.
+ *
+ * Settings sources, each checked in order (env first, then the SQLite
+ * runtime_settings row):
+ *   - API key      : RESEND_API_KEY               | runtime_settings.resend_api_key
+ *   - Operator inbox: OHWOW_OPERATOR_EMAIL       | runtime_settings.operator_email
+ *   - From-address : OHWOW_OUTREACH_EMAIL_FROM   | runtime_settings.outreach_email_from
+ *
+ * The from-address is the same field EmailDispatcher uses for outreach —
+ * intentional reuse so operators configure one verified Resend sender and
+ * both flows benefit.
+ */
+async function resolveEmailBudgetNotifier(
+  ctx: DaemonContext,
+): Promise<((event: BudgetPulseEvent) => void) | undefined> {
+  const { db } = ctx;
+  const readSetting = async (key: string): Promise<string | undefined> => {
+    try {
+      const { data } = await db
+        .from<{ value: string }>('runtime_settings')
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+      return (data as { value: string } | null)?.value || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const apiKey = process.env.RESEND_API_KEY || (await readSetting('resend_api_key'));
+  const toAddress = process.env.OHWOW_OPERATOR_EMAIL || (await readSetting('operator_email'));
+  const fromAddress = process.env.OHWOW_OUTREACH_EMAIL_FROM || (await readSetting('outreach_email_from'));
+
+  if (!apiKey || !toAddress || !fromAddress) {
+    logger.info(
+      {
+        hasApiKey: Boolean(apiKey),
+        hasToAddress: Boolean(toAddress),
+        hasFromAddress: Boolean(fromAddress),
+      },
+      '[daemon] budget email notifier skipped; set RESEND_API_KEY + OHWOW_OPERATOR_EMAIL + OHWOW_OUTREACH_EMAIL_FROM (or the matching runtime_settings keys) to enable',
+    );
+    return undefined;
+  }
+
+  const emailSender = createResendSender({
+    getApiKey: async () => apiKey,
+    fromAddress,
+  });
+  logger.info(
+    { to: toAddress, from: fromAddress },
+    '[daemon] budget email notifier wired (pause/halt bands only)',
+  );
+  return createEmailBudgetNotifier({ emailSender, toAddress, fromAddress });
 }

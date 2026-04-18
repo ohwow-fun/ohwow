@@ -67,7 +67,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     }
   }
 
-  createEngine(ctx);
+  await createEngine(ctx);
 
   // 9. Start polling (connected tier only)
   startCloudPolling(ctx);
