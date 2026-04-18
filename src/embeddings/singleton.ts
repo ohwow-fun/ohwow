@@ -54,11 +54,19 @@ export function warmSharedEmbedder(config: EmbedderConfig = {}): Promise<void> {
   logger.info({ modelId: embedder.modelId }, '[embeddings] warmup starting');
   warmupPromise = embedder
     .ready()
-    .then(() => {
+    .then(async () => {
+      const readyAt = Date.now();
+      // ready() loads weights, but TransformersJS defers tokenizer init and
+      // ONNX graph compilation to the first actual embed call. Run a
+      // throwaway encode so the first user request hits an already-JIT'd
+      // hot path instead of paying ~20s on top of weight load.
+      await embedder.embed(['warmup']);
       logger.info(
         {
           modelId: embedder.modelId,
           dim: embedder.dim,
+          ready_ms: readyAt - startedAt,
+          first_embed_ms: Date.now() - readyAt,
           duration_ms: Date.now() - startedAt,
         },
         '[embeddings] warmup complete',
