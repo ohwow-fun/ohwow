@@ -24,6 +24,11 @@ import {
   resolveRouterDefault,
   type TaskClass,
 } from './router-defaults.js';
+import {
+  applyBudgetMiddleware,
+  type BudgetMiddlewareDeps,
+} from './budget-middleware.js';
+import type { CallOrigin } from './budget-meter.js';
 
 const VALID_TASK_CLASSES: readonly TaskClass[] = [
   'agentic_coding',
@@ -79,6 +84,23 @@ export interface LlmCallDeps {
    * show up as "(unattributed)" in rollups.
    */
   experimentId?: string;
+  /**
+   * Gap 13 budget-enforcement wiring. When set, runLlmCall consults the
+   * middleware before dispatch: the middleware may demote the task
+   * class's default to a cheaper model in the 85-95% band or throw
+   * BudgetPausedError / BudgetExceededError in the 95-100% / >=100%
+   * bands. When unset (back-compat default), the middleware is skipped
+   * and calls dispatch exactly as they did pre-gap-13. This keeps the
+   * meter opt-in per call site while the daemon wires it up cleanly.
+   */
+  budget?: BudgetMiddlewareDeps & {
+    /** Per-workspace daily cap in USD. Undefined => DEFAULT_AUTONOMOUS_SPEND_LIMIT_USD. */
+    limitUsd?: number;
+    /** autonomous | interactive. Defaults to autonomous when the call is inside an agent/task context. */
+    origin?: CallOrigin;
+    /** Revenue-critical bypass for the 95-100% band. */
+    bypass?: 'revenue_critical';
+  };
 }
 
 /**
@@ -564,6 +586,28 @@ export async function runLlmCall(
   let preferModel = explicitPreferModel;
   if (!preferModel && taskClass) {
     preferModel = resolveRouterDefault(taskClass).model;
+  }
+
+  // Gap 13: budget-meter consult. The middleware may demote preferModel
+  // to a cheaper fallback or throw to halt the call entirely. Only
+  // consulted when the caller wires `deps.budget` (daemon path does;
+  // direct-provider unit tests skip it). Errors thrown here are
+  // BudgetPausedError / BudgetExceededError and propagate to the
+  // caller untouched so the operator surface sees them verbatim.
+  if (deps.budget && !explicitPreferModel && taskClass) {
+    const middlewareResult = await applyBudgetMiddleware(
+      { meter: deps.budget.meter, emittedToday: deps.budget.emittedToday, emitPulse: deps.budget.emitPulse },
+      {
+        workspaceId: deps.workspaceId,
+        limitUsd: deps.budget.limitUsd,
+        origin: deps.budget.origin ?? 'autonomous',
+        taskClass,
+        bypass: deps.budget.bypass,
+      },
+    );
+    if (middlewareResult.demoted) {
+      preferModel = middlewareResult.routerDefault.model;
+    }
   }
   if (explicitPreferModel && taskClass && !isSelectableModel(taskClass, explicitPreferModel)) {
     // Not an error — per-agent / workspace overrides are allowed to

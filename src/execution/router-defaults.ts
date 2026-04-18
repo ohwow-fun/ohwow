@@ -2,13 +2,19 @@
  * Authoritative agentic-defaults source for the ohwow model router.
  * Opus 4.7 is deliberately OPT-IN ONLY per the 2026-04-17 founder cost
  * decision; no TaskClass here defaults to it. Callers opt in per-agent
- * or per-call by picking an entry from SELECTABLE_MODELS. Gap 13 (LLM
- * budget enforcement) owns the per-call dollar guardrail; this file
- * leaves a hook point but does not implement metering itself. The unit
- * test in __tests__/router-defaults.test.ts is the regression guard.
+ * or per-call by picking an entry from SELECTABLE_MODELS.
+ *
+ * Gap 13 hook: the per-call dollar guardrail lives in
+ * `./budget-middleware.ts`. Dispatchers (notably `llm-organ.ts`) call
+ * `applyBudgetMiddleware(...)` before handing the routing target to
+ * ModelRouter so the daily cap can pass-through, demote, pause, or
+ * halt the call. This file keeps the defaults table; the middleware
+ * owns the threshold chain. The unit test in
+ * __tests__/router-defaults.test.ts is the opt-in-only regression
+ * guard; __tests__/budget-middleware.test.ts guards the thresholds.
  */
 
-// TODO(gap-13): insert budget-meter middleware here to consult autonomousSpendLimit before dispatch.
+export { applyBudgetMiddleware } from './budget-middleware.js';
 
 /**
  * Named classes of work the router needs to reason about. Each class

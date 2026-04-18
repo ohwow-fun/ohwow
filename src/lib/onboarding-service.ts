@@ -256,6 +256,7 @@ export class OnboardingService {
       ytTomorrowBrokeEnabled: false,
       ytMindWarsEnabled: false,
       ytOperatorModeEnabled: false,
+      autonomousSpendLimitUsd: 50,
       chromeDefaultProfile: 'Default',
     };
 

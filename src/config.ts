@@ -262,6 +262,15 @@ export interface RuntimeConfig {
   ytMindWarsEnabled: boolean;
   /** Per-series kill switch for Operator Mode. Env: OHWOW_YT_OPERATOR_MODE_ENABLED. Default: false. */
   ytOperatorModeEnabled: boolean;
+  /**
+   * Gap 13: hard per-workspace daily cap on autonomous LLM spend in
+   * USD. The budget middleware consults this before every dispatch
+   * and may demote, pause, or halt the call per the threshold chain
+   * in src/execution/budget-middleware.ts. The default is set
+   * deliberately low relative to an ungated runaway loop. Env:
+   * OHWOW_AUTONOMOUS_SPEND_LIMIT_USD. Default: 50.
+   */
+  autonomousSpendLimitUsd: number;
 }
 
 interface ConfigFile {
@@ -357,6 +366,8 @@ interface ConfigFile {
   staleBranchPolicy?: 'off' | 'warn' | 'block' | 'auto-rebase' | 'auto-merge';
   staleBranchThreshold?: number;
   desktopToolsEnabled?: boolean;
+  /** Gap 13: per-workspace daily cap on autonomous LLM spend in USD. */
+  autonomousSpendLimitUsd?: number;
 }
 
 export const DEFAULT_CONFIG_DIR = join(homedir(), '.ohwow');
@@ -586,6 +597,14 @@ export interface WorkspaceConfig {
    * single-repo workspaces keep working unchanged.
    */
   repoRoot?: string;
+  /**
+   * Gap 13: per-workspace daily cap on autonomous LLM spend in USD.
+   * Overrides the global setting. A workspace that runs a heavier
+   * autonomous loop can raise this; a quiet sandbox can drop it to
+   * zero-ish to fail-loud on any autonomous burn. See
+   * src/execution/budget-middleware.ts for the threshold chain.
+   */
+  autonomousSpendLimitUsd?: number;
 }
 
 export function workspaceConfigPath(name: string): string {
@@ -739,6 +758,9 @@ function applyWorkspaceOverrides(fileConfig: ConfigFile, ws: WorkspaceConfig | n
   if (typeof ws.ytTomorrowBrokeEnabled === 'boolean') next.ytTomorrowBrokeEnabled = ws.ytTomorrowBrokeEnabled;
   if (typeof ws.ytMindWarsEnabled === 'boolean') next.ytMindWarsEnabled = ws.ytMindWarsEnabled;
   if (typeof ws.ytOperatorModeEnabled === 'boolean') next.ytOperatorModeEnabled = ws.ytOperatorModeEnabled;
+  if (typeof ws.autonomousSpendLimitUsd === 'number' && ws.autonomousSpendLimitUsd > 0) {
+    next.autonomousSpendLimitUsd = ws.autonomousSpendLimitUsd;
+  }
   return next;
 }
 
@@ -930,6 +952,15 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     ytTomorrowBrokeEnabled: process.env.OHWOW_YT_TOMORROW_BROKE_ENABLED === 'true' || fileConfig.ytTomorrowBrokeEnabled === true,
     ytMindWarsEnabled: process.env.OHWOW_YT_MIND_WARS_ENABLED === 'true' || fileConfig.ytMindWarsEnabled === true,
     ytOperatorModeEnabled: process.env.OHWOW_YT_OPERATOR_MODE_ENABLED === 'true' || fileConfig.ytOperatorModeEnabled === true,
+    autonomousSpendLimitUsd: (() => {
+      const envRaw = process.env.OHWOW_AUTONOMOUS_SPEND_LIMIT_USD;
+      const envNum = envRaw !== undefined ? Number(envRaw) : NaN;
+      if (Number.isFinite(envNum) && envNum > 0) return envNum;
+      if (typeof fileConfig.autonomousSpendLimitUsd === 'number' && fileConfig.autonomousSpendLimitUsd > 0) {
+        return fileConfig.autonomousSpendLimitUsd;
+      }
+      return 50;
+    })(),
     openclaw: {
       enabled: fileConfig.openclaw?.enabled ?? false,
       binaryPath: fileConfig.openclaw?.binaryPath ?? '',
