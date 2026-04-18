@@ -358,6 +358,11 @@ export class ContactConversationAnalystExperiment extends BusinessExperiment {
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         experimentId: this.id,
+        // Gap 13: contact-conversation-analyst fires on the autonomous
+        // experiment-runner cadence. Enroll in the per-workspace daily
+        // cap so vision + extraction spend counts toward the operator
+        // toasts.
+        budget: ctx.engine.getAutonomousBudgetDeps?.(),
       },
       callInput,
     );

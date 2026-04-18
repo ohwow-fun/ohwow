@@ -247,6 +247,11 @@ export async function generatePostDraft(
       modelRouter: deps.engine.modelRouter,
       db: deps.db,
       workspaceId: deps.workspaceId,
+      // Gap 13: scheduler-driven X drafting counts against the daily
+      // autonomous cap. Pulls the deps the daemon wired once via
+      // `engine.setBudgetDeps`; undefined when the middleware is not
+      // wired (early boot / unit tests) so the call still dispatches.
+      budget: deps.engine.getAutonomousBudgetDeps?.(),
     },
     {
       purpose: 'reasoning',

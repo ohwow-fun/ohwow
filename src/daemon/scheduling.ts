@@ -368,7 +368,16 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
       bus,
       llm: async (prompt: string) => {
         const result = await runLlmCall(
-          { modelRouter, db, workspaceId },
+          {
+            modelRouter,
+            db,
+            workspaceId,
+            // Gap 13: the reflection consolidator is an autonomous
+            // daily-phase job fired by ImprovementScheduler. Enroll
+            // its LLM spend in the per-workspace daily cap so the
+            // operator sees band crossings in the dashboard.
+            budget: engine.getAutonomousBudgetDeps(),
+          },
           { purpose: 'reasoning', prompt, max_tokens: 2048, temperature: 0 },
         );
         if (!result.ok) throw new Error(result.error);

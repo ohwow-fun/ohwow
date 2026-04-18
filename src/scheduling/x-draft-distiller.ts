@@ -24,7 +24,7 @@
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelRouter } from '../execution/model-router.js';
-import { runLlmCall } from '../execution/llm-organ.js';
+import { runLlmCall, type LlmCallDeps } from '../execution/llm-organ.js';
 import {
   listDistilledInsights,
   type DistilledInsight,
@@ -47,12 +47,24 @@ export interface XDraftDistillerOptions {
   limit?: number;
   /** LLM override hook for unit tests. */
   draftTweet?: (insight: DistilledInsight) => Promise<string | null>;
+  /**
+   * Gap 13: lazy accessor for the engine's autonomous-budget deps.
+   * Scheduler-driven distilling is autonomous by definition, so when
+   * the daemon wires the middleware via `engine.setBudgetDeps`, each
+   * tick's LLM call enrolls in the daily cap + operator toasts. Lazy
+   * (not a value) so the distiller can be constructed before
+   * `setBudgetDeps` runs during daemon boot. Returns `undefined` when
+   * the middleware is unwired (early boot / unit tests) so the call
+   * still dispatches.
+   */
+  getBudgetDeps?: () => LlmCallDeps['budget'];
 }
 
 export class XDraftDistillerScheduler {
   private readonly minScore: number;
   private readonly limit: number;
   private readonly draftTweetFn: (insight: DistilledInsight) => Promise<string | null>;
+  private readonly getBudgetDeps: () => LlmCallDeps['budget'];
 
   constructor(
     private readonly db: DatabaseAdapter,
@@ -63,6 +75,7 @@ export class XDraftDistillerScheduler {
     this.minScore = opts.minScore ?? DEFAULT_MIN_SCORE;
     this.limit = opts.limit ?? DEFAULT_LIMIT;
     this.draftTweetFn = opts.draftTweet ?? ((insight) => this.defaultDraft(insight));
+    this.getBudgetDeps = opts.getBudgetDeps ?? (() => undefined);
   }
 
   async tick(): Promise<{ considered: number; drafted: number; skipped: number }> {
@@ -123,6 +136,10 @@ export class XDraftDistillerScheduler {
         db: this.db,
         workspaceId: this.workspaceId,
         experimentId: EXPERIMENT_ID_TAG,
+        // Gap 13: hourly autonomous distillation counts against the
+        // daily cap. `getBudgetDeps` is injected by the daemon
+        // scheduling phase once the engine's middleware is wired.
+        budget: this.getBudgetDeps(),
       },
       {
         purpose: 'generation',

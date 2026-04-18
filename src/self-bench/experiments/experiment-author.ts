@@ -651,6 +651,10 @@ export class ExperimentAuthorExperiment implements Experiment {
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         experimentId: this.id,
+        // Gap 13: self-bench experiment authors run on the daemon's
+        // experiment-runner cadence (autonomous). Enroll this call in
+        // the per-workspace daily cap + operator toasts.
+        budget: ctx.engine.getAutonomousBudgetDeps?.(),
       },
       {
         purpose: 'reasoning',

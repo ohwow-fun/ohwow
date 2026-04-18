@@ -173,6 +173,33 @@ export class RuntimeEngine {
     this.budgetLimitUsd = limitUsd;
   }
 
+  /**
+   * Gap 13 follow-up: shape the engine's budget middleware deps into the
+   * `{ ...BudgetMiddlewareDeps, limitUsd, origin: 'autonomous' }` bag
+   * that `runLlmCall` accepts as `deps.budget`.
+   *
+   * Returns `undefined` when the daemon hasn't wired the middleware yet
+   * (early boot, unit-test harnesses that instantiate RuntimeEngine
+   * without calling `setBudgetDeps`). Scheduler-driven autonomous
+   * callers call this once per `runLlmCall` to enroll in the daily
+   * cap + operator toasts without reaching into engine internals.
+   *
+   * Always stamps `origin: 'autonomous'` — this helper is specifically
+   * for the autonomous class (schedulers, crons, daemon loops, self-
+   * bench experiments). Interactive callers build their own deps with
+   * `origin: 'interactive'` via the tag-only path (see round 1b).
+   */
+  getAutonomousBudgetDeps(): (BudgetMiddlewareDeps & { limitUsd?: number; origin: 'autonomous' }) | undefined {
+    if (!this.budgetDeps) return undefined;
+    return {
+      meter: this.budgetDeps.meter,
+      emittedToday: this.budgetDeps.emittedToday,
+      emitPulse: this.budgetDeps.emitPulse,
+      limitUsd: this.budgetLimitUsd,
+      origin: 'autonomous',
+    };
+  }
+
   db: DatabaseAdapter;
   config: EngineConfig;
   effects: RuntimeEffects;

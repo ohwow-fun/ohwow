@@ -353,6 +353,14 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       db,
       modelRouter ?? null,
       workspaceId,
+      {
+        // Gap 13: the distiller is an hourly autonomous job, so its
+        // LLM calls enroll in the per-workspace daily cap + operator
+        // toasts. Lazy (not evaluated until each tick) so the distiller
+        // can be constructed before setBudgetDeps has run during
+        // daemon boot.
+        getBudgetDeps: () => engine.getAutonomousBudgetDeps(),
+      },
     );
     registerInternalHandler(X_DRAFT_DISTILLER_HANDLER, async () => {
       const result = await xDraftDistiller.tick();

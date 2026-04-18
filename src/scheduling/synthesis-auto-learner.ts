@@ -201,6 +201,13 @@ export class SynthesisAutoLearner {
       candidate,
       manifest: probeResult.manifest,
       skillsDir: layout.skillsDir,
+      // Gap 13: the autolearner is a scheduler-driven autonomous caller
+      // (fires on synthesis:candidate bus events), so its LLM spend
+      // counts against the per-workspace daily cap. Pull the deps off
+      // the engine the daemon wired once via `setBudgetDeps`; undefined
+      // when the middleware is not wired (test ctx with a stub engine
+      // that doesn't implement the helper) so the call still dispatches.
+      budget: this.opts.toolCtx.engine.getAutonomousBudgetDeps?.(),
     });
     if (!genResult.ok) {
       logger.warn(

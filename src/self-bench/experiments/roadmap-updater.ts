@@ -202,6 +202,9 @@ export class RoadmapUpdaterExperiment implements Experiment {
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         experimentId: this.id,
+        // Gap 13: roadmap-updater fires on the autonomous experiment-
+        // runner cadence. Enroll in the per-workspace daily cap.
+        budget: ctx.engine.getAutonomousBudgetDeps?.(),
       },
       {
         purpose: 'reasoning',

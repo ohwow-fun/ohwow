@@ -48,7 +48,7 @@ import { join, resolve } from 'node:path';
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../../lib/logger.js';
-import { runLlmCall } from '../../execution/llm-organ.js';
+import { runLlmCall, type LlmCallDeps } from '../../execution/llm-organ.js';
 import type { ModelRouter } from '../../execution/model-router.js';
 import {
   getActiveRuntimeSkillLoader,
@@ -74,6 +74,16 @@ export interface GenerateSkillInput {
    * picks FAST/BALANCED via purpose='generation' + difficulty='moderate'.
    */
   preferModel?: string;
+  /**
+   * Gap 13: when set, the generator's LLM call consults the per-
+   * workspace daily autonomous cap middleware (meter + notifier +
+   * emittedToday tracker). Scheduler-driven callers
+   * (SynthesisAutoLearner) read this off `engine.getAutonomousBudget
+   * Deps()` so the cap + operator toasts include synthesis spend.
+   * Undefined in chat-invoked paths that stay tagged autonomous by
+   * default but don't wire the middleware themselves.
+   */
+  budget?: LlmCallDeps['budget'];
   /**
    * Inject the LLM call function so unit tests can drive the generator
    * with a canned TypeScript response without hitting a real model.
@@ -443,6 +453,14 @@ export async function generateCodeSkill(input: GenerateSkillInput): Promise<Gene
           modelRouter: input.modelRouter,
           db: input.db,
           workspaceId: input.workspaceId,
+          // Gap 13: scheduler-driven synthesis (SynthesisAutoLearner
+          // on synthesis:candidate events) passes the engine's
+          // autonomous-budget deps so the call counts against the
+          // daily cap and band-crossings surface as operator toasts.
+          // Undefined in chat-invoked paths that go through the
+          // orchestrator tool registry; those stay tagged autonomous
+          // but skip the middleware.
+          budget: input.budget,
         },
         {
           purpose: 'generation',
