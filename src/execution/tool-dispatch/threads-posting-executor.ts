@@ -25,10 +25,11 @@ import {
   findProfileByIdentity,
   listProfiles,
   openProfileWindow,
-  findExistingTabForHost,
+  findReusableTabForHost,
   closeTabById,
 } from '../browser/chrome-profile-router.js';
 import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
+import { withProfileLock } from '../browser/profile-mutex.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
@@ -115,24 +116,31 @@ export const threadsPostingExecutor: ToolExecutor = {
       || profiles[0];
 
     // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
-    // Restrict reuse to agent-owned tabs only (ownershipMode: 'ours') so
-    // we never hijack a threads.com tab the human is actively using.
-    // If no owned tab exists, openProfileWindow creates a fresh one and
-    // we mark it owned so subsequent ticks reuse it. `freshTargetId` is
-    // set ONLY when we opened the tab ourselves in THIS call; the
-    // finally block closes it after compose so tabs don't leak.
-    // Owner string for claim scoping — see x-posting-executor for
-    // rationale. Scopes the CDP attach to this task so a concurrent
-    // task on the same profile can't clobber our session.
+    // Prefer reusing an UNCLAIMED threads.com tab owned by a prior task
+    // (`findReusableTabForHost` claims it + `resetTab`s back to the host
+    // landing so stale drafts or modals from the previous task don't
+    // leak in). `withProfileLock` serializes this lookup + claim + open
+    // sequence so two concurrent tasks on the same profile don't both
+    // see "no match" and open duplicate windows.
     const claimOwner = ctx.taskId;
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
-      await ensureDebugChrome({ preferredProfile: target.directory });
-      const existing = await findExistingTabForHost('threads.com', { ownershipMode: 'ours' });
-      if (existing) {
-        expectedBrowserContextId = existing.browserContextId ?? undefined;
-      } else {
+      await withProfileLock(target.directory, async () => {
+        await ensureDebugChrome({ preferredProfile: target.directory });
+        const reusable = await findReusableTabForHost({
+          hostMatch: 'threads.com',
+          profileDir: target.directory,
+          owner: claimOwner,
+          resetUrl: 'https://www.threads.com/',
+        });
+        if (reusable) {
+          expectedBrowserContextId = reusable.browserContextId ?? undefined;
+          reusable.page.close();
+          reusable.closeBrowser();
+          return;
+        }
+
         const opened = await openProfileWindow({
           profileDir: target.directory,
           url: 'https://www.threads.com/',
@@ -149,9 +157,9 @@ export const threadsPostingExecutor: ToolExecutor = {
             '[threads-posting-executor] freshly opened tab already claimed by another owner — racing task likely; closing and bailing',
           );
           await closeTabById(opened.targetId);
-          return { content: 'Error: Couldn\'t claim threads.com tab (racing task holds it). Retry.', is_error: true };
+          throw new Error('Couldn\'t claim threads.com tab (racing task holds it). Retry.');
         }
-      }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `Error: Couldn't open Chrome profile for Threads: ${msg}`, is_error: true };

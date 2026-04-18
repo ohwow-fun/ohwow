@@ -6,6 +6,7 @@ const profileRouterMocks = vi.hoisted(() => ({
   listProfiles: vi.fn(),
   findProfileByIdentity: vi.fn(),
   findExistingTabForHost: vi.fn(),
+  findReusableTabForHost: vi.fn(),
   closeTabById: vi.fn(),
 }));
 const lifecycleMocks = vi.hoisted(() => ({
@@ -84,6 +85,10 @@ beforeEach(() => {
     targetId: 'tid',
     browserContextId: 'ctx-profile-1',
   });
+  // By default no reusable tab exists — exercise the "open a fresh
+  // window" path the existing assertions expect.
+  profileRouterMocks.findReusableTabForHost.mockResolvedValue(null);
+  profileRouterMocks.findExistingTabForHost.mockResolvedValue(null);
 });
 
 describe('xPostingExecutor', () => {

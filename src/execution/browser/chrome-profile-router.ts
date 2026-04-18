@@ -52,11 +52,15 @@ import {
   type ProfileInfo,
 } from './chrome-lifecycle.js';
 import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
-import { RawCdpBrowser } from './raw-cdp.js';
+import { RawCdpBrowser, type RawCdpPage } from './raw-cdp.js';
 import {
+  claimTarget,
+  currentOwner,
   hasAnyClaimForTarget,
   releaseTarget,
+  type ClaimHandle,
 } from './browser-claims.js';
+import { withProfileLock } from './profile-mutex.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -392,60 +396,66 @@ export async function connectAndPinCdpPage(
     ?? profiles.find((p) => !!p.email)
     ?? profiles[0];
 
-  await ensureDebugChrome({ port, preferredProfile: target.directory });
-  const opened = await openProfileWindow({
-    profileDir: target.directory,
-    port,
-    url: opts.url,
-    timeoutMs,
-  });
-
-  // Ledger event so the Guardian can see every explicit pin we perform.
-  // `resolved_profile` is the same as `expected_profile` here because
-  // `openProfileWindow` addresses a specific profile directory by name
-  // — if it succeeded, Chrome opened the right window. The Guardian
-  // still learns this helper was invoked, which bounds the ledger's
-  // blind spot and gives `mismatch` detection a baseline.
-  void appendChromeProfileEvent({
-    source: 'route',
-    port,
-    pid: null,
-    expected_profile: target.directory,
-    resolved_profile: target.directory,
-  });
-
-  const pw = await import('playwright-core');
-  const browser = await pw.chromium.connectOverCDP(`http://localhost:${port}`);
-
-  try {
-    const routed = await routeToProfile({
-      browser,
-      profile: target.email ?? target.directory,
-      urlHint: opts.url,
+  // Serialize per-profile so two concurrent synthesis-probe /
+  // connectAndPinCdpPage calls on the same profile don't both
+  // `openProfileWindow` (which would create duplicate fresh windows).
+  // Different profiles still run in parallel.
+  return withProfileLock(target.directory, async () => {
+    await ensureDebugChrome({ port, preferredProfile: target.directory });
+    const opened = await openProfileWindow({
+      profileDir: target.directory,
       port,
+      url: opts.url,
       timeoutMs,
     });
-    logger.debug(
-      {
-        profile: target.directory,
-        ctx: opened.browserContextId?.slice(0, 8),
+
+    // Ledger event so the Guardian can see every explicit pin we perform.
+    // `resolved_profile` is the same as `expected_profile` here because
+    // `openProfileWindow` addresses a specific profile directory by name
+    // — if it succeeded, Chrome opened the right window. The Guardian
+    // still learns this helper was invoked, which bounds the ledger's
+    // blind spot and gives `mismatch` detection a baseline.
+    void appendChromeProfileEvent({
+      source: 'route',
+      port,
+      pid: null,
+      expected_profile: target.directory,
+      resolved_profile: target.directory,
+    });
+
+    const pw = await import('playwright-core');
+    const browser = await pw.chromium.connectOverCDP(`http://localhost:${port}`);
+
+    try {
+      const routed = await routeToProfile({
+        browser,
+        profile: target.email ?? target.directory,
+        urlHint: opts.url,
+        port,
+        timeoutMs,
+      });
+      logger.debug(
+        {
+          profile: target.directory,
+          ctx: opened.browserContextId?.slice(0, 8),
+          matchReason: routed.matchReason,
+        },
+        '[chrome-profile-router] connectAndPinCdpPage resolved',
+      );
+      return {
+        browser,
+        page: routed.page,
+        profile: routed.profile,
+        browserContextId: opened.browserContextId,
         matchReason: routed.matchReason,
-      },
-      '[chrome-profile-router] connectAndPinCdpPage resolved',
-    );
-    return {
-      browser,
-      page: routed.page,
-      profile: routed.profile,
-      browserContextId: opened.browserContextId,
-      matchReason: routed.matchReason,
-    };
-  } catch (err) {
-    // Close the Playwright Browser handle so we don't leak the CDP
-    // connection on failure. The underlying debug Chrome stays up.
-    await browser.close().catch(() => { /* ignore */ });
-    throw err;
-  }
+      };
+    } catch (err) {
+      // Close the Playwright Browser handle so we don't leak the CDP
+      // connection on failure. The underlying debug Chrome stays up.
+      await browser.close().catch(() => { /* ignore */ });
+      throw err;
+    }
+  });
 }
 
 /**
@@ -482,6 +492,147 @@ export async function findExistingTabForHost(
     const [match] = matches;
     return { targetId: match.targetId, browserContextId: match.browserContextId };
   } catch {
+    return null;
+  } finally {
+    try { browser?.close(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Navigate a CDP page to `url` (default `about:blank`) to flush prior
+ * per-tab state (scroll position, selection, modals, half-typed
+ * compose drafts) before we reuse it for a new task.
+ *
+ * Already-at-url → no-op. Same-URL `Page.navigate` would force a full
+ * reload that costs 1-2s on x.com and throws off identity probes that
+ * read the sidebar immediately after; skipping it keeps reuse cheap.
+ *
+ * Best-effort: errors are swallowed. A page that refuses to navigate
+ * is still reusable — the composer's own navigation will decide
+ * whether to recover or bail.
+ */
+export async function resetTab(page: RawCdpPage, url: string = 'about:blank'): Promise<void> {
+  try {
+    const current = await page.url();
+    // Normalize trailing-slash edge: 'https://x.com/home' and
+    // 'https://x.com/home/' are equivalent to humans but not to CDP.
+    const normalize = (u: string): string => u.replace(/\/+$/, '');
+    if (normalize(current) === normalize(url)) return;
+    await page.goto(url);
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, targetUrl: url },
+      '[chrome-profile-router] resetTab best-effort failure',
+    );
+  }
+}
+
+/**
+ * Two-pass reusable-tab lookup that plays nice with the task-scoped
+ * claims model:
+ *
+ *   1. Iterate page targets whose URL host matches `hostMatch`.
+ *   2. For each match, check `currentOwner({profileDir, targetId})`.
+ *      An UNOWNED tab is reusable. Attempt to `claimTarget` under the
+ *      caller's `owner`.
+ *   3. On successful claim, attach a `RawCdpPage` and (optionally)
+ *      `resetTab(page, resetUrl)` to flush prior state. Return the
+ *      handle so the caller can release + close it at task end.
+ *
+ * Claim-race: `currentOwner` -> `claimTarget` is NOT atomic against
+ * other callers reading between the two. If someone wins first,
+ * `claimTarget` returns null; we log WARN and keep scanning — the
+ * caller falls through to "open fresh" on null return.
+ *
+ * `profileDir` must match the profile the caller is working in, so
+ * claim namespacing is consistent with openProfileWindow-initiated
+ * claims. `hostMatch` is a case-insensitive substring (same semantics
+ * as `findExistingTabForHost`).
+ */
+export interface ReusableTabHandle {
+  page: RawCdpPage;
+  targetId: string;
+  browserContextId: string | null;
+  claim: ClaimHandle;
+  /** Close the CDP browser WS when caller is done. (The tab itself stays open for the next reuse.) */
+  closeBrowser: () => void;
+}
+
+export async function findReusableTabForHost(opts: {
+  hostMatch: string;
+  profileDir: string;
+  owner: string;
+  /** URL to navigate the reused tab to via resetTab. Default 'about:blank'. Pass the host landing page (e.g. x.com/home) to land ready-to-compose. */
+  resetUrl?: string;
+  port?: number;
+}): Promise<ReusableTabHandle | null> {
+  const { hostMatch, profileDir, owner, resetUrl, port = DEFAULT_CDP_PORT } = opts;
+  let browser: RawCdpBrowser | null = null;
+  try {
+    // spawnIfDown=false mirrors findExistingTabForHost — if Chrome is
+    // gone the caller will handle it via their own ensureDebugChrome.
+    browser = await ensureCdpBrowser({ port, spawnIfDown: false });
+    const targets = await browser.getTargets();
+    const needle = hostMatch.toLowerCase();
+    const matches = targets.filter(
+      (t) => t.type === 'page' && t.url.toLowerCase().includes(needle),
+    );
+    for (const match of matches) {
+      const existingOwner = currentOwner({ profileDir, targetId: match.targetId });
+      if (existingOwner && existingOwner !== owner) continue; // Held by a concurrent task.
+
+      const claim = claimTarget({ profileDir, targetId: match.targetId }, owner);
+      if (!claim) {
+        // Race: someone else claimed between our currentOwner read and
+        // our claimTarget write. Warn + keep scanning.
+        logger.warn(
+          { targetId: match.targetId.slice(0, 8), profileDir, owner },
+          '[chrome-profile-router] tab-reuse race: claim taken between check + set; trying next match',
+        );
+        continue;
+      }
+
+      let page: RawCdpPage;
+      try {
+        page = await browser.attachToPage(match.targetId);
+        await page.installUnloadEscapes();
+      } catch (err) {
+        // Attach failed (tab died mid-scan?) — drop the claim so
+        // releaseAllForOwner at task end doesn't leave a stale entry
+        // and keep scanning.
+        claim.release();
+        logger.debug(
+          { err: err instanceof Error ? err.message : err, targetId: match.targetId.slice(0, 8) },
+          '[chrome-profile-router] attachToPage failed during reuse',
+        );
+        continue;
+      }
+
+      if (resetUrl) {
+        await resetTab(page, resetUrl);
+      }
+
+      const closeBrowser = (): void => {
+        try { browser?.close(); } catch { /* ignore */ }
+      };
+      // Don't close the browser WS in the finally below — the caller
+      // now owns it via `closeBrowser`.
+      const handle: ReusableTabHandle = {
+        page,
+        targetId: match.targetId,
+        browserContextId: match.browserContextId,
+        claim,
+        closeBrowser,
+      };
+      browser = null; // Ownership transferred.
+      return handle;
+    }
+    return null;
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err, hostMatch },
+      '[chrome-profile-router] findReusableTabForHost unexpected error',
+    );
     return null;
   } finally {
     try { browser?.close(); } catch { /* ignore */ }

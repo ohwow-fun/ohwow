@@ -60,9 +60,11 @@ import {
   listProfiles,
   openProfileWindow,
   findExistingTabForHost,
+  findReusableTabForHost,
   closeTabById,
 } from '../browser/chrome-profile-router.js';
 import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
+import { withProfileLock } from '../browser/profile-mutex.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
@@ -156,12 +158,15 @@ export const xPostingExecutor: ToolExecutor = {
 
     // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
     // Reuse an existing x.com tab when one is already open (from a prior
-    // cadence fire). DM tools can reuse any tab the operator has open so
-    // they land in the right conversation; compose/scan/reply tools
-    // restrict reuse to agent-owned tabs so we never hijack a tab the
-    // human is actively using. `freshTargetId` is set ONLY when we
-    // opened a new tab; the finally block closes it after compose so
-    // tabs don't leak across fires.
+    // cadence fire). Compose/scan/reply prefer reusing an UNCLAIMED agent
+    // tab (kills the "new window every fire" regression under the
+    // task-scoped claims model); DM tools can additionally fall back to
+    // ANY matching tab the operator already has open so they land in the
+    // right conversation. The whole lookup-and-open-or-claim sequence
+    // runs under `withProfileLock(target.directory)` so two concurrent
+    // tasks on the same profile can't both see "no match" and each
+    // open their own window — the second waits for the first to claim
+    // its tab, then reuses it.
     const dmToolNames = new Set(['x_send_dm', 'x_list_dms', 'x_delete_reply', 'x_delete_tweet']);
     const ownershipMode = dmToolNames.has(toolName) ? 'any' : 'ours';
     // Owner string for claim scoping. `ctx.taskId` scopes each claim to
@@ -173,11 +178,44 @@ export const xPostingExecutor: ToolExecutor = {
     let expectedBrowserContextId: string | undefined;
     let freshTargetId: string | null = null;
     try {
-      await ensureDebugChrome({ preferredProfile: target.directory });
-      const existing = await findExistingTabForHost('x.com', { ownershipMode });
-      if (existing) {
-        expectedBrowserContextId = existing.browserContextId ?? undefined;
-      } else {
+      await withProfileLock(target.directory, async () => {
+        await ensureDebugChrome({ preferredProfile: target.directory });
+        // First pass: reuse an unclaimed x.com tab under this profile.
+        // `findReusableTabForHost` atomically claims the tab and
+        // navigates it back to the host landing page (resetTab) so a
+        // prior task's dirty state — modal, scroll, half-typed draft —
+        // doesn't leak into this one. We don't need the returned
+        // RawCdpPage here; the composer re-attaches via
+        // `getCdpPage(expectedBrowserContextId)`. We do hold the claim
+        // through the whole task (released in `finally` below).
+        const reusable = await findReusableTabForHost({
+          hostMatch: 'x.com',
+          profileDir: target.directory,
+          owner: claimOwner,
+          resetUrl: 'https://x.com/home',
+        });
+        if (reusable) {
+          expectedBrowserContextId = reusable.browserContextId ?? undefined;
+          // Browser WS is per-lookup; drop it now so the composer's
+          // own ensureCdpBrowser gets a clean one.
+          reusable.page.close();
+          reusable.closeBrowser();
+          return;
+        }
+
+        // DM tools (ownershipMode='any') also accept operator-owned
+        // tabs as a fallback — the operator may have a DM conversation
+        // open in their own x.com tab and we should pick that up.
+        if (ownershipMode === 'any') {
+          const operatorTab = await findExistingTabForHost('x.com', { ownershipMode: 'any' });
+          if (operatorTab) {
+            expectedBrowserContextId = operatorTab.browserContextId ?? undefined;
+            return;
+          }
+        }
+
+        // Second pass: no reusable tab exists, so open a fresh window
+        // and claim it under this task.
         const opened = await openProfileWindow({
           profileDir: target.directory,
           url: 'https://x.com/home',
@@ -194,9 +232,9 @@ export const xPostingExecutor: ToolExecutor = {
             '[x-posting-executor] freshly opened tab already claimed by another owner — racing task likely; closing and bailing',
           );
           await closeTabById(opened.targetId);
-          return { content: 'Error: Couldn\'t claim x.com tab (racing task holds it). Retry.', is_error: true };
+          throw new Error('Couldn\'t claim x.com tab (racing task holds it). Retry.');
         }
-      }
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { content: `Error: Couldn't open Chrome profile for X: ${msg}`, is_error: true };
