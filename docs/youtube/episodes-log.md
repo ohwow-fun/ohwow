@@ -40,7 +40,7 @@ owns the append.
 - **Narration**: 107 words, onyx (OpenRouter gpt-audio-mini)
 - **Music**: ambient-electric (base 0.9, ducked under voice)
 - **Commit (rename/config if any)**: fc16d12, c8b743c, 6d3da49, d2a3f9d, 594424d, 7e519e0, 717d6dd, 65f6987, 9fb6dd2
-- **Commit (publish record)**: <this-commit-sha>
+- **Commit (publish record)**: f2f0c30
 - **What worked**: Every layer of the compose to publish path is now defaults-locked and regression-pinned, so the derived title, per-scene TTS, loudnorm, ducking, session partition probe, and public-gate override all hold without per-run babysitting.
 - **What to improve**: Studio wizard stalled at step 0 with "Next button not clickable", so the founder finished manually and automated videoId capture did not happen; the URL above is backfilled once confirmed. Surfacing which field or modal is blocking, or accepting an explicit founder-finish checkpoint, is the real next-up.
 
