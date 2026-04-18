@@ -334,7 +334,13 @@ export async function mirrorArcToDisk(
 
   for (let i = 0; i < reports.length; i += 1) {
     const report = reports[i];
-    const trios = await listTriosForPhase(db, report.id);
+    // `phase_trios.phase_id` carries the picker's logical phase id
+    // (e.g. `phase_A`), NOT the phase-report row id. Director writes the
+    // report row keyed by `genPhaseReportId(arc, idx)` and passes
+    // `pick.phase_id` into the phase orchestrator; that's the value the
+    // trios end up tagged with. Match on the right key or the round
+    // tree comes out empty.
+    const trios = await listTriosForPhase(db, report.phase_id);
     const roundsByTrio = new Map<string, RoundRecord[]>();
     for (const trio of trios) {
       const rounds = await listRoundsForTrio(db, trio.id);
