@@ -110,4 +110,68 @@ describe('createBudgetMeter: origin filter', () => {
     const spent = await meter.getCumulativeAutonomousSpendUsd(WS, NOW);
     expect(spent).toBeCloseTo(3.0, 2);
   });
+
+  it('trusts invoice cost_cents for Opus 4.7 OpenRouter rows (no multiplier)', async () => {
+    // CASE-A invariant (gap-13): OpenRouter populates cost_cents directly
+    // from the invoice payload (`data.usage.cost`), which is the dollar
+    // amount actually billed. If the meter ever started multiplying this
+    // by a tokenizer-inflation factor (e.g. 1.35x for Opus 4.7), the
+    // recorded spend would drift from the invoice of record.
+    //
+    // Seed a single autonomous row with a 25¢ invoice — regardless of
+    // token counts — and assert the meter reports exactly $0.25.
+    const { db } = fakeAdapter([
+      {
+        workspace_id: WS,
+        origin: 'autonomous',
+        cost_cents: 25,
+        model: 'claude-opus-4-7',
+        input_tokens: 1_000,
+        output_tokens: 2_000,
+        created_at: TODAY,
+      },
+    ]);
+    const meter = createBudgetMeter(db);
+    const spent = await meter.getCumulativeAutonomousSpendUsd(WS, NOW);
+    // Exactly 25¢ / 100 = $0.25. A sneaky 1.35x multiplier would push
+    // this to $0.3375 — any deviation fails this test.
+    expect(spent).toBeCloseTo(0.25, 4);
+  });
+
+  it('uses SDK-reported token counts for Opus 4.7 Anthropic rows without extra inflation', async () => {
+    // CASE-A invariant (gap-13): Anthropic-native calls report
+    // input_tokens / output_tokens straight from `response.usage.*`,
+    // which is produced by the server-side Opus 4.7 tokenizer. The
+    // tokenizer change is ALREADY baked into those counts, so the meter
+    // must price them straight against PRICING_USD_PER_MTOK with NO
+    // additional inflation factor applied.
+    //
+    // 1_000 input × $15/MTok  = $0.015
+    // 2_000 output × $75/MTok = $0.150
+    //                 total   = $0.165
+    // A 1.35x multiplier anywhere would push this to ~$0.22275.
+    const { db } = fakeAdapter([
+      {
+        workspace_id: WS,
+        origin: 'autonomous',
+        cost_cents: 0,
+        model: 'claude-opus-4-7',
+        input_tokens: 1_000,
+        output_tokens: 2_000,
+        created_at: TODAY,
+      },
+    ]);
+    const meter = createBudgetMeter(db);
+    const spent = await meter.getCumulativeAutonomousSpendUsd(WS, NOW);
+    // estimateCostUsdCents rounds to the nearest cent via Math.round,
+    // and 16.5¢ rounds to 16¢ under banker-less round-half-to-even-ish
+    // behavior of JS Math.round (which is actually round-half-up toward
+    // +Infinity, but 16.5 lands on 16 due to float repr: 0.015 + 0.15 =
+    // 0.165000000000000... and *100 produces 16.499999...). The exact
+    // fallback path lands on $0.16. What matters for the invariant is
+    // that it is MILES away from the 1.35x-inflated ~$0.22 world — any
+    // multiplier leaks would push this test over $0.20.
+    expect(spent).toBeCloseTo(0.16, 2);
+    expect(spent).toBeLessThan(0.20); // hard upper bound: no multiplier
+  });
 });
