@@ -17,28 +17,49 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveOhwow } from './_ohwow.mjs';
+import {
+  isThrottled,
+  XSearchThrottledError,
+} from '../../src/lib/x-search-throttle.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /**
- * Thrown by scrollAndHarvest when X serves "Something went wrong. Try
- * reloading." on the search endpoint. The page shell still renders (auth
- * is intact, left nav + profile visible) but the timeline is blank,
- * meaning the TweetTimelineSearchQuery RPC was throttled for this account.
+ * Thrown when scrollAndHarvest detects X's "Something went wrong. Try
+ * reloading." error-shell on an authenticated search page — X's per-account
+ * search-RPC throttle. Callers should catch this, persist the trip via
+ * `markThrottled()`, and abort any remaining queries.
  *
- * Observed trigger: more than ~15 distinct search queries in ~5 minutes
- * from the same authenticated session. Cooldown has been 30-60 min in
- * practice. Callers should treat this as a soft-abort: skip remaining
- * queries this run, schedule a retry at least 15 min out.
+ * We also throw this from the pre-flight when a prior run has already
+ * recorded a live cooldown in `~/.ohwow/x-search-throttle.json` — that
+ * way the error type is uniform regardless of who detected the throttle.
  */
 export class XSearchRateLimitedError extends Error {
-  constructor(url) {
-    super(`x_search_rate_limited: ${url}`);
+  constructor(url, detail) {
+    super(
+      `X search throttle tripped${detail ? ` (${detail})` : ''} at ${url}. Respect the cooldown.`,
+    );
     this.name = 'XSearchRateLimitedError';
-    this.code = 'RATE_LIMITED';
     this.url = url;
+    this.detail = detail || null;
   }
 }
+
+// JS string that, evaluated in the page, returns true if the X search
+// error-shell is showing. Matches the "Something went wrong. Try
+// reloading." message on an authenticated profile — the signature the
+// rate limit produces. We also accept a few adjacent phrasings X has
+// shipped in the past year to avoid brittleness.
+const SEARCH_ERROR_SHELL_JS = `(() => {
+  const bodyText = document.body ? document.body.innerText || '' : '';
+  if (!bodyText) return false;
+  const signatures = [
+    'Something went wrong. Try reloading.',
+    'Something went wrong, but don',
+    'Hmm...this page doesn',
+  ];
+  return signatures.some(s => bodyText.includes(s));
+})()`;
 
 export const HARVEST_JS = `(() => {
   const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
@@ -76,29 +97,48 @@ export const HARVEST_JS = `(() => {
   }).filter(p => p.permalink);
 })()`;
 
+/** Crude URL test — returns true if `url` hits x.com's search endpoint,
+ *  which is the only surface governed by the per-account search-RPC
+ *  throttle. Profile / status / home pages are scraped via different
+ *  RPCs and don't share the same budget. */
+function isSearchUrl(url) {
+  return typeof url === 'string' && /(?:x|twitter)\.com\/search(?:\?|$|\/)/i.test(url);
+}
+
 /**
  * Navigate `page` to `url`, scroll up to `maxScrolls` times, accumulate
  * unique posts by permalink, return the list. Uses the same End-key +
  * deep-scroll pattern feed-explore proved out.
+ *
+ * Pre-flight: if `url` is an x.com/search page and `isThrottled()`
+ * reports a live cooldown, throws `XSearchRateLimitedError` WITHOUT
+ * loading the page. That's the cheap branch.
+ *
+ * In-flight: after the 2.8s settle, if the search error-shell is
+ * visible, we also throw `XSearchRateLimitedError` so the caller can
+ * persist the trip and abort. That's the definitive signal.
  */
 export async function scrollAndHarvest(page, url, maxScrolls = 10) {
+  if (isSearchUrl(url)) {
+    const gate = isThrottled();
+    if (gate.throttled) {
+      throw new XSearchRateLimitedError(url, `pre-flight: cooldown until ${gate.until?.toISOString?.() || 'unknown'}`);
+    }
+  }
   await page.goto(url);
   await sleep(2800);
-  // Rate-limit detection. Must run BEFORE the scroll loop — a throttled
-  // search page looks like a legitimate zero-result page (3 stagnant
-  // scrolls, ~12s, no articles) and silently returns []. That mis-reports
-  // a blocked query as "no results", so the caller keeps firing further
-  // queries into the same block and wastes the cooldown window.
-  const searchLike = url.includes('/search');
-  if (searchLike) {
-    const blocked = await page.evaluate(
-      `(() => {
-        const hasErr = document.body && document.body.innerText.includes('Something went wrong');
-        const articles = document.querySelectorAll('article[data-testid="tweet"]').length;
-        return hasErr && articles === 0;
-      })()`
-    );
-    if (blocked) throw new XSearchRateLimitedError(url);
+  if (isSearchUrl(url)) {
+    try {
+      const errShell = await page.evaluate(SEARCH_ERROR_SHELL_JS);
+      if (errShell) {
+        throw new XSearchRateLimitedError(url, 'error-shell after settle');
+      }
+    } catch (e) {
+      // Only rethrow if it's the rate-limit signal; page.evaluate can
+      // throw transient DOM-unready errors that should not look like a
+      // throttle trip.
+      if (e instanceof XSearchRateLimitedError) throw e;
+    }
   }
   const seen = new Map();
   let stagnant = 0;
