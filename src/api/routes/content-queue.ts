@@ -69,7 +69,6 @@ interface PostedLogRow {
 
 interface AutomationRow {
   id: string;
-  workspace_id: string;
   name: string;
   enabled: number | boolean;
   fire_count: number | null;
@@ -157,11 +156,14 @@ export function createContentQueueRouter(db: DatabaseAdapter): Router {
         .limit(100);
       const shipped: PostedLogRow[] = shippedData ?? [];
 
-      // 4. Automation states (filtered to the content ones)
+      // 4. Automation states (filtered to the content ones).
+      // Runtime stores automations in `local_triggers`; the cloud
+      // mirror uses `agent_workforce_workflows`. The runtime table
+      // has no workspace_id column (the whole DB is workspace-scoped)
+      // so we filter by name only.
       const { data: autoData } = await db
-        .from<AutomationRow>('agent_workforce_workflows')
-        .select('id, workspace_id, name, enabled, fire_count, last_fired_at, status')
-        .eq('workspace_id', workspaceId)
+        .from<AutomationRow>('local_triggers')
+        .select('id, name, enabled, fire_count, last_fired_at, status')
         .limit(200);
       const automations = (autoData ?? [])
         .filter((a) => CONTENT_AUTOMATION_NAMES.has(a.name))

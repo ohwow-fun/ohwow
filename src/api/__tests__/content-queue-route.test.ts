@@ -209,11 +209,11 @@ describe('content-queue route', () => {
 
   it('filters automations to the three content lanes', async () => {
     const db = buildDb({
-      agent_workforce_workflows: [
-        { id: 'w1', workspace_id: 'ws-test', name: 'ohwow:content-cadence', enabled: 1, fire_count: 47, last_fired_at: '2026-04-18T02:52:00Z', status: 'active' },
-        { id: 'w2', workspace_id: 'ws-test', name: 'ohwow:x-draft-distiller', enabled: 1, fire_count: 17, last_fired_at: '2026-04-18T02:48:35Z', status: 'active' },
-        { id: 'w3', workspace_id: 'ws-test', name: 'ohwow:x-humor', enabled: 0, fire_count: 3, last_fired_at: null, status: 'active' },
-        { id: 'w4', workspace_id: 'ws-test', name: 'ohwow:x-intel-pipeline', enabled: 1, fire_count: 14, last_fired_at: null, status: 'active' },
+      local_triggers: [
+        { id: 'w1', name: 'ohwow:content-cadence', enabled: 1, fire_count: 47, last_fired_at: '2026-04-18T02:52:00Z', status: 'active' },
+        { id: 'w2', name: 'ohwow:x-draft-distiller', enabled: 1, fire_count: 17, last_fired_at: '2026-04-18T02:48:35Z', status: 'active' },
+        { id: 'w3', name: 'ohwow:x-humor', enabled: 0, fire_count: 3, last_fired_at: null, status: 'active' },
+        { id: 'w4', name: 'ohwow:x-intel-pipeline', enabled: 1, fire_count: 14, last_fired_at: null, status: 'active' },
       ],
     });
     const router = createContentQueueRouter(db as never);
