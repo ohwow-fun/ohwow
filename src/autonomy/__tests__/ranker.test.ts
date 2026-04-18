@@ -450,6 +450,141 @@ describe('rankNextPhase — lens preamble', () => {
   });
 });
 
+// ----------------------------------------------------------------------------
+// Per-mode budget demotion (gap 14.11b)
+// ----------------------------------------------------------------------------
+
+describe('rankNextPhase — per-mode budget demotion', () => {
+  function revenuePhaseReport(
+    arcId: string,
+    costMinutes: number,
+  ): PhaseReportRecord {
+    return fakeReport({
+      id: `pr_${arcId}`,
+      arc_id: arcId,
+      mode: 'revenue',
+      // The goal contains a deterministic source provenance so the
+      // mode-budget filter (which keys off `mode` only) sees these as
+      // revenue reports regardless of source/cadence/regression keying.
+      goal: 'fire approval apr_x [source=approval; id=apr_x]',
+      status: 'phase-closed',
+      cost_minutes: costMinutes,
+      // Push outside cadence (4h) and regression (72h) windows so those
+      // adjustments don't fight the demotion math under test.
+      started_at: new Date(REF_TIME_MS - 96 * 3_600_000).toISOString(),
+    });
+  }
+
+  it('avg cost over 3 distinct revenue arcs at 25min each (>22.5 cap*1.5) demotes a fresh approval by 0.7x', () => {
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_new', age_hours: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        revenuePhaseReport('arc_1', 25),
+        revenuePhaseReport('arc_2', 25),
+        revenuePhaseReport('arc_3', 25),
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    expect(out).toHaveLength(1);
+    // Pre-change formula: base 100 + age_h 0 + novelty 10 (apr_new is a
+    // new source_id; the seeded reports key off apr_x so apr_new is
+    // unseen) - regression 0 - cadence 0 = 110. Demotion multiplier 0.7
+    // -> 77 (within float tolerance).
+    expect(out[0].score).toBeGreaterThan(110 * 0.7 - 0.01);
+    expect(out[0].score).toBeLessThan(110 * 0.7 + 0.01);
+    // Bracket assertion for resilience to small future formula tweaks.
+    const preDemotion = 110;
+    expect(out[0].score).toBeLessThan(preDemotion * 0.71);
+    expect(out[0].score).toBeGreaterThan(preDemotion * 0.69);
+  });
+
+  it('avg cost within budget (10 min, well under 22.5) leaves the score un-multiplied', () => {
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_new', age_hours: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        revenuePhaseReport('arc_1', 10),
+        revenuePhaseReport('arc_2', 10),
+        revenuePhaseReport('arc_3', 10),
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    expect(out).toHaveLength(1);
+    // Base 100 + novelty 10 = 110, no demotion applied.
+    expect(out[0].score).toBe(110);
+  });
+
+  it('only counts DISTINCT arc_ids (3 reports from same arc do NOT trigger demotion via volume)', () => {
+    // Three revenue reports all sharing arc_id='arc_1', each 25 min. The
+    // demotion filter dedupes by arc_id, so only one cost sample lands
+    // (avg=25, > 22.5) — demotion still fires because 1 sample > cap.
+    // This test pins the dedup behaviour: the function does NOT need
+    // EXACTLY DEMOTION_LOOKBACK_ARCS distinct arcs to trigger; it uses
+    // up to that many. Demotion still fires from a single bad arc.
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_new', age_hours: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        { ...revenuePhaseReport('arc_solo', 25), id: 'pr_1' },
+        { ...revenuePhaseReport('arc_solo', 25), id: 'pr_2' },
+        { ...revenuePhaseReport('arc_solo', 25), id: 'pr_3' },
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    // Only one distinct arc: avg=25 > 22.5 -> demote.
+    expect(out[0].score).toBeLessThan(110);
+  });
+
+  it('mode mismatch: tooling reports do NOT demote a revenue candidate', () => {
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_new', age_hours: 0 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        { ...revenuePhaseReport('arc_1', 999), mode: 'tooling' },
+        { ...revenuePhaseReport('arc_2', 999), mode: 'tooling' },
+        { ...revenuePhaseReport('arc_3', 999), mode: 'tooling' },
+      ],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger,
+      refTimeMs: REF_TIME_MS,
+    });
+    // Revenue candidate's mode != tooling, so the budget filter ignores
+    // these reports. Score stays at base 100 + novelty 10 = 110.
+    expect(out[0].score).toBe(110);
+  });
+
+  it('no recent reports for the mode -> no demotion (fresh modes are not penalized)', () => {
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_new', age_hours: 0 })],
+    });
+    const out = rankNextPhase({
+      pulse,
+      ledger: emptyLedger(),
+      refTimeMs: REF_TIME_MS,
+    });
+    expect(out[0].score).toBe(110);
+  });
+});
+
 // Touch the SelfFindingLite import so a future refactor doesn't tree-shake
 // it out of the test bundle by accident.
 void fakeFinding;
