@@ -120,6 +120,22 @@ if (subcommand === 'logs') {
   } else {
     console.log(`No daemon running for focused workspace "${active.name}". (\`ohwow workspace list\` shows all)`);
   }
+
+  // X search throttle — one-liner so operators see it without a separate
+  // command. Full detail is at `ohwow x-throttle-status`.
+  try {
+    const { isThrottled } = await import('./lib/x-search-throttle.js');
+    const { formatDuration } = await import('./lib/format-duration.js');
+    const status = isThrottled();
+    if (status.throttled) {
+      console.log(`X search: throttled (clears in ${formatDuration(status.remainingMs)})`);
+    } else {
+      console.log('X search: ok');
+    }
+  } catch {
+    // Don't let the throttle readout break `ohwow status`.
+  }
+
   process.exit(0);
 } else if (subcommand === 'workspace') {
   const action = process.argv[3];
@@ -850,6 +866,10 @@ if (subcommand === 'logs') {
 } else if (subcommand === 'revenue') {
   const { runRevenueCli } = await import('./cli/revenue.js');
   await runRevenueCli(process.argv.slice(3));
+} else if (subcommand === 'x-throttle-status') {
+  const { runXThrottleStatusCli } = await import('./cli/x-throttle-status.js');
+  runXThrottleStatusCli(process.argv.slice(3));
+  process.exit(0);
 } else if (isDaemon) {
   // Daemon mode: start services + HTTP server, no TUI
   const { startDaemon } = await import('./daemon/start.js');
@@ -872,6 +892,7 @@ if (subcommand === 'logs') {
   console.log('  ohwow restart           Restart the daemon');
   console.log('  ohwow improve           Run self-improvement cycle');
   console.log('  ohwow revenue <add|list>    Record or inspect revenue entries');
+  console.log('  ohwow x-throttle-status     Show X search throttle state (add --json for machine output)');
   console.log('  ohwow video <render|cache>  Render a VideoSpec JSON to MP4');
   console.log('  ohwow showcase <target>     Research a person/company and set up a tailored agent');
   console.log('  ohwow workspace         Manage workspaces (list|current|create|use)');
