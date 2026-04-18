@@ -88,26 +88,58 @@ export interface XReplyQuery {
 }
 
 /**
- * Sandbox-validated default query set (2026-04-18). The direct phrases
- * find solopreneurs in marketing mode ("accepting new clients",
- * "taking on new clients", "open for commissions") and real operator
- * vents ("doing everything myself", "wish I could clone myself"). The
- * viral phrases pull in crowded indie-hacker threads whose reply
- * sections are packed with ohwow's ICP.
+ * Default query set — re-tuned 2026-04-18 around the "automatable hire"
+ * ICP lens: target budget-holders describing a task ohwow can do cheaper
+ * and better, not freelancers advertising availability (who are our
+ * competitors, not prospects).
+ *
+ * Three semantic families tested across three sweeps:
+ *   1. First-person-forced hiring intent ("I'm looking to hire", "I
+ *      want to hire", "I need a virtual assistant") — the first-person
+ *      subject filters out the "(Are you) hiring a X? DM me" supplier
+ *      pitch that collides with the looser "need a X" phrasing.
+ *   2. Role-specific hiring ("looking for a video editor", "hiring a
+ *      video editor", "need a social media manager") — narrow enough
+ *      to keep precision high; video + social are the highest-volume
+ *      roles for the 3-day window.
+ *   3. Decision-point vents ("should I hire", "wish I could clone
+ *      myself", "doing everything myself") — small-team founders at
+ *      the moment of reaching out for headcount relief. Already proven
+ *      in the earlier tuning cycle; kept.
+ *
+ * Dropped from the previous set (service-supply phrases): "now booking",
+ * "accepting new clients", "taking on new clients", "available for
+ * freelance", "looking for more clients", "open to projects", "open
+ * for commissions" — these surface freelancers announcing availability,
+ * not buyers. "as a solopreneur" dropped too (thought-leader heavy).
+ * "hiring a VA" dropped in favor of the disambiguated "hiring a virtual
+ * assistant" and "I need a virtual assistant" (VA collides with
+ * voice-actor fandom on X).
+ *
+ * Tested but NOT added: referral semantics ("know anyone who can",
+ * "anyone know someone who", "tag someone who can") surface personal
+ * life-help asks (medical, consumer, fandom), not business budget
+ * signals. Open-ambient patterns ("we're looking for", "looking for
+ * another") get drowned in song lyrics and sports chatter.
+ *
+ * Viral-mode phrases unchanged — they pull crowded indie-hacker threads
+ * whose reply sections are packed with ICP.
  */
 export const DEFAULT_X_REPLY_QUERIES: XReplyQuery[] = [
-  { q: '"now booking"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"accepting new clients"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"taking on new clients"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"available for freelance"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"looking for more clients"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"open to projects"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"open for commissions"', mode: 'direct', x_extra: 'lang:en -filter:replies -academic -essay' },
-  { q: '"as a solopreneur"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
-  { q: '"hiring a VA"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  // First-person-forced hiring intent
+  { q: '"I\'m looking to hire"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  { q: '"I want to hire"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  { q: '"I need a virtual assistant"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  // Role-specific (video + social are the highest-volume AI-automatable hires)
+  { q: '"hiring a virtual assistant"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  { q: '"looking for a video editor"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  { q: '"hiring a video editor"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  { q: '"need a social media manager"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  // Decision-point vents (retained from prior tuning cycle)
   { q: '"should I hire"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
   { q: '"wish I could clone myself"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
   { q: '"doing everything myself"', mode: 'direct', x_extra: 'lang:en -filter:replies' },
+  // Viral-mode piggyback (ICP-dense reply sections)
   { q: '"solo founder"', mode: 'viral', min_likes: 50, min_replies: 10, max_age_hours: 336 },
   { q: '"build in public"', mode: 'viral', min_likes: 50, min_replies: 10, max_age_hours: 336 },
   { q: '"indie hacker"', mode: 'viral', min_likes: 20, min_replies: 5, max_age_hours: 336 },
