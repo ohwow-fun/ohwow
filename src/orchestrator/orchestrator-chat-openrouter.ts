@@ -576,8 +576,13 @@ export async function* runOpenRouterChat(
       // Record per-iteration telemetry. The orchestrator chat loop calls the
       // provider directly, bypassing llm-organ, so without this write there
       // is no llm_calls row and every cost/token aggregation reads 0.
+      //
+      // Gap 13 follow-up 1b: operator chat turns are interactive by
+      // definition — every iteration here is servicing a human message.
+      // Tag origin='interactive' so these rows are excluded from the
+      // autonomous daily cap sum in createBudgetMeter.
       await recordLlmCallTelemetry(
-        { db: this.db, workspaceId: this.workspaceId },
+        { db: this.db, workspaceId: this.workspaceId, origin: 'interactive' },
         {
           purpose: 'orchestrator_chat',
           provider: response.provider,

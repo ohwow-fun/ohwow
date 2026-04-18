@@ -545,12 +545,17 @@ export async function proposeFirstMonthPlan(
 
   const { system, user } = buildSynthesisPrompt({ member, personModel, workspace });
 
+  // Gap 13 follow-up 1b: propose_first_month_plan is an orchestrator
+  // tool — invoked by the COS during a live chat with a new hire. Tag
+  // origin='interactive' so the synthesis spend is excluded from the
+  // autonomous daily cap sum.
   const llmResult = await runLlmCall(
     {
       modelRouter: ctx.modelRouter,
       db: ctx.db,
       workspaceId: ctx.workspaceId,
       currentAgentId: ctx.currentAgentId,
+      origin: 'interactive',
     },
     {
       purpose: 'planning',

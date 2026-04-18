@@ -77,12 +77,20 @@ export async function llmTool(
     };
   }
 
+  // Gap 13 follow-up 1b: this tool is only registered in the orchestrator
+  // tool registry, which runs inside the interactive chat loop (see
+  // orchestrator/tools/registry.ts). Every invocation is operator-initiated
+  // in the current request cycle, so tag origin='interactive' to exclude
+  // the row from the autonomous daily cap sum. Agent-task invocations of
+  // the same `llm` tool name go through execution/tool-dispatch/llm-
+  // executor.ts, which stays on the 'autonomous' default.
   const result = await runLlmCall(
     {
       modelRouter: ctx.modelRouter,
       db: ctx.db,
       workspaceId: ctx.workspaceId,
       currentAgentId: ctx.currentAgentId,
+      origin: 'interactive',
     },
     input,
   );
