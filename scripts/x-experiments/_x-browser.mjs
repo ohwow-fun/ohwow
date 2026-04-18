@@ -106,21 +106,28 @@ export async function ensureXReady() {
 }
 
 /**
- * Open a FRESH x.com tab inside the same Chrome profile the anchor tab
- * uses. Required for conversation-replies scraping: x.com's SPA caches
- * per-tab state, and a reused tab that previously rendered compose/post
- * or a profile feed won't hydrate the replies section on a subsequent
- * navigation to a status permalink. A fresh tab sidesteps that entirely.
+ * Open a FRESH x.com tab inside the same Chrome profile as whatever
+ * existing x.com tab is around. Required for any x.com scraping:
+ * x.com's SPA caches per-tab state, and a tab that was last touched
+ * by another flow (abandoned compose/post window, stale status
+ * thread, somebody else's profile page) may fail to hydrate
+ * subsequent navigations. Symptoms observed:
  *
- * The `anchorPage` is the existing `findOrOpenXTab` tab, used only to
- * read the `browserContextId` of the signed-in profile — we do not
- * navigate it. Returns the new page and its targetId; callers are
- * expected to `page.closeAndCleanup()` when finished.
+ *  - conversation-replies scrape returns only the focal tweet article
+ *    (17th-pass diagnosis on /zapier/status/… threads: reused tab
+ *    returned `1 raw · 0 external` across 10 scrolls; fresh tab
+ *    returned `3-4 raw · 1-2 external` on scroll 0)
+ *  - `page.goto('/home')` hangs indefinitely when the source tab is
+ *    on a status permalink (18th-pass observation: 100+ seconds idle
+ *    before manual kill)
  *
- * Background: 17th pass reproduced the wall with an A/B test. Reused
- * tab returned `1 raw · 0 external` on every zapier thread; fresh tab
- * returned 3-4 raw · 1-2 external on the same threads. See scripts/
- * x-experiments/_probe-scrape.mjs for the repro.
+ * A fresh tab in the same Chrome profile context sidesteps both.
+ * Callers should close it with `browser.closeTarget(page.targetId)`
+ * when done (that keeps the shared WebSocket alive for any other
+ * open pages; use `page.closeAndCleanup()` only when this is the
+ * last page you have open).
+ *
+ * See `scripts/x-experiments/_probe-scrape.mjs` for the A/B repro.
  */
 export async function openFreshXTab(browser) {
   const targets = await browser.getTargets();

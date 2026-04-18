@@ -28,7 +28,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
+import { RawCdpBrowser } from '../../src/execution/browser/raw-cdp.ts';
 import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.ts';
 import { openFreshXTab } from './_x-browser.mjs';
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
@@ -104,13 +104,30 @@ function loadConfig(workspace) {
 }
 
 async function ensureTab(browser) {
-  let page = await findOrOpenXTab(browser);
-  if (page) return page;
-  await openProfileWindow({ profileDir: PROFILE, url: 'https://x.com/home', timeoutMs: 15000 });
-  await new Promise(r => setTimeout(r, 2500));
-  page = await findOrOpenXTab(browser);
-  if (!page) throw new Error('could not open x.com tab');
-  return page;
+  // x-intel needs a FRESH dedicated tab for the whole run — the 17th-pass
+  // replier fix only covered scrapeRepliers, but the same tab-pollution
+  // bug bites home feed + profile navigations too: the first x.com tab
+  // in the targets list may be a long-abandoned compose/post window or
+  // a zapier status thread that was last touched by another flow. A
+  // `page.goto('/home')` on that stale tab hangs indefinitely (observed
+  // 18th pass, a fresh x-intel process sat idle for 100+ seconds after
+  // attaching to a C950A62C thread tab instead of the properly-loaded
+  // /home tab).
+  //
+  // Do NOT `findOrOpenXTab` first as a bootstrap: attaching to a stale
+  // tab eagerly sends Page.enable/Runtime.enable which leaves CDP state
+  // that interferes with subsequent fresh-tab work (double-attach
+  // reproducibly hangs scrollAndHarvest on the fresh page; standalone
+  // openFreshXTab alone does not). `openFreshXTab` already probes the
+  // targets list itself to find an anchor context — we only need the
+  // profile-window fallback if NO x.com tab exists at all.
+  try {
+    return await openFreshXTab(browser);
+  } catch {
+    await openProfileWindow({ profileDir: PROFILE, url: 'https://x.com/home', timeoutMs: 15000 });
+    await new Promise(r => setTimeout(r, 2500));
+    return openFreshXTab(browser);
+  }
 }
 
 // --- main --------------------------------------------------------------
@@ -309,6 +326,7 @@ console.log(`[x-intel] filter: ${candidates.length} → ${filtered.length} post-
 
 if (!fresh.length) {
   console.log('[x-intel] nothing new — exiting');
+  try { await browser.closeTarget(page.targetId); } catch { /* best effort */ }
   browser.close();
   process.exit(0);
 }
@@ -456,6 +474,7 @@ if (postsSidecar.length) {
 
 if (DRY) {
   console.log('[x-intel] DRY=1 — stopping before synthesis/upload');
+  try { await browser.closeTarget(page.targetId); } catch { /* best effort */ }
   browser.close();
   process.exit(0);
 }
@@ -589,4 +608,5 @@ const accLine = Object.keys(accuracy).length
 console.log('\n[x-intel] done');
 console.log(`[x-intel] report: ${elapsed}s · ${budget.llmCalls} llm calls · ${budget.tokensIn} in / ${budget.tokensOut} out tok · ${(budget.costCents / 100).toFixed(3)} USD · ${budget.autoApplied} auto-uploaded · ${budget.pending} pending approval · ${budget.predictionsEmitted} predictions emitted`);
 console.log(`[x-intel] forecast accuracy (30d): ${accLine}`);
+try { await browser.closeTarget(page.targetId); } catch { /* best effort */ }
 browser.close();
