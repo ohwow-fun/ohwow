@@ -43,7 +43,21 @@ import crypto from 'node:crypto';
 import { RawCdpBrowser } from '../../src/execution/browser/raw-cdp.ts';
 import { ensureXReady, openFreshXTab } from './_x-browser.mjs';
 import { llm, resolveOhwow, extractJson } from './_ohwow.mjs';
-import { scrollAndHarvest } from './_x-harvest.mjs';
+import { scrollAndHarvest, XSearchRateLimitedError } from './_x-harvest.mjs';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Sleep for a random duration in [min, max] ms. Used to space consecutive
+// search queries so X's per-account search-RPC throttle doesn't fire.
+// Observed safe cadence: ~60-90s between distinct queries; a 4-minute burst
+// of 18 queries × 5 scrolls reliably trips the throttle. Prod scheduler
+// runs queries on 10-min ticks and stays well under.
+const INTER_QUERY_DELAY_MIN_MS = Number(process.env.INTER_QUERY_DELAY_MIN_MS || 60_000);
+const INTER_QUERY_DELAY_MAX_MS = Number(process.env.INTER_QUERY_DELAY_MAX_MS || 90_000);
+async function pauseBetweenQueries(label) {
+  const ms = INTER_QUERY_DELAY_MIN_MS + Math.floor(Math.random() * Math.max(0, INTER_QUERY_DELAY_MAX_MS - INTER_QUERY_DELAY_MIN_MS));
+  console.log(`[pain-finder] ⏳ pacing ${(ms / 1000).toFixed(0)}s before ${label}`);
+  await sleep(ms);
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -60,7 +74,12 @@ const PROMPTS_FILE = process.env.PROMPTS_FILE
 const PLATFORM = (process.env.PLATFORM || 'both').toLowerCase();
 const LIMIT = Number(process.env.LIMIT || 30);
 const TOPN = Number(process.env.TOPN || 10);
-const MAX_SCROLLS = Number(process.env.MAX_SCROLLS || 4);
+// Default scroll depth. Direct-mode narrow phrases rarely need deep
+// pagination — most hits land on page 1 within the recency window, and
+// each extra scroll fires another TweetTimelineSearchQuery RPC that
+// counts against the search throttle. Viral mode still benefits from
+// deeper scrolling to reach the top-engagement threads.
+const MAX_SCROLLS = Number(process.env.MAX_SCROLLS || 3);
 const ONLY_DOMAIN = process.env.ONLY_DOMAIN || null;
 
 // Single-query test mode. Lets you try one query at a time to tune
@@ -595,9 +614,22 @@ async function main() {
   const page = await openFreshXTab(browser);
 
   // --- harvest ---
+  // Inter-query pacing: sleep 60-90s between queries (jittered) to stay
+  // under X's per-account search-RPC throttle. Skipped for the very first
+  // query and when a rate-limit error aborts the remainder.
   const rawByPermalink = new Map();
   const perQuery = [];
-  for (const q of queries) {
+  let rateLimitedAt = -1;
+  let firstQuery = true;
+  for (let qi = 0; qi < queries.length; qi++) {
+    const q = queries[qi];
+    if (rateLimitedAt >= 0) {
+      perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: 0, added: 0, error: true, skipped: 'rate_limited' });
+      console.error(`[x]       "${q.q}" SKIPPED (rate-limited earlier at query #${rateLimitedAt + 1})`);
+      continue;
+    }
+    if (!firstQuery) await pauseBetweenQueries(`query #${qi + 1} "${q.q}"`);
+    firstQuery = false;
     if (PLATFORM === 'x' || PLATFORM === 'both') {
       try {
         const rows = await harvestXForQuery(page, q);
@@ -606,6 +638,12 @@ async function main() {
         perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: rows.length, added });
         console.log(`[x]       "${q.q}" → +${rows.length} (domain=${q.domain})`);
       } catch (e) {
+        if (e instanceof XSearchRateLimitedError || e?.code === 'RATE_LIMITED') {
+          rateLimitedAt = qi;
+          perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: 0, added: 0, error: true, rateLimited: true });
+          console.error(`[x]       "${q.q}" RATE-LIMITED — aborting remaining X queries. X search throttle typically clears in 15-60 min.`);
+          continue;
+        }
         perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: 0, added: 0, error: true });
         console.error(`[x]       "${q.q}" FAILED: ${e.message?.slice(0, 160)}`);
       }

@@ -20,6 +20,26 @@ import { resolveOhwow } from './_ohwow.mjs';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Thrown by scrollAndHarvest when X serves "Something went wrong. Try
+ * reloading." on the search endpoint. The page shell still renders (auth
+ * is intact, left nav + profile visible) but the timeline is blank,
+ * meaning the TweetTimelineSearchQuery RPC was throttled for this account.
+ *
+ * Observed trigger: more than ~15 distinct search queries in ~5 minutes
+ * from the same authenticated session. Cooldown has been 30-60 min in
+ * practice. Callers should treat this as a soft-abort: skip remaining
+ * queries this run, schedule a retry at least 15 min out.
+ */
+export class XSearchRateLimitedError extends Error {
+  constructor(url) {
+    super(`x_search_rate_limited: ${url}`);
+    this.name = 'XSearchRateLimitedError';
+    this.code = 'RATE_LIMITED';
+    this.url = url;
+  }
+}
+
 export const HARVEST_JS = `(() => {
   const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
   const num = (s) => {
@@ -64,6 +84,22 @@ export const HARVEST_JS = `(() => {
 export async function scrollAndHarvest(page, url, maxScrolls = 10) {
   await page.goto(url);
   await sleep(2800);
+  // Rate-limit detection. Must run BEFORE the scroll loop — a throttled
+  // search page looks like a legitimate zero-result page (3 stagnant
+  // scrolls, ~12s, no articles) and silently returns []. That mis-reports
+  // a blocked query as "no results", so the caller keeps firing further
+  // queries into the same block and wastes the cooldown window.
+  const searchLike = url.includes('/search');
+  if (searchLike) {
+    const blocked = await page.evaluate(
+      `(() => {
+        const hasErr = document.body && document.body.innerText.includes('Something went wrong');
+        const articles = document.querySelectorAll('article[data-testid="tweet"]').length;
+        return hasErr && articles === 0;
+      })()`
+    );
+    if (blocked) throw new XSearchRateLimitedError(url);
+  }
   const seen = new Map();
   let stagnant = 0;
   for (let i = 0; i < maxScrolls; i++) {
