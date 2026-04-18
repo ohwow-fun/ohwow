@@ -53,6 +53,12 @@ import {
   type FounderInboxRecord,
   type PhaseReportRecord,
 } from './director-persistence.js';
+import {
+  MODE_BUDGETS,
+  DEMOTION_MULTIPLIER,
+  DEMOTION_LOOKBACK_ARCS,
+  DEMOTION_OVERAGE_RATIO,
+} from './budgets.js';
 import { logger } from '../lib/logger.js';
 
 export type RankSource =
@@ -512,6 +518,38 @@ function cadencePenalty(
   return 0;
 }
 
+/**
+ * Per-mode budget demotion (gap 14.11b). Filters recent phase reports
+ * down to the candidate's mode, takes up to DEMOTION_LOOKBACK_ARCS most
+ * recent reports across DISTINCT arc_ids, averages their `cost_minutes`,
+ * and returns `true` if the average exceeded the mode's wall-clock cap
+ * times DEMOTION_OVERAGE_RATIO. The caller multiplies the score by
+ * DEMOTION_MULTIPLIER when this returns true.
+ *
+ * Returns false (no demotion) if there are no matching reports — fresh
+ * modes are not penalized.
+ */
+function modeBudgetOveragePenalty(
+  ledger: LedgerSnapshot,
+  c: RankedPhase,
+): boolean {
+  const cap = MODE_BUDGETS[c.mode];
+  if (!cap) return false;
+  const seenArcIds = new Set<string>();
+  const costs: number[] = [];
+  // recent_phase_reports is already most-recent-first.
+  for (const r of ledger.recent_phase_reports) {
+    if (r.mode !== c.mode) continue;
+    if (seenArcIds.has(r.arc_id)) continue;
+    seenArcIds.add(r.arc_id);
+    costs.push(r.cost_minutes ?? 0);
+    if (costs.length >= DEMOTION_LOOKBACK_ARCS) break;
+  }
+  if (costs.length === 0) return false;
+  const avg = costs.reduce((s, n) => s + n, 0) / costs.length;
+  return avg > cap.wall_minutes * DEMOTION_OVERAGE_RATIO;
+}
+
 // ---- ranker ------------------------------------------------------------
 
 export interface RankInputs {
@@ -541,6 +579,12 @@ export function rankNextPhase(inputs: RankInputs): RankedPhase[] {
     c.score += noveltyBonus(ledger, c, ref);
     c.score -= recentRegressionPenalty(ledger, c, ref);
     c.score -= cadencePenalty(ledger, c, ref);
+    // Per-mode budget demotion (gap 14.11b): multiplicative, applied
+    // AFTER the additive adjustments above so the penalty rides on top
+    // of the post-adjustment score.
+    if (modeBudgetOveragePenalty(ledger, c)) {
+      c.score = c.score * DEMOTION_MULTIPLIER;
+    }
   }
 
   // Founder-answer bias: emit one RankedPhase per newly-answered question
