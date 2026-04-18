@@ -163,6 +163,25 @@ completes inside the harness's deterministic `runArc` mirror.
 After adding a scenario, run with `OHWOW_AUTONOMY_EVAL_UPDATE=1` once
 to write the golden, then commit both files together.
 
+## Per-mode budgets
+
+`src/autonomy/budgets.ts` exports `MODE_BUDGETS` — wall-clock minutes
+plus LLM cents per mode (`revenue 15/10`, `polish 90/50`,
+`plumbing 120/30`, `tooling 180/100`). The Director compares each
+finished phase's `cost_minutes` and `cost_llm_cents` against the cap and
+exits the arc with `exit_reason='budget-exceeded'` when either trips.
+The arc closes gracefully (status `'closed'`, not `'aborted'`) and emits
+a `pino` warn line `director.arc.budget_exceeded`. The cents check is a
+no-op until real-LLM accounting lands but activates automatically when
+it does.
+
+The Ranker reads back the same constants: if a mode's most recent
+`DEMOTION_LOOKBACK_ARCS` arcs averaged over
+`wall_minutes * DEMOTION_OVERAGE_RATIO`, candidates in that mode have
+their score multiplied by `DEMOTION_MULTIPLIER` (`0.7`). This is a
+pure-feedback loop; demotion lifts as soon as the moving average drops
+back under the threshold.
+
 ## Idempotency contract
 
 Two safety properties the conductor guarantees:
