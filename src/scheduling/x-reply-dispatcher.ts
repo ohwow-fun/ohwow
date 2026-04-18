@@ -149,7 +149,14 @@ export class ReplyDispatcher {
       this.platform,
       MAX_SENDS_PER_TICK,
     );
-    if (drafts.length === 0) return;
+    if (drafts.length === 0) {
+      const pendingCount = await this.countPending();
+      logger.debug(
+        { platform: this.platform, pendingCount, dailyCap, todayCount },
+        `${this.label()} no dispatch-ready drafts; nothing to post this tick`,
+      );
+      return;
+    }
 
     let sent = 0;
     let failed = 0;
@@ -219,6 +226,20 @@ export class ReplyDispatcher {
       `${this.label()} reply published`,
     );
     return true;
+  }
+
+  private async countPending(): Promise<number> {
+    try {
+      const { data } = await this.db
+        .from<{ id: string }>('x_reply_drafts')
+        .select('id')
+        .eq('workspace_id', this.workspaceId)
+        .eq('platform', this.platform)
+        .eq('status', 'pending');
+      return Array.isArray(data) ? data.length : 0;
+    } catch {
+      return 0;
+    }
   }
 
   private async countRepliesToday(): Promise<number> {

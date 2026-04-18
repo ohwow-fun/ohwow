@@ -151,8 +151,15 @@ export async function listReplyDrafts(
 }
 
 /**
- * Get the oldest approved drafts for dispatch (FIFO). Dispatcher
- * consumes these and posts them.
+ * Get the oldest dispatch-ready drafts (FIFO). Dispatcher consumes
+ * these and posts them.
+ *
+ * Includes both `approved` (human-gated) and `auto_applied` (gate-
+ * disabled) rows. The scheduler writes `auto_applied` directly when
+ * `<platform>_reply.approval_required=false`, and the dispatcher's
+ * docstring explicitly treats the two statuses identically. Missing
+ * `auto_applied` here silently stalled every dispatch whenever the
+ * approval gate was off.
  */
 export async function listApprovedForDispatch(
   db: DatabaseAdapter,
@@ -166,7 +173,8 @@ export async function listApprovedForDispatch(
       .select('*')
       .eq('workspace_id', workspaceId)
       .eq('platform', platform)
-      .eq('status', 'approved')
+      .in('status', ['approved', 'auto_applied'])
+      .is('applied_at', null)
       .order('created_at', { ascending: true })
       .limit(Math.min(Math.max(limit, 1), 20));
     return data ?? [];
