@@ -55,14 +55,14 @@ export function registerDocumentTools(server: McpServer, client: DaemonApiClient
 
   server.tool(
     'ohwow_generate_document',
-    '[Documents] Generate a document from a template. Auto-populates contact and deal data. Set format=pptx with pptx_spec to render a PowerPoint deck instead of a markdown template.',
+    '[Documents] Generate a document from a template. Auto-populates contact and deal data. Set format=pptx with pptx_spec for a PowerPoint deck, or format=xlsx with xlsx_spec for an Excel workbook.',
     {
       template_id: z.string().optional().describe('Template ID to generate from (markdown format only)'),
       variables: z.record(z.string(), z.string()).optional().describe('Variable values to fill in (overrides auto-populated values)'),
       contact_id: z.string().optional().describe('Contact ID to auto-populate {{contact_*}} variables'),
       deal_id: z.string().optional().describe('Deal ID to auto-populate {{deal_*}} variables'),
       title: z.string().optional().describe('Custom document title'),
-      format: z.enum(['markdown', 'pptx']).optional().describe("Output format. 'markdown' (default) renders a template. 'pptx' builds a PowerPoint deck from pptx_spec."),
+      format: z.enum(['markdown', 'pptx', 'xlsx']).optional().describe("Output format. 'markdown' (default) renders a template. 'pptx' builds a PowerPoint deck from pptx_spec. 'xlsx' builds an Excel workbook from xlsx_spec."),
       pptx_spec: z.object({
         title: z.string().optional(),
         author: z.string().optional(),
@@ -74,8 +74,24 @@ export function registerDocumentTools(server: McpServer, client: DaemonApiClient
           layout: z.enum(['TITLE', 'TITLE_AND_CONTENT', 'BLANK']).optional(),
         })).min(1),
       }).optional().describe('Required when format=pptx. Slide-by-slide deck spec.'),
+      xlsx_spec: z.object({
+        title: z.string().optional(),
+        author: z.string().optional(),
+        filename: z.string().optional(),
+        sheets: z.array(z.object({
+          name: z.string(),
+          headers: z.array(z.string()).optional(),
+          rows: z.array(z.array(z.union([
+            z.string(),
+            z.number(),
+            z.boolean(),
+            z.null(),
+          ]))),
+          column_widths: z.array(z.number()).optional(),
+        })).min(1),
+      }).optional().describe('Required when format=xlsx. Sheet-by-sheet workbook spec.'),
     },
-    async ({ template_id, variables, contact_id, deal_id, title, format, pptx_spec }) => {
+    async ({ template_id, variables, contact_id, deal_id, title, format, pptx_spec, xlsx_spec }) => {
       try {
         const outputFormat = format || 'markdown';
         if (outputFormat === 'pptx') {
@@ -85,6 +101,16 @@ export function registerDocumentTools(server: McpServer, client: DaemonApiClient
           const body: Record<string, unknown> = { ...pptx_spec };
           if (title && !pptx_spec.title) body.title = title;
           const result = await client.post('/api/documents/generate-pptx', body);
+          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+        }
+
+        if (outputFormat === 'xlsx') {
+          if (!xlsx_spec) {
+            return { content: [{ type: 'text' as const, text: 'Error: xlsx_spec is required when format=xlsx' }], isError: true };
+          }
+          const body: Record<string, unknown> = { ...xlsx_spec };
+          if (title && !xlsx_spec.title) body.title = title;
+          const result = await client.post('/api/documents/generate-xlsx', body);
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
         }
 

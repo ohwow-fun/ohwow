@@ -11,6 +11,7 @@ import type { DispatcherDeps } from '../../triggers/action-dispatcher.js';
 import type { RuntimeEngine } from '../../execution/engine.js';
 import type { ChannelRegistry } from '../../integrations/channel-registry.js';
 import { generatePptxDispatcher } from '../../triggers/dispatchers/generate-pptx.js';
+import { generateXlsxDispatcher } from '../../triggers/dispatchers/generate-xlsx.js';
 import { logger } from '../../lib/logger.js';
 
 /** Replace {{variable}} placeholders in a template body. */
@@ -223,6 +224,50 @@ export function createDocumentsRouter(
       });
     } catch (err) {
       logger.error({ err }, '[documents] generate-pptx failed');
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // ── XLSX Generation ──────────────────────────────────────────────
+
+  router.post('/api/documents/generate-xlsx', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      if (!workspaceId) { res.status(400).json({ error: 'workspaceId is required' }); return; }
+
+      const { title, author, sheets, filename } = req.body || {};
+      if (!Array.isArray(sheets) || sheets.length === 0) {
+        res.status(400).json({ error: 'sheets array with at least one sheet is required' });
+        return;
+      }
+
+      const deps: DispatcherDeps = {
+        db,
+        workspaceId,
+        engine: null as unknown as RuntimeEngine,
+        channels: null as unknown as ChannelRegistry | null,
+        executeAction: async () => ({}),
+      };
+
+      const output = await generateXlsxDispatcher.execute(
+        { title, author, sheets, filename, auto_save: true },
+        {},
+        deps,
+        { id: 'xlsx-generate', name: 'xlsx-generate' } as never,
+      );
+
+      res.status(201).json({
+        data: {
+          attachment_id: output.attachment_id ?? null,
+          storage_path: output.storage_path ?? null,
+          filename: output.filename ?? null,
+          sheet_count: output.sheet_count ?? 0,
+          row_count: output.row_count ?? 0,
+          mime_type: output.mime_type ?? null,
+        },
+      });
+    } catch (err) {
+      logger.error({ err }, '[documents] generate-xlsx failed');
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
   });
