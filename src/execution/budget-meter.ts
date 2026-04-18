@@ -17,11 +17,12 @@
  * number is a defensive placeholder — refine against the official
  * price page when the next operator touches this file.
  *
- * Origin tagging (autonomous vs interactive) is best-effort. When the
- * caller supplies an explicit origin we honor it; otherwise we assume
- * `autonomous` — the cost-risky side of the split — so the meter never
- * under-reports the number the cap is trying to guard. Refinement is a
- * follow-up round (see gap 13 Progress log).
+ * Origin tagging (autonomous vs interactive) lives on the llm_calls row
+ * as of migration 141. The meter filters to origin='autonomous' so
+ * operator-initiated chat and manual tool invocations do not erode the
+ * autonomous daily cap. Untagged rows (unchanged call sites) default to
+ * 'autonomous' at insert time, so the cap stays conservative until the
+ * interactive entry points are tagged in a follow-up round.
  */
 
 import type { DatabaseAdapter } from '../db/adapter-types.js';
@@ -111,15 +112,13 @@ interface LlmCallCostRow {
 
 /**
  * Production meter backed by the llm_calls telemetry table. Filters
- * rows by (workspace_id, created_at >= UTC-midnight) and sums
- * cost_cents, falling back to `estimateCostUsdCents` for rows where
- * the provider didn't populate cost_cents. Returns USD (float).
+ * rows by (workspace_id, origin='autonomous', created_at >= UTC-midnight)
+ * and sums cost_cents, falling back to `estimateCostUsdCents` for rows
+ * where the provider didn't populate cost_cents. Returns USD (float).
  *
- * Origin filter note: this round treats every llm_calls row as
- * autonomous. Interactive-vs-autonomous tagging requires a schema
- * change (see gap 13 Progress log). Defaulting to "count everything
- * as autonomous" is the cost-safe choice — the cap will trip
- * conservatively, never permissively.
+ * The origin filter came in with migration 141. Existing rows backfill
+ * as 'autonomous' via the column DEFAULT, so behavior is identical to
+ * the pre-migration meter until callers start writing 'interactive'.
  */
 export function createBudgetMeter(db: DatabaseAdapter): BudgetMeter {
   return {
@@ -130,6 +129,7 @@ export function createBudgetMeter(db: DatabaseAdapter): BudgetMeter {
           .from<LlmCallCostRow>('llm_calls')
           .select('cost_cents, model, input_tokens, output_tokens')
           .eq('workspace_id', workspaceId)
+          .eq('origin', 'autonomous')
           .gte('created_at', since);
         const rows = (data ?? []) as LlmCallCostRow[];
         let totalCents = 0;

@@ -166,6 +166,14 @@ export async function recordLlmCallTelemetry(
     currentAgentId?: string;
     currentTaskId?: string;
     experimentId?: string;
+    /**
+     * Gap 13 origin tag. 'autonomous' (default) is summed by the budget
+     * meter against the per-workspace daily cap; 'interactive' rows
+     * (operator-initiated chat, manual tool invocations) are excluded.
+     * Callers that don't pass it persist 'autonomous', which matches
+     * pre-migration-141 meter behavior exactly.
+     */
+    origin?: CallOrigin;
   },
   row: {
     purpose: Purpose;
@@ -203,6 +211,7 @@ export async function recordLlmCallTelemetry(
       agent_id: deps.currentAgentId ?? null,
       task_id: deps.currentTaskId ?? null,
       experiment_id: deps.experimentId ?? null,
+      origin: deps.origin ?? 'autonomous',
       purpose: row.purpose,
       provider: row.provider,
       model: row.model,
@@ -544,6 +553,19 @@ export async function runLlmCall(
   }
   const purpose: Purpose = purposeValue;
 
+  // Telemetry deps carry the origin tag onto every llm_calls row this
+  // invocation writes. Gap 13: `origin='autonomous'` is the default so
+  // the cap keeps guarding the autonomous loop. Callers that wire
+  // `deps.budget.origin = 'interactive'` opt their row out of the sum.
+  const telemetryDeps = {
+    db: deps.db,
+    workspaceId: deps.workspaceId,
+    currentAgentId: deps.currentAgentId,
+    currentTaskId: deps.currentTaskId,
+    experimentId: deps.experimentId,
+    origin: deps.budget?.origin ?? 'autonomous' as CallOrigin,
+  };
+
   const normalized = normalizePrompt(input);
   if (!normalized.ok) {
     return { ok: false, error: normalized.error };
@@ -635,7 +657,7 @@ export async function runLlmCall(
   } catch (err) {
     const errorMessage = `llm organ: no provider available for purpose "${purpose}": ${err instanceof Error ? err.message : 'unknown error'}`;
     // Record the routing failure so operators can see "no provider" patterns.
-    await recordLlmCallTelemetry(deps, {
+    await recordLlmCallTelemetry(telemetryDeps, {
       purpose,
       provider: 'none',
       model: 'none',
@@ -672,7 +694,7 @@ export async function runLlmCall(
     if (tools && tools.length > 0) {
       if (!selection.provider.createMessageWithTools) {
         const errorMessage = `llm organ: provider "${selection.provider.name}" does not support tool calls.`;
-        await recordLlmCallTelemetry(deps, {
+        await recordLlmCallTelemetry(telemetryDeps, {
           purpose,
           provider: selection.provider.name,
           model: selection.model ?? 'unknown',
@@ -704,7 +726,7 @@ export async function runLlmCall(
     // regardless of whether the row lands. toolCallCount is only emitted
     // when the caller offered tools, so llm_calls aggregations can tell
     // "model didn't call a tool" apart from "tools weren't offered".
-    await recordLlmCallTelemetry(deps, {
+    await recordLlmCallTelemetry(telemetryDeps, {
       purpose,
       provider: response.provider,
       model: response.model,
@@ -745,7 +767,7 @@ export async function runLlmCall(
       { err, purpose, provider: selection.provider.name, model: selection.model, latencyMs },
       'llm organ: provider call failed',
     );
-    await recordLlmCallTelemetry(deps, {
+    await recordLlmCallTelemetry(telemetryDeps, {
       purpose,
       provider: selection.provider.name,
       model: selection.model ?? 'unknown',
