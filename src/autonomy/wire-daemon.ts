@@ -73,12 +73,20 @@ export function wireConductor(
       '[daemon] Autonomy file mirror disabled: no workspace slug supplied',
     );
   }
+  // Forward-ref closure: the Director's `requestImmediateTick` hook
+  // (called on arc close) must call back into the Conductor handle, but
+  // the handle doesn't exist yet. Capture a mutable `trigger` ref and
+  // assign it after `startConductorLoop` returns.
+  let trigger: (() => void) | null = null;
   const io = defaultDirectorIO({
     db: opts.db,
     repoRoot: opts.repoRoot,
     cloudRepoRoot: opts.cloudRepoRoot,
     workspace_slug: workspaceSlug,
   });
+  io.requestImmediateTick = () => {
+    trigger?.();
+  };
   const handle = startConductorLoop({
     db: opts.db,
     io,
@@ -86,6 +94,7 @@ export function wireConductor(
     makeExecutor: opts.makeExecutor ?? defaultMakeStubExecutor,
     intervalMs: opts.intervalMs ?? DEFAULT_CONDUCTOR_INTERVAL_MS,
   });
+  trigger = handle.requestImmediateTick;
   logger.info(
     {
       workspace_id: opts.workspace_id,
