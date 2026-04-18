@@ -105,6 +105,7 @@ import type { WhatsAppClient } from '../whatsapp/client.js';
 import { VERSION } from '../version.js';
 import { logger } from '../lib/logger.js';
 import { attachTerminalWebSocket } from './terminal-websocket.js';
+import { attachScreencastWebSocket } from './screencast-websocket.js';
 
 export interface ServerDeps {
   config: ServerConfig;
@@ -799,6 +800,15 @@ export function createServer(deps: ServerDeps): {
 
     // Terminal WebSocket at /ws/terminal (PTY sessions for remote shell access)
     attachTerminalWebSocket({
+      server,
+      sessionToken,
+      cloudPublicKey: config.contentPublicKey,
+    });
+
+    // Screencast WebSocket at /ws/screencast (live base64-JPEG stream of the
+    // active ohwow-driven browser tab). Same auth surface as /ws/terminal —
+    // local session token OR cloud ES256 content token.
+    attachScreencastWebSocket({
       server,
       sessionToken,
       cloudPublicKey: config.contentPublicKey,
