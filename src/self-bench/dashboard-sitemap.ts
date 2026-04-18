@@ -79,6 +79,7 @@ export const DASHBOARD_SITEMAP: readonly SitemapEntry[] = [
   { reactRoute: 'podcast',                url: `${UI}/podcast`,          category: 'authed',   requiresSeed: false, family: 'podcast' },
   { reactRoute: 'eye',                    url: `${UI}/eye`,              category: 'authed',   requiresSeed: false, family: 'eye' },
   { reactRoute: 'marketing',              url: `${UI}/marketing`,        category: 'authed',   requiresSeed: false, family: 'marketing' },
+  { reactRoute: 'social',                 url: `${UI}/social`,           category: 'authed',   requiresSeed: false, family: 'social' },
   { reactRoute: 'chat',                   url: `${UI}/chat`,             category: 'redirect', requiresSeed: false, family: 'chat' },
   { reactRoute: 'conversations',          url: `${UI}/conversations`,    category: 'redirect', requiresSeed: false, family: 'messages' },
   { reactRoute: 'conversations/:pair',    url: `${UI}/conversations/:pair`, category: 'redirect', requiresSeed: true,  family: 'messages' },
