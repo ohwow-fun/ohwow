@@ -241,70 +241,16 @@ describe('fillExperimentTemplate — migration_schema_probe', () => {
 });
 
 describe('fillExperimentTemplate — compilation smoke test', () => {
-  it('model_latency_probe generated source compiles against the real Experiment interface', () => {
-    const out = fillExperimentTemplate(goodBrief);
-
-    // Write to a temp file inside the real repo's src/self-bench/
-    // directory so it picks up the real tsconfig + type imports.
-    // Use a throwaway slug to avoid collision.
-    const tmpSlug = `tmpl-smoke-${Date.now()}`;
+  // Compile all three probe templates in a single tsc invocation. tsc on the
+  // full workspace is ~10s; running it three times tripled this file's
+  // runtime for no added signal. Each template gets its own unique slug so
+  // they coexist on disk during the check.
+  it('all probe templates compile against the real Experiment interface', () => {
+    const stamp = Date.now();
     const repoRoot = path.resolve(__dirname, '..', '..', '..');
-    const tmpSourcePath = path.join(
-      repoRoot,
-      'src',
-      'self-bench',
-      'experiments',
-      `${tmpSlug}.ts`,
-    );
+    const expDir = path.join(repoRoot, 'src', 'self-bench', 'experiments');
 
-    // Replace the hardcoded slug references so the file matches
-    // the temp name.
-    const adjusted = out.sourceContent
-      .replace(/qwen-35b-latency/g, tmpSlug)
-      .replace(/Qwen35bLatencyExperiment/g, 'TmplSmokeExperiment');
-
-    fs.writeFileSync(tmpSourcePath, adjusted, 'utf-8');
-    try {
-      // Run tsc against just this file via the workspace tsconfig.
-      // Any type error here means the template produced broken code.
-      execSync('npx tsc --noEmit --skipLibCheck', {
-        cwd: repoRoot,
-        stdio: 'pipe',
-      });
-    } finally {
-      try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
-    }
-  });
-
-  it('migration_schema_probe generated source compiles against the real Experiment interface', () => {
-    const out = fillExperimentTemplate(goodMigrationBrief);
-    const tmpSlug = `mig-smoke-${Date.now()}`;
-    const repoRoot = path.resolve(__dirname, '..', '..', '..');
-    const tmpSourcePath = path.join(
-      repoRoot,
-      'src',
-      'self-bench',
-      'experiments',
-      `${tmpSlug}.ts`,
-    );
-
-    const adjusted = out.sourceContent
-      .replace(/migration-schema-016-dashboard-tables/g, tmpSlug)
-      .replace(/MigrationSchema016DashboardTablesExperiment/g, 'MigSmokeExperiment');
-
-    fs.writeFileSync(tmpSourcePath, adjusted, 'utf-8');
-    try {
-      execSync('npx tsc --noEmit --skipLibCheck', {
-        cwd: repoRoot,
-        stdio: 'pipe',
-      });
-    } finally {
-      try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
-    }
-  });
-
-  it('subprocess_health_probe generated source compiles against the real Experiment interface', () => {
-    const brief: ExperimentBrief = {
+    const subprocessBrief: ExperimentBrief = {
       slug: 'toolchain-typecheck',
       name: 'TypeScript type checker health',
       hypothesis: 'npm run typecheck exits with code 0 on every run.',
@@ -318,29 +264,51 @@ describe('fillExperimentTemplate — compilation smoke test', () => {
       } satisfies SubprocessHealthProbeParams,
     };
 
-    const out = fillExperimentTemplate(brief);
-    const tmpSlug = `subprocess-smoke-${Date.now()}`;
-    const repoRoot = path.resolve(__dirname, '..', '..', '..');
-    const tmpSourcePath = path.join(
-      repoRoot,
-      'src',
-      'self-bench',
-      'experiments',
-      `${tmpSlug}.ts`,
-    );
+    const specs = [
+      {
+        brief: goodBrief,
+        slug: `tmpl-smoke-${stamp}`,
+        slugFrom: /qwen-35b-latency/g,
+        classFrom: /Qwen35bLatencyExperiment/g,
+        className: 'TmplSmokeExperiment',
+      },
+      {
+        brief: goodMigrationBrief,
+        slug: `mig-smoke-${stamp}`,
+        slugFrom: /migration-schema-016-dashboard-tables/g,
+        classFrom: /MigrationSchema016DashboardTablesExperiment/g,
+        className: 'MigSmokeExperiment',
+      },
+      {
+        brief: subprocessBrief,
+        slug: `subprocess-smoke-${stamp}`,
+        slugFrom: /toolchain-typecheck/g,
+        classFrom: /ToolchainTypecheckExperiment/g,
+        className: 'SubprocessSmokeExperiment',
+      },
+    ];
 
-    const adjusted = out.sourceContent
-      .replace(/toolchain-typecheck/g, tmpSlug)
-      .replace(/ToolchainTypecheckExperiment/g, 'SubprocessSmokeExperiment');
-
-    fs.writeFileSync(tmpSourcePath, adjusted, 'utf-8');
+    const writtenPaths: string[] = [];
     try {
+      for (const s of specs) {
+        const out = fillExperimentTemplate(s.brief);
+        const adjusted = out.sourceContent
+          .replace(s.slugFrom, s.slug)
+          .replace(s.classFrom, s.className);
+        const p = path.join(expDir, `${s.slug}.ts`);
+        fs.writeFileSync(p, adjusted, 'utf-8');
+        writtenPaths.push(p);
+      }
+      // One tsc run covers all three. Any type error means at least one
+      // template emitted broken code.
       execSync('npx tsc --noEmit --skipLibCheck', {
         cwd: repoRoot,
         stdio: 'pipe',
       });
     } finally {
-      try { fs.unlinkSync(tmpSourcePath); } catch { /* ignore */ }
+      for (const p of writtenPaths) {
+        try { fs.unlinkSync(p); } catch { /* ignore */ }
+      }
     }
   });
 });

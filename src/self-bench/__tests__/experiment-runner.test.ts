@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ExperimentRunner } from '../experiment-runner.js';
+import { ExperimentRunner, REACTIVE_RESCHEDULE_MS } from '../experiment-runner.js';
 import type {
   Experiment,
   ExperimentContext,
@@ -405,7 +405,9 @@ describe('ExperimentRunner', () => {
     const runner = buildRunner();
     const warning = makeStubExperiment({
       id: 'warn',
-      everyMs: 60_000,
+      // Cadence longer than the 60s reactive window so the reactive path
+      // is what lets the second tick fire, not the normal cadence.
+      everyMs: 10 * 60_000,
       runOnBoot: true,
       probe: async () => ({ summary: 'probe', evidence: {} }),
       judge: () => 'warning',
@@ -414,9 +416,10 @@ describe('ExperimentRunner', () => {
     await runner.tick();
     expect(warning.probeCallCount).toBe(1);
 
-    // Advance 6s — well under the 60s cadence but past the 5s reactive
-    // window. Without T2 the probe would still be gated until +60s.
-    currentTime += 6_000;
+    // Advance past the REACTIVE_RESCHEDULE_MS (60s) window but still
+    // well under everyMs. Without T2, the probe would stay gated until
+    // everyMs elapsed.
+    currentTime += REACTIVE_RESCHEDULE_MS + 1_000;
     await runner.tick();
     expect(warning.probeCallCount).toBe(2);
   });

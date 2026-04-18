@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -188,11 +188,20 @@ describe('XOpsObserverExperiment.probe', () => {
     });
     writeFile('x-intel-last-run.json', JSON.stringify({ ts: new Date(nowIso - 1800_000).toISOString(), exitCode: 0 }));
 
-    const exp = new XOpsObserverExperiment(ledgerDir);
-    const result = await exp.probe(makeCtx('default'));
-    expect(result.subject).toBe('x-ops:summary');
-    const ev = result.evidence as XOpsObserverEvidence;
-    expect(ev.approvals_counted).toBeGreaterThan(0);
-    expect(ev.workspace_slug).toBe('default');
+    // probe() internally calls computeEvidence with Date.now() (no nowMs
+    // override path), so freeze the clock to nowIso to keep the fixture
+    // timestamps inside the 48h approvals lookback window.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(nowIso));
+    try {
+      const exp = new XOpsObserverExperiment(ledgerDir);
+      const result = await exp.probe(makeCtx('default'));
+      expect(result.subject).toBe('x-ops:summary');
+      const ev = result.evidence as XOpsObserverEvidence;
+      expect(ev.approvals_counted).toBeGreaterThan(0);
+      expect(ev.workspace_slug).toBe('default');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

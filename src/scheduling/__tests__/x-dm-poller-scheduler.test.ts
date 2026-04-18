@@ -78,6 +78,16 @@ function readerOf(
   );
 }
 
+// Default stub for tests that only care about inbox ingestion. Without this,
+// the scheduler falls through to the real CDP-driven reader and burns ~10s
+// per thread waiting for a Chrome tab that doesn't exist.
+const stubReader: (input: { conversationPair: string }) => Promise<ReadDmThreadResult> =
+  () => Promise.resolve({
+    success: false,
+    message: 'stub: do not hit real browser in unit test',
+    conversationName: null,
+  });
+
 function msg(id: string, text: string, direction: DmMessage['direction'] = 'inbound', isMedia = false): DmMessage {
   return { id, text, direction, isMedia };
 }
@@ -112,6 +122,7 @@ describe('XDmPollerScheduler', () => {
     const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: lister,
+      threadReader: stubReader,
     });
     await sched.tick();
 
@@ -143,6 +154,7 @@ describe('XDmPollerScheduler', () => {
     const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: lister,
+      threadReader: stubReader,
     });
     await sched.tick();
     await sched.tick();
@@ -167,6 +179,7 @@ describe('XDmPollerScheduler', () => {
     const sched1 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: firstLister,
+      threadReader: stubReader,
     });
     await sched1.tick();
 
@@ -178,6 +191,7 @@ describe('XDmPollerScheduler', () => {
     const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: secondLister,
+      threadReader: stubReader,
     });
     await sched2.tick();
 
@@ -202,6 +216,7 @@ describe('XDmPollerScheduler', () => {
     const sched1 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: firstLister,
+      threadReader: stubReader,
     });
     await sched1.tick();
 
@@ -213,6 +228,7 @@ describe('XDmPollerScheduler', () => {
     const sched2 = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: secondLister,
+      threadReader: stubReader,
     });
     await sched2.tick();
 
@@ -236,6 +252,7 @@ describe('XDmPollerScheduler', () => {
     const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       dataDir: env.dir,
       inboxLister: lister,
+      threadReader: stubReader,
     });
     await expect(sched.tick()).resolves.toBeUndefined();
 
@@ -254,6 +271,7 @@ describe('XDmPollerScheduler', () => {
     });
     const sched = new XDmPollerScheduler(env.db, WORKSPACE_ID, {
       inboxLister: lister,
+      threadReader: stubReader,
     });
     await sched.tick();
 
