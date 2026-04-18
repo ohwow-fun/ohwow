@@ -119,7 +119,7 @@ export function appendSeen(workspace, newRecords) {
  * _qualify's engagerBoost reduces the score floor for these rows so
  * low-score repliers who are nevertheless in-market get through.
  */
-export async function scrapeRepliers(page, permalink, maxScrolls = 4) {
+export async function scrapeRepliers(page, permalink, maxScrolls = 6) {
   const url = permalink.startsWith('http') ? permalink : `https://x.com${permalink}`;
   await page.goto(url);
   await sleep(3200);
@@ -136,7 +136,11 @@ export async function scrapeRepliers(page, permalink, maxScrolls = 4) {
     }
     const gained = seen.size - before;
     if (gained === 0) stagnant++; else stagnant = 0;
-    if (stagnant >= 3) break;
+    // Early-exit only after 5 dry scrolls. On thread permalinks x.com loads
+    // the author's own continuations first and external repliers appear
+    // several scrolls deeper; exiting on 3 dry scrolls truncated the
+    // surface to self-replies only (16th-pass diagnosis).
+    if (stagnant >= 5) break;
     await page.pressKey('End');
     await page.evaluate('window.scrollBy(0, window.innerHeight * 1.8)');
     await sleep(1200);

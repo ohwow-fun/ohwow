@@ -191,12 +191,16 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
       const ownPosts = await scrollAndHarvest(page, `https://x.com/${ownHandle}`, 2);
       const myPosts = ownPosts.filter(p => p.author === ownHandle && !p.isRetweet).slice(0, 3);
       console.log(`  found ${myPosts.length} own recent posts to scan for repliers`);
+      const ownScrolls = cfg.own_post_engager_scrolls ?? 6;
       for (const parent of myPosts) {
         try {
-          const repliers = await scrapeRepliers(page, parent.permalink, 2);
-          console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
+          const repliers = await scrapeRepliers(page, parent.permalink, ownScrolls);
+          let external = 0;
+          let selfSkipped = 0;
           for (const r of repliers) {
-            if (!r.author || r.author === ownHandle) continue;
+            if (!r.author) continue;
+            if (r.author === ownHandle) { selfSkipped++; continue; }
+            external++;
             engagerSidecarRows.push(buildEngagerRecord(r, 'engager:own-post', ownHandle, parent.permalink));
             engagerRows.push({
               ...r,
@@ -206,6 +210,7 @@ if (OWN_POST_ENGAGERS_ENABLED && (!SOURCE_FILTER.size || SOURCE_FILTER.has('enga
               _parentPermalink: parent.permalink,
             });
           }
+          console.log(`  ${parent.permalink} → ${repliers.length} raw · ${external} external · ${selfSkipped} self-skipped`);
         } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
       }
     } catch (e) { console.log(`[x-intel] own-post engager scan failed: ${e.message}`); }
@@ -226,10 +231,13 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
     console.log(`\n[x-intel] engagers for @${p.handle} over ${parentPosts.length} recent posts`);
     for (const parent of parentPosts) {
       try {
-        const repliers = await scrapeRepliers(page, parent.permalink, p.engager_max_scrolls ?? 3);
-        console.log(`  ${parent.permalink} → ${repliers.length} repliers`);
+        const repliers = await scrapeRepliers(page, parent.permalink, p.engager_max_scrolls ?? 6);
+        let external = 0;
+        let selfSkipped = 0;
         for (const r of repliers) {
-          if (!r.author || r.author === p.handle) continue;
+          if (!r.author) continue;
+          if (r.author === p.handle) { selfSkipped++; continue; }
+          external++;
           const source = `engager:competitor:${p.handle}`;
           engagerSidecarRows.push(buildEngagerRecord(r, source, p.handle, parent.permalink));
           engagerRows.push({
@@ -240,6 +248,7 @@ if (!SOURCE_FILTER.size || SOURCE_FILTER.has('engagers')) {
             _parentPermalink: parent.permalink,
           });
         }
+        console.log(`  ${parent.permalink} → ${repliers.length} raw · ${external} external · ${selfSkipped} self-skipped`);
       } catch (e) { console.log(`  ${parent.permalink} scrape failed: ${e.message}`); }
     }
   }
