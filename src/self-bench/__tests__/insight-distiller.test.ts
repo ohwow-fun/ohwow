@@ -226,6 +226,68 @@ describe('listDistilledInsights', () => {
     expect(out.map((r) => r.experiment_id)).toEqual(['e2']);
   });
 
+  it('subjectPrefix restricts the candidate pool before dedup + limit', async () => {
+    // Upstream-starvation regression: higher-novelty meta rows used to
+    // crowd out the smaller market:* population out of the top-N
+    // window. subjectPrefix must pre-filter the candidate list so the
+    // limit is drawn from the target population only.
+    const env = buildDb(
+      [
+        {
+          id: 'digest',
+          experiment_id: 'daily-digest',
+          subject: 'digest:daily',
+          verdict: 'pass',
+          summary: 'meta row',
+          evidence: ev({ score: 1.0, reason: 'first_seen' }),
+          ran_at: '2026-04-16T06:00:00Z',
+          status: 'active',
+        },
+        {
+          id: 'ops',
+          experiment_id: 'x-ops-observer',
+          subject: 'x-ops:summary',
+          verdict: 'pass',
+          summary: 'meta row',
+          evidence: ev({ score: 1.0, reason: 'first_seen' }),
+          ran_at: '2026-04-16T05:00:00Z',
+          status: 'active',
+        },
+        {
+          id: 'mkt-1',
+          experiment_id: 'scrape-diff:linear',
+          subject: 'market:linear.app/pricing',
+          verdict: 'warning',
+          summary: 'market row',
+          evidence: ev({ score: 0.9, reason: 'verdict_flipped' }),
+          ran_at: '2026-04-16T04:00:00Z',
+          status: 'active',
+        },
+        {
+          id: 'mkt-2',
+          experiment_id: 'scrape-diff:n8n',
+          subject: 'market:n8n.io/pricing',
+          verdict: 'warning',
+          summary: 'market row',
+          evidence: ev({ score: 0.9, reason: 'verdict_flipped' }),
+          ran_at: '2026-04-16T03:00:00Z',
+          status: 'active',
+        },
+      ],
+      [],
+    );
+    const out = await listDistilledInsights(env.db as never, {
+      subjectPrefix: 'market:',
+      limit: 2,
+    });
+    expect(out).toHaveLength(2);
+    expect(out.every((r) => r.subject.startsWith('market:'))).toBe(true);
+    expect(out.map((r) => r.subject).sort()).toEqual([
+      'market:linear.app/pricing',
+      'market:n8n.io/pricing',
+    ]);
+  });
+
   it('skips findings without a subject (cannot cluster them)', async () => {
     const env = buildDb(
       [

@@ -178,6 +178,22 @@ describe('XDraftDistillerScheduler', () => {
     );
   });
 
+  it('passes subjectPrefix="market:" so the top-N is drawn from the market population only', async () => {
+    // Upstream-starvation regression: the scheduler must push the
+    // subject-shape filter down into listDistilledInsights, otherwise
+    // high-novelty digest/ops rows at novelty 1.0 consume the entire
+    // 5-row window and no market cluster is ever considered.
+    listMock.mockResolvedValue([]);
+    const scheduler = new XDraftDistillerScheduler({} as never, null, 'ws-1', {
+      draftTweet: async () => 'x',
+    });
+    await scheduler.tick();
+    expect(listMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subjectPrefix: MARKET_SUBJECT_PREFIX }),
+    );
+  });
+
   it('reads x_draft_distiller_min_score from runtime_config_overrides per tick, falling back to the ctor value when unset', async () => {
     listMock.mockResolvedValue([]);
     const scheduler = new XDraftDistillerScheduler({} as never, null, 'ws-1', {

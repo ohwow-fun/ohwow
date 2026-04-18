@@ -3,8 +3,12 @@
  * findings into candidate X posts.
  *
  * Per tick:
- *   1. listDistilledInsights({ minScore: 0.7, limit: 5 })
- *   2. Filter to subjects starting with `market:`
+ *   1. listDistilledInsights({ minScore: 0.7, limit: 5,
+ *                              subjectPrefix: 'market:' })
+ *   2. Belt-and-braces re-filter to subjects starting with `market:`
+ *      (the distiller already enforces this pre-rank, but the local
+ *      check keeps downstream assertions — `considered` counter,
+ *      draft pipeline — honest if the query contract ever shifts).
  *   3. For each unseen latest_finding_id, prompt an LLM (purpose=
  *      generation, difficulty=simple, max_cost_cents capped) to draft
  *      1-2 tweet-length posts grounded in the finding evidence.
@@ -106,6 +110,11 @@ export class XDraftDistillerScheduler {
     const insights = await listDistilledInsights(this.db, {
       minScore: effectiveMinScore,
       limit: this.limit,
+      // Pre-filter inside the distiller so the top-N window is drawn
+      // from the market population only. Without this, high-novelty
+      // digest/ops/proposal rows at novelty 1.0 crowd out 0.9-score
+      // market clusters before the scheduler ever sees them.
+      subjectPrefix: MARKET_SUBJECT_PREFIX,
     });
     const market = insights.filter((i) => i.subject?.startsWith(MARKET_SUBJECT_PREFIX));
     let drafted = 0;

@@ -84,6 +84,15 @@ export interface DistillFilters {
   limit?: number;
   /** Return only rows about active findings (default). Pass 'any' to include superseded. */
   status?: FindingStatus | 'any';
+  /**
+   * Restrict the candidate pool to findings whose subject starts with
+   * this prefix BEFORE ranking + limit. Prevents a high-novelty
+   * population (e.g. digest/ops/proposal rows at novelty 1.0) from
+   * starving a smaller target population (e.g. `market:*` clusters)
+   * out of the top-N window. Matched as a literal string prefix on
+   * the in-memory candidate list — no SQL LIKE, no wildcards.
+   */
+  subjectPrefix?: string;
 }
 
 /**
@@ -98,6 +107,7 @@ export async function listDistilledInsights(
   const limit = Math.min(Math.max(filters.limit ?? 25, 1), 200);
   const minScore = Math.max(filters.minScore ?? 0, 0);
   const statusFilter = filters.status ?? 'active';
+  const subjectPrefix = filters.subjectPrefix ?? null;
 
   let findingsQ = db
     .from<FindingRow>('self_findings')
@@ -130,6 +140,10 @@ export async function listDistilledInsights(
   for (const row of findingRows) {
     const subject = row.subject ?? '';
     if (!subject) continue;
+    // Subject-shape pre-filter: applied before dedup + limit so a
+    // smaller target population (e.g. `market:*`) isn't starved out
+    // of the top-N window by a larger high-novelty population.
+    if (subjectPrefix !== null && !subject.startsWith(subjectPrefix)) continue;
     const key = `${row.experiment_id}::${subject}`;
     if (seen.has(key)) continue;
     seen.add(key);
