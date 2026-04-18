@@ -14,7 +14,6 @@ import type { MeetingSession } from '../meeting/meeting-session.js';
 
 export interface RagConfigOptions {
   ollamaUrl?: string;
-  embeddingModel?: string;
   ollamaModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
@@ -29,7 +28,6 @@ export interface InferenceCapabilities {
 export class OrchestratorRuntimeConfig {
   // RAG / embedding settings.
   ollamaUrl?: string;
-  embeddingModel?: string;
   ollamaModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
@@ -57,7 +55,6 @@ export class OrchestratorRuntimeConfig {
 
   setRagConfig(opts: RagConfigOptions): void {
     this.ollamaUrl = opts.ollamaUrl;
-    this.embeddingModel = opts.embeddingModel;
     this.ollamaModel = opts.ollamaModel;
     this.ragBm25Weight = opts.ragBm25Weight;
     this.rerankerEnabled = opts.rerankerEnabled;

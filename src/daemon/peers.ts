@@ -24,10 +24,11 @@ import type { DaemonContext } from './context.js';
 export async function initializePeersAndDocuments(ctx: Partial<DaemonContext>): Promise<void> {
   const { config, db, rawDb, bus, engine, workspaceId, channelRegistry, messageRouter } = ctx as DaemonContext;
 
-  // 12a2. Document processing worker (runs on all devices)
+  // 12a2. Document processing worker (runs on all devices). `ollamaUrl`
+  // stays for the best-effort knowledge-graph extraction path; embedding
+  // generation itself now runs on the in-daemon Qwen3-ONNX singleton.
   const documentWorker = new DocumentWorker(db, bus, {
     ollamaUrl: config.ollamaUrl,
-    embeddingModel: config.embeddingModel || undefined,
     ollamaModel: config.ollamaModel || undefined,
   });
   documentWorker.start();

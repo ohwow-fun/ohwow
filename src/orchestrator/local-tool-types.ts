@@ -24,10 +24,9 @@ export interface LocalToolContext {
   modelRouter?: ModelRouter | null;
   onScheduleChange?: () => void;
   workingDirectory?: string;
-  /** Ollama URL for embedding and query expansion (from config) */
+  /** Ollama URL for query expansion + best-effort graph extraction.
+   *  Embedding generation runs on the in-daemon Qwen3 singleton. */
   ollamaUrl?: string;
-  /** Embedding model name for RAG hybrid search (from config) */
-  embeddingModel?: string;
   /** Ollama chat model for query expansion (from config) */
   ollamaModel?: string;
   /** BM25 weight for hybrid search (from config) */

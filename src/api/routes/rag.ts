@@ -11,8 +11,11 @@ import { retrieveKnowledgeChunks } from '../../lib/rag/retrieval.js';
 import { logger } from '../../lib/logger.js';
 
 export interface RagRouterConfig {
+  /** Ollama URL used for query expansion + graph extraction. Embedding
+   *  generation now runs on the in-daemon Qwen3 singleton regardless of
+   *  this value. */
   ollamaUrl?: string;
-  embeddingModel?: string;
+  /** Ollama chat model for query expansion. */
   ollamaModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
@@ -66,7 +69,6 @@ export function createRagPublicRouter(db: DatabaseAdapter, config: RagRouterConf
         tokenBudget: tokenBudget ?? 4000,
         maxChunks: maxChunks ?? 5,
         ollamaUrl: config.ollamaUrl,
-        embeddingModel: config.embeddingModel,
         bm25Weight: config.ragBm25Weight,
         expandQueries: !!config.ollamaUrl,
         ollamaModel: config.ollamaModel,

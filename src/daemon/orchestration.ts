@@ -58,7 +58,6 @@ export async function setupOrchestration(
   if (orchestrator) {
     orchestrator.setRagConfig({
       ollamaUrl: config.ollamaUrl,
-      embeddingModel: config.embeddingModel,
       ollamaModel: config.ollamaModel,
       ragBm25Weight: config.ragBm25Weight,
       rerankerEnabled: config.rerankerEnabled,

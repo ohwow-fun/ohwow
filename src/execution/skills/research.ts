@@ -54,7 +54,6 @@ export interface LocalKnowledgeOptions {
   db: DatabaseAdapter;
   workspaceId: string;
   ollamaUrl?: string;
-  embeddingModel?: string;
   ollamaModel?: string;
   ragBm25Weight?: number;
   rerankerEnabled?: boolean;
@@ -147,7 +146,6 @@ export async function executeResearch(
         tokenBudget: 4000,
         maxChunks: 5,
         ollamaUrl: localKnowledge.ollamaUrl,
-        embeddingModel: localKnowledge.embeddingModel,
         ollamaModel: localKnowledge.ollamaModel,
         bm25Weight: localKnowledge.ragBm25Weight,
         rerankerEnabled: localKnowledge.rerankerEnabled,

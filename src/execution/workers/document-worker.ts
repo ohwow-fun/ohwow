@@ -13,7 +13,8 @@ import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { TypedEventBus } from '../../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../../tui/types.js';
 import { chunkText } from '../../lib/rag/chunker.js';
-import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { getSharedEmbedder } from '../../embeddings/singleton.js';
 import { extractEntitiesAndRelations, saveGraphData } from '../../lib/rag/knowledge-graph.js';
 import { extractTextLocal, updateCorpusStats } from '../../orchestrator/tools/knowledge.js';
 import { logger } from '../../lib/logger.js';
@@ -52,7 +53,7 @@ export class DocumentWorker {
   constructor(
     private db: DatabaseAdapter,
     private bus: TypedEventBus<RuntimeEvents>,
-    private config: { ollamaUrl?: string; embeddingModel?: string; ollamaModel?: string },
+    private config: { ollamaUrl?: string; ollamaModel?: string },
   ) {}
 
   /**
@@ -209,28 +210,36 @@ export class DocumentWorker {
       // 7. Update corpus stats
       await updateCorpusStats(this.db, job.workspace_id, chunks, 1);
 
-      // 8. Generate embeddings if available
+      // 8. Generate Qwen3 embeddings via the in-daemon embedder. No
+      // document-side task instruction (that's a query-time concern).
+      // Falls back silently if the embedder isn't ready yet — the
+      // boot-time backfill worker will fill in any gaps on next start.
       let embeddingModel: string | undefined;
-      if (this.config.ollamaUrl && this.config.embeddingModel) {
-        try {
-          const chunkTexts = chunks.map((c) => c.content);
-          const embeddings = await generateEmbeddings(chunkTexts, this.config.ollamaUrl, this.config.embeddingModel);
-          let embeddedCount = 0;
-          for (let i = 0; i < chunks.length; i++) {
-            const emb = embeddings[i];
-            if (emb) {
-              const chunkId = createHash('sha256').update(`${job.document_id}-${i}`).digest('hex').slice(0, 32);
-              await this.db
-                .from('agent_workforce_knowledge_chunks')
-                .update({ embedding: serializeEmbedding(emb) })
-                .eq('id', chunkId);
-              embeddedCount++;
-            }
+      try {
+        const embedder = getSharedEmbedder();
+        await embedder.ready();
+        const chunkTexts = chunks.map((c) => c.content);
+        const embeddings = await embedder.embed(chunkTexts);
+        const embedIso = new Date().toISOString();
+        let embeddedCount = 0;
+        for (let i = 0; i < chunks.length; i++) {
+          const emb = embeddings[i];
+          if (emb) {
+            const chunkId = createHash('sha256').update(`${job.document_id}-${i}`).digest('hex').slice(0, 32);
+            await this.db
+              .from('agent_workforce_knowledge_chunks')
+              .update({
+                embedding: serializeEmbedding(emb),
+                embedding_model: embedder.modelId,
+                embedding_updated_at: embedIso,
+              })
+              .eq('id', chunkId);
+            embeddedCount++;
           }
-          if (embeddedCount > 0) embeddingModel = this.config.embeddingModel;
-        } catch (err) {
-          logger.warn({ err, documentId: job.document_id }, '[DocumentWorker] Embedding generation failed, continuing without embeddings');
         }
+        if (embeddedCount > 0) embeddingModel = embedder.modelId;
+      } catch (err) {
+        logger.warn({ err, documentId: job.document_id }, '[DocumentWorker] Embedding generation failed, continuing without embeddings');
       }
 
       // 8b. Extract knowledge graph (best-effort, don't fail the job)

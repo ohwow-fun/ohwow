@@ -10,7 +10,7 @@ export type {
   CrawledPage,
 } from './types.js';
 
-export { DocMountManager, type DocMountManagerConfig } from './mount-manager.js';
+export { DocMountManager } from './mount-manager.js';
 export { docMountExecutor } from './doc-mount-executor.js';
 export {
   DOC_MOUNT_TOOL_DEFINITIONS,

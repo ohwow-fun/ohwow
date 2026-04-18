@@ -31,29 +31,12 @@ const DOCS_BASE_DIR = path.join(os.homedir(), '.ohwow', 'docs');
 // MANAGER
 // ============================================================================
 
-export interface DocMountManagerConfig {
-  /** Ollama URL for embedding generation */
-  ollamaUrl?: string;
-  /** Embedding model name (e.g., nomic-embed-text) */
-  embeddingModel?: string;
-}
-
 export class DocMountManager {
-  private ragConfig: DocMountManagerConfig;
-
   constructor(
     private db: DatabaseAdapter,
     private scraplingService: ScraplingService,
     private dataDir?: string,
-    ragConfig?: DocMountManagerConfig,
-  ) {
-    this.ragConfig = ragConfig ?? {};
-  }
-
-  /** Update RAG config (e.g., when Ollama becomes available) */
-  setRagConfig(config: DocMountManagerConfig): void {
-    this.ragConfig = { ...this.ragConfig, ...config };
-  }
+  ) {}
 
   /** Get the base directory for materialized docs */
   private getDocsDir(): string {
@@ -272,14 +255,14 @@ export class DocMountManager {
 
       await this.materializeToDisk(updatedMount);
 
-      // RAG ingestion: chunk + embed into knowledge base (best-effort)
+      // RAG ingestion: chunk + embed into knowledge base (best-effort).
+      // Embedding now runs on the in-daemon Qwen3 singleton, so there's
+      // no longer an embedder config to thread in here.
       try {
         const storedPages = await store.listPages(this.db, mount.id);
         await ingestMountToKnowledgeBase(updatedMount, storedPages, {
           db: this.db,
           workspaceId: mount.workspaceId,
-          ollamaUrl: this.ragConfig.ollamaUrl,
-          embeddingModel: this.ragConfig.embeddingModel,
         });
       } catch (err) {
         logger.warn({ err, url: mount.url }, '[doc-mount] RAG ingestion failed, mount still usable');

@@ -109,7 +109,8 @@ export const KNOWLEDGE_TOOL_DEFINITIONS: Tool[] = [
     },
   },
 ];
-import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { getSharedEmbedder } from '../../embeddings/singleton.js';
 import { chunkText } from '../../lib/rag/chunker.js';
 import { logger } from '../../lib/logger.js';
 import { syncResource } from '../../control-plane/sync-resources.js';
@@ -367,7 +368,6 @@ export async function getKnowledgeDocument(
     tokenBudget: 4000,
     maxChunks: 10,
     ollamaUrl: ctx.ollamaUrl,
-    embeddingModel: ctx.embeddingModel,
     bm25Weight: ctx.ragBm25Weight,
     expandQueries: !!ctx.ollamaUrl,
     ollamaModel: ctx.ollamaModel,
@@ -979,29 +979,42 @@ function chunkTextLocal(text: string): LocalChunk[] {
 // EMBEDDING HELPER
 // ============================================================================
 
-/** Generate and store embeddings for chunks. Returns the model name if any were embedded. */
+/** Generate and store Qwen3 embeddings for chunks. Returns the model id
+ *  if any were embedded. Best-effort: if the embedder fails to warm up
+ *  (missing ONNX cache, out-of-memory, etc.) we fall back silently and
+ *  the one-shot backfill worker will fill the gap on the next boot. */
 async function embedChunks(
-  ctx: LocalToolContext,
+  _ctx: LocalToolContext,
   docId: string,
   chunks: LocalChunk[],
 ): Promise<string | undefined> {
-  if (!ctx.ollamaUrl || !ctx.embeddingModel) return undefined;
-
-  const chunkTexts = chunks.map((c) => c.content);
-  const embeddings = await generateEmbeddings(chunkTexts, ctx.ollamaUrl, ctx.embeddingModel);
-  let embeddedCount = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    const emb = embeddings[i];
-    if (emb) {
-      const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
-      await ctx.db
-        .from('agent_workforce_knowledge_chunks')
-        .update({ embedding: serializeEmbedding(emb) })
-        .eq('id', chunkId);
-      embeddedCount++;
+  try {
+    const embedder = getSharedEmbedder();
+    await embedder.ready();
+    const chunkTexts = chunks.map((c) => c.content);
+    const embeddings = await embedder.embed(chunkTexts);
+    const nowIso = new Date().toISOString();
+    let embeddedCount = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      const emb = embeddings[i];
+      if (emb) {
+        const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
+        await _ctx.db
+          .from('agent_workforce_knowledge_chunks')
+          .update({
+            embedding: serializeEmbedding(emb),
+            embedding_model: embedder.modelId,
+            embedding_updated_at: nowIso,
+          })
+          .eq('id', chunkId);
+        embeddedCount++;
+      }
     }
+    return embeddedCount > 0 ? embedder.modelId : undefined;
+  } catch (err) {
+    logger.warn({ err, docId }, '[knowledge] Qwen3 embed failed; chunks will be backfilled on next boot');
+    return undefined;
   }
-  return embeddedCount > 0 ? ctx.embeddingModel : undefined;
 }
 
 // ============================================================================
@@ -1140,7 +1153,6 @@ export async function searchKnowledge(
     tokenBudget: 6000,
     maxChunks: maxResults,
     ollamaUrl: ctx.ollamaUrl,
-    embeddingModel: ctx.embeddingModel,
     bm25Weight: ctx.ragBm25Weight,
     expandQueries: !!ctx.ollamaUrl,
     ollamaModel: ctx.ollamaModel,

@@ -22,7 +22,8 @@ import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
 import { wireConductor } from '../autonomy/wire-daemon.js';
-import { warmSharedEmbedder } from '../embeddings/singleton.js';
+import { getSharedEmbedder, warmSharedEmbedder } from '../embeddings/singleton.js';
+import { runEmbeddingBackfill } from '../embeddings/backfill.js';
 import { createEmbedRouter } from '../api/routes/embed.js';
 
 export interface DaemonHandle {
@@ -108,6 +109,18 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // it here so the daemon-ready signal fires on time but actual requests
   // hit warm. Failures are logged + swallowed by warmSharedEmbedder.
   void warmSharedEmbedder();
+
+  // 13e. One-shot embedding backfill for knowledge chunks missing a
+  // Qwen3 vector. Chains off the same warmup promise so the embedder
+  // is already loaded by the time we start scanning. Non-fatal: errors
+  // inside runEmbeddingBackfill are caught there, and the outer catch
+  // here demotes any surprise rejection to a warn so a broken HF cache
+  // or missing table never crashes the daemon.
+  void warmSharedEmbedder()
+    .then(() => runEmbeddingBackfill({ db: ctx.db, embedder: getSharedEmbedder(), logger }))
+    .catch((err) => {
+      logger.warn({ err }, '[daemon] embedding backfill skipped (warmup failed)');
+    });
 
   // 14. Shutdown handler (defined before route so it can be referenced)
   const shutdown = createShutdownHandler(ctx);

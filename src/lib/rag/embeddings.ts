@@ -1,70 +1,17 @@
 /**
- * RAG Embeddings — Local embedding generation via Ollama.
- * Falls back gracefully when Ollama is unavailable.
+ * RAG Embeddings — storage + similarity helpers.
+ *
+ * Embedding GENERATION now lives in `src/embeddings/` and runs on the
+ * in-daemon Qwen3-ONNX embedder (L2-normalized 1024-dim vectors). This
+ * module only carries the thin utilities the retrieval + document
+ * pipelines share: buffer round-tripping and cosine similarity.
  */
 
-import { logger } from '../logger.js';
-
-export interface EmbeddingResult {
-  embedding: Float32Array;
-  model: string;
-}
-
-/**
- * Generate an embedding vector for a text string using Ollama.
- * Returns null if Ollama is unavailable or the model isn't pulled.
- */
-export async function generateEmbedding(
-  text: string,
-  ollamaUrl: string,
-  model: string = 'nomic-embed-text',
-): Promise<EmbeddingResult | null> {
-  try {
-    const response = await fetch(`${ollamaUrl}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-      body: JSON.stringify({ model, input: text }),
-    });
-    if (!response.ok) return null;
-    const data = await response.json() as { embeddings: number[][] };
-    if (!data.embeddings?.[0]) return null;
-    return {
-      embedding: new Float32Array(data.embeddings[0]),
-      model,
-    };
-  } catch {
-    logger.debug('[RAG] Ollama embedding unavailable');
-    return null;
-  }
-}
-
-/**
- * Generate embeddings for multiple texts in a single batch call.
- */
-export async function generateEmbeddings(
-  texts: string[],
-  ollamaUrl: string,
-  model: string = 'nomic-embed-text',
-): Promise<(Float32Array | null)[]> {
-  if (texts.length === 0) return [];
-  try {
-    const response = await fetch(`${ollamaUrl}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(60_000),
-      body: JSON.stringify({ model, input: texts }),
-    });
-    if (!response.ok) return texts.map(() => null);
-    const data = await response.json() as { embeddings: number[][] };
-    return (data.embeddings ?? []).map(e => e ? new Float32Array(e) : null);
-  } catch {
-    logger.debug('[RAG] Ollama batch embedding unavailable');
-    return texts.map(() => null);
-  }
-}
-
-/** Cosine similarity between two Float32Arrays */
+/** Cosine similarity between two Float32Arrays.
+ *
+ * Qwen3 outputs are L2-normalized at embed time, so for Qwen3 vectors
+ * this reduces to a dot product. Keep the full formula anyway so the
+ * helper stays correct when mixed with non-normalized vectors. */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0, normA = 0, normB = 0;

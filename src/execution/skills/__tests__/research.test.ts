@@ -92,7 +92,6 @@ describe('executeResearch', () => {
       db: makeMockDb(),
       workspaceId: 'ws-1',
       ollamaUrl: 'http://localhost:11434',
-      embeddingModel: 'nomic-embed-text',
     };
 
     const result = await executeResearch('What is AI?', 'quick', 'fake-key', null, localKnowledge);

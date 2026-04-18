@@ -5,9 +5,16 @@
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { logger } from '../logger.js';
-import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from './embeddings.js';
+import { cosineSimilarity, deserializeEmbedding } from './embeddings.js';
+import { getSharedEmbedder } from '../../embeddings/singleton.js';
 import { getRelatedChunkIds } from './knowledge-graph.js';
 import { rerankWithLLM } from './reranker.js';
+
+/** Qwen3-style instruction used for retrieval queries. Prepended to the
+ * query string before encoding so the asymmetric embedder projects the
+ * query into the same space as document chunks. */
+const QWEN3_QUERY_INSTRUCTION =
+  'Given a search query, retrieve relevant knowledge-base chunks that answer it';
 
 // ============================================================================
 // TYPES
@@ -39,14 +46,13 @@ export interface RetrieveKnowledgeOptions {
   tokenBudget?: number; // default 6000
   maxChunks?: number;   // default 8
   minScore?: number;    // default 0.01
-  /** Ollama URL for embedding-based hybrid search */
-  ollamaUrl?: string;
-  /** Embedding model name (default: nomic-embed-text) */
-  embeddingModel?: string;
-  /** BM25 weight in hybrid score: 0.0 = pure embedding, 1.0 = pure BM25 (default: 0.5) */
+  /** BM25 weight in hybrid score: 0.0 = pure embedding, 1.0 = pure BM25.
+   *  Default 0.2 — cosine-dominant now that chunks carry Qwen3 vectors. */
   bm25Weight?: number;
   /** Enable query expansion via local LLM */
   expandQueries?: boolean;
+  /** Ollama URL for query expansion + graph extraction (NOT embeddings). */
+  ollamaUrl?: string;
   /** Ollama model for query expansion (default: qwen3:4b) */
   ollamaModel?: string;
   /** Enable LLM-based reranking of top candidates */
@@ -316,32 +322,42 @@ export async function retrieveKnowledgeChunks(opts: RetrieveKnowledgeOptions): P
       };
     });
 
-    // 7. Hybrid scoring: combine BM25 with embedding cosine similarity
-    const bm25Weight = opts.bm25Weight ?? 0.5;
-    if (opts.ollamaUrl && opts.embeddingModel) {
-      try {
-        const queryEmbedding = await generateEmbedding(query, opts.ollamaUrl, opts.embeddingModel);
-        if (queryEmbedding) {
-          // Normalize BM25 scores to 0-1 range
-          const finiteBm25Scores = scored.filter((c) => c.score !== Infinity).map((c) => c.score);
-          const maxBm25 = finiteBm25Scores.length > 0 ? Math.max(...finiteBm25Scores) : 1;
+    // 7. Hybrid scoring: combine BM25 with embedding cosine similarity.
+    // Qwen3 outputs L2-normalized 1024-dim vectors; the shared embedder
+    // is always available via the singleton once the daemon has booted,
+    // so we no longer conditionally skip this block when Ollama is off.
+    // Default bm25Weight is 0.2 — cosine-dominant, with BM25 kept as
+    // a lexical anchor for exact-term matches.
+    const bm25Weight = opts.bm25Weight ?? 0.2;
+    try {
+      const embedder = getSharedEmbedder();
+      await embedder.ready();
+      const [queryEmbedding] = await embedder.embed([query], {
+        isQuery: true,
+        instruction: QWEN3_QUERY_INSTRUCTION,
+      });
+      if (queryEmbedding) {
+        // Normalize BM25 scores to 0-1 range
+        const finiteBm25Scores = scored.filter((c) => c.score !== Infinity).map((c) => c.score);
+        const maxBm25 = finiteBm25Scores.length > 0 ? Math.max(...finiteBm25Scores) : 1;
 
-          for (let i = 0; i < scored.length; i++) {
-            if (scored[i].score === Infinity) continue; // always-inject docs keep Infinity
+        for (let i = 0; i < scored.length; i++) {
+          if (scored[i].score === Infinity) continue; // always-inject docs keep Infinity
 
-            const chunk = chunks[i];
-            if (chunk.embedding) {
-              const chunkEmbedding = deserializeEmbedding(chunk.embedding as Buffer);
-              const cosine = Math.max(0, cosineSimilarity(queryEmbedding.embedding, chunkEmbedding));
-              const normalizedBm25 = maxBm25 > 0 ? scored[i].score / maxBm25 : 0;
-              scored[i].score = bm25Weight * normalizedBm25 + (1 - bm25Weight) * cosine;
-            }
-            // Chunks without embeddings keep their BM25 score as-is
+          const chunk = chunks[i];
+          if (chunk.embedding) {
+            const chunkEmbedding = deserializeEmbedding(chunk.embedding as Buffer);
+            const cosine = Math.max(0, cosineSimilarity(queryEmbedding, chunkEmbedding));
+            const normalizedBm25 = maxBm25 > 0 ? scored[i].score / maxBm25 : 0;
+            scored[i].score = bm25Weight * normalizedBm25 + (1 - bm25Weight) * cosine;
           }
+          // Chunks without embeddings keep their BM25 score as-is
         }
-      } catch {
-        // Embedding failed — continue with BM25 scores only
       }
+    } catch (err) {
+      // Embedder not ready (warm-up in progress, missing ONNX cache, etc.)
+      // — fall back to BM25-only scoring. Non-fatal.
+      logger.debug({ err }, '[RAG] Qwen3 hybrid scoring unavailable, using BM25 only');
     }
 
     // 8. Optional: LLM-based reranking

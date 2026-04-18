@@ -52,7 +52,6 @@ export async function deepResearch(
       db: ctx.db,
       workspaceId: ctx.workspaceId,
       ollamaUrl: ctx.ollamaUrl,
-      embeddingModel: ctx.embeddingModel,
       ollamaModel: ctx.ollamaModel,
       ragBm25Weight: ctx.ragBm25Weight,
       rerankerEnabled: ctx.rerankerEnabled,

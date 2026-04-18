@@ -260,7 +260,6 @@ export class LocalOrchestrator {
       onScheduleChange: this.config.onScheduleChange,
       workingDirectory: this.workingDirectory || undefined,
       ollamaUrl: this.config.ollamaUrl,
-      embeddingModel: this.config.embeddingModel,
       ollamaModel: this.config.ollamaModel,
       ragBm25Weight: this.config.ragBm25Weight,
       rerankerEnabled: this.config.rerankerEnabled,

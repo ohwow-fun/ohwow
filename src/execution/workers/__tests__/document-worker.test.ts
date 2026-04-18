@@ -11,8 +11,20 @@ vi.mock('../../../lib/rag/chunker.js', () => ({
 }));
 
 vi.mock('../../../lib/rag/embeddings.js', () => ({
-  generateEmbeddings: vi.fn(() => Promise.resolve([])),
   serializeEmbedding: vi.fn(() => 'serialized'),
+  cosineSimilarity: vi.fn(() => 0),
+  deserializeEmbedding: vi.fn(() => new Float32Array([])),
+}));
+
+// The document worker now pulls in the Qwen3 embedder singleton. Stub
+// it to a no-op embedder so the unit tests never try to load ONNX.
+vi.mock('../../../embeddings/singleton.js', () => ({
+  getSharedEmbedder: vi.fn(() => ({
+    modelId: 'mock-embedder',
+    dim: 0,
+    ready: vi.fn().mockResolvedValue(undefined),
+    embed: vi.fn().mockResolvedValue([]),
+  })),
 }));
 
 vi.mock('../../../lib/rag/retrieval.js', () => ({

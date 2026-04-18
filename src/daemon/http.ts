@@ -61,7 +61,6 @@ export async function setupHttpServer(
     onScheduleChange: () => ctx.scheduler?.notify(),
     ragConfig: {
       ollamaUrl: config.ollamaUrl,
-      embeddingModel: config.embeddingModel,
       ollamaModel: config.ollamaModel,
       ragBm25Weight: config.ragBm25Weight,
       rerankerEnabled: config.rerankerEnabled,

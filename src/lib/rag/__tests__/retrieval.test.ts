@@ -5,11 +5,25 @@ vi.mock('../../logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-// Mock embeddings module to avoid import issues in unit tests
+// Mock embeddings helpers so the retrieval module imports cleanly in
+// these unit tests (which only exercise bm25 + expandQuery, never the
+// hybrid scoring path).
 vi.mock('../embeddings.js', () => ({
-  generateEmbedding: vi.fn().mockResolvedValue(null),
   cosineSimilarity: vi.fn().mockReturnValue(0),
   deserializeEmbedding: vi.fn().mockReturnValue(new Float32Array([])),
+  serializeEmbedding: vi.fn().mockReturnValue(Buffer.alloc(0)),
+}));
+
+// The retrieval module pulls in the embedder singleton at module load
+// for its hybrid-scoring path. None of the tests below hit that path,
+// so replace it with a no-op embedder that never loads ONNX weights.
+vi.mock('../../../embeddings/singleton.js', () => ({
+  getSharedEmbedder: vi.fn(() => ({
+    modelId: 'mock',
+    dim: 0,
+    ready: vi.fn().mockResolvedValue(undefined),
+    embed: vi.fn().mockResolvedValue([]),
+  })),
 }));
 
 describe('tokenize', () => {

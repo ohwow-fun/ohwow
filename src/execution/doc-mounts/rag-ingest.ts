@@ -10,7 +10,8 @@ import { createHash } from 'crypto';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { DocMount, DocMountPage } from './types.js';
 import { chunkText, type Chunk } from '../../lib/rag/chunker.js';
-import { generateEmbeddings, serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { serializeEmbedding } from '../../lib/rag/embeddings.js';
+import { getSharedEmbedder } from '../../embeddings/singleton.js';
 import { tokenize } from '../../lib/rag/retrieval.js';
 import { logger } from '../../lib/logger.js';
 
@@ -21,8 +22,6 @@ import { logger } from '../../lib/logger.js';
 export interface RagIngestOptions {
   db: DatabaseAdapter;
   workspaceId: string;
-  ollamaUrl?: string;
-  embeddingModel?: string;
 }
 
 // ============================================================================
@@ -40,7 +39,7 @@ export async function ingestMountToKnowledgeBase(
   pages: DocMountPage[],
   opts: RagIngestOptions,
 ): Promise<string[]> {
-  const { db, workspaceId, ollamaUrl, embeddingModel } = opts;
+  const { db, workspaceId } = opts;
   const docIds: string[] = [];
 
   logger.info(
@@ -97,11 +96,10 @@ export async function ingestMountToKnowledgeBase(
           });
       }
 
-      // Generate embeddings if Ollama is available
-      let usedModel: string | undefined;
-      if (ollamaUrl && embeddingModel) {
-        usedModel = await embedDocChunks(db, docId, chunks, ollamaUrl, embeddingModel);
-      }
+      // Generate Qwen3 embeddings via the in-daemon singleton. Best-
+      // effort: if the embedder isn't ready yet the boot-time backfill
+      // worker will fill in any gaps on next restart.
+      const usedModel = await embedDocChunks(db, docId, chunks);
 
       // Update corpus stats
       await updateCorpusStatsForChunks(db, workspaceId, chunks, 1);
@@ -214,17 +212,18 @@ function titleFromPath(filePath: string, domain: string): string {
   return `${domain}: ${name || 'Index'}`;
 }
 
-/** Generate and store embeddings for chunks */
+/** Generate and store Qwen3 embeddings for chunks */
 async function embedDocChunks(
   db: DatabaseAdapter,
   docId: string,
   chunks: Chunk[],
-  ollamaUrl: string,
-  embeddingModel: string,
 ): Promise<string | undefined> {
   try {
+    const embedder = getSharedEmbedder();
+    await embedder.ready();
     const texts = chunks.map((c) => c.content);
-    const embeddings = await generateEmbeddings(texts, ollamaUrl, embeddingModel);
+    const embeddings = await embedder.embed(texts);
+    const nowIso = new Date().toISOString();
     let count = 0;
     for (let i = 0; i < chunks.length; i++) {
       const emb = embeddings[i];
@@ -232,14 +231,18 @@ async function embedDocChunks(
         const chunkId = createHash('sha256').update(`${docId}-${i}`).digest('hex').slice(0, 32);
         await db
           .from('agent_workforce_knowledge_chunks')
-          .update({ embedding: serializeEmbedding(emb) })
+          .update({
+            embedding: serializeEmbedding(emb),
+            embedding_model: embedder.modelId,
+            embedding_updated_at: nowIso,
+          })
           .eq('id', chunkId);
         count++;
       }
     }
-    return count > 0 ? embeddingModel : undefined;
+    return count > 0 ? embedder.modelId : undefined;
   } catch (err) {
-    logger.warn({ err }, '[doc-mount-rag] Embedding generation failed, continuing without');
+    logger.warn({ err }, '[doc-mount-rag] Qwen3 embed failed, continuing without; backfill will retry on next boot');
     return undefined;
   }
 }
