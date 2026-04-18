@@ -78,6 +78,7 @@ export const ACTION_OUTPUT_SCHEMAS: Record<string, string[]> = {
   send_notification: ['sent', 'channels'],
   fill_pdf: ['filled_pdf_base64', 'fields_filled', 'warnings', 'attachment_id', 'storage_path', 'filename'],
   generate_pptx: ['pptx_base64', 'slide_count', 'warnings', 'attachment_id', 'storage_path', 'filename', 'mime_type'],
+  generate_xlsx: ['xlsx_base64', 'sheet_count', 'row_count', 'warnings', 'attachment_id', 'storage_path', 'filename', 'mime_type'],
   save_attachment: ['attachment_id', 'storage_path', 'filename'],
   agent_prompt: ['text', 'tokens_used'],
   a2a_call: ['text', 'a2a_task_id', 'status'],

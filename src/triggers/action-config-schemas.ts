@@ -163,6 +163,25 @@ export const GeneratePptxConfigSchema = z.object({
   auto_save: z.boolean().optional(),
 });
 
+export const GenerateXlsxConfigSchema = z.object({
+  title: z.string().optional(),
+  author: z.string().optional(),
+  sheets: z.array(z.object({
+    name: z.string().min(1),
+    headers: z.array(z.string()).optional(),
+    rows: z.array(z.array(z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.date(),
+      z.null(),
+    ]))),
+    column_widths: z.array(z.number()).optional(),
+  })).min(1),
+  filename: z.string().optional(),
+  auto_save: z.boolean().optional(),
+});
+
 export const RunInternalConfigSchema = z.object({
   /** Name of the handler to invoke. Must be registered via registerInternalHandler() on daemon boot. */
   handler_name: z.string().min(1),
@@ -194,6 +213,7 @@ export type A2ACallConfig = z.infer<typeof A2ACallConfigSchema>;
 export type GenerateChartConfig = z.infer<typeof GenerateChartConfigSchema>;
 export type ShellScriptConfig = z.infer<typeof ShellScriptConfigSchema>;
 export type GeneratePptxConfig = z.infer<typeof GeneratePptxConfigSchema>;
+export type GenerateXlsxConfig = z.infer<typeof GenerateXlsxConfigSchema>;
 export type RunInternalConfig = z.infer<typeof RunInternalConfigSchema>;
 
 // ============================================================================
@@ -220,6 +240,7 @@ export interface ActionConfigMap {
   generate_chart: GenerateChartConfig;
   shell_script: ShellScriptConfig;
   generate_pptx: GeneratePptxConfig;
+  generate_xlsx: GenerateXlsxConfig;
   run_internal: RunInternalConfig;
 }
 
@@ -245,5 +266,6 @@ export const ACTION_CONFIG_SCHEMAS: Record<ActionType, z.ZodType> = {
   generate_chart: GenerateChartConfigSchema,
   shell_script: ShellScriptConfigSchema,
   generate_pptx: GeneratePptxConfigSchema,
+  generate_xlsx: GenerateXlsxConfigSchema,
   run_internal: RunInternalConfigSchema,
 };
