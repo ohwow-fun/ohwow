@@ -24,6 +24,7 @@ import type { Mode } from './types.js';
 export type ArcStatus = 'open' | 'closed' | 'aborted';
 export type ArcExitReason =
   | 'budget'
+  | 'budget-exceeded'
   | 'nothing-queued'
   | 'pulse-ko'
   | 'founder-returned';
