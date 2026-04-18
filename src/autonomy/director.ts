@@ -108,6 +108,14 @@ export interface DirectorIO {
    * caught + logged by the Director, never thrown.
    */
   mirrorArc?: (arc_id: string) => Promise<void>;
+  /**
+   * Optional hook fired AFTER `mirrorArc` returns on arc close. Opt-in;
+   * a no-op when undefined. Conductor-only injection: lets the loop
+   * schedule an immediate follow-up tick instead of waiting for the
+   * `setInterval` idle floor. Errors are caught + logged by the
+   * Director, never thrown into the arc-close return path.
+   */
+  requestImmediateTick?: () => void;
 }
 
 export interface ArcInput {
@@ -805,6 +813,21 @@ export async function runArc(
       logger.warn(
         { arc_id, err: (err as Error).message },
         'director.arc.mirror.failed',
+      );
+    }
+  }
+
+  // Event-driven re-tick hook. Lets the Conductor (or any caller that
+  // injects `requestImmediateTick`) schedule a follow-up loop tick the
+  // moment an arc closes, rather than waiting for the idle interval.
+  // Best-effort: a throwing hook must not affect the arc-close return.
+  if (io.requestImmediateTick) {
+    try {
+      io.requestImmediateTick();
+    } catch (err) {
+      logger.warn(
+        { arc_id, err: (err as Error).message },
+        'director.arc.request_immediate.failed',
       );
     }
   }
