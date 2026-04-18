@@ -190,3 +190,44 @@ Live Run 1's gap #3 (bucket-imbalanced cap) confirmed: ledger iteration is Map-i
 5. Day-3+ operators should bump private-config `minTouches` from 1 → 2. Could be automated once the ledger tracks first-observed-at per workspace.
 6. Corpus has no "hacks" bucket rows; E3 is speculative until the bucket has real examples. Re-run E3 once `hacks` rows appear in sidecar data.
 7. E5's sole miss (Make.com complaint routed as builder) is a known prompt weakness. Budget 20 more calls for a prompt-revision A/B when the false-positive rate matters.
+
+---
+
+# pain-finder query semantics — 2026-04-18
+
+Separate pipeline from lead-gen. Goal: find X posts from ohwow's ICP (solopreneurs, ≤3-person service providers, operators overwhelmed by manual work) so we can reply with genuinely helpful tactics without mentioning ohwow. One-by-one query testing in `scripts/x-experiments/pain-finder.mjs` with `SKIP_CLASSIFIER` (raw eyeballing) enabled by default when `QUERY=...` is set inline.
+
+## Query matrix (last 3 days on X, MAX_SCROLLS=10, LIMIT=100)
+
+| query | raw | ICP% | verdict |
+|---|---:|---:|---|
+| `"now booking"` | 34 | 88% | keep — tattoo/lawn/events/voice actors/PD consultants |
+| `"available for freelance"` | 8 | 100% | keep — devs, designers, character artists |
+| `"looking for more clients"` | 5 | 100% | keep — solopreneurs, small-biz owners |
+| `"open to projects"` | 5 | 100% | keep — designers, one explicitly "going through a tough time" |
+| `"accepting new clients"` | 15 | 80% | keep — counselors/coaches/VAs/editors |
+| `"taking on new clients"` | 10 | 80% | keep — video editors/SM managers/media buyers |
+| `"open for commissions"` | 11 | 45% | keep but noisy — artists OK, Filipino academic-ghost posts are ethically mixed |
+| `"hiring a VA"` | 2 | 50% | keep — tiny volume, but decision-point posts are ohwow-gold |
+| `"should I hire"` | 9 | 11% | keep — rare decision-paralysis vent (the 1 was a long "Should I X? Should I Y? Should I live?" post) |
+| `"wish I could clone myself"` | 2 | 100% | keep — classic founder vent |
+| `"doing everything myself"` | 5 | 60% | keep — solo vents |
+| ~~`"slots available"`~~ | 20 | 15% | drop — K-pop resales, real estate, conferences |
+| ~~`"available for hire"`~~ | 26 | 15% | drop — equipment rental (non-Western English "hire" = "rent") |
+| ~~`"one-person business"`~~ | 9 | 0% | drop — AI thought-leaders, Gumroad ebook pushers |
+| ~~`"anyone recommend a"`~~ | 36 | <5% | drop — consumer recs (eyeliner, restaurants, running shoes) |
+| ~~`"looking for brands"`~~ | 2 | 0% | drop — too niche |
+| ~~`"we are looking for"`~~ | 20 | 5% | drop — HR departments, esports, job boards |
+| ~~`"I need someone to"`~~ | 25 | 0% | drop — parasocial ("hug me", "edit my OC as a goat", K-pop fic) |
+| ~~`"how do you guys manage"`~~ | 13 | 8% | drop — casual life questions (sleep, food, K-drama) |
+| ~~`"i'm swamped"`~~ | 4 | 0% | drop — students/fanfic writers |
+| ~~`"drowning in clients"`~~ | 0 | — | drop — nobody actually says this |
+| ~~`"booked out"`~~ | 66 | 2% | drop — customer complaints ("appointments booked out for weeks") |
+
+## Meta-insights
+
+1. **Action phrases beat abstract identity phrases.** "Now booking" / "taking on new clients" surfaces real solopreneurs. "One-person business" surfaces AI thought-leaders selling ebooks. The concrete verb is the filter.
+2. **Professional self-presentation beats casual overwhelm.** Solopreneurs announcing availability (LinkedIn-ish tone on X) → ICP gold. Casual overwhelm vents ("I'm swamped") → students and fanfic writers.
+3. **"Hire" is ambiguous in English worldwide.** "Available for hire" mostly returns equipment rental posts (UK, Kenya, South Africa use "hire" to mean "rent"). "Available for freelance" is unambiguous.
+4. **Fandom swamps generic help phrases.** "I need someone to…" finds "draw my OC as a goat", "tattoo this on my forehead", "k*ll me", "hug me". Must filter via the phrase itself, not via post-hoc classification.
+5. **Reply-mode matters.** `solo_service_provider` posts (marketing mode) want growth/operations tactics; `genuine_pain` posts want reframes or one-line rules. The drafter prompt must distinguish these.

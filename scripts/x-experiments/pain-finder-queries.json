@@ -1,0 +1,26 @@
+{
+  "note": "Assembled query set validated via one-by-one testing. Two modes:\n  - direct: 1:1 reply to a real solopreneur (service-supply or vent). Uses f=live, no engagement floor.\n  - viral: broadcast reply into a crowded ICP-packed thread. Uses f=top, engagement floor, wider age window.\nPer-query overrides in each entry win over the script defaults.",
+  "defaults": { "max_scrolls": 6, "lang": "en" },
+  "_recency_note": "RECENCY=2d for direct, RECENCY=14d for viral (the mode-field handles this per-query).",
+  "queries": [
+    { "mode": "direct", "domain": "service_supply",      "q": "\"now booking\"",               "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"accepting new clients\"",     "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"taking on new clients\"",     "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"available for freelance\"",   "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"looking for more clients\"",  "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"open to projects\"",          "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "service_supply",      "q": "\"open for commissions\"",      "x_extra": "lang:en -filter:replies -academic -essay" },
+
+    { "mode": "direct", "domain": "solo_identity",       "q": "\"as a solopreneur\"",          "x_extra": "lang:en -filter:replies" },
+
+    { "mode": "direct", "domain": "delegation_decision", "q": "\"hiring a VA\"",               "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "delegation_decision", "q": "\"should I hire\"",             "x_extra": "lang:en -filter:replies" },
+
+    { "mode": "direct", "domain": "founder_overwhelm",   "q": "\"wish I could clone myself\"", "x_extra": "lang:en -filter:replies" },
+    { "mode": "direct", "domain": "founder_overwhelm",   "q": "\"doing everything myself\"",   "x_extra": "lang:en -filter:replies" },
+
+    { "mode": "viral",  "domain": "viral_piggyback",     "q": "\"solo founder\"",              "min_likes": 50, "min_replies": 10, "max_age_hours": 336 },
+    { "mode": "viral",  "domain": "viral_piggyback",     "q": "\"build in public\"",           "min_likes": 50, "min_replies": 10, "max_age_hours": 336 },
+    { "mode": "viral",  "domain": "viral_piggyback",     "q": "\"indie hacker\"",              "min_likes": 20, "min_replies": 5,  "max_age_hours": 336 }
+  ]
+}
