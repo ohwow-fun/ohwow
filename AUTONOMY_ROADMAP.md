@@ -44,6 +44,7 @@
 - **lift-measurement** — [src/self-bench/experiments/lift-measurement.ts]
 - **list-completeness-summary** — [src/self-bench/experiments/list-completeness-summary.ts]
 - **list-handlers-fuzz** — [src/self-bench/experiments/list-handlers-fuzz.ts]
+- **llm-budget-pulse** — [src/self-bench/experiments/llm-budget-pulse.ts]
 - **loop-cadence-probe** — [src/self-bench/experiments/loop-cadence-probe.ts]
 - **mig-smoke-1776324117308** — [src/self-bench/experiments/mig-smoke-1776324117308.ts]
 - **migration-drift-sentinel** — [src/self-bench/experiments/migration-drift-sentinel.ts]
