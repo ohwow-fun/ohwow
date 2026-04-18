@@ -8,9 +8,11 @@
  *   npm run autonomy:eval:update
  * and reviews the diff.
  *
- * The harness budget is 15s for the whole suite; we set the test
- * timeout slightly above that to leave headroom for cold starts on
- * slower CI runners.
+ * Timeout is intentionally generous: the harness runs every scenario
+ * twice (once for the transcript diff, once for the structural
+ * assertions). Phase 6.7 grew the suite to 16 scenarios; under full-
+ * repo parallel vitest load the wall-clock can climb well past the
+ * standalone ~10s. 60s leaves headroom without masking a genuine hang.
  */
 import { describe, it, expect } from 'vitest';
 import { runAllScenarios } from '../harness.js';
@@ -32,5 +34,5 @@ describe('autonomy eval harness', () => {
     expect(result.fail).toHaveLength(0);
     // Sanity: at least the canonical 12 scenarios should be discovered.
     expect(result.pass.length).toBeGreaterThanOrEqual(12);
-  }, 30_000);
+  }, 60_000);
 });

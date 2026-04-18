@@ -54,6 +54,7 @@ import { createFileAccessRouter } from './routes/file-access.js';
 import { createPermissionRequestsRouter } from './routes/permission-requests.js';
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFounderInboxRouter } from './routes/founder-inbox.js';
+import { createAutonomyStatusRouter } from './routes/autonomy-status.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createXDraftsRouter } from './routes/x-drafts.js';
 import { createXReplyDraftsRouter } from './routes/x-reply-drafts.js';
@@ -608,6 +609,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createPermissionRequestsRouter(db, engine));
   app.use(createFailingTriggersRouter(db));
   app.use(createFounderInboxRouter(db));
+  app.use(createAutonomyStatusRouter(db));
   app.use(createFindingsRouter(db));
   app.use(createCalendarRouter(db, eventBus));
   app.use(createEmailRouter(db, eventBus));

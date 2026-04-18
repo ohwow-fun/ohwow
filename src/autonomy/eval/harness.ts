@@ -26,7 +26,7 @@ import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
-import { defaultMakeStubExecutor } from '../conductor.js';
+import { defaultMakeStubExecutor, reconstructPickedKeys } from '../conductor.js';
 import {
   closeArc,
   countInboxAddedForPhase,
@@ -65,6 +65,7 @@ import type {
   ScenarioFinals,
   ScenarioInboxChange,
   ScenarioPhaseSummary,
+  ScenarioRestartPick,
   ScenarioStep,
   ScenarioStepRecord,
   ScenarioTranscript,
@@ -255,6 +256,7 @@ async function runDeterministicTick(
     const freshLedger = await readLedgerSnapshot(state.db, state.workspace_id);
 
     let mergedAnswered = newly_answered;
+    let seedDrained: FounderInboxRecord[] = [];
     if (seedAnsweredPending.length > 0) {
       const seen = new Set(newly_answered.map((r) => r.id));
       const merged = [...newly_answered];
@@ -265,16 +267,11 @@ async function runDeterministicTick(
         }
       }
       mergedAnswered = merged;
-      for (const row of seedAnsweredPending) {
-        try {
-          await state.db
-            .from('founder_inbox')
-            .update({ status: 'resolved' })
-            .eq('id', row.id);
-        } catch {
-          /* swallow */
-        }
-      }
+      // Phase 6.7 Deliverable B (mirror): defer the resolve until the
+      // Director has written the phase report row at status='in-flight'.
+      // If pulse-ko fires before the picker returns again, the inbox row
+      // stays answered so the next tick can re-surface it.
+      seedDrained = seedAnsweredPending;
       seedAnsweredPending = [];
     }
 
@@ -295,6 +292,7 @@ async function runDeterministicTick(
       mode: top.mode,
       goal: top.goal,
       initial_plan_brief: top.initial_plan_brief,
+      resolves_inbox_ids: seedDrained.map((r) => r.id),
     };
   };
 
@@ -448,6 +446,16 @@ async function runArcDeterministic(
       status: 'in-flight',
       started_at: phaseStartIso,
     });
+
+    // Phase 6.7 Deliverable B (mirror): resolve picker-drained inbox
+    // rows AFTER the phase report is in-flight, matching director.ts.
+    for (const inboxId of pick.resolves_inbox_ids ?? []) {
+      try {
+        await resolveFounderQuestion(db, inboxId);
+      } catch {
+        /* swallow; the next tick can re-surface it */
+      }
+    }
 
     const onFounderQuestion: PhaseInput['onFounderQuestion'] = async ({
       ret,
@@ -748,6 +756,83 @@ async function applyStep(
         .eq('id', step.founder_inbox_id);
       return base;
     }
+    case 'restart-pick-once': {
+      // Phase 6.7 (Deliverable A): simulate "daemon crashed mid-arc and
+      // restarted" by building a fresh picker against an existing OPEN
+      // arc, calling reconstructPickedKeys to rebuild the dedupe set
+      // from persisted phase_ids, and invoking the picker once. We
+      // record what the picker would have picked (or null) without
+      // actually running a phase. The arc itself stays in whatever
+      // state it was in.
+      if (!step.restart_arc_id) {
+        throw new Error('restart-pick-once step requires restart_arc_id');
+      }
+      const arcId = step.restart_arc_id;
+      const arcRow = (
+        await adapter
+          .from<{
+            id: string;
+            workspace_id: string;
+            opened_at: string;
+            mode_of_invocation: string;
+            thesis: string;
+            status: string;
+            budget_max_phases: number;
+            budget_max_minutes: number;
+            budget_max_inbox_qs: number;
+            kill_on_pulse_regression: number;
+            pulse_at_entry: string;
+          }>('director_arcs')
+          .select()
+          .eq('id', arcId)
+          .maybeSingle()
+      ).data;
+      if (!arcRow) {
+        base.restart_pick = {
+          picked: false,
+          reason: `arc ${arcId} not found`,
+        };
+        return base;
+      }
+
+      // Rebuild picked_keys from this arc's persisted phase_ids.
+      const restored = await reconstructPickedKeys(adapter, arcId);
+
+      // Build a single-shot picker mirror of the production picker but
+      // pre-seeded with `restored`. We don't reuse the conductor's
+      // picker factory because it pulls from the live ranker every time;
+      // here we want a single-call shape.
+      const fresh = await readFullPulse(adapter, workspace_id);
+      const freshLedger = await readLedgerSnapshot(adapter, workspace_id);
+      const seedAnswered = await listAnsweredUnresolvedFounderInbox(
+        adapter,
+        workspace_id,
+      );
+      const ranked: RankedPhase[] = rankNextPhase({
+        pulse: fresh,
+        ledger: freshLedger,
+        newly_answered: seedAnswered,
+        refTimeMs: tickState.clock.getMs(),
+      });
+      const filtered = ranked.filter(
+        (c) => !restored.has(`${c.mode}|${c.source}|${c.source_id ?? ''}`),
+      );
+      if (filtered.length === 0) {
+        base.restart_pick = {
+          picked: false,
+          reason: 'all candidates already picked in this arc',
+        };
+        return base;
+      }
+      const top = filtered[0];
+      base.restart_pick = {
+        picked: true,
+        phase_id: tickState.ids.next('restartphase'),
+        mode: top.mode,
+        goal: top.goal,
+      };
+      return base;
+    }
   }
 }
 
@@ -883,6 +968,16 @@ export function formatTranscript(t: ScenarioTranscript): string {
           .map((c) => `${c.id}->${c.status}`)
           .join(', ');
         lines.push(`  inbox: ${txt}`);
+      }
+    }
+    if (s.kind === 'restart-pick-once' && s.restart_pick) {
+      const p = s.restart_pick;
+      if (p.picked) {
+        lines.push(
+          `  restart_pick: picked mode=${p.mode} goal="${p.goal ?? ''}"`,
+        );
+      } else {
+        lines.push(`  restart_pick: none reason="${p.reason ?? ''}"`);
       }
     }
   }

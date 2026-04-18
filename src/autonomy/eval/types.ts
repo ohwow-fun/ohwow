@@ -117,6 +117,13 @@ export interface SeedPriorPhaseReport {
   goal_source: string;
   status: PriorPhaseStatus;
   hours_ago: number;
+  /**
+   * When set, the synthetic parent arc is left in `status='open'`
+   * (instead of the default `closed`). Used by Phase 6.7's
+   * restart-mid-arc scenario to leave an arc open with a persisted
+   * phase_id the new picker must dedupe via `reconstructPickedKeys`.
+   */
+  parent_arc_open?: boolean;
 }
 
 export interface SeedSpec {
@@ -134,7 +141,12 @@ export interface SeedSpec {
 // Scenario primitives
 // ----------------------------------------------------------------------------
 
-export type ScenarioStepKind = 'tick' | 'advance' | 'seed' | 'answer-founder';
+export type ScenarioStepKind =
+  | 'tick'
+  | 'advance'
+  | 'seed'
+  | 'answer-founder'
+  | 'restart-pick-once';
 
 export interface ScenarioStep {
   kind: ScenarioStepKind;
@@ -148,6 +160,27 @@ export interface ScenarioStep {
   founder_inbox_id?: string;
   /** `answer-founder` only — answer text to record. */
   founder_answer?: string;
+  /**
+   * `restart-pick-once` only — id of an OPEN arc to attach a fresh
+   * picker to. The harness builds a fresh in-memory picker (no
+   * picked_keys), runs `reconstructPickedKeys(arc_id)` to rebuild from
+   * the persisted phase_ids, then invokes the picker once. The pick
+   * (or null) is recorded for the assertion. No phase actually runs.
+   * Phase 6.7 (Deliverable A): this is the closest the harness comes to
+   * simulating "daemon crashed mid-arc and restarted." We don't try to
+   * reproduce a full crash because the harness has no concept of a
+   * persistent picker process; the property-under-test is "a fresh
+   * picker against an existing arc dedupes via the persisted phase_ids."
+   */
+  restart_arc_id?: string;
+}
+
+export interface ScenarioRestartPick {
+  picked: boolean;
+  phase_id?: string;
+  mode?: string;
+  goal?: string;
+  reason?: string;
 }
 
 export interface ScenarioPhaseSummary {
@@ -177,6 +210,8 @@ export interface ScenarioStepRecord {
   tick_result?: ConductorTickResult;
   arc_summary?: ScenarioArcSummary;
   inbox_changes?: ScenarioInboxChange[];
+  /** `restart-pick-once` only. */
+  restart_pick?: ScenarioRestartPick;
 }
 
 export interface ScenarioFinals {

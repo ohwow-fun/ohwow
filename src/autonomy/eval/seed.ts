@@ -242,31 +242,40 @@ async function seedPriorPhaseReports(
 ): Promise<void> {
   // The ranker reads recent `director_phase_reports` to compute novelty,
   // cadence, and regression penalties. Each row needs a parent
-  // `director_arcs` row (FK constraint). We synthesise a closed arc per
-  // unique arc_id requested.
+  // `director_arcs` row (FK constraint). We synthesise an arc per unique
+  // arc_id requested. The arc is `closed` by default; rows can set
+  // `parent_arc_open` to keep the synthetic arc OPEN (used by the
+  // Phase 6.7 restart-mid-arc scenario).
   const now = ctx.now();
-  const arcsCreated = new Set<string>();
+  const arcsCreated = new Map<string, { open: boolean }>();
   for (const r of rows) {
     const arcId = r.arc_id ?? ctx.nextId('priorarc');
-    if (!arcsCreated.has(arcId)) {
+    const want_open = r.parent_arc_open === true;
+    const existing = arcsCreated.get(arcId);
+    if (existing && existing.open !== want_open) {
+      throw new Error(
+        `seed.prior_phase_reports: conflicting parent_arc_open for arc ${arcId}`,
+      );
+    }
+    if (!existing) {
       const startedIso = isoMinus(now, r.hours_ago);
       await insertOrThrow(ctx.db, 'director_arcs', {
         id: arcId,
         workspace_id: ctx.workspace_id,
         opened_at: startedIso,
-        closed_at: startedIso,
+        closed_at: want_open ? null : startedIso,
         mode_of_invocation: 'loop-tick',
         thesis: 'eval prior arc',
-        status: 'closed',
+        status: want_open ? 'open' : 'closed',
         budget_max_phases: 6,
         budget_max_minutes: 240,
         budget_max_inbox_qs: 3,
         kill_on_pulse_regression: 1,
         pulse_at_entry: '{}',
-        pulse_at_close: '{}',
-        exit_reason: 'nothing-queued',
+        pulse_at_close: want_open ? null : '{}',
+        exit_reason: want_open ? null : 'nothing-queued',
       });
-      arcsCreated.add(arcId);
+      arcsCreated.set(arcId, { open: want_open });
     }
     const reportId = r.id ?? ctx.nextId('priorpr');
     const startedIso = isoMinus(now, r.hours_ago);

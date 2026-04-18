@@ -32,6 +32,7 @@ import { registerXReplyDraftTools } from './tools/x-reply-drafts.js';
 import { registerXDmDraftTools } from './tools/x-dm-drafts.js';
 import { registerApprovalTools } from './tools/approvals.js';
 import { registerFounderInboxTools } from './tools/founder-inbox.js';
+import { registerAutonomyStatusTools } from './tools/autonomy-status.js';
 
 export function registerTools(server: McpServer, client: DaemonApiClient): void {
   registerCoreTools(server, client);
@@ -61,4 +62,5 @@ export function registerTools(server: McpServer, client: DaemonApiClient): void 
   registerXDmDraftTools(server, client);
   registerApprovalTools(server, client);
   registerFounderInboxTools(server, client);
+  registerAutonomyStatusTools(server, client);
 }

@@ -76,6 +76,16 @@ export interface PickerOutput {
   mode: Mode;
   goal: string;
   initial_plan_brief: string;
+  /**
+   * Phase 6.7 (Deliverable B): inbox row ids the picker consumed when
+   * building this pick (e.g. the cross-arc workspace-wide seed). The
+   * Director resolves each id AFTER the phase report row transitions to
+   * `status='in-flight'`. If the arc aborts (pulse-ko, runner threw,
+   * budget cap) before the picker is called again, the unresolved rows
+   * stay `answered` and the next tick's seed pre-fetch picks them up.
+   * Optional; default is the empty list.
+   */
+  resolves_inbox_ids?: string[];
 }
 
 /**
@@ -545,6 +555,28 @@ export async function runArc(
       status: 'in-flight',
       started_at: phaseStartIso,
     });
+
+    // ---- 6b. (Phase 6.7 Deliverable B) resolve any inbox rows the
+    // picker drained for this pick. We do this AFTER the phase report
+    // row transitions to in-flight so the contract is: an inbox row
+    // moves to `resolved` only when work is committed to actually
+    // execute. If pulse-ko / budget tripped earlier we'd have already
+    // exited the loop above; the unresolved row would survive for the
+    // next tick.
+    for (const inboxId of pick.resolves_inbox_ids ?? []) {
+      try {
+        await resolveFounderQuestion(db, inboxId);
+      } catch (err) {
+        logger.warn(
+          {
+            arc_id,
+            inbox_id: inboxId,
+            err: (err as Error).message,
+          },
+          'director.founder_inbox.post_inflight_resolve.failed',
+        );
+      }
+    }
 
     // ---- 7. run the phase ----
     const phaseInput: PhaseInput = {

@@ -73,9 +73,13 @@ const scenario: Scenario = {
       }
     },
     async (t, ctx) => {
-      // The seeded answered row should be `resolved` after the tick
-      // (the picker's seed-drain resolves it so subsequent calls and
-      // future ticks don't re-process it).
+      // The seeded answered row should be `resolved` after the tick.
+      // Phase 6.7 (Deliverable B) moves the resolve out of the picker
+      // into the Director: it now fires AFTER the phase report row
+      // transitions to `status='in-flight'`. The end-state is the same
+      // (resolved) when the phase actually starts; what changes is that
+      // a pre-pick abort (pulse-ko, budget) can no longer prematurely
+      // resolve the row. See scenario 15 for the abort case.
       const { data } = await ctx.db
         .from<{ id: string; status: string }>('founder_inbox')
         .select('id, status')
@@ -84,6 +88,34 @@ const scenario: Scenario = {
       if (!row) throw new Error('expected fi_cross to exist');
       if (row.status !== 'resolved') {
         throw new Error(`expected fi_cross resolved, got ${row.status}`);
+      }
+    },
+    async (t, ctx) => {
+      // Phase 6.7 contract: the founder-answer phase report row must
+      // exist with status 'phase-closed' (i.e., it actually reached
+      // in-flight and ran). If we ever short-circuited the resolve to
+      // happen pre-in-flight, this would silently still pass — so we
+      // pin the property explicitly.
+      const { data } = await ctx.db
+        .from<{
+          id: string;
+          status: string;
+          goal: string;
+        }>('director_phase_reports')
+        .select('id, status, goal')
+        .eq('workspace_id', ctx.workspace_id);
+      const founderAnswerReport = (data ?? []).find((r) =>
+        r.goal.includes('source=founder-answer'),
+      );
+      if (!founderAnswerReport) {
+        throw new Error(
+          'expected a founder-answer phase report (deferred-resolve depends on it reaching in-flight)',
+        );
+      }
+      if (founderAnswerReport.status !== 'phase-closed') {
+        throw new Error(
+          `expected founder-answer phase to reach phase-closed, got ${founderAnswerReport.status}`,
+        );
       }
     },
   ],

@@ -1,0 +1,6 @@
+SCENARIO: 14-restart-mid-arc-no-double-pick
+DESCRIBE: Open arc + persisted phase report (v1 phase_id) for ap_target; same approval still pending. A fresh picker resumes, reconstructPickedKeys dedupes, picker returns none.
+INITIAL_SEED: approvals=1; prior_reports=1
+STEP 0 [restart-pick-once] // fresh picker resumes against the open arc; reconstructPickedKeys parses the v1 phase_id and dedupes
+  restart_pick: none reason="all candidates already picked in this arc"
+FINALS: arcs(open=1 closed=0 aborted=0) phase_reports=1 open_inbox=0

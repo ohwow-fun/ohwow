@@ -1,0 +1,15 @@
+SCENARIO: 15-pulse-ko-preserves-inbox
+DESCRIBE: Mid-arc hook injects an answered inbox row + drops MRR; iteration 2 pulse-ko aborts before the picker fires; the inbox row stays answered for the next tick.
+INITIAL_SEED: approvals=1; vitals(mrr=10000)
+STEP 0 [tick] // tick 1: phase 1 runs the approval; mid-arc hook injects answered inbox + drops MRR; iter 2 pulse-ko aborts before any pick
+  result: ran=true arc=arc_001 status=aborted exit=pulse-ko
+  arc arc_001:
+    phase_001 mode=revenue status=phase-closed trios=1 goal="fire approval ap_first [source=approval; id=ap_first]"
+  inbox: fi_pko->answered
+STEP 1 [tick] // tick 2: pre-fetch surfaces the still-answered inbox row; founder-answer phase runs and resolves it
+  result: ran=true arc=arc_002 status=closed exit=nothing-queued
+  arc arc_002:
+    phase_002 mode=plumbing status=phase-closed trios=1 goal="resume after founder answer (fi_pko) [source=founder-answer; id=fi_pko]"
+    phase_003 mode=revenue status=phase-closed trios=1 goal="fire approval ap_first [source=approval; id=ap_first]"
+  inbox: fi_pko->resolved
+FINALS: arcs(open=0 closed=1 aborted=1) phase_reports=3 open_inbox=0
