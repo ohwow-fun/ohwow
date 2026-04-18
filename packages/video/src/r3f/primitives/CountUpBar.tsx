@@ -95,8 +95,16 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
 
   // Layout: bar on the LEFT, readout card on the RIGHT. Both anchored
   // to the horizontal center of the camera frame.
+  //
+  // Z-ordering: the bar is a box with depth 1.1 (Z extent ±0.55). All text
+  // lives at READOUT_Z (strictly greater than +0.55) so the number always
+  // reads in front of the bar mesh at every camera angle, never threaded
+  // through the digits. The number itself is sized so "47.8M steps/sec"
+  // fits comfortably in the right half of the frame at camera z=8 fov ≈45
+  // without eclipsing the bar or bleeding into it horizontally.
   const BAR_X = -2.0;
   const READOUT_X = 1.6;
+  const READOUT_Z = 1.2;
   const FLOOR_Y = -1.0;
 
   return (
@@ -124,30 +132,55 @@ export const CountUpBar: React.FC<CountUpBarProps> = ({
         />
       </mesh>
 
-      {/* Big number readout — FIXED position so it's visible at any target */}
+      {/* Big number readout — sits IN FRONT of the bar mesh (Z=1.2 > bar Z=±0.55)
+          so the bar never slices through the digits. Sized to fit the right
+          half of the frame without spanning the whole screen. */}
       <Text
-        position={[READOUT_X, 0.15, 0]}
-        fontSize={1.4}
+        position={[READOUT_X, 0.35, READOUT_Z]}
+        fontSize={0.78}
         anchorX="center"
         anchorY="middle"
         color={resolvedColor}
-        outlineWidth={0.025}
+        outlineWidth={0.018}
         outlineColor="#0a1629"
         outlineOpacity={0.9}
         fontWeight={800}
+        maxWidth={4.2}
+        textAlign="center"
       >
-        {numberText}{unit}
+        {numberText}
       </Text>
+
+      {/* Unit line — smaller, directly under the number. Separated from
+          the value so long units ("M steps/sec") don't balloon the main
+          readout width. */}
+      {unit && (
+        <Text
+          position={[READOUT_X, -0.25, READOUT_Z]}
+          fontSize={0.32}
+          anchorX="center"
+          anchorY="middle"
+          color={resolvedColor}
+          outlineWidth={0.01}
+          outlineColor="#0a1629"
+          outlineOpacity={0.8}
+          fontWeight={600}
+          maxWidth={4.2}
+          textAlign="center"
+        >
+          {unit}
+        </Text>
+      )}
 
       {/* Label below the readout */}
       {label && (
         <Text
-          position={[READOUT_X, -0.9, 0]}
-          fontSize={0.28}
+          position={[READOUT_X, -0.75, READOUT_Z]}
+          fontSize={0.24}
           anchorX="center"
           anchorY="middle"
           color="#c8d4e8"
-          maxWidth={4.5}
+          maxWidth={4.2}
           textAlign="center"
           letterSpacing={0.05}
         >
