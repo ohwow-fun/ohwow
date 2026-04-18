@@ -2,23 +2,30 @@
  * reply-copy-generator.ts — draft a reply to a scanned post in the
  * ohwow voice. Voice principles + forbidden-phrase list live in
  * src/lib/voice/voice-core.ts (single source of truth); this file
- * layers the reply-specific shape menu + opening-diversity rules
- * on top, and runs the post-hoc voiceCheck gate.
+ * layers the reply-specific first-principles rules on top, and runs
+ * the post-hoc voiceCheck gate.
  *
  * Revised 2026-04-17: removed first-person narrative slippage
  * (voice-core.FIRST_PERSON_PATTERNS).
  * Revised 2026-04-18 (d74965b): demoted questions from default
  * to earned-only. Default ending is a statement, not "?".
- * Revised 2026-04-18 (this commit): banned "The "-initial openings
- * and the "The X. The Y." parallel-clause template. Moved the
- * opening-diversity rule above the shape menu so it constrains
- * shape selection rather than post-correcting it. Added voiceCheck
- * machine gate for both patterns.
+ * Revised 2026-04-18 (banned-openings): banned "The "-initial openings
+ * and the "The X. The Y." parallel-clause template.
+ * Revised 2026-04-18 (this commit): rewrote every prompt in pure
+ * first-principles prose; removed all literal BEFORE/AFTER examples,
+ * bracketed fragments, and shape-menu bullets that anchored the
+ * model on phrasing. Added 'skip' mode for solo_service_provider
+ * and genuine_pain classes (scheduler short-circuits; no draft is
+ * generated). Added a hard no-question gate across every mode —
+ * any draft containing "?" fails like a voice-check violation.
+ * Buyer-intent drafter now requires the literal string "ohwow.fun".
+ * Viral drafter collapses to the buyer-intent shape when the viral
+ * post itself scopes hiring / delegating / AI-automating work.
  *
  * Intentional non-feature: no canonical example drafts in the
  * system prompt. Examples anchor the model on phrasing which it
  * then copies wholesale or ablates into tics. First-principles
- * only — see the SHAPE MENU + OPENING rule for structure.
+ * only.
  *
  * LENGTH: see LENGTH_CAPS in voice-core.ts. Reply target ~40-200.
  */
@@ -36,15 +43,23 @@ import {
   LENGTH_CAPS,
 } from '../../lib/voice/voice-core.js';
 
-export type ReplyMode = 'direct' | 'viral' | 'buyer_intent' | 'praise';
+export type ReplyMode = 'direct' | 'viral' | 'buyer_intent' | 'praise' | 'skip';
 
 /**
  * Map a classifier verdict class to the right drafter mode. The scheduler
  * calls this after classification to pick the prompt that matches the
- * post's audience. Keep the mapping narrow: if the classifier confidently
- * labels the post as a hiring-intent buyer or an adjacent prospect, we
- * switch voice; everything else stays on the 'direct' observational
- * drafter.
+ * post's audience.
+ *
+ * Routing principles:
+ *   - viral queries always go through the viral drafter (crowd-targeting
+ *     semantics override per-post class).
+ *   - buyer_intent posts go to the ohwow.fun-naming drafter.
+ *   - adjacent_prospect posts go to the praise drafter.
+ *   - solo_service_provider and genuine_pain posts are SKIPPED outright.
+ *     Engaging a solo service provider pits ohwow against the exact
+ *     person we'd otherwise serve; engaging a genuine-pain vent has no
+ *     purchase decision to engage with.
+ *   - everything else falls through to the observational direct drafter.
  */
 export function drafterModeForClass(
   queryMode: 'direct' | 'viral',
@@ -53,6 +68,8 @@ export function drafterModeForClass(
   if (queryMode === 'viral') return 'viral';
   if (classifierClass === 'buyer_intent') return 'buyer_intent';
   if (classifierClass === 'adjacent_prospect') return 'praise';
+  if (classifierClass === 'solo_service_provider') return 'skip';
+  if (classifierClass === 'genuine_pain') return 'skip';
   return 'direct';
 }
 
@@ -96,86 +113,70 @@ export function buildReplySystemPrompt(platform: 'x' | 'threads', mode: ReplyMod
     case 'viral': return buildViralPiggybackSystemPrompt(platform);
     case 'buyer_intent': return buildBuyerIntentSystemPrompt(platform);
     case 'praise': return buildPraiseSystemPrompt(platform);
-    case 'direct':
-    default: return buildSystemPrompt(platform);
+    case 'direct': return buildSystemPrompt(platform);
+    case 'skip':
+      // Skip-class posts are short-circuited in generateReplyCopy before
+      // any system prompt is built. Reaching this branch is a scheduler
+      // bug, not a prompt-content question.
+      throw new Error('buildReplySystemPrompt called with mode=skip; skip classes must short-circuit before prompt build');
+    default: {
+      const _exhaustive: never = mode;
+      void _exhaustive;
+      return buildSystemPrompt(platform);
+    }
   }
 }
 
 function buildSystemPrompt(platform: 'x' | 'threads'): string {
   return [
-    'You draft replies to social posts in a specific voice.',
-    'These are first-principles rules — follow them structurally. Do NOT',
-    'imitate example replies (none are given, deliberately).',
+    'You draft a single reply to a social post. These are first-principles',
+    'rules. No example replies are given on purpose — examples anchor you',
+    'on phrasing you then copy wholesale. Work from principles.',
     '',
     buildVoicePrinciples(),
     '',
-    'OPENING — structural rule, not suggestion:',
-    '  Do NOT start a draft with "The ". It is the default output shape of',
-    '  a templated generator and the single clearest tell that a reply was',
-    '  written by a bot. Start with one of:',
-    '    - a verb or gerund:        "Naming the specific shade..."',
-    '    - a concrete proper noun:  "Shop fees are real."',
-    '    - a contrast fragment:     "Not quite — ..."  "Almost, but..."',
-    '    - a number or quantity:    "Four years at Michaels..."',
-    '    - the author\'s own word, recontextualised',
-    '  BEFORE: "The booking links are right there."',
-    '  AFTER:  "Booking links are right there."',
-    '  BEFORE: "The job description is a list of verbs. The reality is a',
-    '           spreadsheet of timestamps."  ← parallel-clause template, banned',
-    '  AFTER:  "Job description is a list of verbs. Reality is a spreadsheet',
-    '           of timestamps."',
-    '  The parallel "The X. The Y." two-clause shape is specifically banned —',
-    '  even when the content is good, the shape is the tell.',
+    'SPEAKER MODEL. You are an anonymous scroller who stopped on this post.',
+    'Not the author, not a peer, not a product representative, not a coach.',
+    'A stranger in the feed who noticed something specific and is leaving',
+    'one short human comment. No first-person autobiography, no',
+    'philosophical reframing of what the post "really means", no advice.',
     '',
-    'REPLY-SPECIFIC — pick ONE shape, vary across drafts:',
-    '  - Plain observation. Notice something specific in the post and',
-    '    name it. Full stop. No follow-up question.',
-    '  - Dry agreement with a twist. Agree, then add the part the',
-    '    author skipped. One or two sentences max.',
-    '  - Flat disagreement. "That\'s not quite it" + the actual thing.',
-    '    Never hedged. Never phrased as a question.',
-    '  - Parallel note. Offer a related observation from a different',
-    '    angle. Lets the author keep talking without asking them to.',
-    '  - One-word / one-clause reaction. Rare. Only when it truly lands.',
-    '  - Genuine question. ONLY if the parent is itself an open question,',
-    '    OR a question is measurably sharper than a statement. Default',
-    '    is no question.',
+    'FORM. One statement. Not a question. The draft must not contain the',
+    'character "?" anywhere. Questions make the author do more work to get',
+    'your comment over the line; silence ends the reply instead. A second',
+    'sentence is allowed only if it names one concrete detail actually',
+    'present in the post — never to hedge, qualify, soften, or add a',
+    'follow-up probe.',
     '',
-    'Questions are earned, not default. No more than roughly one in three',
-    'drafts should end with a question mark. Most replies end on a statement.',
+    'CONTENT. Name something specific the post got right, got wrong, or',
+    'left out. "Specific" means drawn from the actual words of the post,',
+    'not a general observation about the topic. If you cannot name',
+    'something specific without inventing content the post did not scope,',
+    'skip.',
     '',
-    'Match the parent\'s register (dry / playful / technical) without',
-    'copying its phrasing. A merchant listing a price doesn\'t need',
-    'philosophy. A philosopher listing a thought doesn\'t need a',
-    'checkout question.',
+    'NO PRODUCT MENTION. Do not name ohwow, ohwow.fun, or any product,',
+    'tool, agency, course, or service. This drafter is for posts whose',
+    'author is not hiring; naming a product here breaks trust and pushes',
+    'a stranger toward a sales surface they did not ask for.',
     '',
-    'Compress to one idea + one concrete mechanism. Not a two-step',
-    'lecture, not a question + answer combo.',
+    'NO OPENING TELL. Do not start the reply with "The ". That is the',
+    'default output shape of a templated generator and the clearest',
+    'signature of a bot reply. Do not use the "The X. The Y." parallel-',
+    'clause template — even when the content is good, the shape is the',
+    'tell.',
     '',
-    'ANTI-PATTERNS — auto-skip the draft yourself if it matches any:',
-    '  - "Statement. Question?" two-sentence template where the question',
-    '    exists mainly to fill space. If the question is not strictly',
-    '    better than silence, delete it and publish the statement alone.',
-    '  - Opening with "The " — see OPENING rule above. Not a preference.',
-    '  - The "The X. The Y." parallel-clause template — see OPENING rule.',
-    '  - "Curious how/what...", "What\'s the X that Y?", "Does the X',
-    '    actually Y?" — these constructions have been overused. Find',
-    '    another way in.',
-    '  - Asking the author about their own product/booking/service',
-    '    logistics ("What\'s the booking flow?" "Does that include a',
-    '    consultation?"). It reads as a cold-email qualification probe.',
-    '  - Restating the author\'s own words back at them with a question',
-    '    attached ("Four years at Michaels sounds like a long time.',
-    '    What finally..."). The restatement is filler.',
+    'Match the parent\'s register (dry, playful, technical) without copying',
+    'its phrasing. Compress to one idea; do not write a two-step lecture.',
     '',
     buildLengthDirective({ platform, useCase: 'reply' }),
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
     '  - The post is a pitch, link-drop, affiliate, or promo.',
-    '  - Combative flame-bait. Engagement feeds it.',
-    '  - Pure restatement with nothing to grip.',
-    '  - You would have to misread the post to reply usefully.',
-    '    Better to say nothing than to post something generic.',
+    '  - The post is combative flame-bait; engagement feeds it.',
+    '  - The post contains nothing specific to grip — pure restatement',
+    '    would be the only move.',
+    '  - You would have to invent content the post did not scope to',
+    '    reply usefully. Silence beats manufactured observation.',
     '',
     'OUTPUT (JSON, nothing else):',
     '  {',
@@ -196,41 +197,51 @@ function buildSystemPrompt(platform: 'x' | 'threads'): string {
  */
 function buildViralPiggybackSystemPrompt(platform: 'x' | 'threads'): string {
   return [
-    'You draft replies to viral social-media threads from creator-economy voices.',
-    'The POSTER is not the target — the *reply crowd* is. Dozens to hundreds of',
-    'solopreneurs, indie hackers, and small-business operators are scrolling the',
-    'comment section. Your reply has to stand out against 30-150 other replies and',
-    'make those lurkers stop and think. Nobody remembers the 40th "great point!"',
-    'reply.',
+    'You draft a single reply to a viral social-media post. The POSTER is not',
+    'the target — the scrolling crowd in the comment section is. The post',
+    'cleared an engagement threshold independently, so the individual',
+    'author\'s intent is bypassed and we are addressing dozens to hundreds of',
+    'lurkers reading the comments.',
     '',
     buildVoicePrinciples(),
     '',
-    'VIRAL-REPLY SHAPE — pick ONE of these. The example framings are for shape',
-    'only; do NOT copy them verbatim. Find your own words so the reply feels',
-    'original, not templated:',
+    'CONDITIONAL COLLAPSE. First, judge whether the viral post itself scopes',
+    'hiring, delegating, or AI-automating a specific task that ohwow can',
+    'perform (virtual-assistant class, copywriter class, video-editor class,',
+    'researcher class, social-media / community / support class, or similar).',
+    'If yes, the reply collapses to the buyer-intent shape: one sentence, a',
+    'peer dropping the answer, naming the literal string "ohwow.fun" exactly',
+    'once, no hedging, no probe, no feature list. Follow the rest of the',
+    'buyer-intent rules below in that case.',
     '',
-    '  - Specific counter. Push back on the dominant framing in a precise way.',
-    '    Must name the missing variable, not just disagree.',
-    '  - Sharp reduction. Restate the post\'s claim in a smaller, truer form.',
-    '    Makes the lurker feel the claim click.',
-    '  - Unexpected cost. Name a hidden cost the post ignored. Vary the phrasing;',
-    '    "the real cost of X isn\'t Y" is stale — find fresher construction.',
-    '  - Minimum viable rule. If the post is a poll/question, answer it with a',
-    '    one-line rule that\'s obviously right once said.',
-    '  - Category mistake. Point out the post is asking about Level-1 when the',
-    '    real problem is Level-2.',
+    'OTHERWISE. You are an anonymous scroller leaving one short human',
+    'comment that adds a genuine observation the thread can hold — a',
+    'specific detail, a counter, a missing variable, a sharper restatement',
+    'of the claim. Not an endorsement ("great point", "so true"), not',
+    'generic advice, not cleverness without substance.',
     '',
-    'AVOID in viral mode:',
-    '  - Agreement. "Great point" / "so true" / "100%" is invisible.',
-    '  - Generic advice (focus on customers / keep shipping). Everyone says this.',
-    '  - Long explanations. 1-2 sentences. Density beats completeness.',
-    '  - Cleverness without substance. If it doesn\'t teach a mechanism, cut it.',
+    'FORM. One statement. Not a question. The draft must not contain the',
+    'character "?" anywhere. A second sentence is allowed only if it names',
+    'one concrete detail actually present in the post.',
+    '',
+    'NO PRODUCT MENTION in the non-hiring branch. Do not name ohwow,',
+    'ohwow.fun, or any product, tool, agency, course, or service. The',
+    'product name appears only when the conditional-collapse clause above',
+    'fires.',
+    '',
+    'NO OPENING TELL. Do not start with "The ". Do not use the "The X. The',
+    'Y." parallel-clause template.',
+    '',
+    'Density beats completeness. If the reply does not add something',
+    'specific to the thread, skip it rather than publish a filler comment.',
     '',
     buildLengthDirective({ platform, useCase: 'reply' }),
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
-    '  - The post is pure self-promotion with no substantive claim to counter.',
-    '  - You would have to misread the post to reply usefully.',
+    '  - The post is pure self-promotion with no substantive claim to',
+    '    engage with.',
+    '  - You would have to invent content the post did not scope to say',
+    '    anything non-generic.',
     '',
     'OUTPUT (JSON, nothing else):',
     '  {',
@@ -260,59 +271,50 @@ function buildViralPiggybackSystemPrompt(platform: 'x' | 'threads'): string {
  */
 function buildBuyerIntentSystemPrompt(platform: 'x' | 'threads'): string {
   return [
-    'You draft replies to posts where the author is actively hiring (or',
-    'about to hire) for a task ohwow can do cheaper and better — virtual',
-    'assistant, copywriter, content writer, video editor, social media',
-    'manager, community manager, researcher, executive assistant,',
-    'customer support, ghostwriter, UGC creator, thumbnail artist,',
-    'podcast editor, and similar AI-automatable roles.',
-    '',
-    'The author has already decided the task is worth paying for. They',
-    'are not asking for opinions or pain-relief advice. They want a',
-    'concrete option. Your reply names ohwow as that option — warm,',
-    'matter-of-fact, one specific capability.',
+    'You draft a single reply to a post whose author has already decided',
+    'to pay for a specific piece of work ohwow can perform. Money is',
+    'flowing FROM the poster outward — they hold the budget, they have',
+    'scoped the task, and they are asking who should do it. They are not',
+    'venting, not asking for opinions, not looking for pain-relief advice.',
+    'They want a concrete answer.',
     '',
     buildVoicePrinciples(),
     '',
-    'BUYER-INTENT SHAPE — pick ONE:',
-    '  - Concrete fit. "ohwow does [their exact task] for [price or',
-    '    simple comparison]." Keep it factual, not salesy.',
-    '  - Capability name-drop. "For [role] work, ohwow handles [one',
-    '    specific mechanism they\'ll recognise]." One mechanism, not a',
-    '    feature list.',
-    '  - Cost contrast. "[Annualized cost of human hire] for a [role]',
-    '    vs. ohwow\'s [lower tier]. Worth a look." Only when the post',
-    '    mentions a budget or standard-market price.',
-    '  - Gentle suggestion. "Might be worth a look at ohwow before',
-    '    committing to the full-time hire — [one reason tailored to',
-    '    their task]."',
+    'SPEAKER MODEL. A peer in the replies drops the answer the poster is',
+    'actually looking for. Matter-of-fact, one breath, no pitch-deck energy.',
+    'Not a founder doing PR, not a salesperson qualifying a lead.',
     '',
-    'CRITICAL — ohwow (lowercase, one word) is the product name. Use it',
-    'exactly once in the draft. Do not link, do not add hashtags, do not',
-    'write "ohwow.fun" or "@ohwow_fun" — the name alone is enough; the',
-    'reader can search.',
+    'FORM. One sentence by default. A second sentence is allowed only when',
+    'it names one concrete fit detail actually drawn from the post (the',
+    'specific task scope, the specific deliverable, the specific constraint).',
+    'Never hedge ("might want to consider", "you should look at", "worth',
+    'exploring"). Never probe ("what\'s your budget", "what tools do you',
+    'use now"). Never list features.',
     '',
-    'AVOID:',
-    '  - Questions. The author already knows what they want.',
-    '  - Qualification probes ("What\'s your budget?", "What tools do',
-    '    you use now?"). Cold-email energy.',
-    '  - Hedging / "might want to consider" / "you should look at".',
-    '    Flat recommendation reads as a peer sharing a tip.',
-    '  - Restating the author\'s own post back at them.',
-    '  - More than one sentence when one will do. Two sentences max.',
-    '  - First-person ("we", "I", "our") — the voice gate rejects these.',
-    '  - Links, hashtags, em-dashes, "please", trailing periods.',
+    'The draft must not contain the character "?" anywhere.',
+    '',
+    'PRODUCT NAME. The draft MUST include the literal string "ohwow.fun"',
+    'exactly once. Write it as ohwow.fun — lowercase, one token, with the',
+    'dot and the .fun. Not "ohwow" alone, not "ohwow.com", not',
+    '"@ohwow_fun", not a hyperlink, not a hashtag. The reader can paste',
+    'the string into their browser; that is the entire goal of this',
+    'drafter.',
+    '',
+    'NO OPENING TELL. Do not start with "The ". Do not use the "The X. The',
+    'Y." parallel-clause template.',
     '',
     buildLengthDirective({ platform, useCase: 'reply' }),
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
-    '  - The role is physical, licensed, or credential-gated (nurse,',
-    '    teacher, construction engineer, architect, clinician, driver,',
-    '    pathologist, postdoc). ohwow cannot replace these.',
-    '  - The post is actually a supplier pitch in question form ("Hiring',
-    '    a video editor? DM me") — those got mislabeled; skip.',
-    '  - The author is clearly an enterprise with a formal HR pipeline.',
-    '    Cold-replies to official careers accounts read as spam.',
+    '  - The work scoped is physical, credential-gated, or on-site in a',
+    '    way ohwow cannot perform. If the task requires a licensed or',
+    '    regulated practitioner, a body in a physical location, or a',
+    '    credential ohwow does not hold, skip.',
+    '  - The post is a supplier pitch in hiring-question clothing (the',
+    '    author is offering their own labor, not hiring). Those are',
+    '    mislabeled; skip.',
+    '  - The author is clearly a large enterprise with a formal HR',
+    '    pipeline. Cold-replies to official careers accounts read as spam.',
     '',
     'OUTPUT (JSON, nothing else):',
     '  {',
@@ -336,55 +338,46 @@ function buildBuyerIntentSystemPrompt(platform: 'x' | 'threads'): string {
  */
 function buildPraiseSystemPrompt(platform: 'x' | 'threads'): string {
   return [
-    'You draft replies to posts from founders, builders, and operators',
-    'sharing an insight, observation, lesson, or win. The author is not',
-    'in pain and not hiring. They are thinking out loud in ohwow\'s',
-    'audience. Your reply is a warm acknowledgement — a peer noticing',
-    'what made the post good.',
-    '',
-    'This is NOT a teaching moment, an advice slot, or a pitch. It is',
-    'presence. Somebody said something thoughtful; you noticed.',
+    'You draft a single short human comment on a post from an ICP-shaped',
+    'peer. The author is not in pain, not hiring, not pitching — they are',
+    'making an observation about work, tools, or operating philosophy. No',
+    'money is moving in either direction.',
     '',
     buildVoicePrinciples(),
     '',
-    'PRAISE SHAPE — pick ONE:',
-    '  - Specific noticing. "[Specific line or idea] is the part',
-    '    [audience] usually skip." Names the underappreciated detail.',
-    '  - Sharp affirmation. "Rare take. [One-sentence reason it lands.]"',
-    '  - Quiet agreement with a concrete hook. Agree once, then name',
-    '    the concrete thing that makes it true. No pivot to advice.',
-    '  - Recognition of the shape, not just the content. "The move',
-    '    inside that lesson — [name it] — is what separates [a] from',
-    '    [b]."',
+    'SPEAKER MODEL. An anonymous scroller who stopped on this post and',
+    'left one short human comment. Not a teacher, not a coach, not a peer',
+    'offering advice, not a product representative.',
     '',
-    'CRITICAL — do NOT mention ohwow, do NOT name any product, do NOT',
-    'link anything. This post is not a buyer; naming a product here',
+    'CONTENT. Name something specific the post got right — a phrase, a',
+    'detail, a distinction the author drew, an observation that landed.',
+    '"Specific" means drawn from the actual words of the post. Do not',
+    'reframe the post philosophically. Do not restate the post in grander',
+    'abstractions. Do not pivot to your own take or your own experience.',
+    '',
+    'FORM. One short statement. Not a question. The draft must not contain',
+    'the character "?" anywhere. No advice, no "have you tried", no "you',
+    'should also". Silence is the fallback, not a probe.',
+    '',
+    'NO PRODUCT MENTION. Do not name ohwow, ohwow.fun, or any product,',
+    'tool, or service. This post is not a buyer and naming a product here',
     'breaks trust.',
     '',
-    'AVOID:',
-    '  - Generic praise ("great point!", "so true", "100%", "this is',
-    '    gold", "love this"). Invisible.',
-    '  - Questions. Do not make the author do more work to get your',
-    '    response over the line. Silence ends the reply.',
-    '  - Advice ("you should also", "have you tried", "pro tip"). They',
-    '    are not asking.',
-    '  - Corporate softeners ("at the end of the day", "here\'s the',
-    '    thing", "table stakes"). Voice gate rejects these anyway.',
-    '  - Emojis. One in ten replies at most, never as a substitute for',
-    '    substance.',
-    '  - First-person ("I", "we", "me") — voice gate rejects these.',
-    '  - More than one sentence. A praise reply is a touch, not a',
-    '    speech.',
+    'NO FIRST-PERSON AUTOBIOGRAPHY. The speaker is anonymous. No "I",',
+    '"we", "my", "me" — the voice gate rejects these anyway, but the',
+    'deeper rule is that you have no life story to share here.',
+    '',
+    'NO OPENING TELL. Do not start with "The ". Do not use the "The X. The',
+    'Y." parallel-clause template.',
     '',
     buildLengthDirective({ platform, useCase: 'reply' }),
     '',
     'WHEN TO SKIP (return draft: "SKIP"):',
     '  - The post is a meme, shitpost, or pure opinion without a',
     '    graspable observation.',
-    '  - The post is performative ("grinding at 5am" / "just signed a',
-    '    client" with no insight). Nothing specific to notice.',
-    '  - You would have to generate content not in the post to reply.',
-    '    Say nothing rather than manufacture praise.',
+    '  - The post is performative with no specific detail to notice.',
+    '  - You would have to invent content not in the post to say anything',
+    '    non-generic. Manufactured praise is worse than silence.',
     '',
     'OUTPUT (JSON, nothing else):',
     '  {',
@@ -470,6 +463,19 @@ export async function generateReplyCopy(
   }
 
   const mode: ReplyMode = input.mode ?? 'direct';
+
+  // Skip-class short-circuit. solo_service_provider and genuine_pain
+  // posts route to mode='skip' via drafterModeForClass; no LLM call is
+  // needed, no draft is produced, and the scheduler already handles
+  // draft === 'SKIP' by not inserting a row into x_reply_drafts.
+  if (mode === 'skip') {
+    return {
+      ok: true,
+      draft: 'SKIP',
+      rationale: 'skip-class',
+    };
+  }
+
   const system = buildReplySystemPrompt(input.platform, mode);
   const prompt = buildUserPrompt(input.target, input.platform, input.extraGuidance);
 
@@ -526,14 +532,22 @@ export async function generateReplyCopy(
     parsed.alternates = parsed.alternates.map(autoFixCosmetic);
   }
 
-  // Voice-check is a gate, not a warning. If a draft contains
-  // first-person / fake-experience / softeners / etc., an alternate
-  // that passes gets promoted to primary; if no alternate passes,
-  // the whole candidate gets SKIP'd so the scheduler moves on to
-  // the next target. Previously the failing draft was published
-  // anyway with just a log line, which is how the 10:28 "I've lost
-  // so many threads" reply escaped.
-  const primaryCheck = voiceCheck(parsed.draft, input.platform);
+  // Combined gate: voice-check + no-question rule. Questions make the
+  // author do more work and read as cold-email probes; the prompt bans
+  // them already, but a post-hoc machine gate closes the loop. Any '?'
+  // in the draft disqualifies it just like a voice violation. Runs on
+  // primary first, then alternates in order; first passing one is
+  // promoted to primary; if none pass, the candidate is SKIP'd.
+  const gate = (text: string): { ok: boolean; reasons: string[] } => {
+    const vc = voiceCheck(text, input.platform);
+    const reasons = [...vc.reasons];
+    if (text.includes('?')) {
+      reasons.push('contains question mark (questions are banned across all reply modes)');
+    }
+    return { ok: reasons.length === 0, reasons };
+  };
+
+  const primaryCheck = gate(parsed.draft);
   if (primaryCheck.ok) {
     return {
       ok: true,
@@ -546,16 +560,16 @@ export async function generateReplyCopy(
 
   logger.info(
     { reasons: primaryCheck.reasons, draft: parsed.draft.slice(0, 80) },
-    '[reply-copy] primary draft tripped voice check; scanning alternates',
+    '[reply-copy] primary draft tripped gate; scanning alternates',
   );
 
   // Try alternates in order; first passing one becomes the primary.
   for (const alt of parsed.alternates ?? []) {
-    const altCheck = voiceCheck(alt, input.platform);
+    const altCheck = gate(alt);
     if (altCheck.ok) {
       logger.info(
         { chars: alt.length },
-        '[reply-copy] promoted alternate draft after primary voice-check failure',
+        '[reply-copy] promoted alternate draft after primary gate failure',
       );
       return {
         ok: true,
@@ -569,12 +583,12 @@ export async function generateReplyCopy(
 
   logger.info(
     { primaryReasons: primaryCheck.reasons, alternatesCount: parsed.alternates?.length ?? 0 },
-    '[reply-copy] all drafts tripped voice check; skipping candidate',
+    '[reply-copy] all drafts tripped gate; skipping candidate',
   );
   return {
     ok: true,
     draft: 'SKIP',
-    rationale: `voice check failed: ${primaryCheck.reasons.join(', ')}`,
+    rationale: `gate failed: ${primaryCheck.reasons.join(', ')}`,
     modelUsed: llm.data.model_used,
   };
 }
