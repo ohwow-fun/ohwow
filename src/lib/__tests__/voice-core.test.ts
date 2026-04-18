@@ -147,7 +147,10 @@ describe('autoFixCosmetic', () => {
   });
 
   it('post-fix output passes the voice gate', () => {
-    const fixed = autoFixCosmetic('The bottleneck is context switching — batch it.');
+    // Avoid "The "-initial opening so the openingThe gate added 2026-04-18
+    // doesn't fire — this test is about autoFixCosmetic + gate integration,
+    // not opening-shape.
+    const fixed = autoFixCosmetic('Bottleneck is context switching — batch it.');
     expect(voiceCheck(fixed, { platform: 'x', useCase: 'reply' }).ok).toBe(true);
   });
 });

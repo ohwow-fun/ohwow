@@ -172,6 +172,15 @@ export function voiceCheck(text: string, ctx: VoiceCheckContext): { ok: boolean;
   if (/\bhttps?:\/\//.test(text)) reasons.push('link');
   if (/\.\s*$/.test(text)) reasons.push('trailingPeriod');
 
+  // Opening-shape guard. "The <noun>" as the first two tokens is the
+  // default output shape of a templated generator; the prompt bans it
+  // but the model drifts. Reject so alternate slot carries drafts
+  // that slipped past the prompt.
+  if (/^the\s+\w/i.test(text)) reasons.push('openingThe');
+  // Parallel-clause template "The X. The Y." — shape is the tell even
+  // when content lands.
+  if (/^the\s+[^.?!]*[.?!]\s+the\s/i.test(text)) reasons.push('parallelTheTemplate');
+
   for (const [re, label] of FIRST_PERSON_PATTERNS) {
     if (re.test(text)) reasons.push(label);
   }

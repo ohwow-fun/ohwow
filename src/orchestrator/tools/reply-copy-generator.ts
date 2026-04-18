@@ -1,44 +1,26 @@
 /**
- * reply-copy-generator.ts — draft a reply to a scanned post in a
- * calibrated conversational voice.
+ * reply-copy-generator.ts — draft a reply to a scanned post in the
+ * ohwow voice. Voice principles + forbidden-phrase list live in
+ * src/lib/voice/voice-core.ts (single source of truth); this file
+ * layers the reply-specific shape menu + opening-diversity rules
+ * on top, and runs the post-hoc voiceCheck gate.
  *
- * Voice spec (first-principles only — deliberately no canonical
- * example drafts. Examples anchor the model on phrasing it then
- * copies wholesale or ablates into tics. Revised 2026-04-17 after
- * observing first-person narrative slippage like "I've lost so
- * many threads trying to switch models..." / "You end up spending
- * more time reconciling agent decisions than writing the original
- * prompt").
+ * Revised 2026-04-17: removed first-person narrative slippage
+ * (voice-core.FIRST_PERSON_PATTERNS).
+ * Revised 2026-04-18 (d74965b): demoted questions from default
+ * to earned-only. Default ending is a statement, not "?".
+ * Revised 2026-04-18 (this commit): banned "The "-initial openings
+ * and the "The X. The Y." parallel-clause template. Moved the
+ * opening-diversity rule above the shape menu so it constrains
+ * shape selection rather than post-correcting it. Added voiceCheck
+ * machine gate for both patterns.
  *
- * STANCE principles:
- *   - Observational, not narrative. The voice notices and opines,
- *     it does not claim to have lived through specific events.
- *   - Curious, not corrective. Opens a question or reframe; does not
- *     restate the author's point back at them.
- *   - Reciprocates energy. Questions invite statements, statements
- *     invite questions or contrasting claims.
+ * Intentional non-feature: no canonical example drafts in the
+ * system prompt. Examples anchor the model on phrasing which it
+ * then copies wholesale or ablates into tics. First-principles
+ * only — see the SHAPE MENU + OPENING rule for structure.
  *
- * CRAFT principles:
- *   - One observation + one concrete mechanism. Not a two-step lecture.
- *   - Specific beats abstract. Name the thing that causes the effect,
- *     not the category label.
- *   - Adds a dimension the post did not already cover. Agreement
- *     alone is dead air; mild dissent or a reframe earns the read.
- *
- * FORBIDDEN (structural, not stylistic):
- *   - First-person: I, me, my, mine, we, us, our, I've, I'm, I'd.
- *     These turn opinions into claims about the author's private
- *     experience — the voice does not have private experience.
- *   - Fake-experience phrasing: "I've seen", "my experience",
- *     "when I tried", "I lost", "in practice I", "I've been", "I ran
- *     into", "we found". Same reason as first-person.
- *   - Self-reference, pitches, product names (unless the post named
- *     them first). Sign-offs. Hashtags. Em dashes. "Please".
- *     Trailing period. Corporate softeners ("great take",
- *     "happy to"), lecture openers ("at the end of the day",
- *     "here's the thing", "the key is").
- *
- * LENGTH: 80-200 chars typical. Hard cap 240 X / 280 Threads.
+ * LENGTH: see LENGTH_CAPS in voice-core.ts. Reply target ~40-200.
  */
 
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
@@ -103,6 +85,24 @@ function buildSystemPrompt(platform: 'x' | 'threads'): string {
     '',
     buildVoicePrinciples(),
     '',
+    'OPENING — structural rule, not suggestion:',
+    '  Do NOT start a draft with "The ". It is the default output shape of',
+    '  a templated generator and the single clearest tell that a reply was',
+    '  written by a bot. Start with one of:',
+    '    - a verb or gerund:        "Naming the specific shade..."',
+    '    - a concrete proper noun:  "Shop fees are real."',
+    '    - a contrast fragment:     "Not quite — ..."  "Almost, but..."',
+    '    - a number or quantity:    "Four years at Michaels..."',
+    '    - the author\'s own word, recontextualised',
+    '  BEFORE: "The booking links are right there."',
+    '  AFTER:  "Booking links are right there."',
+    '  BEFORE: "The job description is a list of verbs. The reality is a',
+    '           spreadsheet of timestamps."  ← parallel-clause template, banned',
+    '  AFTER:  "Job description is a list of verbs. Reality is a spreadsheet',
+    '           of timestamps."',
+    '  The parallel "The X. The Y." two-clause shape is specifically banned —',
+    '  even when the content is good, the shape is the tell.',
+    '',
     'REPLY-SPECIFIC — pick ONE shape, vary across drafts:',
     '  - Plain observation. Notice something specific in the post and',
     '    name it. Full stop. No follow-up question.',
@@ -132,9 +132,8 @@ function buildSystemPrompt(platform: 'x' | 'threads'): string {
     '  - "Statement. Question?" two-sentence template where the question',
     '    exists mainly to fill space. If the question is not strictly',
     '    better than silence, delete it and publish the statement alone.',
-    '  - Opening with "The <noun>..." — it\'s the tell of templated',
-    '    generation. Vary the opening; start with a verb, a contrast',
-    '    ("Not quite..."), a named thing, anything but "The".',
+    '  - Opening with "The " — see OPENING rule above. Not a preference.',
+    '  - The "The X. The Y." parallel-clause template — see OPENING rule.',
     '  - "Curious how/what...", "What\'s the X that Y?", "Does the X',
     '    actually Y?" — these constructions have been overused. Find',
     '    another way in.',
