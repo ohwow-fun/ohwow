@@ -55,6 +55,7 @@ import { createPermissionRequestsRouter } from './routes/permission-requests.js'
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFounderInboxRouter } from './routes/founder-inbox.js';
 import { createAutonomyStatusRouter } from './routes/autonomy-status.js';
+import { createBudgetConfigRouter } from './routes/budget-config.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createXDraftsRouter } from './routes/x-drafts.js';
 import { createXReplyDraftsRouter } from './routes/x-reply-drafts.js';
@@ -137,6 +138,22 @@ export interface ServerConfig {
   /** API keys for modelReady detection — passed from daemon config at boot. */
   anthropicApiKey?: string;
   openRouterApiKey?: string;
+  /** License key snapshot so the budget-config write preserves it in workspace.json. */
+  licenseKey?: string;
+  /**
+   * Gap 13: install-wide default cap (loadConfig resolves this from env or
+   * ~/.ohwow/config.json, defaulting to 50 USD). Surfaced through the
+   * budget-config route so the UI can report `source='global'` vs
+   * `source='default'` accurately.
+   */
+  autonomousSpendLimitUsd?: number;
+  /**
+   * True when the install-wide cap was explicitly set by env or global
+   * config.json (vs loadConfig falling back to the 50 USD default).
+   * Lets the budget-config GET distinguish `source='global'` from
+   * `source='default'` without a second config read.
+   */
+  autonomousSpendLimitExplicit?: boolean;
 }
 
 /**
@@ -611,6 +628,17 @@ export function createServer(deps: ServerDeps): {
   app.use(createFounderInboxRouter(db));
   app.use(createAutonomyStatusRouter(db));
   app.use(createFindingsRouter(db));
+  // Gap 13: per-workspace daily cap knob for the autonomous LLM loop.
+  // GET returns the current limit + today's spend + source hint.
+  // PUT persists to workspace.json and hot-reloads engine.budgetLimitUsd.
+  app.use(createBudgetConfigRouter({
+    engine,
+    workspaceId: workspaceId || 'local',
+    globalLimitUsd: config.autonomousSpendLimitUsd,
+    globalLimitExplicit: config.autonomousSpendLimitExplicit,
+    currentTier: config.tier,
+    currentLicenseKey: config.licenseKey,
+  }));
   app.use(createCalendarRouter(db, eventBus));
   app.use(createEmailRouter(db, eventBus));
   app.use(createDealsRouter(db, eventBus));

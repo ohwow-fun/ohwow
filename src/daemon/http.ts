@@ -32,6 +32,18 @@ export async function setupHttpServer(
 ): Promise<void> {
   const { config, db, rawDb, bus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, modelRouter, channelRegistry, messageRouter, controlPlane, startTime, pidPath, dataDir } = ctx as DaemonContext;
 
+  // Gap 13: surface the install-wide cap + explicit/default hint so the
+  // per-workspace budget-config route can report source accurately.
+  // Explicit = either OHWOW_AUTONOMOUS_SPEND_LIMIT_USD env or the global
+  // config.json set it; otherwise loadConfig fell back to 50 USD.
+  const envExplicit = (() => {
+    const raw = process.env.OHWOW_AUTONOMOUS_SPEND_LIMIT_USD;
+    if (!raw) return false;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0;
+  })();
+  const globalExplicit = envExplicit || (config.autonomousSpendLimitUsd !== 50);
+
   const { app, attachWs } = createServer({
     config: {
       port: config.port,
@@ -42,6 +54,9 @@ export async function setupHttpServer(
       browserHeadless: config.browserHeadless,
       anthropicApiKey: config.anthropicApiKey,
       openRouterApiKey: config.openRouterApiKey,
+      licenseKey: config.licenseKey,
+      autonomousSpendLimitUsd: config.autonomousSpendLimitUsd,
+      autonomousSpendLimitExplicit: globalExplicit,
     },
     db,
     rawDb,
