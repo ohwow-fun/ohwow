@@ -76,20 +76,23 @@ export interface ThreadsReplyQuery {
 }
 
 /**
- * Default direct-ICP query set for Threads (mirrors X direct queries).
- * Threads' search tab has no `top` sort, so viral-piggyback queries are
+ * Default direct-ICP query set for Threads — mirrors the re-tuned X
+ * direct queries (see x-reply-scheduler.ts for the "automatable hire"
+ * lens + the supplier-pitch vs first-person rationale). Threads'
+ * search tab has no `top` sort, so viral-piggyback queries are
  * deferred to a future iteration.
  */
 export const DEFAULT_THREADS_REPLY_QUERIES: ThreadsReplyQuery[] = [
-  { q: 'accepting new clients', mode: 'direct' },
-  { q: 'taking on new clients', mode: 'direct' },
-  { q: 'now booking', mode: 'direct' },
-  { q: 'available for freelance', mode: 'direct' },
-  { q: 'looking for more clients', mode: 'direct' },
-  { q: 'open to projects', mode: 'direct' },
-  { q: 'open for commissions', mode: 'direct' },
-  { q: 'as a solopreneur', mode: 'direct' },
-  { q: 'hiring a VA', mode: 'direct' },
+  // First-person-forced hiring intent
+  { q: "I'm looking to hire", mode: 'direct' },
+  { q: 'I want to hire', mode: 'direct' },
+  { q: 'I need a virtual assistant', mode: 'direct' },
+  // Role-specific
+  { q: 'hiring a virtual assistant', mode: 'direct' },
+  { q: 'looking for a video editor', mode: 'direct' },
+  { q: 'hiring a video editor', mode: 'direct' },
+  { q: 'need a social media manager', mode: 'direct' },
+  // Decision-point vents
   { q: 'should I hire', mode: 'direct' },
   { q: 'wish I could clone myself', mode: 'direct' },
   { q: 'doing everything myself', mode: 'direct' },
