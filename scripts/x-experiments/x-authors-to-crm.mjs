@@ -31,7 +31,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { resolveOhwow, llm, extractJson } from './_ohwow.mjs';
+import { resolveOhwow, llm, extractJson, daemonFetch } from './_ohwow.mjs';
 import { propose, loadQueue } from './_approvals.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from './_author-ledger.mjs';
 import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent, buildAutoApproveGate, loadProposedHandles } from './_qualify.mjs';
@@ -80,7 +80,7 @@ async function fetchPostContext(url, token, permalink) {
   if (!permalink) return { post_text: null, business_label: null };
   try {
     const q = `/api/x/tweet/lookup?permalink=${encodeURIComponent(permalink)}`;
-    const res = await fetch(`${url}${q}`, { headers: { authorization: `Bearer ${token}` } });
+    const res = await daemonFetch(`${url}${q}`, { headers: { authorization: `Bearer ${token}` } });
     if (!res.ok) return { post_text: null, business_label: null };
     const { data } = await res.json();
     return {
@@ -98,7 +98,7 @@ async function fetchExistingHandles(url, token) {
   // for a whole-run dedup pass it's cheaper to pull the full set once.
   // When workspaces accumulate enough X-sourced contacts for this to
   // matter, switch to per-handle targeted lookups inside the loop.
-  const res = await fetch(`${url}/api/contacts`, { headers: { authorization: `Bearer ${token}` } });
+  const res = await daemonFetch(`${url}/api/contacts`, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`list contacts ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const { data } = await res.json();
   const handles = new Set();
@@ -111,7 +111,7 @@ async function fetchExistingHandles(url, token) {
 }
 
 async function createContact(url, token, payload) {
-  const res = await fetch(`${url}/api/contacts`, {
+  const res = await daemonFetch(`${url}/api/contacts`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(payload),
@@ -121,7 +121,7 @@ async function createContact(url, token, payload) {
 }
 
 async function createEvent(url, token, contactId, payload) {
-  const res = await fetch(`${url}/api/contacts/${contactId}/events`, {
+  const res = await daemonFetch(`${url}/api/contacts/${contactId}/events`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(payload),

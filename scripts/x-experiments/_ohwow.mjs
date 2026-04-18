@@ -49,6 +49,101 @@ export function resolveOhwow() {
   return { url: `http://localhost:${port}`, token: readToken(ws), workspace: ws };
 }
 
+/**
+ * Classify an error thrown by Node's native fetch as a connection-level
+ * failure worth retrying. We specifically retry when the daemon is
+ * literally not answering — ECONNREFUSED (daemon dead / rebinding after
+ * a restart), ECONNRESET (socket torn down mid-request by the bouncing
+ * daemon), and the generic "fetch failed" TypeError Node wraps these in.
+ * Native fetch exposes the real errno on `cause` (undici's UND_ERR_*
+ * or the raw syscall error). We do NOT retry HTTP 5xx responses — those
+ * are semantic failures, not plumbing outages — and we do NOT retry
+ * AbortError/timeout unless its underlying cause is a connection refusal.
+ */
+function isConnectionRefused(err) {
+  if (!err) return false;
+  const codes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
+  const walk = (e, depth = 0) => {
+    if (!e || depth > 5) return false;
+    if (typeof e.code === 'string' && codes.has(e.code)) return true;
+    if (typeof e.errno === 'string' && codes.has(e.errno)) return true;
+    // Node's native fetch wraps network errors as TypeError('fetch failed')
+    // with the real syscall error on .cause. Descend.
+    if (e.cause) return walk(e.cause, depth + 1);
+    return false;
+  };
+  if (walk(err)) return true;
+  // Abort/timeout paths carry a named error without a code — only retry
+  // when the cause chain confirms it was really a refusal underneath.
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError') return false;
+  // Last-ditch: the message sometimes is the only surface (older Node
+  // builds). Match "ECONNREFUSED" / "ECONNRESET" substrings literally.
+  const msg = String(err?.message || '');
+  return /ECONNREFUSED|ECONNRESET|ENOTFOUND/.test(msg);
+}
+
+/**
+ * Retry policy for daemon HTTP calls made from standalone scripts.
+ * Default: up to 5 attempts, 500ms base delay, 2x multiplicative backoff,
+ * capped at 8s per sleep, ~30s total budget — wide enough to survive a
+ * full `ohwow restart` (stop → pid wait → daemon boot → port rebind,
+ * routinely 3-8s in local observation, up to ~15s under load). Narrower
+ * would drop runs during a normal restart; much wider and the parent
+ * automation's 1800s shell_script timeout starts to feel the tail.
+ */
+const DEFAULT_RETRY = Object.freeze({
+  maxAttempts: 5,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+  multiplier: 2,
+  totalBudgetMs: 30_000,
+});
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Drop-in replacement for `fetch()` that retries on connection-level
+ * failures with bounded backoff. Takes the same arguments as fetch.
+ *
+ * - Only retries when the error is a connection refusal / reset (the
+ *   daemon is bouncing). HTTP error responses (5xx) are returned as-is
+ *   for the caller's normal `res.ok` handling.
+ * - Logs each retry attempt to stderr so the operator sees the bounce
+ *   survive live. Standalone scripts don't have access to the pino
+ *   logger; stderr is the right floor.
+ * - Respects the caller's AbortSignal on `init`. Aborts skip retry.
+ *
+ * Exported so sibling scripts that bypass `req()` (x-authors-to-crm,
+ * approval-queue, dm-to-code — all of which hit /api/contacts + /api/x
+ * directly) can harden their calls uniformly.
+ */
+export async function daemonFetch(url, init, retry = DEFAULT_RETRY) {
+  const cfg = { ...DEFAULT_RETRY, ...retry };
+  const startedAt = Date.now();
+  let attempt = 0;
+  let delay = cfg.baseDelayMs;
+  let lastErr;
+  while (attempt < cfg.maxAttempts) {
+    attempt++;
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      lastErr = err;
+      if (init?.signal?.aborted) throw err;
+      if (!isConnectionRefused(err)) throw err;
+      const elapsed = Date.now() - startedAt;
+      if (attempt >= cfg.maxAttempts || elapsed + delay > cfg.totalBudgetMs) {
+        process.stderr.write(`[daemonFetch] giving up after attempt ${attempt} (${elapsed}ms) ${url}: ${err?.cause?.code || err?.code || err?.message}\n`);
+        throw err;
+      }
+      process.stderr.write(`[daemonFetch] retry ${attempt}/${cfg.maxAttempts} in ${delay}ms ${url}: ${err?.cause?.code || err?.code || err?.message}\n`);
+      await sleep(delay);
+      delay = Math.min(delay * cfg.multiplier, cfg.maxDelayMs);
+    }
+  }
+  throw lastErr;
+}
+
 async function req(method, route, body, asForm) {
   const { url, token } = resolveOhwow();
   const headers = { authorization: `Bearer ${token}` };
@@ -59,7 +154,7 @@ async function req(method, route, body, asForm) {
     headers['content-type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const res = await fetch(url + route, { method, headers, body: payload });
+  const res = await daemonFetch(url + route, { method, headers, body: payload });
   if (!res.ok) throw new Error(`${method} ${route} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   return res.json();
 }

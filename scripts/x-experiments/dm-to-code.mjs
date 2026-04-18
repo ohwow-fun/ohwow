@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { RawCdpBrowser, findOrOpenXTab } from '../../src/execution/browser/raw-cdp.ts';
-import { llm, chat, resolveOhwow, extractJson } from './_ohwow.mjs';
+import { llm, chat, resolveOhwow, extractJson, daemonFetch } from './_ohwow.mjs';
 import { propose } from './_approvals.mjs';
 import { loadLedger, saveLedger, upsertAuthor, markQualified, isQualified } from './_author-ledger.mjs';
 import { loadLeadGenConfig, freeGates, classifyIntent, acceptsIntent } from './_qualify.mjs';
@@ -202,7 +202,7 @@ Given a DM transcript + classification, output STRICT JSON: {"code_prompt":"<=12
             console.log(`  [funnel] @${peerHandle} ${proposal.status}`);
             if (!DRY && proposal.status === 'auto_applied') {
               try {
-                const cRes = await fetch(`${url}/api/contacts`, {
+                const cRes = await daemonFetch(`${url}/api/contacts`, {
                   method: 'POST',
                   headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
                   body: JSON.stringify({
@@ -223,7 +223,7 @@ Given a DM transcript + classification, output STRICT JSON: {"code_prompt":"<=12
                 });
                 if (!cRes.ok) throw new Error(`POST contacts ${cRes.status}`);
                 const contact = (await cRes.json()).data;
-                await fetch(`${url}/api/contacts/${contact.id}/events`, {
+                await daemonFetch(`${url}/api/contacts/${contact.id}/events`, {
                   method: 'POST',
                   headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
                   body: JSON.stringify({

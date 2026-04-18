@@ -14,7 +14,7 @@
  *   dm_dispatch      → chat() via _ohwow
  */
 import { loadQueue, rate, stats } from './_approvals.mjs';
-import { chat, ingestKnowledgeFile, resolveOhwow } from './_ohwow.mjs';
+import { chat, ingestKnowledgeFile, resolveOhwow, daemonFetch } from './_ohwow.mjs';
 import { postTweet, replyToPost } from './_x-harvest.mjs';
 import { ensureXReady } from './_x-browser.mjs';
 import crypto from 'node:crypto';
@@ -58,7 +58,7 @@ async function applyEntry(e) {
   if (e.kind === 'x_contact_create') {
     const { url, token } = resolveOhwow();
     const p = e.payload;
-    const createRes = await fetch(`${url}/api/contacts`, {
+    const createRes = await daemonFetch(`${url}/api/contacts`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -80,7 +80,7 @@ async function applyEntry(e) {
     });
     if (!createRes.ok) throw new Error(`create contact ${createRes.status}: ${(await createRes.text()).slice(0, 200)}`);
     const contact = (await createRes.json()).data;
-    await fetch(`${url}/api/contacts/${contact.id}/events`, {
+    await daemonFetch(`${url}/api/contacts/${contact.id}/events`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify({
