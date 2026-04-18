@@ -20,6 +20,7 @@ import { runWorkflowDispatcher } from './dispatchers/run-workflow.js';
 import { createTaskDispatcher } from './dispatchers/create-task.js';
 import { sendNotificationDispatcher } from './dispatchers/send-notification.js';
 import { fillPdfDispatcher } from './dispatchers/fill-pdf.js';
+import { generatePptxDispatcher } from './dispatchers/generate-pptx.js';
 import { saveAttachmentDispatcher } from './dispatchers/save-attachment.js';
 import { takeScreenshotDispatcher } from './dispatchers/take-screenshot.js';
 import { agentPromptDispatcher } from './dispatchers/agent-prompt.js';
@@ -68,6 +69,7 @@ export function createDefaultRegistry(): ActionDispatcherRegistry {
   registry.register(createTaskDispatcher);
   registry.register(sendNotificationDispatcher);
   registry.register(fillPdfDispatcher);
+  registry.register(generatePptxDispatcher);
   registry.register(saveAttachmentDispatcher);
   registry.register(takeScreenshotDispatcher);
   registry.register(agentPromptDispatcher);

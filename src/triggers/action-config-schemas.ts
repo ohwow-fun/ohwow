@@ -150,6 +150,19 @@ export const ShellScriptConfigSchema = z.object({
   workspace_slug: z.string().optional(),
 });
 
+export const GeneratePptxConfigSchema = z.object({
+  title: z.string().optional(),
+  author: z.string().optional(),
+  slides: z.array(z.object({
+    title: z.string().optional(),
+    bullets: z.array(z.string()).optional(),
+    notes: z.string().optional(),
+    layout: z.enum(['TITLE', 'TITLE_AND_CONTENT', 'BLANK']).optional(),
+  })).min(1),
+  filename: z.string().optional(),
+  auto_save: z.boolean().optional(),
+});
+
 export const RunInternalConfigSchema = z.object({
   /** Name of the handler to invoke. Must be registered via registerInternalHandler() on daemon boot. */
   handler_name: z.string().min(1),
@@ -180,6 +193,7 @@ export type AgentPromptConfig = z.infer<typeof AgentPromptConfigSchema>;
 export type A2ACallConfig = z.infer<typeof A2ACallConfigSchema>;
 export type GenerateChartConfig = z.infer<typeof GenerateChartConfigSchema>;
 export type ShellScriptConfig = z.infer<typeof ShellScriptConfigSchema>;
+export type GeneratePptxConfig = z.infer<typeof GeneratePptxConfigSchema>;
 export type RunInternalConfig = z.infer<typeof RunInternalConfigSchema>;
 
 // ============================================================================
@@ -205,6 +219,7 @@ export interface ActionConfigMap {
   a2a_call: A2ACallConfig;
   generate_chart: GenerateChartConfig;
   shell_script: ShellScriptConfig;
+  generate_pptx: GeneratePptxConfig;
   run_internal: RunInternalConfig;
 }
 
@@ -229,5 +244,6 @@ export const ACTION_CONFIG_SCHEMAS: Record<ActionType, z.ZodType> = {
   a2a_call: A2ACallConfigSchema,
   generate_chart: GenerateChartConfigSchema,
   shell_script: ShellScriptConfigSchema,
+  generate_pptx: GeneratePptxConfigSchema,
   run_internal: RunInternalConfigSchema,
 };
