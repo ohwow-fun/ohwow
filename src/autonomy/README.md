@@ -118,6 +118,29 @@ Three commands cover day-to-day operator work:
   arc. Use this to debug "why did the conductor pick X" or to preview
   behavior before flipping the flag.
 
+## File mirror (per-arc forensics)
+
+After every arc closes, the Director writes a markdown mirror at:
+
+```
+~/.ohwow/workspaces/<slug>/autonomy/arcs/<arc_id>/
+  arc.md
+  phase-NN-<mode>.md
+  phase-NN/round-NN-{plan,impl,qa}.md
+```
+
+Use `cat`, `git grep`, or `rg` over that tree for forensic spelunking
+without opening the SQLite DB. The DB remains the source of truth for
+queries; the mirror is regenerated from DB rows on every arc close and
+is safe to delete. To rebuild it for a historical closed arc, run:
+
+```bash
+npx tsx scripts/autonomy-tick.ts --mirror-only=<arc_id>
+```
+
+Writes are atomic (`writeFile(.tmp)` + `rename`); a filesystem hiccup
+during arc close logs a `pino.warn` and the arc still closes cleanly.
+
 ## How to add a scenario
 
 Scenarios live in `src/autonomy/eval/scenarios/`. They are numbered
