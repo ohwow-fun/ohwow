@@ -31,6 +31,8 @@ import type { ReplyCandidate } from './reply-target-selector.js';
 export type ReplyClassifierClass =
   | 'genuine_pain'
   | 'solo_service_provider'
+  | 'buyer_intent'
+  | 'adjacent_prospect'
   | 'viral_piggyback'
   | 'ai_seller'
   | 'ai_enthusiast'
@@ -72,6 +74,16 @@ export interface ClassifyDeps {
 const SELLERISH_CAP: Record<ReplyClassifierClass, number> = {
   genuine_pain: 1,
   solo_service_provider: 3,
+  // buyer_intent posts often read as sellerish=2 because they describe
+  // a concrete deliverable + contact info ("send your portfolio to X").
+  // That's the buyer specifying what they want, not a seller pitching.
+  // Allow up to 3.
+  buyer_intent: 3,
+  // adjacent_prospect posts by founders/creators frequently include a
+  // natural dose of self-reference (their own win, their own take).
+  // Cap at 2 so we don't engage with outright promo while keeping the
+  // normal insight voice.
+  adjacent_prospect: 2,
   viral_piggyback: 3,
   ai_seller: -1,
   ai_enthusiast: -1,
@@ -111,6 +123,8 @@ const CLASSIFIER_SYSTEM_PROMPT = [
   'Classes:',
   '- genuine_pain: writer is an operator describing their own current struggle. First-person, specific, unresolved. They are not pitching a product, service, newsletter, or thread. They are just venting, asking, or narrating.',
   '- solo_service_provider: solopreneur or ≤3-person agency announcing availability ("accepting new clients", "taking on new clients", "open to projects", "looking for more clients"). Terse, LinkedIn-ish tone. They are NOT a scaled agency with paid ads; they are a human doing the work themselves. These are ohwow ICP in marketing mode, not pain mode. Replies should give one concrete growth/operations lever they can pull tomorrow morning (a specific follow-up rule, a niche-narrowing question, a referral mechanic) — NOT pain-relief advice.',
+  '- buyer_intent: writer is actively hiring — or about to hire — for a role ohwow can do cheaper and better. First-person or team-voice ("I need a virtual assistant", "I\'m looking to hire a video editor", "we\'re hiring a content writer for our team", "I was about to hire a designer for our SaaS"). The TASK named is AI-automatable: virtual assistant, copywriter, content writer, video editor, social media manager, community manager, researcher, executive assistant, customer support rep, ghostwriter, UGC creator, thumbnail artist, podcast editor. Excludes physical/credentialed roles (nurse, teacher, construction, architect, driver, clinician) and senior-IC engineering roles — those are NOT buyer_intent. Distinguish from solo_service_provider by direction: buyer_intent WANTS to hire ("I need"), solo_service_provider OFFERS to be hired ("I\'m available"). The rhetorical-question pitch "(Are you) hiring a video editor? DM me" is NOT buyer_intent — that\'s a supplier pitch masquerading as a hiring post (label solo_service_provider).',
+  '- adjacent_prospect: writer is ohwow\'s audience but NOT currently in pain and NOT hiring. Founder, builder, small-team operator, or creator sharing an observation, win, lesson, or opinion that resonates with the ICP. The post has substance — a specific insight, a contrarian take, a hard-won lesson. Engage with warmth (genuine praise noticing one specific thing), not with advice or a pitch. Reject thin takes or generic motivational posts (those are generic_noise). The test: would a thoughtful peer in this exact niche stop scrolling to agree? If yes, adjacent_prospect. If the post is just "hustle harder" / "time is the ultimate currency" / generic insight — generic_noise.',
   '- ai_seller: writer is promoting an AI product, agent framework, tool, or course. Mentions "I built", "we shipped", "try our", "check my", "demo video", etc. Often has engagement metrics bragging.',
   '- ai_enthusiast: writer is talking ABOUT AI / LLMs / agents as a topic (discussing models, techniques, news) but is not describing a pain they have. Includes thought leaders, commentators, researchers.',
   '- consultant_pitch: agency/coach offers a packaged methodology, big-result case study, or CTA to book a call ("I help founders scale 10k→100k", "DM for a $500 audit", "3 spots left for my mastermind"). Not a solopreneur quietly announcing they take projects — those are solo_service_provider. The test: does it sound like a pitch deck (scaled, systematized, with pricing tiers), or like a human saying "I\'m open for work"?',
@@ -157,7 +171,8 @@ function parseVerdict(raw: string): ReplyClassifierVerdict | null {
 
   const classVal = typeof obj.class === 'string' ? obj.class : null;
   const validClasses: ReplyClassifierClass[] = [
-    'genuine_pain', 'solo_service_provider', 'viral_piggyback',
+    'genuine_pain', 'solo_service_provider', 'buyer_intent', 'adjacent_prospect',
+    'viral_piggyback',
     'ai_seller', 'ai_enthusiast', 'consultant_pitch', 'generic_noise',
   ];
   if (!classVal || !validClasses.includes(classVal as ReplyClassifierClass)) return null;
