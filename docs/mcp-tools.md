@@ -34,7 +34,7 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | [Goals](#goals) | 1 | Goal tracking |
 | [Workflows](#workflows) | 2 | Workflow execution |
 | [Automations](#automations) | 2 | Automation management |
-| [Knowledge](#knowledge) | 3 | Knowledge base (RAG) |
+| [Knowledge](#knowledge) | 4 | Knowledge base (RAG) |
 | [Research](#research) | 2 | Web research and scraping |
 | [Messaging](#messaging) | 2 | WhatsApp and Telegram |
 | [Cloud](#cloud) | 2 | Cloud dashboard |
@@ -202,7 +202,8 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `ohwow_list_knowledge` | AI | List all knowledge base documents (~15s). |
+| `ohwow_list_knowledge` | Direct | List knowledge base documents (~50ms). Pass `include_bodies=true` to include compiled text for every doc; pair with `limit` to cap payload. |
+| `ohwow_get_knowledge` | Direct | Fetch a single document by id with full compiled body text (~50ms). Returns an error result for unknown ids. |
 | `ohwow_search_knowledge` | AI | Semantic RAG search with source attribution (~15s). |
 | `ohwow_add_knowledge_url` | AI | Ingest a web page into the knowledge base (~30s). |
 

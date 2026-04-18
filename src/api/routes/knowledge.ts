@@ -8,7 +8,13 @@
  * chunking, and embeddings in the background (same path the orchestrator
  * tool takes for large files).
  *
- * GET    /api/knowledge        — list documents (workspace-scoped, active only)
+ * GET    /api/knowledge        — list documents (workspace-scoped, active only).
+ *                                 Accepts ?include_bodies=1 and ?limit=N for
+ *                                 consumers that need the compiled text in bulk
+ *                                 (embedding benchmarks, RAG evals). Default
+ *                                 response is metadata-only to keep payloads small.
+ * GET    /api/knowledge/:id    — fetch a single document WITH compiled body text.
+ *                                 Returns 404 if the doc is missing or inactive.
  * DELETE /api/knowledge/:id    — soft-delete (is_active = 0)
  * POST   /api/knowledge/url    — ingest a URL (fetch, strip HTML, enqueue)
  * POST   /api/knowledge/upload — ingest a file (multipart, enqueue)
@@ -30,6 +36,56 @@ interface KnowledgeRow {
   processing_status: string;
   chunk_count: number | null;
   created_at: string;
+}
+
+interface KnowledgeRowWithBody extends KnowledgeRow {
+  file_type: string | null;
+  file_size: number | null;
+  compiled_text: string | null;
+  compiled_token_count: number | null;
+  content_hash: string | null;
+  source_url: string | null;
+  processed_at: string | null;
+}
+
+/**
+ * Shape a full knowledge-document row (metadata + compiled body) into the
+ * public JSON response envelope. Used by both the single-document GET and
+ * the bulk `include_bodies=1` list path so callers see identical field
+ * names regardless of entry point.
+ */
+function shapeFullDoc(row: KnowledgeRowWithBody): {
+  id: string;
+  title: string;
+  filename: string | null;
+  type: 'url' | 'file';
+  fileType: string | null;
+  fileSize: number | null;
+  status: string;
+  chunk_count: number;
+  tokens: number;
+  contentHash: string | null;
+  sourceUrl: string | null;
+  createdAt: string;
+  processedAt: string | null;
+  body: string;
+} {
+  return {
+    id: row.id,
+    title: row.title,
+    filename: row.filename,
+    type: row.source_type === 'url' ? 'url' : 'file',
+    fileType: row.file_type,
+    fileSize: row.file_size,
+    status: row.processing_status,
+    chunk_count: row.chunk_count ?? 0,
+    tokens: row.compiled_token_count ?? 0,
+    contentHash: row.content_hash,
+    sourceUrl: row.source_url,
+    createdAt: row.created_at,
+    processedAt: row.processed_at,
+    body: row.compiled_text ?? '',
+  };
 }
 
 const ALLOWED_EXTENSIONS = new Set([
@@ -78,12 +134,45 @@ export function createKnowledgeRouter(db: DatabaseAdapter, dataDir?: string): Ro
 
   router.get('/api/knowledge', async (req, res) => {
     try {
-      const { data, error } = await db
+      // Opt-in: consumers that need the compiled body text (embedding
+      // benchmarks, RAG evals, full-text export) can ask for it in bulk.
+      // Default stays metadata-only to keep the web UI's list response
+      // small. `limit` caps the row count when bodies are requested so a
+      // bulk fetch can't accidentally return megabytes.
+      const includeBodies = req.query.include_bodies === '1' || req.query.include_bodies === 'true';
+      const limitRaw = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : NaN;
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : undefined;
+
+      if (includeBodies) {
+        let q = db
+          .from<KnowledgeRowWithBody>('agent_workforce_knowledge_documents')
+          .select('id, title, filename, file_type, file_size, source_type, source_url, processing_status, chunk_count, compiled_text, compiled_token_count, content_hash, created_at, processed_at')
+          .eq('workspace_id', req.workspaceId)
+          .eq('is_active', 1)
+          .order('created_at', { ascending: false });
+        if (limit !== undefined) {
+          q = q.limit(limit);
+        }
+        const { data, error } = await q;
+        if (error) {
+          res.status(500).json({ error: error.message });
+          return;
+        }
+        const docs = (data || []).map(shapeFullDoc);
+        res.json({ data: docs });
+        return;
+      }
+
+      let q = db
         .from<KnowledgeRow>('agent_workforce_knowledge_documents')
         .select('id, title, filename, source_type, processing_status, chunk_count, created_at')
         .eq('workspace_id', req.workspaceId)
         .eq('is_active', 1)
         .order('created_at', { ascending: false });
+      if (limit !== undefined) {
+        q = q.limit(limit);
+      }
+      const { data, error } = await q;
 
       if (error) {
         res.status(500).json({ error: error.message });
@@ -100,6 +189,32 @@ export function createKnowledgeRouter(db: DatabaseAdapter, dataDir?: string): Ro
       }));
 
       res.json({ data: docs });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  router.get('/api/knowledge/:id', async (req, res) => {
+    try {
+      const { data, error } = await db
+        .from<KnowledgeRowWithBody>('agent_workforce_knowledge_documents')
+        .select('id, title, filename, file_type, file_size, source_type, source_url, processing_status, chunk_count, compiled_text, compiled_token_count, content_hash, created_at, processed_at')
+        .eq('workspace_id', req.workspaceId)
+        .eq('is_active', 1)
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      if (error) {
+        res.status(500).json({ error: error.message });
+        return;
+      }
+
+      if (!data) {
+        res.status(404).json({ error: `No knowledge document with id "${req.params.id}".` });
+        return;
+      }
+
+      res.json({ data: shapeFullDoc(data) });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }

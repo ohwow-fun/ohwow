@@ -197,8 +197,9 @@ PROJECTS (instant)
   ohwow_create_project    Create project
   ohwow_list_goals        List goals (~5s)
 
-KNOWLEDGE (~5-30s)
-  ohwow_list_knowledge    List documents
+KNOWLEDGE (~5-30s, list/get instant)
+  ohwow_list_knowledge    List documents. Pass include_bodies=true for full text (~50ms direct)
+  ohwow_get_knowledge     Fetch one document by id with full compiled body (~50ms direct)
   ohwow_search_knowledge  Semantic search
   ohwow_add_knowledge_url Ingest web page
 

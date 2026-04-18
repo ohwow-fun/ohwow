@@ -129,10 +129,16 @@ describe('MCP tool registration', () => {
     ]);
   });
 
-  it('registers 3 knowledge tools', () => {
+  it('registers 4 knowledge tools', () => {
     const server = createMockServer();
     registerKnowledgeTools(server as never, createMockClient() as never);
-    expect(server.tools).toHaveLength(3);
+    expect(server.tools).toHaveLength(4);
+    expect(server.tools.map(t => t.name)).toEqual([
+      'ohwow_list_knowledge',
+      'ohwow_get_knowledge',
+      'ohwow_search_knowledge',
+      'ohwow_add_knowledge_url',
+    ]);
   });
 
   it('registers 2 research tools', () => {
@@ -187,8 +193,10 @@ describe('MCP tool registration', () => {
   it('registers all tools via barrel', () => {
     const server = createMockServer();
     registerTools(server as never, createMockClient() as never);
-    // 87 existing + 3 reply-draft tools (list/approve/reject x_reply_draft).
-    expect(server.tools).toHaveLength(90);
+    // 90 prior tools + 2 subsequent additions (pre-existing) + 1 new
+    // ohwow_get_knowledge verb added alongside the knowledge body-fetch
+    // MCP surface.
+    expect(server.tools).toHaveLength(93);
   });
 
   it('every tool has a unique name', () => {
