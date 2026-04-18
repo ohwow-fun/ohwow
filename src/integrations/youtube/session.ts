@@ -118,13 +118,113 @@ function pickStudioTarget(targets: CdpTargetInfo[], contextId?: string): CdpTarg
   return studioPages[0] ?? null;
 }
 
-function pickFallbackContext(targets: CdpTargetInfo[]): { contextId: string | null; target: CdpTargetInfo | null } {
-  const pages = targets.filter((t) => t.type === 'page');
-  const yt = pages.find((t) => /youtube\.com/.test(t.url));
-  if (yt?.browserContextId) return { contextId: yt.browserContextId, target: yt };
-  const x = pages.find((t) => /https:\/\/(x|twitter)\.com/.test(t.url));
-  if (x?.browserContextId) return { contextId: x.browserContextId, target: x };
-  return { contextId: null, target: null };
+/**
+ * Rank existing page tabs into a priority-ordered list of candidate
+ * browserContextIds to spawn a Studio tab in. Higher priority first:
+ *
+ *   1. any tab already on studio.youtube.com
+ *   2. any tab on youtube.com (watch pages, search, channel)
+ *   3. any tab on x.com / twitter.com (sibling cross-posting flow)
+ *
+ * De-duplicates by contextId so the caller can probe each unique
+ * context exactly once. Tabs without a browserContextId are dropped.
+ */
+export function rankFallbackContexts(targets: CdpTargetInfo[]): Array<{ contextId: string; target: CdpTargetInfo }> {
+  const pages = targets.filter((t) => t.type === 'page' && !!t.browserContextId);
+  const tiers: Array<(t: CdpTargetInfo) => boolean> = [
+    (t) => /studio\.youtube\.com/.test(t.url),
+    (t) => /youtube\.com/.test(t.url),
+    (t) => /https:\/\/(x|twitter)\.com/.test(t.url),
+  ];
+  const out: Array<{ contextId: string; target: CdpTargetInfo }> = [];
+  const seen = new Set<string>();
+  for (const matches of tiers) {
+    for (const t of pages) {
+      if (!matches(t)) continue;
+      const ctx = t.browserContextId as string;
+      if (seen.has(ctx)) continue;
+      seen.add(ctx);
+      out.push({ contextId: ctx, target: t });
+    }
+  }
+  return out;
+}
+
+/**
+ * CDP error shape for "Failed to find browser context with id ...".
+ * Chrome rejects `Target.createTarget` on read-only profile partitions
+ * with code -32000. `raw-cdp` wraps the JSON-RPC error with
+ * `JSON.stringify`, so the shape we see is an Error whose message is
+ * the stringified `{ code, message }` payload.
+ */
+function isMissingBrowserContextError(err: unknown): boolean {
+  if (!err) return false;
+  if (typeof err === 'object') {
+    const obj = err as { code?: unknown; message?: unknown };
+    if (obj.code === -32000 && typeof obj.message === 'string' && /browser context/i.test(obj.message)) {
+      return true;
+    }
+  }
+  const msg = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (msg.includes('-32000') && /browser context/i.test(msg)) return true;
+  return false;
+}
+
+/**
+ * Probe-and-pick: walk candidate contexts in priority order, ask Chrome
+ * to spawn a throwaway `about:blank` target in each one, and return the
+ * first context whose probe succeeds (closing the probe tab before
+ * returning). Contexts whose probe fails with CDP -32000 ("Failed to
+ * find browser context …") are skipped — those are read-only partitions
+ * where Target.createTarget is unusable. Any other probe error is
+ * re-thrown verbatim so we don't swallow unrelated transport issues.
+ *
+ * Throws `YTSessionError` with code `no_spawnable_context` if every
+ * candidate is a dead end. Callers treat that as the profile-mismatch
+ * path (the same surface they already handle for "no context to open
+ * Studio in").
+ */
+export interface ProbeBrowser {
+  createTargetInContext(browserContextId: string, url?: string): Promise<string>;
+  closeTarget(targetId: string): Promise<void>;
+}
+
+export async function pickSpawnableFallbackContext(
+  browser: ProbeBrowser,
+  targets: CdpTargetInfo[],
+): Promise<{ contextId: string; target: CdpTargetInfo }> {
+  const candidates = rankFallbackContexts(targets);
+  if (candidates.length === 0) {
+    throw new YTSessionError('no candidate browser context found for Studio fallback', {
+      code: 'no_spawnable_context',
+      reason: 'no_candidates',
+    });
+  }
+  for (const cand of candidates) {
+    let probeTargetId: string | null = null;
+    try {
+      probeTargetId = await browser.createTargetInContext(cand.contextId, 'about:blank');
+    } catch (err) {
+      if (isMissingBrowserContextError(err)) {
+        logger.debug(
+          { contextId: cand.contextId.slice(0, 8), url: cand.target.url },
+          '[youtube/session] fallback context probe rejected (read-only partition), skipping',
+        );
+        continue;
+      }
+      // Non -32000 error — could be transport failure, WS closed, etc.
+      // Re-throw verbatim; callers handle session errors uniformly.
+      throw err;
+    }
+    // Probe succeeded — close the throwaway tab and return this context.
+    await browser.closeTarget(probeTargetId);
+    return cand;
+  }
+  throw new YTSessionError('no spawnable browser context for Studio fallback', {
+    code: 'no_spawnable_context',
+    reason: 'all_candidates_read_only',
+    candidatesTried: candidates.length,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -151,8 +251,16 @@ export async function ensureYTStudio(opts: EnsureYTStudioOptions = {}): Promise<
     // No Studio tab yet. Decide which context to open in.
     let openInContext = opts.browserContextId ?? null;
     if (!openInContext) {
-      const fallback = pickFallbackContext(targets);
-      openInContext = fallback.contextId;
+      try {
+        const picked = await pickSpawnableFallbackContext(browser, targets);
+        openInContext = picked.contextId;
+      } catch (err) {
+        // No spawnable fallback context (or transport failure). Surface
+        // the error to the caller — the profile-mismatch path is the
+        // same surface as "no context to open Studio in".
+        if (ownsBrowser) browser.close();
+        throw err;
+      }
     }
     if (openInContext) {
       const targetId = await browser.createTargetInContext(openInContext, STUDIO_URL);
