@@ -44,6 +44,11 @@ import { RawCdpBrowser } from '../../src/execution/browser/raw-cdp.ts';
 import { ensureXReady, openFreshXTab } from './_x-browser.mjs';
 import { llm, resolveOhwow, extractJson } from './_ohwow.mjs';
 import { scrollAndHarvest, XSearchRateLimitedError } from './_x-harvest.mjs';
+import {
+  assertNotThrottled,
+  markThrottled,
+  XSearchThrottledError,
+} from '../../src/lib/x-search-throttle.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Sleep for a random duration in [min, max] ms. Used to space consecutive
@@ -589,6 +594,20 @@ function writeMd(records, outPath, meta) {
 
 async function main() {
   const t0 = Date.now();
+
+  // Respect any prior-run throttle trip before we spend time spawning
+  // Chrome / loading prompts. If a cooldown is live, exit 0 — this is
+  // not an error, it's the script correctly deferring.
+  try {
+    assertNotThrottled();
+  } catch (e) {
+    if (e instanceof XSearchThrottledError) {
+      console.log(`[pain-finder] x search is throttled until ${e.retryAfter.toISOString()} (${Math.ceil(e.remainingMs / 60000)} min remaining) — exiting.`);
+      process.exit(0);
+    }
+    throw e;
+  }
+
   const prompts = loadPrompts();
   let queries;
   if (INLINE_QUERY) {
@@ -639,9 +658,12 @@ async function main() {
         console.log(`[x]       "${q.q}" → +${rows.length} (domain=${q.domain})`);
       } catch (e) {
         if (e instanceof XSearchRateLimitedError || e?.code === 'RATE_LIMITED') {
+          // Persist the trip cross-process BEFORE aborting this run so
+          // subsequent runs honor the cooldown via the pre-flight guard.
+          const state = markThrottled(e.url || `query:${q.q}`);
           rateLimitedAt = qi;
           perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: 0, added: 0, error: true, rateLimited: true });
-          console.error(`[x]       "${q.q}" RATE-LIMITED — aborting remaining X queries. X search throttle typically clears in 15-60 min.`);
+          console.error(`[x]       "${q.q}" RATE-LIMITED — cooldown until ${state.throttled_until} (consecutive_hits=${state.consecutive_hits}). Aborting remaining X queries.`);
           continue;
         }
         perQuery.push({ domain: q.domain, q: q.q, platform: 'x', raw: 0, added: 0, error: true });
