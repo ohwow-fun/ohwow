@@ -103,9 +103,27 @@ function parseArgs(argv) {
 // ---------------------------------------------------------------------------
 // Title / description derivation
 // ---------------------------------------------------------------------------
+// Parse a date-shaped substring out of specId. Requires hyphen-separated
+// YYYY-MM-DD so numeric ids like "yt-video-1776538439135" (unix-ms
+// timestamps) can't false-match digit runs as Y/M/D — that bug landed a
+// draft titled "Daily AI News - July 23, 1780" before it was caught.
+// Components are range-validated (year 2020–2099, month 1–12, day 1–31);
+// anything out of band falls back to today.
 function deriveDateLabel(specId, fallback = new Date()) {
-  const m = /(\d{4})(\d{2})(\d{2})/.exec(specId || '');
-  const d = m ? new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : fallback;
+  const m = /(\d{4})-(\d{2})-(\d{2})/.exec(typeof specId === 'string' ? specId : '');
+  let d = fallback;
+  if (m) {
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    const inRange =
+      year >= 2020 && year <= 2099
+      && month >= 1 && month <= 12
+      && day >= 1 && day <= 31;
+    if (inRange) {
+      d = new Date(Date.UTC(year, month - 1, day));
+    }
+  }
   return d.toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -470,7 +488,24 @@ async function main() {
   await cmdStage({ args });
 }
 
-main().catch((err) => {
-  console.error('[publish-briefing] fatal', err);
-  process.exit(1);
-});
+// Only auto-run when invoked as a script. Allows tests to import the
+// pure helpers (deriveDateLabel, deriveTitle, deriveHook, …) without
+// triggering the stage/publish pipeline.
+const invokedDirectly = (() => {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return new URL(import.meta.url).pathname === path.resolve(entry);
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    console.error('[publish-briefing] fatal', err);
+    process.exit(1);
+  });
+}
+
+export { deriveDateLabel, deriveTitle, deriveHook, deriveDescription };
