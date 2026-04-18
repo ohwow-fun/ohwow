@@ -85,6 +85,24 @@ export interface LlmCallDeps {
    */
   experimentId?: string;
   /**
+   * Gap 13 origin tag. Callers that are servicing an operator-initiated
+   * request (chat UI, manual tool invocation from TUI/web, /api/llm)
+   * pass 'interactive' so the row is excluded from the autonomous daily
+   * cap sum. Callers inside schedulers, triggers, or self-bench leave
+   * this unset and persist 'autonomous' (the cost-safe default).
+   *
+   * This top-level field is the tag-only path: it mirrors the `origin`
+   * field already exposed on `recordLlmCallTelemetry`'s deps param
+   * (used by the chat-loop's direct telemetry write) so call sites
+   * that want to mark a call interactive without wiring the full
+   * budget middleware can do so with a single field.
+   *
+   * `deps.budget.origin` still works for call sites that ARE wiring the
+   * meter; when both are set, budget.origin wins because the meter is
+   * the richer path.
+   */
+  origin?: CallOrigin;
+  /**
    * Gap 13 budget-enforcement wiring. When set, runLlmCall consults the
    * middleware before dispatch: the middleware may demote the task
    * class's default to a cheaper model in the 85-95% band or throw
@@ -556,14 +574,16 @@ export async function runLlmCall(
   // Telemetry deps carry the origin tag onto every llm_calls row this
   // invocation writes. Gap 13: `origin='autonomous'` is the default so
   // the cap keeps guarding the autonomous loop. Callers that wire
-  // `deps.budget.origin = 'interactive'` opt their row out of the sum.
+  // `deps.budget.origin = 'interactive'` (budget-meter path) or
+  // `deps.origin = 'interactive'` (tag-only path) opt their row out of
+  // the sum. Budget wins when both are set — it's the richer wiring.
   const telemetryDeps = {
     db: deps.db,
     workspaceId: deps.workspaceId,
     currentAgentId: deps.currentAgentId,
     currentTaskId: deps.currentTaskId,
     experimentId: deps.experimentId,
-    origin: deps.budget?.origin ?? 'autonomous' as CallOrigin,
+    origin: deps.budget?.origin ?? deps.origin ?? 'autonomous' as CallOrigin,
   };
 
   const normalized = normalizePrompt(input);
@@ -622,7 +642,7 @@ export async function runLlmCall(
       {
         workspaceId: deps.workspaceId,
         limitUsd: deps.budget.limitUsd,
-        origin: deps.budget.origin ?? 'autonomous',
+        origin: deps.budget.origin ?? deps.origin ?? 'autonomous',
         taskClass,
         bypass: deps.budget.bypass,
       },

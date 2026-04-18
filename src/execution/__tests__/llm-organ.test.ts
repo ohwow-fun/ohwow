@@ -720,6 +720,104 @@ describe('llm-organ', () => {
     });
   });
 
+  describe('origin threading (gap 13 follow-up 1b)', () => {
+    // These tests pin the interactive-tagging plumbing: a caller that
+    // passes `origin: 'interactive'` (or nests it inside deps.budget)
+    // MUST see that value land on the telemetry row. If a future edit
+    // drops either branch, autonomous-cap enforcement silently starts
+    // counting operator chat and manual tool invocations against the
+    // daily budget again — the exact bug this round was opened to
+    // close.
+
+    function depsWithInsertSpy(origin?: 'autonomous' | 'interactive'): {
+      deps: LlmCallDeps;
+      insertSpy: ReturnType<typeof vi.fn>;
+    } {
+      const insertSpy = vi.fn(async () => ({ data: null, error: null }));
+      const selectForPurpose = vi.fn(async () => ({
+        provider: makeProvider('ollama'),
+        model: undefined,
+        purpose: 'reasoning' as const,
+        policy: { modelSource: 'auto', fallback: 'local' },
+        maxCostCents: undefined,
+      }));
+      const deps: LlmCallDeps = {
+        modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
+        db: {
+          from: vi.fn(() => ({
+            select: () => ({
+              eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
+            }),
+            insert: insertSpy,
+          })),
+          rpc: vi.fn(),
+        } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
+        origin,
+      };
+      return { deps, insertSpy };
+    }
+
+    it('defaults to origin=autonomous when the caller omits the field', async () => {
+      const { deps, insertSpy } = depsWithInsertSpy();
+      const result = await runLlmCall(deps, { prompt: 'hi' });
+      expect(result.ok).toBe(true);
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: 'autonomous' }),
+      );
+    });
+
+    it('writes origin=interactive when the caller sets deps.origin', async () => {
+      const { deps, insertSpy } = depsWithInsertSpy('interactive');
+      const result = await runLlmCall(deps, { prompt: 'hi' });
+      expect(result.ok).toBe(true);
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: 'interactive' }),
+      );
+    });
+
+    it('prefers deps.budget.origin over deps.origin when both are set', async () => {
+      // Budget wiring is the richer path (it also drives middleware
+      // demote/halt). When a call site wires both, budget wins so
+      // meter-aware and tag-only paths cannot disagree.
+      const insertSpy = vi.fn(async () => ({ data: null, error: null }));
+      const selectForPurpose = vi.fn(async () => ({
+        provider: makeProvider('ollama'),
+        model: undefined,
+        purpose: 'reasoning' as const,
+        policy: { modelSource: 'auto', fallback: 'local' },
+        maxCostCents: undefined,
+      }));
+      const deps: LlmCallDeps = {
+        modelRouter: { selectForPurpose } as unknown as LlmCallDeps['modelRouter'],
+        db: {
+          from: vi.fn(() => ({
+            select: () => ({
+              eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }),
+            }),
+            insert: insertSpy,
+          })),
+          rpc: vi.fn(),
+        } as unknown as LlmCallDeps['db'],
+        workspaceId: 'test-workspace',
+        origin: 'autonomous',
+        budget: {
+          meter: { getCumulativeAutonomousSpendUsd: vi.fn(async () => 0) } as never,
+          emittedToday: { claim: vi.fn(() => false) },
+          emitPulse: vi.fn(),
+          origin: 'interactive',
+        },
+      };
+      const result = await runLlmCall(deps, { prompt: 'hi' });
+      expect(result.ok).toBe(true);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: 'interactive' }),
+      );
+    });
+  });
+
   describe('constraint passthrough', () => {
     it('passes preferModel, localOnly, maxCostCents, and difficulty to the router', async () => {
       const deps = makeDeps({});
