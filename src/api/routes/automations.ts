@@ -131,6 +131,39 @@ export function createAutomationsRouter(
     }
   });
 
+  // Enable / disable — flat-envelope toggles that write through to the
+  // scheduler's source of truth (local_triggers.enabled). The cloud
+  // dashboard's Content Calendar calls these so a pause in the UI
+  // actually pauses the cron, instead of drifting against a Supabase
+  // mirror the runtime never reads.
+  router.post('/api/automations/:id/enable', async (req, res) => {
+    try {
+      const automation = await service.update(req.params.id, { enabled: true });
+      if (!automation) {
+        res.status(404).json({ ok: false, error: 'Automation not found' });
+        return;
+      }
+      onScheduleChange?.();
+      res.json({ ok: true, automation });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  router.post('/api/automations/:id/disable', async (req, res) => {
+    try {
+      const automation = await service.update(req.params.id, { enabled: false });
+      if (!automation) {
+        res.status(404).json({ ok: false, error: 'Automation not found' });
+        return;
+      }
+      onScheduleChange?.();
+      res.json({ ok: true, automation });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
   // Execute automation
   router.post('/api/automations/:id/execute', async (req, res) => {
     try {

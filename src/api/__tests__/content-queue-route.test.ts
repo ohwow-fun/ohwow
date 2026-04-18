@@ -165,7 +165,8 @@ describe('content-queue route', () => {
           metadata: JSON.stringify({ dispatcher: 'content_cadence', platform: 'x' }),
           created_at: nowIso,
           completed_at: null,
-          error: null,
+          error_message: null,
+          failure_category: null,
         },
         {
           id: 't2',
@@ -176,7 +177,8 @@ describe('content-queue route', () => {
           metadata: JSON.stringify({ dispatcher: 'content_cadence', platform: 'threads' }),
           created_at: nowIso,
           completed_at: nowIso,
-          error: 'auth cookie expired',
+          error_message: 'auth cookie expired',
+          failure_category: 'auth',
         },
         {
           id: 't3',
@@ -187,7 +189,20 @@ describe('content-queue route', () => {
           metadata: JSON.stringify({ dispatcher: 'crm_sync' }),
           created_at: nowIso,
           completed_at: null,
-          error: null,
+          error_message: null,
+          failure_category: null,
+        },
+        {
+          id: 't4',
+          workspace_id: 'ws-test',
+          agent_id: 'a1',
+          title: 'Humor post failed silent',
+          status: 'failed',
+          metadata: JSON.stringify({ dispatcher: 'x_humor', platform: 'x' }),
+          created_at: nowIso,
+          completed_at: nowIso,
+          error_message: null,
+          failure_category: null,
         },
       ],
     });
@@ -198,13 +213,27 @@ describe('content-queue route', () => {
     const body = res._body as {
       data: {
         inflight: Array<{ id: string; platform: string | null }>;
-        failures: Array<{ id: string; error: string | null }>;
+        failures: Array<{
+          id: string;
+          error_message: string | null;
+          failure_category: string | null;
+          source_automation: string | null;
+        }>;
       };
     };
     expect(body.data.inflight.map((t) => t.id)).toEqual(['t1']);
     expect(body.data.inflight[0].platform).toBe('x');
-    expect(body.data.failures.map((t) => t.id)).toEqual(['t2']);
-    expect(body.data.failures[0].error).toBe('auth cookie expired');
+    expect(body.data.failures.map((t) => t.id).sort()).toEqual(['t2', 't4']);
+    const t2 = body.data.failures.find((t) => t.id === 't2')!;
+    expect(t2.error_message).toBe('auth cookie expired');
+    expect(t2.failure_category).toBe('auth');
+    expect(t2.source_automation).toBe('ohwow:content-cadence');
+    const t4 = body.data.failures.find((t) => t.id === 't4')!;
+    // Gap B invariant: failures without recorded errors still surface
+    // (UI renders "(no error recorded)" rather than hiding the row).
+    expect(t4.error_message).toBeNull();
+    expect(t4.failure_category).toBeNull();
+    expect(t4.source_automation).toBe('ohwow:x-humor');
   });
 
   it('filters automations to the three content lanes', async () => {

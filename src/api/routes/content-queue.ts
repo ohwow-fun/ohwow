@@ -53,7 +53,11 @@ interface TaskRow {
   metadata: string | Record<string, unknown> | null;
   created_at: string;
   completed_at: string | null;
-  error: string | null;
+  // agent_workforce_tasks stores failure detail in error_message +
+  // failure_category. There is no `error` column — the round-2a cut
+  // read `task.error` and got undefined for every failure.
+  error_message: string | null;
+  failure_category: string | null;
 }
 
 interface PostedLogRow {
@@ -209,13 +213,29 @@ export function createContentQueueRouter(db: DatabaseAdapter): Router {
           })),
           failures: failures.map((t) => {
             const meta = parseMetadata(t.metadata);
+            const dispatcher = typeof meta.dispatcher === 'string' ? meta.dispatcher : null;
+            // Source automation: the scheduler tags cadence dispatches
+            // as `content_cadence` and humor dispatches as `x_humor`;
+            // surface the user-visible automation name so the Couldn't-
+            // ship row tells the founder which cron emitted this task.
+            const sourceAutomation =
+              dispatcher === 'content_cadence'
+                ? 'ohwow:content-cadence'
+                : dispatcher === 'x_humor'
+                  ? 'ohwow:x-humor'
+                  : null;
             return {
               id: t.id,
               title: t.title,
-              error: t.error,
+              // error_message is the verbatim daemon error. Frontend
+              // renders "(no error recorded)" when both fields are null
+              // so failure rows are never silently hidden.
+              error_message: t.error_message,
+              failure_category: t.failure_category,
               completed_at: t.completed_at,
               created_at: t.created_at,
-              dispatcher: typeof meta.dispatcher === 'string' ? meta.dispatcher : null,
+              dispatcher,
+              source_automation: sourceAutomation,
               platform: typeof meta.platform === 'string' ? meta.platform : null,
             };
           }),
