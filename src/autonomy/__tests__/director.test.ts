@@ -997,6 +997,140 @@ describe('runArc — per-mode budget (llm cents) untestable today', () => {
   });
 });
 
+// ----------------------------------------------------------------------------
+// Event-driven Conductor wake — io.requestImmediateTick post-arc-close hook
+// (gap 14.11a: post-arc-close re-tick fires AFTER mirrorArc returns)
+// ----------------------------------------------------------------------------
+
+describe('runArc — requestImmediateTick hook (gap 14.11a)', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+  });
+  afterEach(() => {
+    rawDb.close();
+  });
+
+  it('mirrorArc fires BEFORE requestImmediateTick; each exactly once on close', async () => {
+    const order: string[] = [];
+    const baseIO = makeFakeIO();
+    const io: DirectorIO = {
+      ...baseIO,
+      mirrorArc: async () => {
+        order.push('mirrorArc');
+      },
+      requestImmediateTick: () => {
+        order.push('requestImmediateTick');
+      },
+    };
+    const picker = staticQueuePicker([basePicked()]);
+    const exec = allPassExec();
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('closed');
+    expect(order).toEqual(['mirrorArc', 'requestImmediateTick']);
+  });
+
+  it('requestImmediateTick fires on aborted arcs too (pulse-ko close path)', async () => {
+    // mrr drops between phases -> arc aborted with pulse-ko.
+    const entry: PulseSnapshot = { ts: 'entry', mrr_cents: 10_000, pipeline_count: 5 };
+    const drop: PulseSnapshot = { ts: 'drop', mrr_cents: 8_000, pipeline_count: 5 };
+    const baseIO = makeFakeIO({
+      pulses: [entry, entry, entry, drop],
+      defaultPulse: drop,
+    });
+    let immediateCalls = 0;
+    const io: DirectorIO = {
+      ...baseIO,
+      requestImmediateTick: () => {
+        immediateCalls += 1;
+      },
+    };
+    const picker = staticQueuePicker([
+      basePicked({ phase_id: 'phase_A' }),
+      basePicked({ phase_id: 'phase_B' }),
+    ]);
+    const exec = new StubExecutor({
+      plan: [planContinue, planContinue],
+      impl: [implContinue, implContinue],
+      qa: [qaPassed, qaPassed],
+    });
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('aborted');
+    expect(result.exit_reason).toBe('pulse-ko');
+    expect(immediateCalls).toBe(1);
+  });
+
+  it('undefined requestImmediateTick is a no-op (additive contract); arc returns closed', async () => {
+    const io = makeFakeIO();
+    // Explicitly NOT setting requestImmediateTick — it should default to undefined.
+    expect((io as DirectorIO).requestImmediateTick).toBeUndefined();
+    const picker = staticQueuePicker([basePicked()]);
+    const exec = allPassExec();
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('closed');
+    expect(result.exit_reason).toBe('nothing-queued');
+    expect(result.phases_run).toBe(1);
+  });
+
+  it('throwing requestImmediateTick does NOT propagate; arc-close return value is unaffected', async () => {
+    const baseIO = makeFakeIO();
+    const io: DirectorIO = {
+      ...baseIO,
+      requestImmediateTick: () => {
+        throw new Error('synthetic wake failure');
+      },
+    };
+    const picker = staticQueuePicker([basePicked()]);
+    const exec = allPassExec();
+
+    const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+
+    expect(result.status).toBe('closed');
+    expect(result.exit_reason).toBe('nothing-queued');
+    expect(result.phases_run).toBe(1);
+    expect(result.reports).toHaveLength(1);
+  });
+
+  it('throwing requestImmediateTick logs director.arc.request_immediate.failed at warn level', async () => {
+    const { logger } = await import('../../lib/logger.js');
+    const { vi } = await import('vitest');
+    const warnSpy = vi.spyOn(logger, 'warn');
+    try {
+      const baseIO = makeFakeIO();
+      const io: DirectorIO = {
+        ...baseIO,
+        requestImmediateTick: () => {
+          throw new Error('boom');
+        },
+      };
+      const picker = staticQueuePicker([basePicked()]);
+      const exec = allPassExec();
+
+      const result = await runArc(baseArcInput(), picker, exec, adapter, io);
+      expect(result.status).toBe('closed');
+
+      const matched = warnSpy.mock.calls.find((args) => {
+        return args[1] === 'director.arc.request_immediate.failed';
+      });
+      expect(matched).toBeDefined();
+      // The log payload carries the arc id + the err message.
+      const ctx = matched![0] as { arc_id: string; err: string };
+      expect(ctx.arc_id).toBe(result.arc_id);
+      expect(ctx.err).toBe('boom');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 // Silence unused-import lint while keeping the executor types in scope
 // for future extensions of the suite.
 void TrioScriptedExecutor;

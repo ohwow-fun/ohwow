@@ -12,6 +12,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
 import {
+  DEFAULT_CONDUCTOR_DEBOUNCE_MS,
   PHASE_ID_FORMAT_VERSION,
   conductorTick,
   defaultMakeStubExecutor,
@@ -20,6 +21,7 @@ import {
   startConductorLoop,
   type ConductorDeps,
 } from '../conductor.js';
+import { logger } from '../../lib/logger.js';
 import {
   answerFounderQuestion,
   closeArc,
@@ -826,5 +828,275 @@ describe('conductorTick — deferred resolve preserves inbox on pre-in-flight ab
       .all('ws-test') as Array<{ status: string }>;
     expect(reports).toHaveLength(1);
     expect(reports[0].status).toBe('phase-aborted');
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Event-driven Conductor wakes (gap 14.11a, post-arc-close)
+// ----------------------------------------------------------------------------
+
+/** Wait for `inflight` to clear by polling the conductor's behavior. */
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 500,
+  pollMs = 5,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+}
+
+describe('startConductorLoop — requestImmediateTick (gap 14.11a)', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+    vi.stubEnv('OHWOW_AUTONOMY_CONDUCTOR', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    rawDb.close();
+  });
+
+  it('triggers tickOnce within ~50ms even when intervalMs >> elapsed', async () => {
+    const deps = makeDeps(adapter);
+    // intervalMs of 10s — without the wake the setInterval would NOT
+    // fire inside the test window.
+    const handle = startConductorLoop({
+      ...deps,
+      intervalMs: 10_000,
+      debounceMs: 50,
+    });
+    try {
+      handle.requestImmediateTick();
+      await waitFor(() => {
+        const arcs = rawDb
+          .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+          .all('ws-test') as Array<{ id: string }>;
+        return arcs.length >= 1;
+      });
+      const arcs = rawDb
+        .prepare(
+          'SELECT id, status, exit_reason FROM director_arcs WHERE workspace_id = ?',
+        )
+        .all('ws-test') as Array<{
+        id: string;
+        status: string;
+        exit_reason: string | null;
+      }>;
+      expect(arcs).toHaveLength(1);
+      expect(arcs[0].status).toBe('closed');
+      expect(arcs[0].exit_reason).toBe('nothing-queued');
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('two requestImmediateTick calls inside the debounce window collapse to ONE tick; second logs conductor.tick.debounced', async () => {
+    const deps = makeDeps(adapter);
+    const infoSpy = vi.spyOn(logger, 'info');
+    const handle = startConductorLoop({
+      ...deps,
+      intervalMs: 10_000,
+      debounceMs: 5_000, // huge window — second call definitely drops
+    });
+    try {
+      handle.requestImmediateTick();
+      // Wait for the first tick to LAND (arc closed, inflight clear) so
+      // the second call hits the within-window branch, not the inflight
+      // branch. Both branches log 'conductor.tick.debounced' but the
+      // window branch is the canonical one for the second-call assertion.
+      await waitFor(() => {
+        const arcs = rawDb
+          .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+          .all('ws-test') as Array<{ id: string }>;
+        return arcs.length >= 1;
+      });
+      // Second call inside the 5s window — must be debounced.
+      handle.requestImmediateTick();
+      // No new arc should appear.
+      await new Promise((r) => setTimeout(r, 50));
+      const arcs = rawDb
+        .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+        .all('ws-test') as Array<{ id: string }>;
+      expect(arcs).toHaveLength(1);
+
+      // Find the debounced log line.
+      const debouncedCalls = infoSpy.mock.calls.filter((args) => {
+        const msg = args[1];
+        return msg === 'conductor.tick.debounced';
+      });
+      expect(debouncedCalls.length).toBeGreaterThanOrEqual(1);
+      // At least one debounce call carries the within-window reason.
+      const withinWindow = debouncedCalls.find((args) => {
+        const ctx = args[0] as { reason?: string };
+        return ctx?.reason === 'within-window';
+      });
+      expect(withinWindow).toBeDefined();
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('after the debounce window elapses, a fresh requestImmediateTick fires successfully', async () => {
+    const deps = makeDeps(adapter);
+    const handle = startConductorLoop({
+      ...deps,
+      intervalMs: 10_000,
+      debounceMs: 50, // tiny window so the test completes fast
+    });
+    try {
+      handle.requestImmediateTick();
+      await waitFor(() => {
+        const arcs = rawDb
+          .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+          .all('ws-test') as Array<{ id: string }>;
+        return arcs.length >= 1;
+      });
+      // Wait past the debounce window.
+      await new Promise((r) => setTimeout(r, 100));
+      // Second wake — should fire (NOT debounced).
+      handle.requestImmediateTick();
+      await waitFor(() => {
+        const arcs = rawDb
+          .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+          .all('ws-test') as Array<{ id: string }>;
+        return arcs.length >= 2;
+      });
+      const arcs = rawDb
+        .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+        .all('ws-test') as Array<{ id: string }>;
+      expect(arcs.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      handle.stop();
+    }
+  });
+
+  it('DEFAULT_CONDUCTOR_DEBOUNCE_MS is 30 seconds', () => {
+    expect(DEFAULT_CONDUCTOR_DEBOUNCE_MS).toBe(30_000);
+  });
+
+  it('stop() makes subsequent requestImmediateTick a no-op (does not throw, does not tick)', async () => {
+    const deps = makeDeps(adapter);
+    const handle = startConductorLoop({
+      ...deps,
+      intervalMs: 10_000,
+      debounceMs: 50,
+    });
+    handle.stop();
+    expect(() => handle.requestImmediateTick()).not.toThrow();
+    // Give a beat to confirm nothing fired.
+    await new Promise((r) => setTimeout(r, 30));
+    const arcs = rawDb
+      .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+      .all('ws-test') as Array<{ id: string }>;
+    expect(arcs).toHaveLength(0);
+  });
+
+  it('inflight serialization holds: requestImmediateTick during an in-flight tick drops with reason=inflight', async () => {
+    // Slow pulseReader keeps the first tick in flight long enough that
+    // the second wake collides with it.
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let pulseCallCount = 0;
+    const deps: ConductorDeps = {
+      ...makeDeps(adapter),
+      pulseReader: async () => {
+        pulseCallCount += 1;
+        if (pulseCallCount === 1) {
+          await firstHeld; // hold the first tick
+        }
+        return emptyPulse();
+      },
+    };
+    const infoSpy = vi.spyOn(logger, 'info');
+    const handle = startConductorLoop({
+      ...deps,
+      intervalMs: 10_000,
+      debounceMs: 50,
+    });
+    try {
+      handle.requestImmediateTick();
+      // Tiny wait so the tick reaches the held pulseReader.
+      await new Promise((r) => setTimeout(r, 20));
+      // Second wake while the first is in-flight — must drop.
+      handle.requestImmediateTick();
+
+      const inflightDrop = infoSpy.mock.calls.find((args) => {
+        const ctx = args[0] as { reason?: string };
+        const msg = args[1];
+        return msg === 'conductor.tick.debounced' && ctx?.reason === 'inflight';
+      });
+      expect(inflightDrop).toBeDefined();
+
+      // Release and let the first tick wind down.
+      releaseFirst();
+      await waitFor(() => {
+        const arcs = rawDb
+          .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+          .all('ws-test') as Array<{ id: string }>;
+        return arcs.length >= 1;
+      });
+      // Only ONE arc — second wake didn't produce a second arc.
+      const arcs = rawDb
+        .prepare('SELECT id FROM director_arcs WHERE workspace_id = ?')
+        .all('ws-test') as Array<{ id: string }>;
+      expect(arcs).toHaveLength(1);
+    } finally {
+      releaseFirst();
+      handle.stop();
+    }
+  });
+});
+
+describe('wireConductor — handle exposes requestImmediateTick + stop', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+    vi.stubEnv('OHWOW_AUTONOMY_CONDUCTOR', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rawDb.close();
+  });
+
+  it('returns a non-null handle that exposes both requestImmediateTick and stop when the env flag is on', async () => {
+    const { wireConductor } = await import('../wire-daemon.js');
+    const handle = wireConductor({
+      db: adapter,
+      workspace_id: 'ws-test',
+      // Long interval — we don't want the setInterval to fire during the test.
+      intervalMs: 60 * 60 * 1000,
+    });
+    try {
+      expect(handle).not.toBeNull();
+      expect(typeof handle!.requestImmediateTick).toBe('function');
+      expect(typeof handle!.stop).toBe('function');
+      // Don't actually fire the tick here — the wireConductor handle's
+      // tick reaches into a real `defaultDirectorIO` that we don't fully
+      // wire (no workspace slug). The shape assertion above is the
+      // contract; tick correctness is covered by the dedicated tests.
+    } finally {
+      handle?.stop();
+    }
+  });
+
+  it('returns null when the env flag is off', async () => {
+    vi.stubEnv('OHWOW_AUTONOMY_CONDUCTOR', '0');
+    const { wireConductor } = await import('../wire-daemon.js');
+    const handle = wireConductor({
+      db: adapter,
+      workspace_id: 'ws-test',
+    });
+    expect(handle).toBeNull();
   });
 });
