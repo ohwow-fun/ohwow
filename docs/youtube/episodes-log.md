@@ -33,7 +33,7 @@ owns the append.
 
 ### 2026-04-18 — The Briefing — Daily AI News - April 18, 2026 · One Move
 
-- **Published**: https://youtu.be/[manual-publish-url-to-backfill]
+- **Published**: https://www.youtube.com/watch?v=Mb_zSIkUPoE
 - **Runtime**: 51.5s
 - **Format**: Horizontal
 - **Seed**: CraftAX CUDA to CPU port at 47.8M steps/sec on Ryzen 9 9950X3D
