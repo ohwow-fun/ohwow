@@ -169,7 +169,7 @@ is scoped.
 
 | Series | Current title template | Notes |
 |---|---|---|
-| The Briefing | `Daily AI News - <Month Day, Year>` | Renaming on 2026-04-18 as of day 2. Previous template was `The Briefing · <Mon Day> · <Hook>` (see `_publish-briefing.mjs#deriveTitle`). Founder drives the new format; default assumption "April 18, 2026" full month. When the rename lands, update the derivation in `_publish-briefing.mjs` and mirror the decision here. |
+| The Briefing | `Daily AI News - {DATE} · {Hook}` (the `· {Hook}` tail is optional; omitted when no hook is derivable). Example: `Daily AI News - April 18, 2026 · <hook>`. | DATE is long-form `Month Day, Year`, UTC-derived from the spec id (fallback: today). Internal series name stays `briefing` / `The Briefing` across filenames, registry slug, prompt module, and show-bible; this rename is YouTube-title-only. See `_publish-briefing.mjs#deriveTitle` + `#deriveDateLabel`. |
 | Tomorrow Broke | TBD when first publish script lands | Expect `<Year> - <Hook>` style to match datestamp-opener voice. |
 | Mind Wars | TBD when first publish script lands | Expect `<Question> | Mind Wars` style. |
 | Operator Mode | TBD when first publish script lands | Expect `<Workflow> - Operator Mode` style. |
