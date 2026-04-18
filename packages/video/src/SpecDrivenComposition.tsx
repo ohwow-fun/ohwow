@@ -46,10 +46,69 @@ const AudioLayer: React.FC<{ refs: AudioRef[]; totalFrames: number }> = ({
  * (e.g. 0.9 → 0.12) still sounds like a compressor, not a volume knob being
  * yanked.
  */
-function smoothstep(t: number): number {
+export function smoothstep(t: number): number {
   if (t <= 0) return 0;
   if (t >= 1) return 1;
   return t * t * (3 - 2 * t);
+}
+
+/**
+ * Default attack / release / duck floor for the music ducker. Exported so
+ * the regression test pins the same constants the renderer uses — a change
+ * to these here MUST be reviewed against the RMS-envelope assertion in the
+ * music-ducking test.
+ */
+export const MUSIC_DUCK_DEFAULTS = {
+  /** 15 frames @ 30fps ≈ 500ms attack. See MusicLayer comment below. */
+  attackFrames: 15,
+  /** 30 frames @ 30fps = 1s release. */
+  releaseFrames: 30,
+  /**
+   * Ducked-volume cap. Music never sits louder than this while voice plays.
+   * 0.12 linear ≈ -18 dB, which leaves clear voice-over-music headroom at
+   * the -14 LUFS YouTube target even when baseVolume is hot (0.9).
+   */
+  duckCeilingLinear: 0.12,
+  /**
+   * Fraction of baseVolume used as the duck floor when baseVolume itself
+   * is very quiet. Without this cap, `Math.min(ceiling, base * 0.4)` on a
+   * base of e.g. 0.2 would duck TO ~-22 dB instead of UP to -18 dB, which
+   * is the correct behavior (voice sits on top by a fixed margin).
+   */
+  duckFloorFraction: 0.4,
+} as const;
+
+/**
+ * Materialize voiceWindows from a list of voiceovers. Each voiceover becomes
+ * a (start, end) duck window. If `durationFrames` is missing, we infer the
+ * end from the next voiceover's start (or `totalFrames` for the tail),
+ * minus a 1-frame gap so overlapping windows don't fight.
+ *
+ * This replaces the earlier behavior where voiceovers without durationFrames
+ * were silently DROPPED — a failure mode that made upstream spec bugs (e.g.
+ * a throwaway re-render script feeding a pre-durationFrames spec) inaudible
+ * because music stayed flat under voice. See regression test:
+ * `__tests__/music-ducking.test.ts`.
+ */
+export function voiceWindowsFromRefs(
+  voiceovers: AudioRef[],
+  totalFrames: number,
+): Array<{ start: number; end: number }> {
+  if (voiceovers.length === 0) return [];
+  const sorted = [...voiceovers].sort((a, b) => a.startFrame - b.startFrame);
+  return sorted.map((v, i) => {
+    const start = v.startFrame;
+    let end: number;
+    if (typeof v.durationFrames === "number" && v.durationFrames > 0) {
+      end = start + v.durationFrames;
+    } else {
+      // No explicit duration — duck until the next voice or composition end.
+      // 1-frame gap prevents touching windows from being fused into one.
+      const next = sorted[i + 1];
+      end = next ? Math.max(start + 1, next.startFrame - 1) : totalFrames;
+    }
+    return { start, end };
+  });
 }
 
 /**
@@ -61,12 +120,8 @@ function smoothstep(t: number): number {
  * Frames passed to the returned function are Sequence-relative (i.e., 0 at
  * the start of the music Sequence); internally we shift by `musicStartFrame`
  * so voice windows can be compared in absolute-composition time.
- *
- * Voice windows that lack a durationFrames are skipped — without an explicit
- * end frame we can't honor a release ramp, and defaulting to "active until
- * composition end" would leave music ducked for the whole tail.
  */
-function buildMusicVolume(params: {
+export function buildMusicVolume(params: {
   baseVolume: number;
   duckedVolume: number;
   attackFrames: number;
@@ -103,6 +158,14 @@ function buildMusicVolume(params: {
   };
 }
 
+/** Compute the ducked-volume target from baseVolume using shared defaults. */
+export function duckedVolumeFor(baseVolume: number): number {
+  return Math.min(
+    MUSIC_DUCK_DEFAULTS.duckCeilingLinear,
+    baseVolume * MUSIC_DUCK_DEFAULTS.duckFloorFraction,
+  );
+}
+
 const MusicLayer: React.FC<{
   music: AudioRef;
   voiceovers: AudioRef[];
@@ -113,13 +176,8 @@ const MusicLayer: React.FC<{
   // voice sits on top by the same headroom margin even when music is loud.
   // Capped by 40% of base so a very quiet base (e.g. 0.2) doesn't mean
   // ducking UP.
-  const duckedVolume = Math.min(0.12, baseVolume * 0.4);
-  const voiceWindows = voiceovers
-    .filter((v) => typeof v.durationFrames === "number")
-    .map((v) => ({
-      start: v.startFrame,
-      end: v.startFrame + (v.durationFrames as number),
-    }));
+  const duckedVolume = duckedVolumeFor(baseVolume);
+  const voiceWindows = voiceWindowsFromRefs(voiceovers, totalFrames);
   const volumeFn = buildMusicVolume({
     baseVolume,
     duckedVolume,
@@ -127,8 +185,8 @@ const MusicLayer: React.FC<{
     // wider dynamic range (up to ~8x). 15 frames in / 30 out at 30fps ≈
     // 500ms attack, 1s release — musical without letting voice onsets peek
     // through the head of the duck.
-    attackFrames: 15,
-    releaseFrames: 30,
+    attackFrames: MUSIC_DUCK_DEFAULTS.attackFrames,
+    releaseFrames: MUSIC_DUCK_DEFAULTS.releaseFrames,
     musicStartFrame: music.startFrame,
     voiceWindows,
   });

@@ -338,8 +338,11 @@ function buildFullSpec({ draft, voiceByScene, kit, series }) {
   }
 
   // Build per-scene voiceover entries with absolute startFrames + explicit
-  // durationFrames. The renderer's MusicLayer requires durationFrames to
-  // register a duck window; without it, music ducking is skipped entirely.
+  // durationFrames. The renderer's MusicLayer infers a fallback window when
+  // durationFrames is missing (see `voiceWindowsFromRefs` in
+  // packages/video/src/SpecDrivenComposition.tsx), but a precise per-clip
+  // duration gives the ducker an exact release-ramp anchor — so we always
+  // emit it here and treat it as a required part of the compose contract.
   // Walk the scene timeline and place each voice clip at cursor + lead.
   const fps = 30;
   const voiceovers = [];
