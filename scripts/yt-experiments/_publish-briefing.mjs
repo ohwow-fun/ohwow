@@ -229,6 +229,45 @@ function countPriorAppliedUnlisted(queue, series) {
   ).length;
 }
 
+/**
+ * Decide whether the publish-draft flow is allowed to proceed, given
+ * the requested visibility, the caller's flags, and the prior-applied
+ * unlisted count.
+ *
+ * Returns an object with:
+ *   - `allowed`: true if the publish should proceed.
+ *   - `override`: true if the founder-confirmed public override was
+ *     applied (so callers can log it). Only true when BOTH
+ *     `--yes` AND an explicit `--visibility=public` are supplied.
+ *   - `reason`: one-line refusal reason when !allowed, for surfacing.
+ *
+ * Pure function — no I/O, no process.exit — so it's unit-testable.
+ * The CLI wrapper maps `!allowed` to process.exit(1) and logs `reason`.
+ */
+export function evaluatePublicVisibilityGate({
+  visibility,
+  explicitVisibility, // what the user actually passed on the CLI (lowercase) or null/undefined
+  confirmedYes,
+  priorAppliedUnlisted,
+  threshold,
+}) {
+  if (visibility !== 'public') {
+    return { allowed: true, override: false, reason: null };
+  }
+  const explicitPublic = (explicitVisibility ?? '').toLowerCase() === 'public';
+  if (explicitPublic && confirmedYes) {
+    return { allowed: true, override: true, reason: null };
+  }
+  if (priorAppliedUnlisted >= threshold) {
+    return { allowed: true, override: false, reason: null };
+  }
+  return {
+    allowed: false,
+    override: false,
+    reason: `--visibility=public refused: need ≥${threshold} applied unlisted rows, found ${priorAppliedUnlisted}.`,
+  };
+}
+
 async function confirmTty(prompt) {
   if (!process.stdin.isTTY) return false;
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
@@ -252,10 +291,22 @@ async function cmdPublishDraft({ videoId, args }) {
 
   if (visibility === 'public') {
     const prior = countPriorAppliedUnlisted(queue, series);
-    if (prior < UNLISTED_BEFORE_PUBLIC) {
+    const gate = evaluatePublicVisibilityGate({
+      visibility,
+      explicitVisibility: args.kv.visibility,
+      confirmedYes: args.flags.has('yes'),
+      priorAppliedUnlisted: prior,
+      threshold: UNLISTED_BEFORE_PUBLIC,
+    });
+    if (gate.override) {
+      // Audit-visible warning for the founder-confirmed override path.
       console.error(
-        `[publish-draft] --visibility=public refused: need ≥${UNLISTED_BEFORE_PUBLIC} applied unlisted rows, found ${prior}.`,
+        `[publish-draft] founder-confirmed public override; gate bypassed `
+          + `(had ${prior}/${UNLISTED_BEFORE_PUBLIC} prior applied unlisted).`,
       );
+    }
+    if (!gate.allowed) {
+      console.error(`[publish-draft] ${gate.reason}`);
       process.exit(1);
     }
   }
@@ -360,12 +411,28 @@ async function cmdStage({ args }) {
     console.error(`[stage]   thumbnail: ${thumbnailPath} (${(fs.statSync(thumbnailPath).size / 1024).toFixed(1)} KB)`);
   }
 
-  // Playlist: explicit --playlist > series default > --no-playlist skip
+  // Playlist: --no-playlist is an explicit escape hatch that wins over
+  // --playlist and the series default. Otherwise use explicit --playlist
+  // or fall back to the series' configured playlist.
+  const skipPlaylist = args.flags.has('no-playlist');
   let playlistName = null;
-  if (args.kv.playlist) {
-    playlistName = args.kv.playlist;
-  } else if (!args.flags.has('no-playlist')) {
-    playlistName = series.playlist ?? null;
+  if (!skipPlaylist) {
+    if (args.kv.playlist) {
+      playlistName = args.kv.playlist;
+    } else {
+      playlistName = series.playlist ?? null;
+    }
+  }
+
+  // Founder override: fully publish gate bypass requires BOTH --yes AND
+  // --visibility=public at stage time. Autopilot path (no --yes, or no
+  // explicit --visibility=public) still routes through the ≥N-unlisted-
+  // prior gate at publish-draft time. This warning surfaces when the
+  // override is applied so the action is audit-visible in the log.
+  const publicOverride =
+    visibility === 'public' && args.flags.has('yes');
+  if (publicOverride) {
+    console.error('[stage] founder-confirmed public override; gate bypassed');
   }
 
   console.error('[stage] plan:');
@@ -373,7 +440,7 @@ async function cmdStage({ args }) {
   console.error(`  title         ${title}`);
   console.error(`  visibility    ${visibility}  (saved with draft; publish-draft uses this unless overridden)`);
   console.error(`  thumbnail     ${thumbnailPath ?? '(Studio auto-pick)'}`);
-  console.error(`  playlist      ${playlistName ?? '(none)'}`);
+  console.error(`  playlist      ${skipPlaylist ? '(skipped: --no-playlist)' : (playlistName ?? '(none)')}`);
 
   const session = await ensureYTStudio({ identity: args.kv.identity, throwOnChallenge: true });
   const flags = session.health.accountFlags || {};
@@ -394,7 +461,8 @@ async function cmdStage({ args }) {
       description,
       thumbnailPath: thumbnailPath ?? undefined,
       playlist: playlistName ?? undefined,
-      createPlaylistIfMissing: !!playlistName,
+      skipPlaylist,
+      createPlaylistIfMissing: !!playlistName && !skipPlaylist,
       createPlaylistVisibility: 'public',
       visibility,
       dryRun: true,
@@ -509,3 +577,4 @@ if (invokedDirectly) {
 }
 
 export { deriveDateLabel, deriveTitle, deriveHook, deriveDescription };
+// evaluatePublicVisibilityGate is exported inline where defined above.

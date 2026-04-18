@@ -31,12 +31,23 @@
  */
 
 import type { RawCdpPage } from '../../../execution/browser/raw-cdp.js';
-import { YTUploadError } from '../errors.js';
+import { YTTimeoutError, YTUploadError } from '../errors.js';
 import { SEL } from '../selectors.js';
 import { waitForPredicate, waitForSelector } from '../wait.js';
 import { humanClickAt, humanClickSelector, humanType, sleepRandom } from './human.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Max time to wait for the playlist picker's "New playlist" button to be
+ * interactable after clicking the trigger. Empirical on slower first-mount:
+ * Studio's Polymer dialog can take 4-7s on a cold profile session, so 4s
+ * was too tight. 8s matches the order of magnitude Studio itself takes to
+ * render complex pickers; callers who want a clean bail can set
+ * `opts.skipPlaylist` (or pass `--no-playlist` to the CLI) instead of
+ * relying on the timeout.
+ */
+const PICKER_INTERACTIVE_TIMEOUT_MS = 8_000;
 
 export type PlaylistVisibility = 'public' | 'unlisted' | 'private';
 
@@ -105,6 +116,44 @@ async function readChipNames(page: RawCdpPage): Promise<string[]> {
   })()`);
 }
 
+/**
+ * Snapshot what the picker subtree actually looks like right now. Used by
+ * the timeout-path of openPicker to surface actionable diagnostics in the
+ * thrown error: operators should see which selectors matched and which
+ * didn't instead of a generic "never held within Nms".
+ */
+async function readPickerDiag(page: RawCdpPage): Promise<{
+  dialogPresent: boolean;
+  dialogVisible: boolean;
+  newButtonPresent: boolean;
+  newButtonVisible: boolean;
+  rowsCount: number;
+  visibleRowsCount: number;
+}> {
+  return page.evaluate<{
+    dialogPresent: boolean;
+    dialogVisible: boolean;
+    newButtonPresent: boolean;
+    newButtonVisible: boolean;
+    rowsCount: number;
+    visibleRowsCount: number;
+  }>(`(() => {
+    const dialog = document.querySelector(${JSON.stringify(SEL.PLAYLIST_PICKER_DIALOG)});
+    const newBtn = document.querySelector(${JSON.stringify(SEL.PLAYLIST_NEW_BUTTON)});
+    const rows = document.querySelectorAll(${JSON.stringify(SEL.PLAYLIST_ROWS)});
+    let visibleRows = 0;
+    for (const r of rows) { if (r.offsetParent !== null) visibleRows += 1; }
+    return {
+      dialogPresent: !!dialog,
+      dialogVisible: !!(dialog && dialog.offsetParent !== null),
+      newButtonPresent: !!newBtn,
+      newButtonVisible: !!(newBtn && newBtn.offsetParent !== null),
+      rowsCount: rows.length,
+      visibleRowsCount: visibleRows,
+    };
+  })()`);
+}
+
 /** Open the picker. Throws if the dialog fails to mount. */
 async function openPicker(page: RawCdpPage): Promise<void> {
   const coords = await page.evaluate<{ x: number; y: number } | null>(`(() => {
@@ -118,14 +167,46 @@ async function openPicker(page: RawCdpPage): Promise<void> {
 
   await humanClickAt(page, coords.x, coords.y);
 
-  // Wait for rows OR the New button to mount — either signals the
-  // dialog is interactive. The outer ytcp-playlist-dialog exists in
-  // the DOM even when closed; row mount is the honest "open" signal.
-  await waitForPredicate(
-    page,
-    `!!document.querySelector(${JSON.stringify(SEL.PLAYLIST_NEW_BUTTON)}) && document.querySelector(${JSON.stringify(SEL.PLAYLIST_NEW_BUTTON)}).offsetParent !== null`,
-    { timeoutMs: 4_000, label: 'playlist picker interactive' },
-  );
+  // Wait for the "New playlist" button to mount AND be visible — Studio
+  // renders the outer ytcp-playlist-dialog in the DOM even when closed,
+  // so "dialog exists" is not an honest interactive signal. Rows or
+  // the New button becoming visible is.
+  //
+  // If the wait times out, surface the picker's last-seen DOM state
+  // (which selectors matched, which were hidden) so a future failure
+  // tells the operator what actually happened rather than "never held
+  // within Nms". Callers who want to bail cleanly should pass
+  // `skipPlaylist: true` at the upload layer (or `--no-playlist` at
+  // the CLI).
+  try {
+    await waitForPredicate(
+      page,
+      `!!document.querySelector(${JSON.stringify(SEL.PLAYLIST_NEW_BUTTON)}) && document.querySelector(${JSON.stringify(SEL.PLAYLIST_NEW_BUTTON)}).offsetParent !== null`,
+      { timeoutMs: PICKER_INTERACTIVE_TIMEOUT_MS, label: 'playlist picker interactive' },
+    );
+  } catch (err) {
+    if (err instanceof YTTimeoutError) {
+      let diag: Awaited<ReturnType<typeof readPickerDiag>> | null = null;
+      let diagError: string | null = null;
+      try {
+        diag = await readPickerDiag(page);
+      } catch (readErr) {
+        diagError = readErr instanceof Error ? readErr.message : String(readErr);
+      }
+      const diagSummary = diag
+        ? `dialog[present=${diag.dialogPresent},visible=${diag.dialogVisible}] `
+          + `newButton[present=${diag.newButtonPresent},visible=${diag.newButtonVisible}] `
+          + `rows[total=${diag.rowsCount},visible=${diag.visibleRowsCount}]`
+        : `diagnostic read failed: ${diagError}`;
+      throw new YTUploadError(
+        'select_playlist',
+        `playlist picker never became interactive within ${PICKER_INTERACTIVE_TIMEOUT_MS}ms (${diagSummary}). `
+          + `Pass --no-playlist to skip the playlist step explicitly.`,
+        { diag, diagError, timeoutMs: PICKER_INTERACTIVE_TIMEOUT_MS },
+      );
+    }
+    throw err;
+  }
 }
 
 interface PickerRow {

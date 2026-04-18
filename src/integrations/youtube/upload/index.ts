@@ -77,6 +77,13 @@ export interface UploadShortOptions {
   createPlaylistIfMissing?: boolean;
   /** Visibility for a newly-created playlist. Default 'unlisted'. */
   createPlaylistVisibility?: PlaylistVisibility;
+  /**
+   * Explicit escape hatch: skip the playlist stage entirely, even if
+   * `playlist` is set. Use when Studio's playlist picker is flaky on a
+   * given profile and the caller wants to proceed without binding.
+   * The `_publish-briefing.mjs --no-playlist` CLI flag maps to this.
+   */
+  skipPlaylist?: boolean;
   visibility?: Visibility;
   /** When true, stop before clicking Save and close the dialog. */
   dryRun?: boolean;
@@ -103,6 +110,17 @@ export interface UploadResult {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Whether the playlist stage should run for these options. Exported for
+ * unit tests — pure predicate, no side effects. Playlist runs only when
+ * a name is provided AND the caller has not opted out via skipPlaylist.
+ */
+export function shouldRunPlaylistStage(opts: Pick<UploadShortOptions, 'playlist' | 'skipPlaylist'>): boolean {
+  if (opts.skipPlaylist) return false;
+  if (!opts.playlist) return false;
+  return true;
+}
 
 export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): Promise<UploadResult> {
   const visibility = opts.visibility ?? 'unlisted';
@@ -190,7 +208,7 @@ export async function uploadShort(page: RawCdpPage, opts: UploadShortOptions): P
     );
   }
 
-  if (opts.playlist) {
+  if (shouldRunPlaylistStage(opts)) {
     // "Scrolling to the playlist section" pause.
     await sleepRandom(600, 1_400);
     await stage('playlist_set', { playlist: opts.playlist }, async () => {
