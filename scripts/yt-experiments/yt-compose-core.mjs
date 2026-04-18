@@ -382,7 +382,7 @@ function buildFullSpec({ draft, voiceByScene, kit, series }) {
       harmony: kit.paletteHarmony,
       mood: kit.ambientMoodDefault,
     },
-    music: { src: ambientSrc, startFrame: 0, volume: 0.15 },
+    music: { src: ambientSrc, startFrame: 0, volume: 0.9 },
     voiceovers,
     transitions: draft.spec?.transitions || [{ kind: 'fade', durationInFrames: 15 }],
     scenes,
