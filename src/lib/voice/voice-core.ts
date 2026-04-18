@@ -47,7 +47,9 @@ export const FIRST_PERSON_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/\bmy\b/i, 'firstPerson:my'],
   [/\bmine\b/i, 'firstPerson:mine'],
   [/\bwe\b/i, 'firstPerson:we'],
-  [/\bus\b/i, 'firstPerson:us'],
+  // Case-sensitive on "us": lowercase is the pronoun, uppercase "US" is
+  // the country code ("US customers") and must not false-positive.
+  [/\bus\b/, 'firstPerson:us'],
   [/\bour\b/i, 'firstPerson:our'],
 ];
 
@@ -107,6 +109,36 @@ export const LENGTH_CAPS = {
   x: { reply: 240, post: 280 },
   threads: { reply: 280, post: 500 },
 } as const;
+
+// ---------------------------------------------------------------------------
+// Cosmetic auto-fix (pre-gate).
+// ---------------------------------------------------------------------------
+
+/**
+ * Strip cosmetic violations the LLM repeatedly commits (trailing period,
+ * em-dash, en-dash) before the voice gate runs. These are the two rules
+ * models ignore most often despite being in every prompt, and they're
+ * trivially fixable without changing meaning.
+ *
+ * What this does NOT fix: first-person pronouns, product names, corporate
+ * softeners, sign-offs — those are intent-level violations and still hard
+ * fail the gate.
+ *
+ * Em-dash replacement uses ", " which reads naturally in most clause-joining
+ * contexts; safer than "; " which looks stiff on X/Threads.
+ */
+export function autoFixCosmetic(text: string): string {
+  if (!text) return text;
+  let t = text;
+  // Em-dash / en-dash → ", ". Strip adjoining whitespace so " — " doesn't
+  // leave doubled spaces on either side.
+  t = t.replace(/\s*[—–]\s*/g, ', ');
+  // Strip a single trailing period (and any trailing whitespace).
+  t = t.replace(/\.\s*$/, '');
+  // Clean up artifacts the replacement can create.
+  t = t.replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').trim();
+  return t;
+}
 
 // ---------------------------------------------------------------------------
 // The gate.

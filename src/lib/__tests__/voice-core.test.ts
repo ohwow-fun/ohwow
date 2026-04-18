@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   voiceCheck,
+  autoFixCosmetic,
   FIRST_PERSON_PATTERNS,
   FAKE_EXPERIENCE_PATTERNS,
   CRINGE_TICS,
@@ -27,6 +28,16 @@ describe('voiceCheck', () => {
     it('rejects "we"', () => {
       const r = voiceCheck('we keep hitting the same wall', replyCtx);
       expect(r.reasons).toContain('firstPerson:we');
+    });
+
+    it('rejects lowercase "us" as pronoun', () => {
+      const r = voiceCheck('let us try the other approach', replyCtx);
+      expect(r.reasons).toContain('firstPerson:us');
+    });
+
+    it('allows uppercase "US" as country code', () => {
+      const r = voiceCheck('US customers have different pain points', replyCtx);
+      expect(r.reasons.filter((x) => x.startsWith('firstPerson'))).toEqual([]);
     });
   });
 
@@ -93,6 +104,51 @@ describe('buildVoicePrinciples', () => {
     expect(s).toContain('STANCE:');
     expect(s).toContain('CRAFT:');
     expect(s).toContain('FORBIDDEN:');
+  });
+});
+
+describe('autoFixCosmetic', () => {
+  it('strips a single trailing period', () => {
+    expect(autoFixCosmetic('Block the next 3 days.')).toBe('Block the next 3 days');
+  });
+
+  it('replaces em-dash with ", "', () => {
+    expect(autoFixCosmetic('The bottleneck isn\'t tasks — it is context switching')).toBe(
+      'The bottleneck isn\'t tasks, it is context switching',
+    );
+  });
+
+  it('replaces en-dash with ", "', () => {
+    expect(autoFixCosmetic('One rule – ship daily')).toBe('One rule, ship daily');
+  });
+
+  it('handles both violations in one draft', () => {
+    expect(autoFixCosmetic('First, a reframe — then a mechanism.')).toBe(
+      'First, a reframe, then a mechanism',
+    );
+  });
+
+  it('no-op on already clean text', () => {
+    const s = 'the bottleneck is every task feeling equal';
+    expect(autoFixCosmetic(s)).toBe(s);
+  });
+
+  it('collapses doubled commas from adjacent em-dash to comma', () => {
+    // input: "A, — B" (human typed comma before em-dash)
+    expect(autoFixCosmetic('A, — B')).toBe('A, B');
+  });
+
+  it('does not strip mid-sentence periods', () => {
+    expect(autoFixCosmetic('Mr. Jones and Dr. Smith.')).toBe('Mr. Jones and Dr. Smith');
+  });
+
+  it('handles empty string', () => {
+    expect(autoFixCosmetic('')).toBe('');
+  });
+
+  it('post-fix output passes the voice gate', () => {
+    const fixed = autoFixCosmetic('The bottleneck is context switching — batch it.');
+    expect(voiceCheck(fixed, { platform: 'x', useCase: 'reply' }).ok).toBe(true);
   });
 });
 
