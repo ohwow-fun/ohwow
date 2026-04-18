@@ -235,6 +235,10 @@ export async function runAnthropicReActLoop(
           workspaceId,
           currentAgentId: agentId,
           currentTaskId: taskId,
+          // Gap 13: direct-telemetry agent dispatch is autonomous by
+          // definition. Pin the literal (matches the default) so the
+          // grep-canary in origin-tagging.test.ts can audit this site.
+          origin: 'autonomous',
         },
         {
           purpose: 'agent_task',
