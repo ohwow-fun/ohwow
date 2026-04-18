@@ -39,6 +39,12 @@ export function createLlmRouter(
     const workspaceId = req.workspaceId ?? 'local';
 
     try {
+      // Gap 13 follow-up 1b: /api/llm is the operator-facing HTTP entry
+      // point (surfaced to Claude Code via the ohwow_llm MCP tool and
+      // invoked directly by any client acting as a sub-orchestrator on
+      // behalf of a human). Every request is interactive by definition,
+      // so tag origin='interactive' to exclude the row from the
+      // autonomous daily cap sum.
       const result = await runLlmCall(
         {
           modelRouter,
@@ -46,6 +52,7 @@ export function createLlmRouter(
           workspaceId,
           currentAgentId: agentId,
           currentTaskId: taskId,
+          origin: 'interactive',
         },
         body,
       );
