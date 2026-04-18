@@ -41,13 +41,13 @@ export async function activateBrowserSession(
 
   // "isolated" profile means use Playwright Chromium with no state.
   if (requestedProfile === 'isolated') {
-    const service = new LocalBrowserService({ headless: browserHeadless });
+    const service = new LocalBrowserService({ headless: browserHeadless, forceBundled: true });
     logger.info('[orchestrator] Browser activated (isolated Chromium)');
     return { service, degradedReason: null };
   }
 
   if (browserTarget !== 'chrome') {
-    const service = new LocalBrowserService({ headless: browserHeadless });
+    const service = new LocalBrowserService({ headless: browserHeadless, forceBundled: true });
     return { service, degradedReason: null };
   }
 
@@ -93,7 +93,7 @@ export async function activateBrowserSession(
     // misleading "Chrome CDP unavailable".
     const { describeDebugChromeState } = await import('../execution/browser/chrome-lifecycle.js');
     const state = describeDebugChromeState();
-    const service = new LocalBrowserService({ headless: browserHeadless });
+    const service = new LocalBrowserService({ headless: browserHeadless, forceBundled: true });
     let degradedReason: string;
     if (state.status === 'missing') {
       degradedReason = `${state.reason} Running in isolated Chromium (no logged-in sessions). ${state.bootstrapHint}`;
@@ -112,7 +112,7 @@ export async function activateBrowserSession(
       { err: err instanceof Error ? err.message : err },
       '[orchestrator] Chrome activation failed, falling back to Chromium',
     );
-    const service = new LocalBrowserService({ headless: browserHeadless });
+    const service = new LocalBrowserService({ headless: browserHeadless, forceBundled: true });
     const degradedReason = `Chrome activation threw: ${err instanceof Error ? err.message : String(err)} — running in isolated Chromium with no real profile`;
     return { service, degradedReason };
   }

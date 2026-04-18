@@ -64,6 +64,15 @@ export interface LocalBrowserServiceOptions {
   modelBaseURL?: string;
   /** CDP WebSocket URL to connect to an existing browser (e.g. real Chrome). When set, Stagehand connects via CDP instead of launching Chromium. */
   cdpUrl?: string;
+  /**
+   * Skip the default debug-Chrome attach attempt and spawn bundled
+   * Chromium directly. Use this when the caller explicitly needs an
+   * isolated browser with no real profile state (tests, one-shot PDF
+   * rendering, screenshot-only flows, or a fallback site that has
+   * already probed CDP itself and failed). Ignored when `cdpUrl` is
+   * passed — an explicit CDP URL always wins.
+   */
+  forceBundled?: boolean;
 }
 
 /**
@@ -158,6 +167,7 @@ export class LocalBrowserService {
   private modelApiKey: string;
   private modelBaseURL: string | undefined;
   private cdpUrl: string | undefined;
+  private forceBundled: boolean;
   private initPromise: Promise<StagehandPage> | null = null;
 
   constructor(opts?: LocalBrowserServiceOptions) {
@@ -175,6 +185,7 @@ export class LocalBrowserService {
     this.modelApiKey = opts?.modelApiKey || resolved.apiKey || '';
     this.modelBaseURL = opts?.modelBaseURL || resolved.baseURL;
     this.cdpUrl = opts?.cdpUrl;
+    this.forceBundled = opts?.forceBundled === true;
   }
 
   // ==========================================================================
@@ -196,6 +207,35 @@ export class LocalBrowserService {
   private async _initBrowser(): Promise<StagehandPage> {
 
     try {
+      // Reuse debug Chrome by default; isolate only when caller explicitly asks.
+      // Automation tasks that came in without a cdpUrl used to spawn a fresh
+      // bundled Chromium every time — throwing away the user's real logged-in
+      // sessions and (when running in parallel) racing on Playwright's user-
+      // data-dir lock. Attaching to the existing debug Chrome on :9222 gives
+      // every automation the user's real cookies and lets the per-profile
+      // routing work downstream. Only skip this when `forceBundled` is true.
+      if (!this.cdpUrl && !this.forceBundled) {
+        try {
+          const handle = await ensureDebugChrome({ port: 9222 });
+          this.cdpUrl = handle.cdpHttpUrl;
+          logger.debug(
+            { cdpUrl: this.cdpUrl, pid: handle.pid },
+            '[browser] attaching to debug Chrome via CDP (default)',
+          );
+        } catch (err) {
+          const reason = err instanceof ChromeLifecycleError
+            ? `${err.code}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+          logger.warn(
+            { reason },
+            '[browser] debug Chrome attach failed, falling back to bundled Chromium',
+          );
+          // Leave this.cdpUrl unset — Stagehand will launch bundled Chromium.
+        }
+      }
+
       const { Stagehand } = await loadStagehand();
       const launchOpts: Record<string, unknown> = this.cdpUrl
         ? { cdpUrl: this.cdpUrl }

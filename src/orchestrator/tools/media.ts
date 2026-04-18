@@ -227,7 +227,7 @@ export async function exportSlidesToPdf(
 </style></head>`,
   );
 
-  const browser = new LocalBrowserService({ headless: true });
+  const browser = new LocalBrowserService({ headless: true, forceBundled: true });
   try {
     const page = await browser.ensureBrowser();
     await page.setContent(printHtml, { waitUntil: 'networkidle' });

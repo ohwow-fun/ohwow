@@ -94,6 +94,10 @@ async function ensureBrowserService(opts?: {
     modelName: opts?.modelName,
     modelApiKey: opts?.modelApiKey,
     cdpUrl,
+    // This route already probed CDP above. When cdpUrl is undefined we
+    // either chose not to try (preferRealChrome === false) or the probe
+    // failed — either way, skip the default re-probe inside the service.
+    forceBundled: !cdpUrl,
   });
   return browserService;
 }
