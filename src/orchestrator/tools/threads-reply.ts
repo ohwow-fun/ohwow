@@ -39,6 +39,11 @@ import {
   type CdpPageHandle,
 } from './social-cdp-helpers.js';
 import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
+import {
+  threadsThrottleTracker,
+  XSearchThrottledError,
+  looksLikeXSearchRateLimit,
+} from '../../lib/x-search-throttle.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -314,6 +319,38 @@ export async function scanThreadsPostsViaBrowser(
     };
   }
 
+  // Threads has its own independent search throttle. Separate state
+  // file from X so one platform's cooldown doesn't freeze the other.
+  // Only search URLs hit the throttled endpoint; home / profile stay fine.
+  const usesSearchRpc = resolvedUrl.includes('/search');
+  if (usesSearchRpc) {
+    try {
+      threadsThrottleTracker.assertNotThrottled();
+    } catch (err) {
+      if (err instanceof XSearchThrottledError) {
+        logger.warn(
+          {
+            event: 'x_search_deferred',
+            platform: 'threads',
+            source,
+            resolvedUrl,
+            retryAfter: err.retryAfter.toISOString(),
+            remainingMs: err.remainingMs,
+          },
+          `[${LOG_TAG}] scan deferred — threads search still throttled`,
+        );
+        return {
+          success: false,
+          message: `threads.com search throttled. Retry after ${err.retryAfter.toISOString()} (${Math.round(err.remainingMs / 1000)}s).`,
+          source,
+          resolvedUrl,
+          posts: [],
+        };
+      }
+      throw err;
+    }
+  }
+
   const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
   if (!handle) {
     return {
@@ -456,6 +493,28 @@ export async function scanThreadsPostsViaBrowser(
       }
       return out;
     })()`)) ?? [];
+
+    // Threads rate-limit detection. Its search view throws up an
+    // equivalent "Something went wrong" shell when throttled. Persist
+    // via the threads-scoped tracker so next tick's scheduler defers.
+    if (usesSearchRpc && parsed.length === 0) {
+      const bodyText = await page
+        .evaluate<string>(`document.body ? (document.body.innerText || '') : ''`)
+        .catch(() => '');
+      if (looksLikeXSearchRateLimit(bodyText, parsed.length)) {
+        const state = threadsThrottleTracker.markThrottled(resolvedUrl);
+        const retryAfter = state.throttled_until ? new Date(state.throttled_until) : new Date();
+        return {
+          success: false,
+          message: `threads.com search rate-limited (error shell rendered). Cooldown until ${retryAfter.toISOString()}.`,
+          source,
+          resolvedUrl,
+          posts: [],
+          screenshotBase64: await captureScreenshot(page).catch(() => undefined),
+          currentUrl: await page.url().catch(() => undefined),
+        };
+      }
+    }
 
     const unique = parsed.slice(0, limit);
 

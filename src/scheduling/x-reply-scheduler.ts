@@ -56,6 +56,7 @@ import {
   insertReplyDraft,
   findReplyDraftByUrl,
 } from './x-reply-store.js';
+import { isThrottled as isXSearchThrottled } from '../lib/x-search-throttle.js';
 
 // ---------------------------------------------------------------------------
 // Runtime config keys
@@ -268,6 +269,26 @@ export class XReplyScheduler {
     const enabled = getRuntimeConfig<boolean>(CFG_ENABLED, true);
     if (!enabled) {
       logger.debug('[x-reply-scheduler] disabled via runtime_config');
+      return;
+    }
+
+    // Persistent-throttle gate. When the scraper tripped X's search
+    // throttle on an earlier tick, skip the whole pipeline — scanning,
+    // classifying, drafting are all pointless until the cooldown ends.
+    // markThrottled persists to ~/.ohwow/x-search-throttle.json so this
+    // works across daemon restarts.
+    const throttleStatus = isXSearchThrottled();
+    if (throttleStatus.throttled && throttleStatus.until) {
+      logger.warn(
+        {
+          event: 'x_search_deferred',
+          platform: 'x',
+          trigger,
+          retryAfter: throttleStatus.until.toISOString(),
+          remainingMs: throttleStatus.remainingMs,
+        },
+        '[x-reply-scheduler] tick deferred — x search is throttled',
+      );
       return;
     }
 

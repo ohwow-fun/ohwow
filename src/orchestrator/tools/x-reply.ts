@@ -51,6 +51,12 @@ import {
 } from './x-posting.js';
 import { hashText, hasIdenticalPublished, recordPost } from './posted-log-helpers.js';
 import { typeIntoRichTextbox, clickFirstEnabledSubmit } from './social-cdp-helpers.js';
+import {
+  assertNotThrottled as assertXNotThrottled,
+  markThrottled as markXThrottled,
+  XSearchThrottledError,
+  looksLikeXSearchRateLimit,
+} from '../../lib/x-search-throttle.js';
 
 // ---------------------------------------------------------------------------
 // Tool schema definitions
@@ -254,6 +260,38 @@ export async function scanXPostsViaBrowser(input: ScanXInput): Promise<ScanXResu
     };
   }
 
+  // Persistent-throttle gate. Only search URLs trip X's authenticated
+  // search RPC; home / profile / mentions use different endpoints and
+  // stay healthy during a search cooldown. Gate accordingly so a single
+  // search-induced cooldown doesn't freeze the agent's other scan paths.
+  const usesSearchRpc = resolvedUrl.includes('/search');
+  if (usesSearchRpc) {
+    try {
+      assertXNotThrottled();
+    } catch (err) {
+      if (err instanceof XSearchThrottledError) {
+        logger.warn(
+          {
+            event: 'x_search_deferred',
+            source,
+            resolvedUrl,
+            retryAfter: err.retryAfter.toISOString(),
+            remainingMs: err.remainingMs,
+          },
+          '[x-reply] scan deferred — x search still throttled',
+        );
+        return {
+          success: false,
+          message: `x.com search throttled. Retry after ${err.retryAfter.toISOString()} (${Math.round(err.remainingMs / 1000)}s).`,
+          source,
+          resolvedUrl,
+          tweets: [],
+        };
+      }
+      throw err;
+    }
+  }
+
   const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
   if (!page) {
     return {
@@ -365,6 +403,30 @@ export async function scanXPostsViaBrowser(input: ScanXInput): Promise<ScanXResu
       }
       return out;
     })()`)) ?? [];
+
+    // Rate-limit detection — X renders the "Something went wrong. Try
+    // reloading." error shell instead of the timeline when the
+    // authenticated search RPC is throttled. Articles == 0 + that copy
+    // in the rendered body = persist the cooldown and surface a
+    // structured error the scheduler can defer on.
+    if (usesSearchRpc && parsed.length === 0) {
+      const bodyText = await page
+        .evaluate<string>(`document.body ? (document.body.innerText || '') : ''`)
+        .catch(() => '');
+      if (looksLikeXSearchRateLimit(bodyText, parsed.length)) {
+        const state = markXThrottled(resolvedUrl);
+        const retryAfter = state.throttled_until ? new Date(state.throttled_until) : new Date();
+        return {
+          success: false,
+          message: `x.com search rate-limited (error shell rendered). Cooldown until ${retryAfter.toISOString()}.`,
+          source,
+          resolvedUrl,
+          tweets: [],
+          screenshotBase64: await captureScreenshot(page),
+          currentUrl: await page.url().catch(() => undefined),
+        };
+      }
+    }
 
     // Dedupe by id (X sometimes renders the same tweet twice in the virtual scroller).
     const seen = new Set<string>();

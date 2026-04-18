@@ -44,6 +44,7 @@ import {
   insertReplyDraft,
   findReplyDraftByUrl,
 } from './x-reply-store.js';
+import { threadsThrottleTracker } from '../lib/x-search-throttle.js';
 
 // ---------------------------------------------------------------------------
 // Runtime config keys
@@ -211,6 +212,25 @@ export class ThreadsReplyScheduler {
     const enabled = getRuntimeConfig<boolean>(CFG_ENABLED, true);
     if (!enabled) {
       logger.debug('[threads-reply-scheduler] disabled via runtime_config');
+      return;
+    }
+
+    // Persistent-throttle gate. Threads has its own independent search
+    // cooldown tracked in ~/.ohwow/threads-search-throttle.json; skip
+    // the entire tick when it's active so we don't re-hit the rate
+    // limit and reset the backoff clock.
+    const throttleStatus = threadsThrottleTracker.isThrottled();
+    if (throttleStatus.throttled && throttleStatus.until) {
+      logger.warn(
+        {
+          event: 'x_search_deferred',
+          platform: 'threads',
+          trigger,
+          retryAfter: throttleStatus.until.toISOString(),
+          remainingMs: throttleStatus.remainingMs,
+        },
+        '[threads-reply-scheduler] tick deferred — threads search is throttled',
+      );
       return;
     }
 
