@@ -135,6 +135,37 @@ export function releaseTarget(targetId: string): number {
   return n;
 }
 
+/**
+ * Release any claim whose targetId matches. Used by the CDP
+ * `Target.targetDestroyed` subscription to clean up when a tab is
+ * closed externally (user manually closed it, Chrome crashed, renderer
+ * process died, etc.).
+ *
+ * Idempotent: returns 0 when no claim matches (destruction of an
+ * unclaimed tab is the normal case).
+ *
+ * Releases across ALL profileDirs that claimed this targetId. That is
+ * intentional: CDP target destruction is profile-agnostic from the
+ * event's perspective — once the browser reports a targetId is gone,
+ * it is genuinely gone regardless of which profile originally opened
+ * it. Keeping any claim for a destroyed target would just block a
+ * future task from reusing a numerically-similar targetId.
+ *
+ * Same synchronous/atomic invariant as the rest of this module:
+ * iteration + delete in one tick, no yields.
+ */
+export function releaseByTargetId(targetId: string): number {
+  const suffix = `::${targetId}`;
+  let n = 0;
+  for (const k of claims.keys()) {
+    if (k.endsWith(suffix)) {
+      claims.delete(k);
+      n++;
+    }
+  }
+  return n;
+}
+
 /** Diagnostic snapshot, not live. Useful for dashboards + debugging. */
 export function debugSnapshot(): Array<{ key: ClaimKey; owner: string; claimedAt: number }> {
   const out: Array<{ key: ClaimKey; owner: string; claimedAt: number }> = [];

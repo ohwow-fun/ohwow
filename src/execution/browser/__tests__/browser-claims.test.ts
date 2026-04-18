@@ -4,6 +4,7 @@ import {
   currentOwner,
   hasAnyClaimForTarget,
   releaseAllForOwner,
+  releaseByTargetId,
   releaseTarget,
   debugSnapshot,
 } from '../browser-claims.js';
@@ -83,5 +84,39 @@ describe('browser-claims', () => {
     expect(currentOwner({ profileDir: 'Default', targetId: 't-1' })).toBeNull();
     expect(currentOwner({ profileDir: 'Profile 1', targetId: 't-1' })).toBeNull();
     expect(currentOwner({ profileDir: 'Default', targetId: 't-2' })).toBe('task-a');
+  });
+
+  describe('releaseByTargetId', () => {
+    it('releases only the matching targetId and leaves sibling claims under the same owner alone', () => {
+      claimTarget({ profileDir: 'Default', targetId: 't-1' }, 'task-a');
+      claimTarget({ profileDir: 'Default', targetId: 't-2' }, 'task-a');
+
+      const released = releaseByTargetId('t-1');
+      expect(released).toBe(1);
+
+      expect(currentOwner({ profileDir: 'Default', targetId: 't-1' })).toBeNull();
+      expect(currentOwner({ profileDir: 'Default', targetId: 't-2' })).toBe('task-a');
+    });
+
+    it('releases every profileDir-scoped claim for a targetId together (profile-agnostic by design)', () => {
+      // Edge case documenting intentional behavior: CDP target destruction
+      // is profile-agnostic from the event's perspective — a destroyed
+      // targetId is genuinely gone regardless of which profileDir "owned"
+      // the claim. Both entries must be wiped.
+      claimTarget({ profileDir: 'Default', targetId: 't-1' }, 'task-a');
+      claimTarget({ profileDir: 'Profile 1', targetId: 't-1' }, 'task-b');
+
+      const released = releaseByTargetId('t-1');
+      expect(released).toBe(2);
+      expect(currentOwner({ profileDir: 'Default', targetId: 't-1' })).toBeNull();
+      expect(currentOwner({ profileDir: 'Profile 1', targetId: 't-1' })).toBeNull();
+    });
+
+    it('is idempotent — zero matches returns 0 without throwing', () => {
+      expect(releaseByTargetId('nonexistent')).toBe(0);
+      claimTarget({ profileDir: 'Default', targetId: 't-1' }, 'task-a');
+      expect(releaseByTargetId('t-1')).toBe(1);
+      expect(releaseByTargetId('t-1')).toBe(0);
+    });
   });
 });

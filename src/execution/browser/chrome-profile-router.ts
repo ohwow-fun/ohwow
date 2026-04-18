@@ -57,6 +57,7 @@ import {
   claimTarget,
   currentOwner,
   hasAnyClaimForTarget,
+  releaseByTargetId,
   releaseTarget,
   type ClaimHandle,
 } from './browser-claims.js';
@@ -708,6 +709,11 @@ export interface EnsureCdpBrowserOptions {
  * first if Chrome isn't running (and spawnIfDown is not explicitly
  * false). Throws if spawn fails or the connect still times out —
  * callers should wrap in try/catch or finally for cleanup.
+ *
+ * Every successful connect is decorated with a `Target.targetDestroyed`
+ * subscription (idempotent per RawCdpBrowser instance) so claims on
+ * externally-closed tabs get released automatically. See
+ * `ensureTargetDestroyedSubscription` below.
  */
 export async function ensureCdpBrowser(
   opts: EnsureCdpBrowserOptions = {},
@@ -723,7 +729,96 @@ export async function ensureCdpBrowser(
       );
     }
   }
-  return RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+  const browser = await RawCdpBrowser.connect(`http://localhost:${port}`, 5000);
+  // Fire-and-forget: `Target.setDiscoverTargets` needs to be enabled
+  // before destroyed events flow, and we only want to do it once per
+  // connection. The helper is internally idempotent via the WeakSet.
+  ensureTargetDestroyedSubscription(browser).catch((err) => {
+    logger.debug(
+      { err: err instanceof Error ? err.message : err },
+      '[chrome-profile-router] ensureTargetDestroyedSubscription failed (non-fatal)',
+    );
+  });
+  return browser;
+}
+
+// ---------------------------------------------------------------------------
+// Target.targetDestroyed → automatic claim release.
+// ---------------------------------------------------------------------------
+//
+// When the human operator closes an agent-owned tab by hand (or the
+// tab crashes, or its renderer dies), the owning task can't know — it
+// keeps the claim alive until `releaseAllForOwner` runs at task end.
+// During that window, `findReusableTabForHost` sees the stale claim,
+// skips the (now-dead) target, and opens a brand-new tab. Over a long
+// session those orphan claims accumulate and every reuse path degrades
+// to "just open a new tab."
+//
+// The fix: subscribe to CDP's browser-level `Target.targetDestroyed`
+// event. Whenever Chrome tells us a target is gone, call
+// `releaseByTargetId` to evict any claim that still references it.
+//
+// CDP gotcha: `Target.targetDestroyed` only fires after
+// `Target.setDiscoverTargets({discover: true})` is called on the
+// browser session. Without that call, the browser never sends these
+// events to our WebSocket at all. Nothing else in the repo enables
+// discovery, so we do it here.
+
+const subscribedBrowsers = new WeakSet<RawCdpBrowser>();
+
+/**
+ * Ensure the given browser is subscribed to `Target.targetDestroyed`
+ * so claims get auto-released when a tab disappears. Idempotent: every
+ * browser is tracked in a module-level WeakSet, so repeated calls on
+ * the same instance are no-ops.
+ *
+ * Safe to call fire-and-forget — any internal CDP error is logged at
+ * debug level rather than rethrown; the subscription is a nice-to-
+ * have, not a correctness requirement for the calling path.
+ *
+ * Exported for testing. Production callers should just let
+ * `ensureCdpBrowser` invoke it automatically.
+ */
+export async function ensureTargetDestroyedSubscription(
+  browser: RawCdpBrowser,
+): Promise<void> {
+  if (subscribedBrowsers.has(browser)) return;
+  subscribedBrowsers.add(browser);
+
+  // Register the listener BEFORE enabling discovery so we don't miss
+  // the first event that might fire in response to setDiscoverTargets'
+  // initial "targetCreated" burst. (targetDestroyed won't fire there,
+  // but ordering the calls this way is harmless and avoids any
+  // theoretical race.)
+  browser.on('Target.targetDestroyed', (params) => {
+    const p = params as { targetId?: unknown } | null | undefined;
+    const targetId = p && typeof p.targetId === 'string' ? p.targetId : null;
+    if (!targetId) return;
+    const released = releaseByTargetId(targetId);
+    if (released > 0) {
+      logger.info(
+        { targetId: targetId.slice(0, 8), released },
+        '[chrome-profile-router] tab destroyed externally; released claim(s)',
+      );
+    }
+    // released === 0 is the normal case (human closed a non-agent tab).
+    // Intentionally silent to keep log volume sane.
+  });
+
+  try {
+    await browser.send('Target.setDiscoverTargets', { discover: true });
+  } catch (err) {
+    // Re-enable allowed: if Chrome already has discovery on from a
+    // prior connection on this WS (shouldn't happen since we connect
+    // fresh each time, but be defensive), it returns success anyway.
+    // Real failures we log + swallow — the subscription still exists;
+    // we just may not receive events until discovery is re-enabled
+    // elsewhere.
+    logger.debug(
+      { err: err instanceof Error ? err.message : err },
+      '[chrome-profile-router] Target.setDiscoverTargets failed',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
