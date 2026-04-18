@@ -37,6 +37,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { runPhase } from './phase-orchestrator.js';
 import type { PhaseInput, PhaseResult, PhaseStatus } from './phase-orchestrator.js';
 import { mirrorArcToDisk } from './file-mirror.js';
+import { MODE_BUDGETS } from './budgets.js';
 import type { Mode, RoundExecutor } from './types.js';
 import {
   answerFounderQuestion as _answerFounderQuestion,
@@ -692,6 +693,8 @@ export async function runArc(
       Math.round((phaseEndedAt.getTime() - phaseStartedMs) / 60_000),
     );
 
+    const cost_llm_cents = 0;
+
     await updatePhaseReport(db, {
       id: phaseReportId,
       status: phaseStatusToReportStatus(phaseResult.status),
@@ -708,7 +711,7 @@ export async function runArc(
       next_phase_recommendation: null,
       cost_trios: phaseResult.trios.length,
       cost_minutes,
-      cost_llm_cents: 0,
+      cost_llm_cents,
       raw_report: phaseResult.report,
       ended_at: phaseEndedAt.toISOString(),
     });
@@ -726,6 +729,40 @@ export async function runArc(
       'director.phase.complete',
     );
 
+    // ---- 8b. per-mode budget enforcement (gap 14.11b) ----
+    // Compare the just-finished phase against MODE_BUDGETS[mode]; close
+    // the arc gracefully with `exit_reason='budget-exceeded'` if either
+    // wall-clock minutes or LLM cents exceeded the cap. The cents check
+    // is a no-op until real-LLM accounting lands (cost_llm_cents is
+    // hard-coded 0 above) but activates automatically when it does.
+    const cap = MODE_BUDGETS[pick.mode];
+    if (cost_minutes > cap.wall_minutes) {
+      exit_reason = 'budget-exceeded';
+      logger.warn(
+        {
+          arc_id,
+          mode: pick.mode,
+          cost_minutes,
+          cap_minutes: cap.wall_minutes,
+        },
+        'director.arc.budget_exceeded',
+      );
+      break;
+    }
+    if (cost_llm_cents > cap.llm_cents) {
+      exit_reason = 'budget-exceeded';
+      logger.warn(
+        {
+          arc_id,
+          mode: pick.mode,
+          cost_llm_cents,
+          cap_llm_cents: cap.llm_cents,
+        },
+        'director.arc.budget_exceeded',
+      );
+      break;
+    }
+
     // Phase returned phase-blocked-on-founder: fall through and let the
     // next iteration's inbox-cap check decide whether the arc continues
     // (a single open question may not yet hit the cap).
@@ -733,6 +770,8 @@ export async function runArc(
 
   // ---- exit: capture pulse_at_close, write closeArc ----
   const pulseAtClose = await io.readPulse(input.workspace_id);
+  // 'budget-exceeded' is a graceful close, not abort — only 'pulse-ko'
+  // (or a runner throw, which routes through 'pulse-ko' above) aborts.
   const arcStatus: 'closed' | 'aborted' =
     exit_reason === 'pulse-ko' ? 'aborted' : 'closed';
 
