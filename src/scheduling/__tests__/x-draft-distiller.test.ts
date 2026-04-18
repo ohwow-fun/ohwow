@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { DistilledInsight } from '../../self-bench/insight-distiller.js';
+import {
+  _resetRuntimeConfigCacheForTests,
+  _seedRuntimeConfigCacheForTests,
+} from '../../self-bench/runtime-config.js';
 
 const listMock = vi.fn();
 const findMock = vi.fn();
@@ -49,6 +53,7 @@ beforeEach(() => {
   listMock.mockReset();
   findMock.mockReset();
   insertMock.mockReset();
+  _resetRuntimeConfigCacheForTests();
 });
 
 describe('XDraftDistillerScheduler', () => {
@@ -170,6 +175,46 @@ describe('XDraftDistillerScheduler', () => {
     expect(listMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ minScore: 0.7, limit: 5 }),
+    );
+  });
+
+  it('reads x_draft_distiller_min_score from runtime_config_overrides per tick, falling back to the ctor value when unset', async () => {
+    listMock.mockResolvedValue([]);
+    const scheduler = new XDraftDistillerScheduler({} as never, null, 'ws-1', {
+      minScore: 0.7,
+      draftTweet: async () => 'x',
+    });
+
+    // First tick: no override set — should use the ctor value.
+    await scheduler.tick();
+    expect(listMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ minScore: 0.7 }),
+    );
+
+    // Seed an override, simulating an experiment writing to
+    // runtime_config_overrides. Next tick must pick it up live.
+    _seedRuntimeConfigCacheForTests('x_draft_distiller_min_score', 0.55);
+    await scheduler.tick();
+    expect(listMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ minScore: 0.55 }),
+    );
+
+    // String-shaped values (as stored in the JSON column) must coerce.
+    _seedRuntimeConfigCacheForTests('x_draft_distiller_min_score', '0.4');
+    await scheduler.tick();
+    expect(listMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ minScore: 0.4 }),
+    );
+
+    // Non-numeric override falls back to the ctor value.
+    _seedRuntimeConfigCacheForTests('x_draft_distiller_min_score', 'not-a-number');
+    await scheduler.tick();
+    expect(listMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ minScore: 0.7 }),
     );
   });
 });

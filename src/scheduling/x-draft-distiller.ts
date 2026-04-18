@@ -29,8 +29,17 @@ import {
   listDistilledInsights,
   type DistilledInsight,
 } from '../self-bench/insight-distiller.js';
+import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { logger } from '../lib/logger.js';
 import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
+
+/**
+ * runtime_config_overrides key for the distiller's min novelty score.
+ * Read per-tick via getRuntimeConfig so experiments can flip the
+ * threshold live (cache TTL is 60s) without a daemon restart — the
+ * constructor-provided value is the fallback when no override is set.
+ */
+export const X_DRAFT_DISTILLER_MIN_SCORE_KEY = 'x_draft_distiller_min_score';
 
 export const MARKET_SUBJECT_PREFIX = 'market:';
 
@@ -79,8 +88,23 @@ export class XDraftDistillerScheduler {
   }
 
   async tick(): Promise<{ considered: number; drafted: number; skipped: number }> {
+    // Read the min-score threshold per tick so experiments can flip
+    // it live via runtime_config_overrides without a daemon restart.
+    // The constructor-provided value is the fallback when no override
+    // is set. Coerce from the stored JSON (which may be a string) to a
+    // number; fall back to the instance default if coercion fails.
+    const overrideRaw = getRuntimeConfig<unknown>(
+      X_DRAFT_DISTILLER_MIN_SCORE_KEY,
+      this.minScore,
+    );
+    const overrideNum =
+      typeof overrideRaw === 'number' ? overrideRaw : Number(overrideRaw);
+    const effectiveMinScore = Number.isFinite(overrideNum)
+      ? overrideNum
+      : this.minScore;
+
     const insights = await listDistilledInsights(this.db, {
-      minScore: this.minScore,
+      minScore: effectiveMinScore,
       limit: this.limit,
     });
     const market = insights.filter((i) => i.subject?.startsWith(MARKET_SUBJECT_PREFIX));
