@@ -18,6 +18,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { RuntimeEngine } from '../execution/engine.js';
 import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { createAuthMiddleware } from './middleware.js';
+import type { WorkspaceDbPool } from '../db/workspace-db-pool.js';
 import { createHealthRouter, type HealthBppDeps } from './routes/health.js';
 import { createTasksRouter } from './routes/tasks.js';
 import { createLlmRouter } from './routes/llm.js';
@@ -127,6 +128,7 @@ export interface ServerDeps {
   controlPlane?: import('../control-plane/client.js').ControlPlaneClient | null;
   onScheduleChange?: () => void;
   ragConfig?: import('./routes/rag.js').RagRouterConfig;
+  dbPool?: WorkspaceDbPool;
 }
 
 export interface ServerConfig {
@@ -166,7 +168,7 @@ export function createServer(deps: ServerDeps): {
   app: express.Application;
   attachWs: (server: Server) => void;
 } {
-  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, vibeVoiceService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange } = deps;
+  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, vibeVoiceService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange, dbPool } = deps;
   const app = express();
 
   // CORS — restrict to known origins (localhost and cloud app)
@@ -568,6 +570,7 @@ export function createServer(deps: ServerDeps): {
     config.contentPublicKey,
     db,
     () => workspaceId || 'local',
+    dbPool,
   );
   app.use('/api', auth);
   app.use('/browser/session', auth);

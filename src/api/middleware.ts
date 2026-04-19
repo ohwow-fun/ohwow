@@ -6,6 +6,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import { jwtVerify, importJWK } from 'jose';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { verifyDaemonToken } from '../daemon/token-codec.js';
+import type { WorkspaceDbPool } from '../db/workspace-db-pool.js';
 
 /**
  * Create auth middleware that validates content tokens, local session tokens,
@@ -29,6 +31,7 @@ export function createAuthMiddleware(
   contentPublicKey?: JsonWebKey,
   db?: DatabaseAdapter,
   getLocalWorkspaceId: () => string = () => 'local',
+  dbPool?: WorkspaceDbPool,
 ) {
   const symmetricSecret = new TextEncoder().encode(jwtSecret);
 
@@ -101,6 +104,24 @@ export function createAuthMiddleware(
       req.userId = 'local';
       next();
       return;
+    }
+
+    // Daemon JWT fast-path: token carries workspaceName claim; inject dbPool
+    if (dbPool) {
+      const payload = await verifyDaemonToken(token, jwtSecret);
+      if (payload) {
+        try {
+          dbPool.get(payload.workspaceName); // verify workspace is accessible
+          req.workspaceName = payload.workspaceName;
+          req.dbPool = dbPool;
+          req.userId = 'local';
+          next();
+          return;
+        } catch {
+          res.status(401).json({ error: 'Workspace not found or inaccessible' });
+          return;
+        }
+      }
     }
 
     // Fall back to cloud JWT verification
