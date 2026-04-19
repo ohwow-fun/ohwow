@@ -54,6 +54,8 @@ export interface LlmAssertionContext extends ScenarioAssertionContext {
   meter: LlmMeter;
   /** Captured plan RoundReturn from the (only) plan round in the run. */
   captured_plan_return?: RoundReturn;
+  /** Captured qa RoundReturn from the (only) qa round in the run. */
+  captured_qa_return?: RoundReturn;
   /** Persisted phase reports for the arc that opened this run. */
   phase_reports: PhaseReportRecord[];
 }
@@ -67,9 +69,18 @@ export interface LlmScenario
   extends Omit<Scenario, 'assertions' | 'makeExecutor'> {
   assertions: LlmScenarioAssertion[];
   /**
-   * LLM scenarios do NOT set `makeExecutor`; the runner builds the real
-   * executor (plan-only, Haiku) with a fresh meter per scenario.
+   * Optional custom executor factory. When provided, the runner calls this
+   * instead of building the default plan-only executor. The factory receives
+   * the effective model, a spend-capped client, the shared meter, and capture
+   * refs so `withPlanCapture` / `withQaCapture` can be applied.
    */
+  makeExecutor?: (params: {
+    effectiveModel: string;
+    cappedClient: PlanModelClient;
+    meter: LlmMeter;
+    planCapture: { plan_return?: RoundReturn };
+    qaCapture: { qa_return?: RoundReturn };
+  }) => RoundExecutor;
 }
 
 export interface LlmScenarioResult {
@@ -209,7 +220,7 @@ async function buildDefaultClient(
 // Helpers: capture the first plan return; enforce the spend cap.
 // ---------------------------------------------------------------------------
 
-function withPlanCapture(
+export function withPlanCapture(
   inner: RoundExecutor,
   capture: { plan_return?: RoundReturn },
 ): RoundExecutor {
@@ -218,6 +229,21 @@ function withPlanCapture(
       const ret = await inner.run(brief);
       if (brief.kind === 'plan' && !capture.plan_return) {
         capture.plan_return = ret;
+      }
+      return ret;
+    },
+  };
+}
+
+export function withQaCapture(
+  inner: RoundExecutor,
+  capture: { qa_return?: RoundReturn },
+): RoundExecutor {
+  return {
+    async run(brief: RoundBrief): Promise<RoundReturn> {
+      const ret = await inner.run(brief);
+      if (brief.kind === 'qa' && !capture.qa_return) {
+        capture.qa_return = ret;
       }
       return ret;
     },
@@ -286,7 +312,8 @@ export async function runLlmScenario(
   const cap = opts.spendCapCents ?? DEFAULT_LLM_SPEND_CAP_CENTS;
 
   const meter = newLlmMeter();
-  const capture: { plan_return?: RoundReturn } = {};
+  const planCapture: { plan_return?: RoundReturn } = {};
+  const qaCapture: { qa_return?: RoundReturn } = {};
 
   let baseClient: PlanModelClient;
   let effectiveModel = model;
@@ -323,6 +350,15 @@ export async function runLlmScenario(
     steps: scenario.steps,
     assertions: [],
     makeExecutor: () => {
+      if (scenario.makeExecutor) {
+        return scenario.makeExecutor({
+          effectiveModel,
+          cappedClient,
+          meter,
+          planCapture,
+          qaCapture,
+        });
+      }
       const fallback = defaultMakeStubExecutor();
       const llmExec = makeLlmPlanExecutor({
         model: effectiveModel,
@@ -330,7 +366,7 @@ export async function runLlmScenario(
         fallback,
         meter,
       });
-      return withPlanCapture(llmExec, capture);
+      return withPlanCapture(llmExec, planCapture);
     },
   };
 
@@ -385,7 +421,8 @@ export async function runLlmScenario(
       db: held.db,
       workspace_id: held.workspace_id,
       meter,
-      captured_plan_return: capture.plan_return,
+      captured_plan_return: planCapture.plan_return,
+      captured_qa_return: qaCapture.qa_return,
       phase_reports: reports,
     };
 
