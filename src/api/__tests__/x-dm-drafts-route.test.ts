@@ -188,13 +188,71 @@ describe('POST /api/x-dm-drafts', () => {
     expect(res._status).toBe(404);
   });
 
-  it('returns 422 when the contact has no x_handle', async () => {
+  it('returns 422 when the contact has neither x_handle nor x_conversation_pair', async () => {
     env.tables.agent_workforce_contacts[0].custom_fields = JSON.stringify({ x_intent: 'buyer_intent' });
     const handler = findHandler(router, 'post', '/api/x-dm-drafts');
     const req = makeReq({ body: { contact_id: 'contact-shann', body: 'hi' } });
     const res = makeRes();
     await handler(req, res as unknown as Response);
     expect(res._status).toBe(422);
+    const body = res._body as { error: string };
+    expect(body.error).toMatch(/x_handle or x_conversation_pair/);
+  });
+
+  it('stages a task using x_conversation_pair when contact has no x_handle', async () => {
+    const pair = '1877225919862951937:2033915109555499008';
+    env.tables.agent_workforce_contacts[0].custom_fields = JSON.stringify({
+      x_conversation_pair: pair,
+      x_display_name: 'James The Bad Ass',
+    });
+    env.tables.agent_workforce_contacts[0].name = 'James The Bad Ass';
+    const handler = findHandler(router, 'post', '/api/x-dm-drafts');
+    const req = makeReq({ body: { contact_id: 'contact-shann', body: 'Hey, quick question' } });
+    const res = makeRes();
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(201);
+    const body = res._body as { data: { task_id: string; handle: null; conversation_pair: string; status: string } };
+    expect(body.data.handle).toBeNull();
+    expect(body.data.conversation_pair).toBe(pair);
+    expect(body.data.status).toBe('needs_approval');
+
+    const task = env.tables.agent_workforce_tasks[0];
+    expect(task.status).toBe('needs_approval');
+    expect(task.title).toBe('DM draft for James The Bad Ass');
+    const deferred = JSON.parse(task.deferred_action as string);
+    expect(deferred.type).toBe('send_dm');
+    expect(deferred.params.conversation_pair).toBe(pair);
+    expect(deferred.params.handle).toBeUndefined();
+
+    const deliv = env.tables.agent_workforce_deliverables[0];
+    expect(deliv.status).toBe('pending_review');
+    const content = JSON.parse(deliv.content as string);
+    expect(content.conversation_pair).toBe(pair);
+    expect(content.handle).toBeNull();
+    expect(content.text).toBe('Hey, quick question');
+  });
+
+  it('includes both handle and conversation_pair in action_spec when contact has both', async () => {
+    const pair = '1877225919862951937:2033915109555499008';
+    env.tables.agent_workforce_contacts[0].custom_fields = JSON.stringify({
+      x_handle: 'shannholmberg',
+      x_conversation_pair: pair,
+    });
+    const handler = findHandler(router, 'post', '/api/x-dm-drafts');
+    const req = makeReq({ body: { contact_id: 'contact-shann', body: 'hi' } });
+    const res = makeRes();
+    await handler(req, res as unknown as Response);
+
+    expect(res._status).toBe(201);
+    const body = res._body as { data: { handle: string; conversation_pair: string } };
+    expect(body.data.handle).toBe('shannholmberg');
+    expect(body.data.conversation_pair).toBe(pair);
+
+    const task = env.tables.agent_workforce_tasks[0];
+    const deferred = JSON.parse(task.deferred_action as string);
+    expect(deferred.params.handle).toBe('shannholmberg');
+    expect(deferred.params.conversation_pair).toBe(pair);
   });
 
   it('returns 400 when body is missing or empty', async () => {
