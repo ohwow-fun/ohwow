@@ -111,8 +111,9 @@ export function createXDmDraftsRouter(db: DatabaseAdapter): Router {
 
       const fields = parseCustomFields(contact.custom_fields);
       const handle = typeof fields.x_handle === 'string' ? fields.x_handle.replace(/^@/, '') : '';
-      if (!handle) {
-        res.status(422).json({ error: 'contact has no x_handle in custom_fields; cannot draft an X DM' });
+      const conversationPair = typeof fields.x_conversation_pair === 'string' ? fields.x_conversation_pair : '';
+      if (!handle && !conversationPair) {
+        res.status(422).json({ error: 'contact has no x_handle or x_conversation_pair in custom_fields; cannot draft an X DM' });
         return;
       }
 
@@ -127,15 +128,23 @@ export function createXDmDraftsRouter(db: DatabaseAdapter): Router {
 
       const taskId = crypto.randomUUID();
       const now = new Date().toISOString();
-      const displayName = contact.name || `@${handle}`;
+      const displayName = contact.name || (handle ? `@${handle}` : conversationPair);
+
+      // Build action_spec params: prefer handle when available, fall back to conversation_pair
+      const dmParams: Record<string, string> = { text: trimmedBody, contact_id };
+      if (handle) dmParams.handle = handle;
+      if (conversationPair) dmParams.conversation_pair = conversationPair;
+
+      const taskTitle = handle ? `DM draft for @${handle}` : `DM draft for ${displayName}`;
+      const delivTitle = handle ? `DM to @${handle}` : `DM to ${displayName}`;
 
       const { error: taskErr } = await db.from('agent_workforce_tasks').insert({
         id: taskId,
         workspace_id: workspaceId,
         agent_id: resolvedAgentId,
-        title: `DM draft for @${handle}`,
+        title: taskTitle,
         description: `Outbound X DM to ${displayName}, staged for founder approval.`,
-        input: JSON.stringify({ contact_id, handle, body: trimmedBody }),
+        input: JSON.stringify({ contact_id, handle: handle || null, conversation_pair: conversationPair || null, body: trimmedBody }),
         output: trimmedBody,
         status: 'needs_approval',
         priority: 'normal',
@@ -143,7 +152,7 @@ export function createXDmDraftsRouter(db: DatabaseAdapter): Router {
         deferred_action: JSON.stringify({
           type: 'send_dm',
           provider: 'x',
-          params: { text: trimmedBody, handle, contact_id },
+          params: dmParams,
         }),
         source_type: 'operator',
         created_at: now,
@@ -161,10 +170,11 @@ export function createXDmDraftsRouter(db: DatabaseAdapter): Router {
         agent_id: resolvedAgentId,
         deliverable_type: 'dm',
         provider: 'x',
-        title: `DM to @${handle}`,
+        title: delivTitle,
         content: JSON.stringify({
           text: trimmedBody,
-          handle,
+          handle: handle || null,
+          conversation_pair: conversationPair || null,
           contact_id,
           action_spec: { type: 'send_dm' },
         }),
@@ -182,7 +192,8 @@ export function createXDmDraftsRouter(db: DatabaseAdapter): Router {
         data: {
           task_id: taskId,
           contact_id,
-          handle,
+          handle: handle || null,
+          conversation_pair: conversationPair || null,
           status: 'needs_approval',
           note: 'Listed by ohwow_list_approvals. Approve via ohwow_approve_task to send; reject via ohwow_reject_task.',
         },
