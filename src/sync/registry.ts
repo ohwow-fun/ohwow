@@ -30,6 +30,43 @@ export interface SyncTableSpec {
 
 export const SYNC_REGISTRY: SyncTableSpec[] = [
   {
+    table: 'director_arcs',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'opened_at', 'closed_at',
+      'mode_of_invocation', 'thesis', 'status',
+      'budget_max_phases', 'budget_max_minutes', 'budget_max_inbox_qs',
+      'kill_on_pulse_regression', 'pulse_at_entry', 'pulse_at_close',
+      'exit_reason',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (non-uuid runtime ids) → cloud text; workspace_id → uuid; ' +
+      '*_at TEXT → timestamptz; pulse_at_entry/pulse_at_close TEXT (JSON) ' +
+      '→ cloud text (no `_json` suffix → script coerceValue passes through ' +
+      'as-is, cloud column typed text not jsonb).',
+  },
+  {
+    table: 'director_phase_reports',
+    primaryKey: 'id',
+    columns: [
+      'id', 'arc_id', 'workspace_id', 'phase_id', 'mode', 'goal', 'status',
+      'trios_run',
+      'runtime_sha_start', 'runtime_sha_end',
+      'cloud_sha_start', 'cloud_sha_end',
+      'delta_pulse_json', 'delta_ledger', 'inbox_added',
+      'remaining_scope', 'next_phase_recommendation',
+      'cost_trios', 'cost_minutes', 'cost_llm_cents',
+      'raw_report', 'started_at', 'ended_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id/arc_id/phase_id TEXT → cloud text; workspace_id → uuid; ' +
+      'delta_pulse_json TEXT (JSON, `_json` suffix) → cloud jsonb (auto-parsed); ' +
+      'delta_ledger/inbox_added TEXT (JSON, no `_json` suffix) → cloud text; ' +
+      '*_at TEXT → timestamptz. FK to director_arcs — sync director_arcs first.',
+  },
+  {
     table: 'founder_inbox',
     primaryKey: 'id',
     columns: [
@@ -39,6 +76,35 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     ],
     isWorkspaceScoped: true,
     notes: 'options_json TEXT(JSON) → jsonb cloud-side; *_at TEXT → timestamptz',
+  },
+  {
+    table: 'phase_rounds',
+    primaryKey: 'id',
+    columns: [
+      'id', 'trio_id', 'kind', 'status', 'summary',
+      'findings_written', 'commits', 'evaluation_json', 'raw_return',
+      'started_at', 'ended_at',
+    ],
+    isWorkspaceScoped: false,
+    notes:
+      'No workspace_id column — sync runs WITHOUT --workspace; opt-out via ' +
+      'parent phase_trios. id/trio_id TEXT → cloud text (FK to phase_trios — ' +
+      'sync phase_trios first); evaluation_json TEXT (JSON, `_json` suffix) ' +
+      '→ cloud jsonb (auto-parsed); findings_written/commits TEXT (JSON, no ' +
+      '`_json` suffix) → cloud text; *_at TEXT → timestamptz.',
+  },
+  {
+    table: 'phase_trios',
+    primaryKey: 'id',
+    columns: [
+      'id', 'phase_id', 'workspace_id', 'mode', 'outcome',
+      'started_at', 'ended_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id/phase_id TEXT → cloud text; workspace_id → uuid; ' +
+      '*_at TEXT → timestamptz. CHECK constraints on mode + outcome ' +
+      'preserved verbatim cloud-side.',
   },
 ];
 
