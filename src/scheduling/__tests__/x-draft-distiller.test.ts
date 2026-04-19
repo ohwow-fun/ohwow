@@ -18,7 +18,7 @@ vi.mock('../x-draft-store.js', () => ({
   insertDraft: (...args: unknown[]) => insertMock(...args),
 }));
 
-const { XDraftDistillerScheduler, buildPrompt, MARKET_SUBJECT_PREFIX } = await import(
+const { XDraftDistillerScheduler, buildPrompt, sanitizeDraft, hasExternalSignal, MARKET_SUBJECT_PREFIX } = await import(
   '../x-draft-distiller.js'
 );
 
@@ -236,12 +236,11 @@ describe('XDraftDistillerScheduler', () => {
 });
 
 describe('buildPrompt', () => {
-  it('includes subject, summary, novelty reason, and diff lines', () => {
+  it('threads subject, summary, and diff lines through as source material', () => {
     const prompt = buildPrompt(
       makeInsight({
         subject: 'market:linear.app/pricing',
         summary: 'Pricing page drifted',
-        novelty_reason: 'verdict_flipped',
         evidence: {
           url: 'https://linear.app/pricing',
           change_kind: 'changed',
@@ -251,15 +250,132 @@ describe('buildPrompt', () => {
     );
     expect(prompt).toContain('market:linear.app/pricing');
     expect(prompt).toContain('Pricing page drifted');
-    expect(prompt).toContain('verdict_flipped');
     expect(prompt).toContain('+ Pro $12/mo');
     expect(prompt).toContain('- Pro $9/mo');
     expect(prompt).toContain('https://linear.app/pricing');
   });
 
-  it('forbids pitch CTAs and corporate voice in its instructions', () => {
+  it('keeps mechanism vocabulary out of the evidence block so the model does not parrot it', () => {
+    // The older bad posts opened with "the verdict flipped..." because
+    // the prompt labelled evidence fields with the internal terms.
+    // The evidence section must not name change_kind or novelty_reason.
+    const prompt = buildPrompt(
+      makeInsight({
+        novelty_reason: 'verdict_flipped',
+        evidence: {
+          url: 'https://example.com',
+          change_kind: 'changed',
+          diff: { added: ['hello'], removed: [], truncated: false },
+        },
+      }),
+    );
+    // Locate the evidence section and assert internal labels aren't in it.
+    const evidenceBlock = prompt.slice(prompt.indexOf('Evidence:'));
+    expect(evidenceBlock).not.toMatch(/change_kind/);
+    expect(evidenceBlock).not.toMatch(/novelty_reason/);
+    expect(evidenceBlock).not.toMatch(/verdict_flipped/);
+  });
+
+  it('invites SKIP when evidence is thin so the model can refuse to draft', () => {
     const prompt = buildPrompt(makeInsight({}));
-    expect(prompt).toMatch(/NO call-to-action/i);
-    expect(prompt).toMatch(/NO product pitch/i);
+    expect(prompt).toMatch(/SKIP/);
+  });
+});
+
+describe('sanitizeDraft', () => {
+  it('returns null when the model replies SKIP', () => {
+    expect(sanitizeDraft('SKIP')).toBeNull();
+    expect(sanitizeDraft('skip')).toBeNull();
+    expect(sanitizeDraft('  SKIP.  ')).toBeNull();
+    expect(sanitizeDraft('"SKIP"')).toBeNull();
+  });
+
+  it('returns the post body when the model writes something real', () => {
+    expect(sanitizeDraft('Linear quietly bumped Pro to $12.')).toBe(
+      'Linear quietly bumped Pro to $12.',
+    );
+  });
+});
+
+describe('hasExternalSignal', () => {
+  it('accepts findings with a real content diff', () => {
+    expect(
+      hasExternalSignal(
+        makeInsight({
+          evidence: {
+            url: 'https://x',
+            change_kind: 'changed',
+            diff: { added: ['something'], removed: [], truncated: false },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects unchanged findings — the "verdict flipped on static content" noise', () => {
+    expect(
+      hasExternalSignal(
+        makeInsight({
+          evidence: {
+            url: 'https://x',
+            change_kind: 'unchanged',
+            diff: { added: [], removed: [], truncated: false },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects changed findings whose diff is empty', () => {
+    expect(
+      hasExternalSignal(
+        makeInsight({
+          evidence: {
+            url: 'https://x',
+            change_kind: 'changed',
+            diff: { added: [], removed: [], truncated: false },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects first_seen findings — opening our eyes is not an event', () => {
+    expect(
+      hasExternalSignal(
+        makeInsight({
+          evidence: { url: 'https://x', change_kind: 'first_seen' },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('XDraftDistillerScheduler filter integration', () => {
+  it('skips insights without an external signal without calling the LLM', async () => {
+    listMock.mockResolvedValue([
+      makeInsight({
+        latest_finding_id: 'f-noise',
+        evidence: {
+          url: 'https://x',
+          change_kind: 'unchanged',
+          diff: { added: [], removed: [], truncated: false },
+        },
+      }),
+    ]);
+    findMock.mockResolvedValue(null);
+    const draftMock = vi.fn();
+    insertMock.mockResolvedValue(null);
+
+    const scheduler = new XDraftDistillerScheduler({} as never, null, 'ws-1', {
+      draftTweet: draftMock,
+    });
+    const stats = await scheduler.tick();
+
+    expect(stats.considered).toBe(1);
+    expect(stats.drafted).toBe(0);
+    expect(stats.skipped).toBe(1);
+    expect(draftMock).not.toHaveBeenCalled();
+    expect(insertMock).not.toHaveBeenCalled();
   });
 });

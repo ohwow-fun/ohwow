@@ -125,6 +125,17 @@ export class XDraftDistillerScheduler {
         skipped += 1;
         continue;
       }
+      // Gate the LLM call on whether the finding actually contains a
+      // concrete external event. A `verdict_flipped` novelty on static
+      // content (change_kind=unchanged, or empty diff) is an artifact
+      // of the baseline model reassessing itself — no news the reader
+      // would care about. Drafting from it produces the "we've been
+      // watching, the verdict flipped" meta-posts. Drop them here so
+      // we don't burn LLM budget turning noise into filler.
+      if (!hasExternalSignal(insight)) {
+        skipped += 1;
+        continue;
+      }
       const existing = await findDraftByFindingId(
         this.db,
         this.workspaceId,
@@ -192,29 +203,71 @@ export class XDraftDistillerScheduler {
 }
 
 /**
- * Build the LLM prompt for a single insight. Grounded in the finding
- * evidence, conservative, anti-promotional. The prompt explicitly
- * bans pitch CTAs and corporate framing — see the outreach
- * philosophy in CLAUDE.md / memory.
+ * Gate: does this insight describe a real thing that moved in the
+ * world, or just an internal baseline flip? A useful post needs
+ * external source material. `verdict_flipped` on `change_kind=unchanged`
+ * is the model reassessing itself; an empty diff means nothing the
+ * reader could actually repeat. Neither deserves the LLM's time.
+ */
+export function hasExternalSignal(insight: DistilledInsight): boolean {
+  const ev = insight.evidence ?? {};
+  if (ev.change_kind !== 'changed') return false;
+  const diff = ev.diff as { added?: string[]; removed?: string[] } | undefined;
+  const added = diff?.added?.length ?? 0;
+  const removed = diff?.removed?.length ?? 0;
+  return added + removed > 0;
+}
+
+/**
+ * Build the LLM prompt for a single insight.
+ *
+ * Prompt design is from-first-principles on purpose. Older revisions
+ * were a list of bans (NO CTA, NO corporate voice, NO product pitch)
+ * and produced evasive, passive "we've been watching..." posts —
+ * bans describe the shape of failure but leave the LLM with no
+ * positive direction, so it retreats into safe meta-commentary.
+ *
+ * The prompt below instead tells the model who the reader is, what
+ * earns a place in their feed, and gives it explicit permission to
+ * return `SKIP` when the evidence doesn't support a real post.
+ * No banned-phrase list, no example tweets — the model is trusted
+ * to be a competent writer if it knows what it's writing for.
+ *
+ * Mechanism vocabulary (change_kind, novelty_reason, verdict) is
+ * deliberately kept out of the evidence summary: every time we leak
+ * those labels into the context, the LLM copies them into the post.
  */
 export function buildPrompt(insight: DistilledInsight): string {
   const evidenceSummary = summarizeEvidence(insight.evidence);
   return [
-    'You draft a single short post for X, grounded in a piece of market-drift',
-    'evidence I just observed. Constraints:',
+    "You're drafting a single short post for an X timeline.",
     '',
-    '- Write ONE post, 1-2 tweets long, each tweet ≤ 280 chars.',
-    '- Conversational tone. First-person plural is fine. No corporate voice.',
-    '- NO call-to-action. NO "check out", "sign up", "try our", "DM me".',
-    '- NO product pitch. NO mention of ohwow or competitors by name unless',
-    '  they are the subject of the observation itself.',
-    '- Do not make claims you cannot support from the evidence below.',
-    '- If the evidence is thin, stay observational. Describe what shifted.',
-    '- Output just the post text. No preamble, no quotes, no hashtags.',
+    "The reader is a stranger scrolling. They don't know your account,",
+    "your tooling, or that an observation happened at all. You have a",
+    'second or two to earn their attention.',
     '',
+    'A post earns its place when one of two things is true:',
+    ' - it names a specific thing that moved in the world, concrete enough',
+    '   that the reader could repeat it to someone else, or',
+    " - it offers a read on that movement the reader didn't have before —",
+    '   an implication, a pattern, a take worth a nod.',
+    '',
+    'Voice is a person thinking out loud. Not a dashboard, not a',
+    "newsletter. Don't describe watching, scanning, or flipping verdicts —",
+    "that's internal vocabulary the reader neither sees nor cares about.",
+    'The post is about the thing, not the act of seeing it.',
+    '',
+    'The evidence below is source material, not a script. Pull from it',
+    "what a human would actually notice. If it doesn't contain something",
+    'a reader would care about, reply with exactly `SKIP`. Silence beats',
+    "filler, and you're trusted to judge that.",
+    '',
+    'Format: one post, up to two tweets, each ≤280 characters. Plain text.',
+    'No labels, no surrounding quotes, no hashtags.',
+    '',
+    '---',
     `Subject: ${insight.subject}`,
-    `Signal summary: ${insight.summary}`,
-    `Novelty reason: ${insight.novelty_reason}`,
+    `Summary: ${insight.summary}`,
     evidenceSummary ? `Evidence:\n${evidenceSummary}` : '',
   ]
     .filter(Boolean)
@@ -226,8 +279,6 @@ function summarizeEvidence(evidence: Record<string, unknown> | undefined | null)
   const parts: string[] = [];
   const url = evidence.url;
   if (typeof url === 'string') parts.push(`url: ${url}`);
-  const changeKind = evidence.change_kind;
-  if (typeof changeKind === 'string') parts.push(`change_kind: ${changeKind}`);
   const diff = evidence.diff as
     | { added?: string[]; removed?: string[] }
     | undefined;
@@ -240,13 +291,15 @@ function summarizeEvidence(evidence: Record<string, unknown> | undefined | null)
   return parts.join('\n');
 }
 
-function sanitizeDraft(raw: string): string | null {
+export function sanitizeDraft(raw: string): string | null {
   if (!raw) return null;
   // Strip leading/trailing quotes the LLM sometimes wraps around output.
   let body = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
   // Drop any "Post:" / "Draft:" prefix an LLM might add despite instructions.
   body = body.replace(/^(?:post|draft|tweet|reply)[:\-\s]+/i, '').trim();
   if (body.length === 0) return null;
+  // The prompt invites SKIP when evidence is thin — honor it as a null draft.
+  if (/^skip\.?$/i.test(body)) return null;
   if (body.length > TWEET_CHAR_CAP * 2 + 10) {
     body = body.slice(0, TWEET_CHAR_CAP * 2 + 10);
   }
