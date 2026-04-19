@@ -24,7 +24,6 @@
 import { ControlPlaneClient } from '../control-plane/client.js';
 import type { AgentConfigPayload } from '../control-plane/types.js';
 import {
-  resolveActiveWorkspace,
   readWorkspaceConfig,
   writeWorkspaceConfig,
   findWorkspaceByCloudId,
@@ -33,9 +32,14 @@ import { saveWorkspaceData } from '../lib/onboarding-logic.js';
 import { clearReplacedMarker } from './lifecycle.js';
 import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
+import type { WorkspaceContext } from './workspace-context.js';
 
-export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): Promise<void> {
-  const { config, db, rawDb, dataDir } = ctx as DaemonContext;
+/**
+ * Perform cloud connect + workspace consolidation for a single workspace.
+ * Writes controlPlane, workspaceId, and businessContext back onto wsCtx.
+ */
+export async function consolidateWorkspace(wsCtx: WorkspaceContext): Promise<void> {
+  const { config, db, rawDb, dataDir, workspaceName } = wsCtx;
   const isConnected = config.tier !== 'free';
 
   // Clear any stale replaced marker unconditionally at daemon startup.
@@ -48,11 +52,10 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
   // workspace also points at that cloud id. Two local workspaces cannot mirror
   // the same cloud workspace — that's exactly the silent-data-collision bug
   // workspace isolation exists to prevent.
-  const activeWsName = resolveActiveWorkspace().name;
-  const activeWs = readWorkspaceConfig(activeWsName);
+  const activeWs = readWorkspaceConfig(workspaceName);
   if (activeWs?.mode === 'cloud' && activeWs.cloudWorkspaceId) {
     const conflict = findWorkspaceByCloudId(activeWs.cloudWorkspaceId);
-    if (conflict && conflict !== activeWsName) {
+    if (conflict && conflict !== workspaceName) {
       throw new Error(
         `Cloud workspace ${activeWs.cloudWorkspaceId} is already bound to local workspace ` +
           `"${conflict}". Two local workspaces cannot mirror the same cloud workspace. ` +
@@ -66,9 +69,9 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
   if (isConnected && config.licenseKey) {
     controlPlane = new ControlPlaneClient(config, db, {
       onTaskDispatch: (agentId, taskId) => {
-        if (ctx.engine) {
+        if (wsCtx.engine) {
           logger.info(`[daemon] Task dispatched: ${taskId} -> agent ${agentId}`);
-          ctx.engine.executeTask(agentId, taskId).catch(err => {
+          wsCtx.engine.executeTask(agentId, taskId).catch(err => {
             logger.error(`[daemon] Task ${taskId} error: ${err instanceof Error ? err.message : err}`);
           });
         }
@@ -78,9 +81,9 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
       },
       onTaskCancel: () => {},
       onWorkflowExecute: (workflowId) => {
-        if (ctx.triggerEvaluator) {
+        if (wsCtx.triggerEvaluator) {
           logger.info(`[daemon] Workflow execute: ${workflowId}`);
-          ctx.triggerEvaluator.executeById(workflowId).catch(err => {
+          wsCtx.triggerEvaluator.executeById(workflowId).catch(err => {
             logger.error(`[daemon] Workflow ${workflowId} error: ${err instanceof Error ? err.message : err}`);
           });
         } else {
@@ -91,7 +94,7 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
 
     try {
       const connectResponse = await controlPlane.connect();
-      ctx.businessContext = connectResponse.businessContext;
+      wsCtx.businessContext = connectResponse.businessContext;
 
       // Store plan name as display-only metadata (cloud knows the real plan)
       if (connectResponse.planTier) {
@@ -101,9 +104,9 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
 
       try {
         await saveWorkspaceData(db, 'local', {
-          businessName: ctx.businessContext.businessName,
-          businessType: ctx.businessContext.businessType,
-          businessDescription: ctx.businessContext.businessDescription || '',
+          businessName: wsCtx.businessContext.businessName,
+          businessType: wsCtx.businessContext.businessType,
+          businessDescription: wsCtx.businessContext.businessDescription || '',
           founderPath: '',
           founderFocus: '',
         });
@@ -126,12 +129,12 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
     const resolvedCloudId = controlPlane.connectedWorkspaceId;
     if (activeWs.cloudWorkspaceId && activeWs.cloudWorkspaceId !== resolvedCloudId) {
       throw new Error(
-        `Workspace "${activeWsName}" is pinned to cloud workspace ${activeWs.cloudWorkspaceId} ` +
+        `Workspace "${workspaceName}" is pinned to cloud workspace ${activeWs.cloudWorkspaceId} ` +
           `but the cloud returned ${resolvedCloudId}. License key may have been reassigned. ` +
           `Re-link the workspace explicitly if this is intentional.`,
       );
     }
-    writeWorkspaceConfig(activeWsName, {
+    writeWorkspaceConfig(workspaceName, {
       ...activeWs,
       cloudWorkspaceId: resolvedCloudId,
       cloudDeviceId: controlPlane.connectedDeviceId ?? undefined,
@@ -281,8 +284,50 @@ export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): P
     logger.warn({ err }, '[daemon] Workspace parent-row rename skipped');
   }
 
-  ctx.controlPlane = controlPlane;
-  ctx.workspaceId = workspaceId;
+  wsCtx.controlPlane = controlPlane;
+  wsCtx.workspaceId = workspaceId;
+}
+
+/**
+ * Thin backward-compat wrapper: runs cloud connect + consolidation using
+ * fields from a partial DaemonContext (primary workspace). Delegates to
+ * consolidateWorkspace after building a WorkspaceContext view over ctx.
+ */
+export async function connectCloudAndConsolidate(ctx: Partial<DaemonContext>): Promise<void> {
+  const { config, db, rawDb, dataDir, workspaceName, businessContext, engine, triggerEvaluator, controlPlane, bus } = ctx as DaemonContext;
+
+  // Build a WorkspaceContext view over the primary DaemonContext fields.
+  // We pass ctx's mutable references so consolidateWorkspace can write
+  // controlPlane/workspaceId/businessContext back and they are reflected
+  // on both the WorkspaceContext and ctx simultaneously.
+  const wsCtx: WorkspaceContext = {
+    workspaceName: workspaceName ?? 'default',
+    workspaceId: ctx.workspaceId ?? 'local',
+    dataDir,
+    sessionToken: ctx.sessionToken ?? '',
+    rawDb,
+    db,
+    config,
+    businessContext: businessContext ?? { businessName: 'My Business', businessType: 'saas_startup' },
+    engine: engine ?? null,
+    orchestrator: null,
+    triggerEvaluator: triggerEvaluator ?? null,
+    channelRegistry: null,
+    connectorRegistry: null,
+    messageRouter: null,
+    scheduler: null,
+    proactiveEngine: null,
+    connectorSyncScheduler: null,
+    controlPlane: controlPlane ?? null,
+    bus: bus!,
+  };
+
+  await consolidateWorkspace(wsCtx);
+
+  // Reflect consolidated values back onto ctx for backward compat.
+  ctx.controlPlane = wsCtx.controlPlane;
+  ctx.workspaceId = wsCtx.workspaceId;
+  ctx.businessContext = wsCtx.businessContext;
 }
 
 export function startCloudPolling(ctx: Partial<DaemonContext>): void {
