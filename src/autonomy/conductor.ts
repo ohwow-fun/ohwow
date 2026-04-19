@@ -47,6 +47,7 @@ import {
 } from './ranker.js';
 import { readFullPulse, type FullPulseSnapshot } from './pulse.js';
 import type { RoundBrief, RoundExecutor, RoundReturn } from './types.js';
+import type { runPhase } from './phase-orchestrator.js';
 
 // ---- env flag ----------------------------------------------------------
 
@@ -129,6 +130,25 @@ export interface ConductorDeps {
   ledgerReader?: typeof readLedgerSnapshot;
   /** Test hook: pin "now" for cadence / novelty windows. */
   refTimeMs?: number;
+  /**
+   * Optional deterministic id factory threaded into `ArcInput` for the
+   * eval harness. Absent in production.
+   * See `ArcInput.idFactory` in director.ts.
+   */
+  idFactory?: (prefix: string) => string;
+  /**
+   * Optional `now` override threaded into `ArcInput` for the eval harness
+   * fake clock. Absent in production.
+   * See `ArcInput.now` in director.ts.
+   */
+  nowOverride?: () => Date;
+  /**
+   * Optional `runPhase` override threaded into `ArcInput`. Used by the
+   * eval harness to wrap the phase runner with the mid-arc mutation hook
+   * so scenarios can simulate pulse drops between phase iterations.
+   * Absent in production.
+   */
+  runPhaseOverride?: typeof runPhase;
 }
 
 export interface ConductorTickResult {
@@ -424,13 +444,9 @@ function buildConductorPicker(
     const resolves_inbox_ids = seedDrained.map((r) => r.id);
 
     const out: PickerOutput = {
-      phase_id: genPhaseId(
-        deps.workspace_id,
-        top.mode,
-        top.source,
-        top.source_id,
-        seq,
-      ),
+      phase_id: deps.idFactory
+        ? deps.idFactory('phase')
+        : genPhaseId(deps.workspace_id, top.mode, top.source, top.source_id, seq),
       mode: top.mode,
       goal: top.goal,
       initial_plan_brief: top.initial_plan_brief,
@@ -535,6 +551,11 @@ export async function conductorTick(
     const meter = deps.getArcMeter();
     arcInput.getLlmCents = () => meter.cents;
   }
+
+  // Eval harness injectors — absent in production.
+  if (deps.idFactory) arcInput.idFactory = deps.idFactory;
+  if (deps.nowOverride) arcInput.now = deps.nowOverride;
+  if (deps.runPhaseOverride) arcInput.runPhase = deps.runPhaseOverride;
 
   try {
     const result = await runArc(arcInput, picker, executor, deps.db, deps.io);
