@@ -191,6 +191,15 @@ export class ReplyDispatcher {
       return;
     }
 
+    // Pre-dispatch jitter: wait 0–3 min so posts don't land exactly on
+    // tick boundaries (every 5 min on the dot is a bot timing signature).
+    const preJitterMs = Math.floor(Math.random() * 3 * 60 * 1000);
+    if (preJitterMs > 0) {
+      logger.debug({ preJitterMs }, `${this.label()} pre-dispatch jitter`);
+      await new Promise<void>((resolve) => setTimeout(resolve, preJitterMs));
+      if (this.stopped) return;
+    }
+
     let sent = 0;
     let failed = 0;
     for (const draft of drafts) {

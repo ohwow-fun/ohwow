@@ -35,6 +35,8 @@ import {
   clickByText,
   clearTextbox,
   wait,
+  jitteredWait,
+  warmupBrowse,
   HYDRATION_WAIT_MS,
   type CdpPageHandle,
 } from './social-cdp-helpers.js';
@@ -253,7 +255,7 @@ export async function fetchThreadsPostFullText(
   const { page, created } = handle;
   try {
     await page.goto(url);
-    await wait(HYDRATION_WAIT_MS);
+    await jitteredWait(HYDRATION_WAIT_MS, 0.3);
 
     const text = await page.evaluate<string | null>(`(() => {
       const postId = ${JSON.stringify(postId)};
@@ -365,7 +367,7 @@ export async function scanThreadsPostsViaBrowser(
   const { page, created } = handle;
   try {
     await page.goto(resolvedUrl);
-    await wait(HYDRATION_WAIT_MS);
+    await jitteredWait(HYDRATION_WAIT_MS, 0.3);
     const currentUrl = await page.url();
     if (currentUrl.includes('/login') || currentUrl.includes('/accounts/login')) {
       return {
@@ -378,13 +380,21 @@ export async function scanThreadsPostsViaBrowser(
       };
     }
 
-    // Scroll to hydrate more posts.
+    // Initial reading pause before scrolling — humans don't instantly scroll
+    await jitteredWait(1200, 0.5);
+
+    // Scroll to hydrate more posts — variable distance and timing per pass.
     for (let i = 0; i < scrollRounds; i++) {
-      await page.evaluate(`window.scrollBy(0, Math.round(window.innerHeight * 0.9))`);
-      await wait(700);
+      const fraction = 0.5 + Math.random() * 0.4;
+      await page.evaluate(`window.scrollBy(0, Math.round(window.innerHeight * ${fraction}))`);
+      await jitteredWait(900, 0.45);
     }
-    await page.evaluate(`window.scrollTo(0, 0)`);
-    await wait(250);
+    // Scroll back to a natural reading position rather than snapping to top
+    if (scrollRounds > 0) {
+      const backFraction = 0.2 + Math.random() * 0.35;
+      await page.evaluate(`window.scrollBy(0, -Math.round(window.scrollY * ${backFraction}))`);
+      await jitteredWait(400, 0.4);
+    }
 
     const parsed = (await page.evaluate<ScannedThread[]>(`(() => {
       function parseCount(raw) {
@@ -605,11 +615,13 @@ export async function composeThreadsReplyViaBrowser(
   const { page, created } = handle;
   try {
     await page.goto(normalized);
-    await wait(HYDRATION_WAIT_MS);
+    await jitteredWait(HYDRATION_WAIT_MS, 0.3);
     const currentUrl = await page.url();
     if (currentUrl.includes('/login') || currentUrl.includes('/accounts/login')) {
       return { success: false, message: `Threads redirected to login (${currentUrl}).`, currentUrl };
     }
+    // Brief reading pause before opening the reply composer
+    await jitteredWait(1500, 0.4);
 
     // Threads renders the reply composer two ways depending on layout:
     //   A) modal: click Reply → [role="dialog"] [role="textbox"] appears
@@ -655,7 +667,7 @@ export async function composeThreadsReplyViaBrowser(
 
     // Clear any residual / draft text.
     await clearTextbox(page, textboxSel);
-    await wait(200);
+    await jitteredWait(200, 0.4);
 
     // Focus + warmup + type.
     await page.evaluate<boolean>(`(() => {
@@ -668,7 +680,7 @@ export async function composeThreadsReplyViaBrowser(
     await page.typeText(' ');
     await page.pressKey('Backspace');
     await page.typeText(text);
-    await wait(400);
+    await jitteredWait(400, 0.4);
 
     const screenshotBase64 = await captureScreenshot(page);
 
@@ -714,7 +726,7 @@ export async function composeThreadsReplyViaBrowser(
       return false;
     })()`).catch(() => false);
 
-    await wait(1500);
+    await jitteredWait(1500, 0.3);
 
     // If Threads threw up a "Discard thread?" confirmation (which can
     // happen when a competing click landed on Cancel earlier), preserve
@@ -740,7 +752,7 @@ export async function composeThreadsReplyViaBrowser(
 
     if (!composerCleared) {
       // Try one more time — sometimes Threads needs a second click.
-      await wait(800);
+      await jitteredWait(800, 0.35);
       await page.evaluate(`(() => {
         const dialog = document.querySelector('[role="dialog"]');
         const scope = dialog || document;
@@ -755,7 +767,7 @@ export async function composeThreadsReplyViaBrowser(
         }
         return false;
       })()`).catch(() => {});
-      await wait(2000);
+      await jitteredWait(2000, 0.3);
       composerCleared = await page.evaluate<boolean>(`(() => {
         const tb = document.querySelector('${textboxSel}');
         if (!tb) return true;
@@ -772,7 +784,7 @@ export async function composeThreadsReplyViaBrowser(
         replyPublished: 0,
       };
     }
-    await wait(1000);
+    await jitteredWait(1000, 0.35);
 
     // Confirm publish. Composer-clearance alone gave false negatives
     // (observed twice — ralph42x and robin.ebers) because Threads is
@@ -795,7 +807,7 @@ export async function composeThreadsReplyViaBrowser(
         return false;
       })()`).catch(() => false);
       if (publishConfirmed) break;
-      await wait(500);
+      await jitteredWait(500, 0.25);
     }
 
     const stillLooksUnpublished = !publishConfirmed;

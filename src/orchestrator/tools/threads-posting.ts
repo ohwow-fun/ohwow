@@ -40,6 +40,8 @@ import {
   clickByText,
   clearTextbox,
   wait,
+  jitteredWait,
+  warmupBrowse,
   confirmPostLanded,
   clickFirstEnabledSubmit,
   HYDRATION_WAIT_MS,
@@ -413,7 +415,8 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
     const currentUrl = await page.url();
     if (!isThreadsUrl(currentUrl)) {
       await page.goto(THREADS_HOME);
-      await wait(HYDRATION_WAIT_MS);
+      await jitteredWait(HYDRATION_WAIT_MS, 0.3);
+      await warmupBrowse(page);
     }
 
     // Identity verification
@@ -433,7 +436,7 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
       };
     }
 
-    await wait(500);
+    await jitteredWait(500, 0.5);
 
     // Focus textbox
     const focused = await focusComposeTextbox(page, 0);
@@ -449,7 +452,7 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
 
     // Clear any residual text (e.g., from a saved draft or a stale dialog)
     await clearTextbox(page, SEL_TEXTBOX);
-    await wait(200);
+    await jitteredWait(200, 0.4);
 
     // Re-focus after clear (selectAll+delete may have moved focus)
     await focusComposeTextbox(page, 0);
@@ -460,7 +463,7 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
 
     // Type the post text
     await page.typeText(text);
-    await wait(400);
+    await jitteredWait(400, 0.4);
 
     const screenshotBase64 = await captureScreenshot(page);
 
@@ -500,7 +503,7 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
       };
     }
 
-    await wait(POST_SETTLE_MS);
+    await jitteredWait(POST_SETTLE_MS, 0.25);
 
     const outcome = await readPostOutcome(page);
     const postShot = await captureScreenshot(page);
@@ -599,7 +602,8 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
     const currentUrl = await page.url();
     if (!isThreadsUrl(currentUrl)) {
       await page.goto(THREADS_HOME);
-      await wait(HYDRATION_WAIT_MS);
+      await jitteredWait(HYDRATION_WAIT_MS, 0.3);
+      await warmupBrowse(page);
     }
 
     // Identity verification
@@ -618,7 +622,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       };
     }
 
-    await wait(500);
+    await jitteredWait(500, 0.5);
 
     // Type first post
     if (!await focusComposeTextbox(page, 0)) {
@@ -632,7 +636,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
 
     // Clear any residual text from drafts
     await clearTextbox(page, SEL_TEXTBOX);
-    await wait(200);
+    await jitteredWait(200, 0.4);
     await focusComposeTextbox(page, 0);
 
     await page.typeText(' ');
@@ -651,7 +655,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
           postsTyped,
         };
       }
-      await wait(800);
+      await jitteredWait(800, 0.4);
 
       if (!await focusComposeTextbox(page, i)) {
         return {
@@ -666,7 +670,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       postsTyped++;
     }
 
-    await wait(400);
+    await jitteredWait(400, 0.4);
     const screenshotBase64 = await captureScreenshot(page);
 
     if (dryRun) {
@@ -698,7 +702,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
       };
     }
 
-    await wait(POST_SETTLE_MS);
+    await jitteredWait(POST_SETTLE_MS, 0.25);
 
     const outcome = await readPostOutcome(page);
     if (outcome === 'still_open') {
