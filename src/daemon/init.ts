@@ -215,6 +215,7 @@ export async function createEngine(ctx: Partial<DaemonContext>): Promise<void> {
     daemonPort: config.port,
     daemonToken: sessionToken,
     desktopToolsEnabled: config.desktopToolsEnabled,
+    workspaceName: ctx.workspaceName,
   }, {
     reportToCloud: controlPlane ? (report) => controlPlane.reportTask(report) : () => Promise.resolve(),
   }, businessContext, bus, modelRouter, scraplingService);
