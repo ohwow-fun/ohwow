@@ -8,6 +8,7 @@ import { jwtVerify, importJWK } from 'jose';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { verifyDaemonToken } from '../daemon/token-codec.js';
 import type { WorkspaceDbPool } from '../db/workspace-db-pool.js';
+import type { WorkspaceRegistry } from '../daemon/workspace-registry.js';
 
 /**
  * Create auth middleware that validates content tokens, local session tokens,
@@ -32,6 +33,7 @@ export function createAuthMiddleware(
   db?: DatabaseAdapter,
   getLocalWorkspaceId: () => string = () => 'local',
   dbPool?: WorkspaceDbPool,
+  registry?: WorkspaceRegistry,
 ) {
   const symmetricSecret = new TextEncoder().encode(jwtSecret);
 
@@ -107,6 +109,7 @@ export function createAuthMiddleware(
     }
 
     // Daemon JWT fast-path: token carries workspaceName claim; inject dbPool
+    // and resolve the WorkspaceContext from the registry if available.
     if (dbPool) {
       const payload = await verifyDaemonToken(token, jwtSecret);
       if (payload) {
@@ -115,6 +118,9 @@ export function createAuthMiddleware(
           req.workspaceName = payload.workspaceName;
           req.dbPool = dbPool;
           req.userId = 'local';
+          if (registry?.has(payload.workspaceName)) {
+            req.workspaceCtx = registry.get(payload.workspaceName);
+          }
           next();
           return;
         } catch {

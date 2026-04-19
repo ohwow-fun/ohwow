@@ -14,6 +14,8 @@ declare global {
       workspaceName?: string;
       /** Per-workspace SQLite connection pool injected by auth middleware. */
       dbPool?: import('../db/workspace-db-pool.js').WorkspaceDbPool;
+      /** Resolved WorkspaceContext for daemon JWT requests. */
+      workspaceCtx?: import('../daemon/workspace-context.js').WorkspaceContext;
     }
   }
 }
