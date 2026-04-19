@@ -25,6 +25,33 @@ import { DigitalNervousSystem } from '../body/digital-nervous-system.js';
 import { logger } from '../lib/logger.js';
 import type { DaemonContext } from './context.js';
 import type { InferenceState } from './inference.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type { RuntimeEngine } from '../execution/engine.js';
+import type { ModelRouter } from '../execution/model-router.js';
+import type { RuntimeConfig } from '../config.js';
+import type { TypedEventBus } from '../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../tui/types.js';
+import type { ControlPlaneClient } from '../control-plane/client.js';
+import type { ScraplingService } from '../execution/scrapling/index.js';
+import type { initDatabase } from '../db/init.js';
+
+/**
+ * Explicit workspace parameters for the orchestration phase.
+ * Extracted from DaemonContext so secondary workspaces can call
+ * setupWorkspaceOrchestration directly in a future phase.
+ */
+export interface WorkspaceOrchestrationDeps {
+  workspaceId: string;
+  dataDir: string;
+  config: RuntimeConfig;
+  db: DatabaseAdapter;
+  rawDb: ReturnType<typeof initDatabase>;
+  bus: TypedEventBus<RuntimeEvents>;
+  engine: RuntimeEngine;
+  controlPlane: ControlPlaneClient | null;
+  modelRouter: ModelRouter;
+  scraplingService: ScraplingService;
+}
 
 export async function setupOrchestration(
   ctx: Partial<DaemonContext>,
