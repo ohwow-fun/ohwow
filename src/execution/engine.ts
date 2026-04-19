@@ -47,6 +47,7 @@ import {
   type ClaudeCodeSessionStore,
 } from './adapters/index.js';
 import { LocalBrowserService } from './browser/index.js';
+import { withBrowserJob } from './browser/browser-job-queue.js';
 import { LocalDesktopService } from './desktop/index.js';
 import type { DesktopServiceOptions } from './desktop/index.js';
 import { ScraplingService } from './scrapling/index.js';
@@ -1007,141 +1008,159 @@ export class RuntimeEngine {
         hasBrowserTools: browserEnabled,
       });
 
-      try {
-        if (useModelRouter) {
-          // ── Model router execution path (OpenRouter, Ollama, etc.) ──
-          const routerResult = await runModelRouterLoop.call(this, {
-            systemPrompt,
-            messages,
-            tools,
-            maxTokens: agentConfig.max_tokens || 4096,
-            temperature: agentConfig.temperature ?? 0.7,
-            taskId,
-            agentId,
-            workspaceId,
-            goalId: task.goal_id || undefined,
-            fileAccessGuard,
-            approvalRequired,
-            browserEnabled,
-            mcpClients,
-            desktopOptions,
-            difficulty,
-            gitEnabled: bashEnabled,
-            skillsDocument: skillsDoc || undefined,
-            taskInput: typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? ''),
-          });
-          fullContent = routerResult.fullContent;
-          totalInputTokens = routerResult.totalInputTokens;
-          totalOutputTokens = routerResult.totalOutputTokens;
-          reactTrace = routerResult.reactTrace;
-          providerReportedCostCents = routerResult.providerCostCents;
-          // Track actual model used (resolved from catalog, not raw agent config)
-          if (routerResult.actualModelUsed) {
-            (agentConfig as Record<string, unknown>)._resolvedModel = routerResult.actualModelUsed;
-          }
-        } else if (tools.length > 0) {
-          // ── Anthropic tool loop (runAnthropicReActLoop) ──
-          const services: ReActServicesHolder = {
-            browserService,
-            browserActivated,
-            desktopService,
-            desktopActivated,
-          };
-          const contextLimit = getContextLimit(modelId);
-          const loopResult = await runAnthropicReActLoop.call(this, {
-            systemPrompt,
-            systemPromptHash,
-            messages,
-            tools,
-            caps,
-            services,
-            mcpClients,
-            taskId,
-            agentId,
-            workspaceId,
-            task,
-            agentConfig,
-            agent,
-            modelId,
-            contextLimit,
-            llmCache,
-            agentBudget,
-            startTime,
-          });
-          fullContent = loopResult.fullContent;
-          totalInputTokens = loopResult.totalInputTokens;
-          totalOutputTokens = loopResult.totalOutputTokens;
-          reactTrace = loopResult.reactTrace;
-          // Sync services back to executeTask's locals so the outer
-          // finally can close whatever the loop activated.
-          browserService = services.browserService;
-          browserActivated = services.browserActivated;
-          desktopService = services.desktopService;
-          desktopActivated = services.desktopActivated;
-          // The loop may have reassigned caps.fileAccessGuard on a doc-
-          // mount expansion; re-bind the local so any remaining readers
-          // see the final value.
-          fileAccessGuard = caps.fileAccessGuard;
-
-          // Check for irreversible tools used in Anthropic path
-          const irreversibleAnthropicTools = loopResult.anthropicToolsUsed.filter(
-            (name) => getToolReversibility(name) === 'irreversible',
-          );
-          if (irreversibleAnthropicTools.length > 0) {
-            this.emit('task:warning', {
+      // When this task uses browser tools AND the engine is scoped to a
+      // workspace, serialize via BrowserJobQueue so that two tasks in
+      // the same workspace never race on the same CDP surface.
+      // For non-browser tasks (or when workspaceName is unset) the exec
+      // function runs directly with no queuing overhead.
+      const execModelLoop = async (): Promise<ExecuteAgentResult | null> => {
+        // Null return means "continue to assertTaskWasGrounded + finalizeTaskSuccess".
+        // A non-null return means "return early from executeTask" (e.g. paused).
+        try {
+          if (useModelRouter) {
+            // ── Model router execution path (OpenRouter, Ollama, etc.) ──
+            const routerResult = await runModelRouterLoop.call(this, {
+              systemPrompt,
+              messages,
+              tools,
+              maxTokens: agentConfig.max_tokens || 4096,
+              temperature: agentConfig.temperature ?? 0.7,
               taskId,
-              warning: 'irreversible_tools_used',
-              tools: irreversibleAnthropicTools,
+              agentId,
+              workspaceId,
+              goalId: task.goal_id || undefined,
+              fileAccessGuard,
+              approvalRequired,
+              browserEnabled,
+              mcpClients,
+              desktopOptions,
+              difficulty,
+              gitEnabled: bashEnabled,
+              skillsDocument: skillsDoc || undefined,
+              taskInput: typeof task.input === 'string' ? task.input : JSON.stringify(task.input ?? ''),
+            });
+            fullContent = routerResult.fullContent;
+            totalInputTokens = routerResult.totalInputTokens;
+            totalOutputTokens = routerResult.totalOutputTokens;
+            reactTrace = routerResult.reactTrace;
+            providerReportedCostCents = routerResult.providerCostCents;
+            // Track actual model used (resolved from catalog, not raw agent config)
+            if (routerResult.actualModelUsed) {
+              (agentConfig as Record<string, unknown>)._resolvedModel = routerResult.actualModelUsed;
+            }
+          } else if (tools.length > 0) {
+            // ── Anthropic tool loop (runAnthropicReActLoop) ──
+            const services: ReActServicesHolder = {
+              browserService,
+              browserActivated,
+              desktopService,
+              desktopActivated,
+            };
+            const contextLimit = getContextLimit(modelId);
+            const loopResult = await runAnthropicReActLoop.call(this, {
+              systemPrompt,
+              systemPromptHash,
+              messages,
+              tools,
+              caps,
+              services,
+              mcpClients,
+              taskId,
+              agentId,
+              workspaceId,
+              task,
+              agentConfig,
+              agent,
+              modelId,
+              contextLimit,
+              llmCache,
+              agentBudget,
+              startTime,
+            });
+            fullContent = loopResult.fullContent;
+            totalInputTokens = loopResult.totalInputTokens;
+            totalOutputTokens = loopResult.totalOutputTokens;
+            reactTrace = loopResult.reactTrace;
+            // Sync services back to executeTask's locals so the outer
+            // finally can close whatever the loop activated.
+            browserService = services.browserService;
+            browserActivated = services.browserActivated;
+            desktopService = services.desktopService;
+            desktopActivated = services.desktopActivated;
+            // The loop may have reassigned caps.fileAccessGuard on a doc-
+            // mount expansion; re-bind the local so any remaining readers
+            // see the final value.
+            fileAccessGuard = caps.fileAccessGuard;
+
+            // Check for irreversible tools used in Anthropic path
+            const irreversibleAnthropicTools = loopResult.anthropicToolsUsed.filter(
+              (name) => getToolReversibility(name) === 'irreversible',
+            );
+            if (irreversibleAnthropicTools.length > 0) {
+              this.emit('task:warning', {
+                taskId,
+                warning: 'irreversible_tools_used',
+                tools: irreversibleAnthropicTools,
+              });
+            }
+
+            // Pause early-return: the loop signals pause via result.paused.
+            // We return a paused ExecuteAgentResult here — the outer finally
+            // still runs, closing browser/desktop/MCP cleanly.
+            if (loopResult.paused) {
+              return {
+                success: true,
+                taskId,
+                status: 'paused',
+                output: loopResult.paused.output,
+                tokensUsed: loopResult.paused.tokensUsed,
+                costCents: loopResult.paused.costCents,
+              };
+            }
+          } else {
+            // Simple single call (no tools)
+            const response = await this.anthropic!.messages.create({
+              model: modelId,
+              max_tokens: agentConfig.max_tokens || 4096,
+              temperature: agentConfig.temperature ?? 0.7,
+              system: systemPrompt,
+              messages,
+            });
+
+            totalInputTokens = response.usage.input_tokens;
+            totalOutputTokens = response.usage.output_tokens;
+            this.emit('task:progress', { taskId, tokensUsed: totalInputTokens + totalOutputTokens });
+
+            const textBlocks = response.content.filter((b): b is TextBlock => b.type === 'text');
+            fullContent = textBlocks.map(b => b.text).join('\n');
+          }
+        } finally {
+          // Always close the browser after task execution (if it was activated)
+          if (browserService) {
+            await browserService.close().catch(err => {
+              logger.error({ err }, '[RuntimeEngine] Browser cleanup failed');
             });
           }
-
-          // Pause early-return: the loop signals pause via result.paused.
-          // We return a paused ExecuteAgentResult here — the outer finally
-          // still runs, closing browser/desktop/MCP cleanly.
-          if (loopResult.paused) {
-            return {
-              success: true,
-              taskId,
-              status: 'paused',
-              output: loopResult.paused.output,
-              tokensUsed: loopResult.paused.tokensUsed,
-              costCents: loopResult.paused.costCents,
-            };
+          // Always close desktop after task execution (if it was activated)
+          if (desktopService) {
+            await desktopService.close();
           }
-        } else {
-          // Simple single call (no tools)
-          const response = await this.anthropic!.messages.create({
-            model: modelId,
-            max_tokens: agentConfig.max_tokens || 4096,
-            temperature: agentConfig.temperature ?? 0.7,
-            system: systemPrompt,
-            messages,
-          });
+          // Close MCP connections
+          if (mcpClients) {
+            await mcpClients.close().catch(err => {
+              logger.error({ err }, '[RuntimeEngine] MCP cleanup failed');
+            });
+          }
+        }
+        return null;
+      };
 
-          totalInputTokens = response.usage.input_tokens;
-          totalOutputTokens = response.usage.output_tokens;
-          this.emit('task:progress', { taskId, tokensUsed: totalInputTokens + totalOutputTokens });
+      const earlyReturn = browserEnabled && this.config.workspaceName
+        ? await withBrowserJob(this.config.workspaceName, execModelLoop)
+        : await execModelLoop();
 
-          const textBlocks = response.content.filter((b): b is TextBlock => b.type === 'text');
-          fullContent = textBlocks.map(b => b.text).join('\n');
-        }
-      } finally {
-        // Always close the browser after task execution (if it was activated)
-        if (browserService) {
-          await browserService.close().catch(err => {
-            logger.error({ err }, '[RuntimeEngine] Browser cleanup failed');
-          });
-        }
-        // Always close desktop after task execution (if it was activated)
-        if (desktopService) {
-          await desktopService.close();
-        }
-        // Close MCP connections
-        if (mcpClients) {
-          await mcpClients.close().catch(err => {
-            logger.error({ err }, '[RuntimeEngine] MCP cleanup failed');
-          });
-        }
+      if (earlyReturn !== null) {
+        return earlyReturn;
       }
 
       // Fail-closed hallucination gate: if the agent produced text-only
