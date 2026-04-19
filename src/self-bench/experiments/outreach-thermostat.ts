@@ -224,15 +224,15 @@ export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): 
       ? 'stack'
       : 'recent';
   if (channel === 'x_dm') {
-    return `Hey ${name}, your ${bucketHint} thread hit close to home. Been building ohwow around a similar problem for a while. If you ever want to trade notes on what's worked, my DMs are open.`;
+    return `Hey ${name}, that ${bucketHint} thread you posted is exactly the problem ohwow is built around. Worth a quick swap if you want to compare notes.`;
   }
   if (channel === 'x_reply') {
-    return `Ran into a version of this building ohwow. For us, the handoff design ended up mattering more than the agent choice itself.`;
+    return `The handoff design tends to matter more than the agent choice here. ohwow takes a different angle on that tradeoff.`;
   }
   if (channel === 'email') {
     return {
       subject: `${name}, note on your ${bucketHint} post`,
-      text: `Hi ${name},\n\nYour ${bucketHint} post came across my feed and stuck. Been building ohwow around a similar frustration for a while.\n\nIf you ever want to trade notes on what's worked, I'm around. No agenda.\n\nJesus Onoro\nohwow.fun`,
+      text: `Hi ${name},\n\nThat ${bucketHint} post is the exact problem ohwow is built around. Worth a quick swap to compare notes.\n\nJesus Onoro\nohwow.fun`,
     };
   }
   return '';

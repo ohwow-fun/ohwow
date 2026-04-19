@@ -98,6 +98,57 @@ export const INTEL_LEAK_PHRASES: ReadonlyArray<string> = [
   'scanning',
 ];
 
+/**
+ * AI-generated writing clichés that betray a model's fingerprint and
+ * make copy sound like a ChatGPT draft. "Delve", "fascinating", and
+ * their relatives have been statistically overrepresented in LLM output
+ * since GPT-3; seeing them is a near-certain signal the post was not
+ * written by a person. Checked case-insensitively as substrings.
+ *
+ * Note on "leverage": the word is fine as a noun ("financial leverage")
+ * but almost always signals corporate/AI-speak when used as a verb
+ * ("leverage our capabilities"). The phrase stored here is the verb
+ * form trigger that substring-matches "leverage " (with a trailing
+ * space) to avoid false-positives on the noun.
+ */
+export const AI_CLICHE_PHRASES: ReadonlyArray<string> = [
+  'delve into',
+  'delve',
+  "it's worth noting",
+  'it is worth noting',
+  'noteworthy',
+  'fascinating',
+  "it's fascinating",
+  'it is fascinating',
+  'groundbreaking',
+  'testament to',
+  'in conclusion',
+  'to summarize',
+  'in summary',
+  "it's clear that",
+  'it is clear that',
+  'furthermore',
+  'moreover',
+  'additionally',
+  'on one hand',
+  'on the other hand',
+  'in other words',
+  'at its core',
+  'cutting-edge',
+  'state-of-the-art',
+  'paradigm shift',
+  'synergy',
+  'seamlessly',
+  'robust',
+  'utilize',
+  'leverage ',
+  'game-changer',
+  'game changer',
+  'revolutionary',
+  'transformative',
+  'unprecedented',
+];
+
 /** Sign-off patterns — treated as "you're not writing an email." */
 export const SIGN_OFFS: ReadonlyArray<string> = [
   'thanks!',
@@ -219,6 +270,9 @@ export function voiceCheck(text: string, ctx: VoiceCheckContext): { ok: boolean;
   for (const s of INTEL_LEAK_PHRASES) {
     if (lower.includes(s)) reasons.push(`intelLeak:${s}`);
   }
+  for (const s of AI_CLICHE_PHRASES) {
+    if (lower.includes(s)) reasons.push(`aiCliche:${s}`);
+  }
 
   return { ok: reasons.length === 0, reasons };
 }
@@ -282,6 +336,21 @@ export function buildVoicePrinciples(): string {
     '  - Drift vocabulary recently overused: "scope ownership",',
     '    "context rot". Use only when they are the single most precise',
     '    term, never as a default reach.',
+    '  - AI CLICHÉ WORDS — never use these. They are statistical tells of',
+    '    machine-generated text and immediately undermine credibility:',
+    '    delve, fascinating, noteworthy, groundbreaking, furthermore,',
+    '    moreover, additionally, in conclusion, to summarize, it\'s worth',
+    '    noting, it\'s clear that, at its core, cutting-edge, seamlessly,',
+    '    paradigm shift, synergy, utilize (use "use" instead), leverage as',
+    '    a verb (use "use" instead), game-changer, revolutionary,',
+    '    transformative, unprecedented, state-of-the-art, robust.',
+    '  - AI CLICHÉ STRUCTURES — these patterns mark machine-generated prose:',
+    '    No "on one hand / on the other hand" framing; it reads like a',
+    '    debate template. No rhetorical question openers ("But what if...?",',
+    '    "Have you ever...?") — they are performative, not earned. No',
+    '    perfectly-balanced 3-point lists that read like a slide deck.',
+    '    Do not start 3 or more consecutive sentences with "This", "The",',
+    '    or "It\'s" — the repetition signals a template, not thought.',
   ].join('\n');
 }
 
