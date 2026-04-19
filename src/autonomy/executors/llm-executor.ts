@@ -295,6 +295,21 @@ export function withSpendCap(
 }
 
 // ---------------------------------------------------------------------------
+// Transient network error detection
+// ---------------------------------------------------------------------------
+
+function isTransientNetworkError(err: unknown): boolean {
+  if (err instanceof SpendCapExceeded) return false;
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('econnreset') ||
+    msg.includes('fetch failed') ||
+    msg.includes('econnrefused')
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Wall-clock guard
 // ---------------------------------------------------------------------------
 
@@ -365,11 +380,29 @@ export function makeLlmPlanExecutor(opts: LlmExecutorOptions): RoundExecutor {
       maxTokens: maxOutputTokens,
       temperature,
     };
-    const response = await withTimeout(
-      opts.client.call(params),
-      timeoutMs,
-      `llm-plan-executor:${brief.trio_id}`,
-    );
+    let response: ModelResponse;
+    try {
+      response = await withTimeout(
+        opts.client.call(params),
+        timeoutMs,
+        `llm-plan-executor:${brief.trio_id}`,
+      );
+    } catch (err) {
+      if (isTransientNetworkError(err)) {
+        logger.warn(
+          { trio_id: brief.trio_id, err: (err as Error).message },
+          'autonomy.llm_executor.network_retry',
+        );
+        await new Promise<void>((r) => setTimeout(r, 2000));
+        response = await withTimeout(
+          opts.client.call(params),
+          timeoutMs,
+          `llm-plan-executor:${brief.trio_id}`,
+        );
+      } else {
+        throw err;
+      }
+    }
     if (meter) {
       meter.input_tokens += response.inputTokens;
       meter.output_tokens += response.outputTokens;
