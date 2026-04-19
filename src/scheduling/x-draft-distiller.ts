@@ -36,7 +36,7 @@ import {
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { logger } from '../lib/logger.js';
 import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
-import { INTEL_LEAK_PHRASES } from '../lib/voice/voice-core.js';
+import { INTEL_LEAK_PHRASES, buildVoicePrinciples, buildLengthDirective } from '../lib/voice/voice-core.js';
 
 /**
  * runtime_config_overrides key for the distiller's min novelty score.
@@ -270,6 +270,10 @@ export function buildPrompt(insight: DistilledInsight): string {
     `Subject: ${insight.subject}`,
     `Summary: ${insight.summary}`,
     evidenceSummary ? `Evidence:\n${evidenceSummary}` : '',
+    '',
+    buildVoicePrinciples(),
+    '',
+    buildLengthDirective({ platform: 'x', useCase: 'post' }),
   ]
     .filter(Boolean)
     .join('\n');

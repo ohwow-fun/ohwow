@@ -91,6 +91,11 @@ export const INTEL_LEAK_PHRASES: ReadonlyArray<string> = [
   'verdict flipped',
   'latest scan',
   "we've been watching",
+  'no changes',
+  'we observed',
+  'unchanged',
+  'the verdict',
+  'scanning',
 ];
 
 /** Sign-off patterns — treated as "you're not writing an email." */

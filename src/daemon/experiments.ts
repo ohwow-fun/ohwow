@@ -346,8 +346,9 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
 
     // Belt-and-suspenders: seed x_reply.enabled = false so the scheduler's
     // per-tick guard also rejects work even if the boot flag is later
-    // toggled on before the account is reviewed and restored. Only writes
-    // when the key is not already set, preserving any operator override.
+    // toggled on. The X account is permanently banned; there is no
+    // re-enable path. Only writes when the key is not already set,
+    // preserving any operator override.
     if (getRuntimeConfig<boolean | undefined>('x_reply.enabled', undefined) === undefined) {
       void setRuntimeConfig(db, 'x_reply.enabled', false).catch((err) => {
         logger.warn({ err }, '[daemon] could not seed x_reply.enabled=false');
@@ -355,10 +356,8 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     }
 
     // XReplyScheduler and XReplyDispatcher are gated by xReplySchedulerEnabled
-    // (default false). The X account was flagged for suspicious behavior;
-    // the channel is deprecated pending review. Set
-    // OHWOW_X_REPLY_SCHEDULER_ENABLED=true to re-enable after account is
-    // restored and reviewed.
+    // (default false). The X account is permanently banned. This gate has
+    // no re-enable path.
     if (config.xReplySchedulerEnabled) {
       const xReply = new XReplyScheduler({
         db, engine, workspaceId, workspaceSlug,

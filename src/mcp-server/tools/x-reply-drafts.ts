@@ -93,7 +93,7 @@ export function registerXReplyDraftTools(server: McpServer, client: DaemonApiCli
           drafts,
           note:
             drafts.length === 0
-              ? 'No reply drafts queued. Either the reply schedulers have not ticked yet, or no posts survived the classifier. Check x_reply.enabled and x_reply.queries in runtime_config.'
+              ? 'X reply drafts are permanently disabled. The X account is banned. Only Threads reply drafts are produced.'
               : `${drafts.length} draft(s). Approve with ohwow_approve_x_reply_draft, reject with ohwow_reject_x_reply_draft. Dispatcher ticks ~5 min after approval.`,
         });
       } catch (err) {
