@@ -225,10 +225,10 @@ export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): 
       ? 'stack'
       : 'recent';
   if (channel === 'x_dm') {
-    return `Hey ${name}, that ${bucketHint} thread you posted is exactly the problem ohwow is built around. Worth a quick swap if you want to compare notes.`;
+    return `Hey ${name}, that ${bucketHint} thread you posted is exactly the problem ohwow is built around. Worth a quick swap if you want to compare notes`;
   }
   if (channel === 'x_reply') {
-    return `The handoff design tends to matter more than the agent choice here. ohwow takes a different angle on that tradeoff.`;
+    return `Handoff design matters more than agent choice here. ohwow takes a different angle on that tradeoff`;
   }
   if (channel === 'email') {
     return {
