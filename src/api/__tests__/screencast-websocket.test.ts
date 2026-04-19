@@ -33,6 +33,7 @@ interface FakeBrowser {
   on: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   emitFrame: (params: Record<string, unknown>, sessionId: string) => void;
+  emitTargetDestroyed: (targetId: string) => void;
 }
 
 let currentBrowser: FakeBrowser | null = null;
@@ -70,11 +71,20 @@ function freshBrowser(): FakeBrowser {
     for (const l of arr) l(params, sessionId);
   };
 
-  return { send, on, close, emitFrame };
+  const emitTargetDestroyed = (targetId: string) => {
+    const arr = listeners.get('Target.targetDestroyed') ?? [];
+    for (const l of arr) l({ targetId });
+  };
+
+  return { send, on, close, emitFrame, emitTargetDestroyed };
 }
 
 vi.mock('../../execution/browser/chrome-profile-router.js', () => ({
   ensureCdpBrowser: vi.fn(async () => currentBrowser),
+  // ensureTargetDestroyedSubscription is called during acquireGroup; the
+  // fake browser's `on` mock already captures the listener registration so
+  // we just resolve immediately.
+  ensureTargetDestroyedSubscription: vi.fn(async () => {}),
 }));
 
 vi.mock('../../execution/browser/browser-claims.js', () => ({
@@ -260,6 +270,69 @@ describe('/ws/screencast', () => {
 
       const attachCall = currentBrowser!.send.mock.calls.find(([m]) => m === 'Target.attachToTarget');
       expect(attachCall![1]).toMatchObject({ targetId: 'explicit-target' });
+
+      ws.close();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    it('Target.targetDestroyed for the subscribed tab broadcasts idle status and closes the WS with code 4002', async () => {
+      const targetId = 'tab-to-be-closed';
+      snapshotClaims = [{ key: { profileDir: 'Default', targetId }, owner: 'task', claimedAt: 1 }];
+
+      const ws = openClient(harness.url);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+      await nextMessage(ws); // authenticated
+      ws.send(JSON.stringify({ type: 'subscribe' }));
+      await nextMessage(ws); // status active
+
+      // Set up listeners BEFORE triggering the event.
+      const idlePromise = nextMessage(ws);
+      const closePromise = waitForClose(ws, 3000);
+
+      // Simulate the browser tab being destroyed externally.
+      currentBrowser!.emitTargetDestroyed(targetId);
+
+      // The server must first send { type: 'status', state: 'idle', reason: 'target_closed' }
+      // and then close the socket with code 4002.
+      const idle = await idlePromise;
+      expect(idle).toMatchObject({ type: 'status', state: 'idle', reason: 'target_closed' });
+
+      const { code } = await closePromise;
+      expect(code).toBe(4002);
+
+      // Teardown must have fired: stopScreencast + browser.close.
+      await vi.waitFor(() => {
+        const stopCall = currentBrowser!.send.mock.calls.find(([m]) => m === 'Page.stopScreencast');
+        expect(stopCall).toBeDefined();
+        expect(currentBrowser!.close).toHaveBeenCalled();
+      }, { timeout: 2000 });
+    });
+
+    it('Target.targetDestroyed for a DIFFERENT tab does not affect subscribers watching their own target', async () => {
+      const myTarget = 'my-tab';
+      snapshotClaims = [{ key: { profileDir: 'Default', targetId: myTarget }, owner: 'task', claimedAt: 1 }];
+
+      const ws = openClient(harness.url);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+      await nextMessage(ws);
+      ws.send(JSON.stringify({ type: 'subscribe' }));
+      await nextMessage(ws); // status active
+
+      // Collect any unexpected messages that arrive within 300ms.
+      const unexpected: unknown[] = [];
+      ws.on('message', (data) => { unexpected.push(JSON.parse(data.toString())); });
+
+      // Emit destroyed for a DIFFERENT targetId — must be a no-op for our subscriber.
+      currentBrowser!.emitTargetDestroyed('some-other-tab');
+
+      // Give the event loop time to propagate any unexpected messages or closes.
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Socket must still be open and no messages must have arrived.
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      expect(unexpected).toHaveLength(0);
 
       ws.close();
       await new Promise((r) => setTimeout(r, 50));
