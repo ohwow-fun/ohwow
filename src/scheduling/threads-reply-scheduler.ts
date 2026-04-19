@@ -44,6 +44,7 @@ import {
   insertReplyDraft,
   findReplyDraftByUrl,
 } from './x-reply-store.js';
+import { voiceCheck, autoFixCosmetic } from '../lib/voice/voice-core.js';
 import { threadsThrottleTracker } from '../lib/x-search-throttle.js';
 
 // ---------------------------------------------------------------------------
@@ -346,6 +347,20 @@ export class ThreadsReplyScheduler {
         continue;
       }
 
+      // Belt-and-suspenders voice gate: fix cosmetic violations first, then
+      // reject any draft that still fails the gate. generateReplyCopy runs
+      // voiceCheck internally but this catches drifts introduced by later
+      // enrichment or alternate-selection paths before the row lands in DB.
+      const fixedDraft = autoFixCosmetic(gen.draft!);
+      const gateResult = voiceCheck(fixedDraft, { platform: 'threads', useCase: 'reply' });
+      if (!gateResult.ok) {
+        logger.warn(
+          { url: k.candidate.url, reasons: gateResult.reasons },
+          '[threads-reply-scheduler] draft failed voice gate; skipping insert',
+        );
+        continue;
+      }
+
       const row = await insertReplyDraft(this.db, {
         workspaceId: this.workspaceId,
         platform: 'threads',
@@ -355,7 +370,7 @@ export class ThreadsReplyScheduler {
         replyToLikes: k.candidate.likes,
         replyToReplies: k.candidate.replies,
         mode: 'direct',
-        body: gen.draft!,
+        body: fixedDraft,
         alternates: gen.alternates,
         verdict: k.verdict,
         score: k.score,
