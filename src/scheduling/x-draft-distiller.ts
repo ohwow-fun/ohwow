@@ -136,6 +136,10 @@ export class XDraftDistillerScheduler {
         skipped += 1;
         continue;
       }
+      if (!hasConcreteContent(insight)) {
+        skipped += 1;
+        continue;
+      }
       const existing = await findDraftByFindingId(
         this.db,
         this.workspaceId,
@@ -218,6 +222,65 @@ export function hasExternalSignal(insight: DistilledInsight): boolean {
   return added + removed > 0;
 }
 
+const LOW_SIGNAL_PATTERNS: RegExp[] = [
+  /no changes/i,
+  /no new releases/i,
+  /no updates/i,
+  /nothing new/i,
+  /unchanged/i,
+  /no activity/i,
+  /no commits/i,
+  /no modifications/i,
+];
+
+/**
+ * Pre-LLM content quality filter. Returns false when the insight's diff
+ * contains only boilerplate low-signal lines (e.g. "No changes", "No new
+ * releases") that would produce vacuous posts. Saves an LLM call on findings
+ * that technically changed but carry no reader-facing news.
+ */
+export function hasConcreteContent(insight: DistilledInsight): boolean {
+  const ev = insight.evidence ?? {};
+  if (ev.change_kind !== 'changed') return false;
+  const diff = ev.diff as { added?: string[]; removed?: string[] } | undefined;
+  const added = diff?.added ?? [];
+  const removed = diff?.removed ?? [];
+  if (added.length === 0 && removed.length === 0) return false;
+  const allLines = [...added, ...removed].filter((l) => l.trim().length > 0);
+  if (allLines.length === 0) return false;
+  // If every non-empty line matches a low-signal pattern, there is nothing concrete.
+  return allLines.some((line) => !LOW_SIGNAL_PATTERNS.some((p) => p.test(line)));
+}
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'has',
+  'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his',
+  'how', 'its', 'may', 'new', 'now', 'old', 'see', 'two', 'way', 'who',
+  'boy', 'did', 'she', 'use', 'say',
+]);
+
+function isProperNoun(word: string): boolean {
+  return (
+    word.length >= 8 &&
+    /^[A-Z]/.test(word) &&
+    !STOP_WORDS.has(word.toLowerCase())
+  );
+}
+
+/**
+ * Scans diff lines for the most salient named entity: a version string or a
+ * title-case proper noun. Returns the first matching line, or null.
+ */
+function extractNamedEntity(diff: { added: string[]; removed: string[] }): string | null {
+  const lines = [...diff.added, ...diff.removed];
+  for (const line of lines) {
+    if (/\b\d+\.\d+/.test(line)) return line;
+    const words = line.split(/\s+/);
+    if (words.some(isProperNoun)) return line;
+  }
+  return null;
+}
+
 /**
  * Build the LLM prompt for a single insight.
  *
@@ -276,6 +339,11 @@ export function buildPrompt(insight: DistilledInsight): string {
     '',
     buildVoicePrinciples(),
     '',
+    'Before writing the post, write one internal line:',
+    'ANGLE: <one clause explaining what this change implies for builders, not what changed>',
+    'If you cannot fill the ANGLE clause with something specific, return SKIP instead.',
+    'The ANGLE line must NOT appear in the final post — it is a scratchpad gate only.',
+    '',
     buildLengthDirective({ platform: 'threads', useCase: 'post' }),
   ]
     .filter(Boolean)
@@ -290,6 +358,12 @@ function summarizeEvidence(evidence: Record<string, unknown> | undefined | null)
   const diff = evidence.diff as
     | { added?: string[]; removed?: string[] }
     | undefined;
+  // Prepend the most salient named entity so the LLM has it front-of-context.
+  const namedEntity = extractNamedEntity({
+    added: diff?.added ?? [],
+    removed: diff?.removed ?? [],
+  });
+  if (namedEntity !== null) parts.unshift(`Named entity: ${namedEntity}`);
   if (diff?.added && diff.added.length > 0) {
     parts.push(`added:\n${diff.added.slice(0, 15).map((l) => `  + ${l}`).join('\n')}`);
   }
@@ -301,8 +375,13 @@ function summarizeEvidence(evidence: Record<string, unknown> | undefined | null)
 
 export function sanitizeDraft(raw: string): string | null {
   if (!raw) return null;
+  // Strip any ANGLE: scratchpad lines the model may have leaked into output.
+  const stripped = raw
+    .split('\n')
+    .filter((line) => !/^ANGLE:/i.test(line.trim()))
+    .join('\n');
   // Strip leading/trailing quotes the LLM sometimes wraps around output.
-  let body = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+  let body = stripped.trim().replace(/^["'`]+|["'`]+$/g, '').trim();
   // Drop any "Post:" / "Draft:" prefix an LLM might add despite instructions.
   body = body.replace(/^(?:post|draft|tweet|reply)[:\-\s]+/i, '').trim();
   if (body.length === 0) return null;
