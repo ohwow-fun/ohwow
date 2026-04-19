@@ -247,6 +247,7 @@ export class OnboardingService {
       xAuthorsToCrmEnabled: false,
       xAuthorsMinSignal: 0.6,
       xAuthorsBuckets: ['market_signal', 'competitors'],
+      xReplySchedulerEnabled: false,
       xComposeEnabled: false,
       xReplyEnabled: false,
       xHumorEnabled: false,
