@@ -18,7 +18,7 @@ vi.mock('../x-draft-store.js', () => ({
   insertDraft: (...args: unknown[]) => insertMock(...args),
 }));
 
-const { XDraftDistillerScheduler, buildPrompt, sanitizeDraft, hasExternalSignal, MARKET_SUBJECT_PREFIX } = await import(
+const { XDraftDistillerScheduler, buildPrompt, sanitizeDraft, hasExternalSignal, hasConcreteContent, MARKET_SUBJECT_PREFIX } = await import(
   '../x-draft-distiller.js'
 );
 
@@ -400,6 +400,221 @@ describe('XDraftDistillerScheduler filter integration', () => {
     expect(stats.drafted).toBe(0);
     expect(stats.skipped).toBe(1);
     expect(draftMock).not.toHaveBeenCalled();
+    expect(insertMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── Criteria freeze: content-quality filter (hasConcreteContent + ANGLE gate) ──
+// These tests pin the 6 criteria from the QA plan for the pre-LLM content
+// quality filter introduced in c5b1780.
+
+describe('hasConcreteContent — criterion 1: low-signal "no changes" diff returns false', () => {
+  it('returns false when every added line matches a low-signal pattern', () => {
+    // Criterion 1: the "no changes detected" boilerplate line is a known
+    // low-signal pattern; a finding whose entire diff is this line must be
+    // dropped before the LLM call fires.
+    expect(
+      hasConcreteContent(
+        makeInsight({
+          evidence: {
+            change_kind: 'changed',
+            diff: { added: ['no changes detected'], removed: [] },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('also returns false for other known low-signal phrases (variant coverage)', () => {
+    const lowSignalLines = [
+      'No new releases',
+      'no updates',
+      'Nothing new',
+      'unchanged',
+      'No activity',
+      'No commits',
+      'No modifications',
+    ];
+    for (const line of lowSignalLines) {
+      expect(
+        hasConcreteContent(
+          makeInsight({
+            evidence: {
+              change_kind: 'changed',
+              diff: { added: [line], removed: [] },
+            },
+          }),
+        ),
+        `expected false for low-signal line: "${line}"`,
+      ).toBe(false);
+    }
+  });
+});
+
+describe('hasConcreteContent — criterion 2: real named content returns true', () => {
+  it('returns true when the diff contains a concrete named change', () => {
+    // Criterion 2: a diff with real version info and a feature description is
+    // concrete content — the LLM should be allowed to draft from it.
+    expect(
+      hasConcreteContent(
+        makeInsight({
+          evidence: {
+            change_kind: 'changed',
+            diff: {
+              added: ['Open WebUI 0.6.2 released', 'New feature: model switching'],
+              removed: [],
+            },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('hasConcreteContent — edge cases', () => {
+  it('returns false when change_kind is not "changed"', () => {
+    expect(
+      hasConcreteContent(
+        makeInsight({
+          evidence: { change_kind: 'unchanged', diff: { added: ['Open WebUI 0.6.2'], removed: [] } },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false when diff is empty (both arrays empty)', () => {
+    expect(
+      hasConcreteContent(
+        makeInsight({ evidence: { change_kind: 'changed', diff: { added: [], removed: [] } } }),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns true when only the removed side has concrete content', () => {
+    expect(
+      hasConcreteContent(
+        makeInsight({
+          evidence: {
+            change_kind: 'changed',
+            diff: { added: [], removed: ['Pro plan $9/month removed'] },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('returns true when mixed lines contain at least one non-low-signal line', () => {
+    expect(
+      hasConcreteContent(
+        makeInsight({
+          evidence: {
+            change_kind: 'changed',
+            diff: { added: ['no changes detected', 'Open WebUI 0.6.2 released'], removed: [] },
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('extractNamedEntity (via buildPrompt) — criterion 3', () => {
+  it('surfaces the version-bearing line as "Named entity:" in the evidence block', () => {
+    // Criterion 3: extractNamedEntity is private, but its output is prepended
+    // to the evidence summary as "Named entity: <line>". This test verifies
+    // the named-entity extraction fires and picks the right line.
+    const prompt = buildPrompt(
+      makeInsight({
+        evidence: {
+          change_kind: 'changed',
+          diff: { added: ['Open WebUI 0.6.2 released'], removed: [] },
+        },
+      }),
+    );
+    expect(prompt).toContain('Named entity: Open WebUI 0.6.2 released');
+  });
+
+  it('does not add a Named entity line when there is no version string or proper noun', () => {
+    const prompt = buildPrompt(
+      makeInsight({
+        evidence: {
+          change_kind: 'changed',
+          diff: { added: ['something changed here'], removed: [] },
+        },
+      }),
+    );
+    expect(prompt).not.toContain('Named entity:');
+  });
+});
+
+describe('buildPrompt — criterion 4: ANGLE gate present', () => {
+  it('contains "ANGLE:" in the prompt instruction block', () => {
+    // Criterion 4: the ANGLE scratchpad gate must appear in the pre-writing
+    // instructions so the model is directed to derive an implication before
+    // writing. Its absence would mean the gate was accidentally deleted.
+    const prompt = buildPrompt(makeInsight({}));
+    expect(prompt).toContain('ANGLE:');
+  });
+
+  it('instructs the model that the ANGLE line must not appear in the final post', () => {
+    const prompt = buildPrompt(makeInsight({}));
+    expect(prompt).toMatch(/ANGLE.*must NOT appear in the final post/i);
+  });
+});
+
+describe('sanitizeDraft — ANGLE line stripping', () => {
+  it('strips an ANGLE: scratchpad line leaked by the model before the actual post', () => {
+    const raw = 'ANGLE: builders now have easier model-switching\nLinear quietly bumped Pro to $12';
+    const result = sanitizeDraft(raw);
+    expect(result).not.toMatch(/^ANGLE:/im);
+    expect(result).toContain('Linear quietly bumped Pro to $12');
+  });
+
+  it('strips ANGLE: line regardless of case', () => {
+    // Use a body that passes voiceCheck (no trailing punctuation issues, no intel-leak phrases)
+    const raw = 'angle: some internal note\nLinear raised Pro from $9 to $12';
+    const result = sanitizeDraft(raw);
+    // result must not be null (body is voice-clean after stripping the angle line)
+    expect(result).not.toBeNull();
+    // The angle line must not be in the output
+    expect(result).not.toContain('angle:');
+    expect(result).toContain('Linear raised Pro from $9 to $12');
+  });
+});
+
+describe('tick() — criterion 5: low-signal diff skipped without LLM call', () => {
+  it('increments skipped and never calls draftTweet for a finding whose diff is all low-signal', async () => {
+    // Criterion 5: a finding that passes hasExternalSignal (change_kind=changed,
+    // non-empty diff) but fails hasConcreteContent (every line matches a
+    // low-signal pattern) must be skipped before the LLM call fires.
+    listMock.mockResolvedValue([
+      makeInsight({
+        subject: 'market:open-webui/releases',
+        latest_finding_id: 'f-lowsignal',
+        evidence: {
+          url: 'https://github.com/open-webui/open-webui/releases',
+          change_kind: 'changed',
+          // Non-empty diff so hasExternalSignal passes, but every line is low-signal
+          // so hasConcreteContent must gate it out.
+          diff: { added: ['no changes detected'], removed: [] },
+        },
+      }),
+    ]);
+    findMock.mockResolvedValue(null);
+    const draftTweetMock = vi.fn();
+    insertMock.mockResolvedValue(null);
+
+    const scheduler = new XDraftDistillerScheduler({} as never, null, 'ws-1', {
+      draftTweet: draftTweetMock,
+    });
+    const stats = await scheduler.tick();
+
+    // considered = 1 (market: subject passed the prefix filter)
+    expect(stats.considered).toBe(1);
+    // drafted = 0, skipped = 1 (dropped by hasConcreteContent)
+    expect(stats.drafted).toBe(0);
+    expect(stats.skipped).toBe(1);
+    // The LLM must never have been called.
+    expect(draftTweetMock).not.toHaveBeenCalled();
     expect(insertMock).not.toHaveBeenCalled();
   });
 });
