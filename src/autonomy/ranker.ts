@@ -504,15 +504,22 @@ function recentRegressionPenalty(
   return 0;
 }
 
+// Approval-source candidates use a longer cadence window so a stale
+// approval that was attempted in a prior arc (phase-closed) does not
+// float back to the top after just 4h via the age_hours score term.
+const APPROVAL_CADENCE_WINDOW_HOURS = 24;
+
 function cadencePenalty(
   ledger: LedgerSnapshot,
   c: RankedPhase,
   ref = nowMs(),
 ): number {
+  const window =
+    c.source === 'approval' ? APPROVAL_CADENCE_WINDOW_HOURS : CADENCE_WINDOW_HOURS;
   for (const r of ledger.recent_phase_reports) {
     if (reportKey(r) !== candidateKey(c)) continue;
     const age = hoursSince(r.started_at, ref);
-    if (age <= CADENCE_WINDOW_HOURS) return CADENCE_PENALTY;
+    if (age <= window) return CADENCE_PENALTY;
     break;
   }
   return 0;
