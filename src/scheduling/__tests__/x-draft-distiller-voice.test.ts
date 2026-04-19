@@ -165,3 +165,39 @@ describe('voiceCheck — new INTEL_LEAK_PHRASES enforcement', () => {
     expect(intelLeakReasons).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AI_CLICHE_PHRASES gate in sanitizeDraft() (freeze: runtime e5ca11f)
+// ---------------------------------------------------------------------------
+
+describe('sanitizeDraft — rejects AI cliché phrases', () => {
+  it('returns null for a draft containing "groundbreaking"', () => {
+    expect(sanitizeDraft('furthermore, the verdict on AI tools is groundbreaking')).toBeNull();
+  });
+
+  it('returns null for a draft containing "furthermore"', () => {
+    expect(sanitizeDraft('Furthermore, these results are clear.')).toBeNull();
+  });
+
+  it('returns null for a draft containing "delve"', () => {
+    expect(sanitizeDraft('Let us delve into the implications of this change.')).toBeNull();
+  });
+
+  it('returns null for a draft containing "seamlessly"', () => {
+    expect(sanitizeDraft('The system integrates seamlessly with existing workflows.')).toBeNull();
+  });
+
+  it('returns null for a draft containing "it is worth noting"', () => {
+    expect(sanitizeDraft('It is worth noting that prices increased 30%.')).toBeNull();
+  });
+
+  it('AI cliché rejection is case-insensitive', () => {
+    expect(sanitizeDraft('FURTHERMORE the pricing shifted.')).toBeNull();
+    expect(sanitizeDraft('This is GROUNDBREAKING research.')).toBeNull();
+  });
+
+  it('does not reject clean drafts that contain no banned AI cliché phrases', () => {
+    const clean = 'Prices went up 30%. Nobody is talking about it.';
+    expect(sanitizeDraft(clean)).toBe(clean);
+  });
+});
