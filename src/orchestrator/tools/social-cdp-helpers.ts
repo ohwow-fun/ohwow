@@ -468,6 +468,7 @@ export async function typeIntoRichTextbox(
   // than paste but it's the only strategy that both lands text and
   // unlocks submission in the current X release.
   await focusOnly();
+  await wait(150); // let DraftJS internal state settle after focus before per-char dispatch
   const send = (page as unknown as { send: (m: string, p: unknown) => Promise<unknown> }).send.bind(page);
   for (const ch of text) {
     if (ch === '\n') {
