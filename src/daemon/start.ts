@@ -22,10 +22,14 @@ import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
 import { wireConductor } from '../autonomy/wire-daemon.js';
-import { resolveActiveWorkspace } from '../config.js';
+import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
 import { getSharedEmbedder, warmSharedEmbedder } from '../embeddings/singleton.js';
 import { runEmbeddingBackfill } from '../embeddings/backfill.js';
 import { createEmbedRouter } from '../api/routes/embed.js';
+import { WorkspaceRegistry, discoverWorkspaceNames } from './workspace-registry.js';
+import type { WorkspaceContext } from './workspace-context.js';
+import { TypedEventBus } from '../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../tui/types.js';
 
 export interface DaemonHandle {
   shutdown: () => void;
@@ -51,6 +55,147 @@ export async function startDaemon(): Promise<DaemonHandle> {
   const inferenceState = await setupInference(ctx);
 
   createServices(ctx);
+
+  // 6b. Build workspace registry — discover all initialised workspaces and
+  // create a lightweight WorkspaceContext for each. The primary workspace
+  // context is built from the already-initialised ctx fields; secondary
+  // workspaces get their own SQLite connection and event bus but start
+  // with controlPlane=null (Phase 2 constraint — cloud connect runs for
+  // primary only). acquireLock is NOT called for secondary workspaces since
+  // the PID file is per-daemon, not per-workspace.
+  const registry = new WorkspaceRegistry();
+  ctx.registry = registry;
+
+  const primaryName = ctx.workspaceName;
+  const allWorkspaceNames = discoverWorkspaceNames();
+
+  // Register primary workspace context using the already-initialised fields.
+  const primaryWsCtx: WorkspaceContext = {
+    workspaceName: primaryName,
+    workspaceId: 'local', // will be updated post-cloud consolidation externally
+    dataDir: ctx.dataDir,
+    sessionToken: ctx.sessionToken,
+    rawDb: ctx.rawDb,
+    db: ctx.db,
+    config: ctx.config,
+    businessContext: ctx.businessContext,
+    engine: null,   // populated after createEngine
+    orchestrator: null,
+    triggerEvaluator: null,
+    channelRegistry: null,
+    connectorRegistry: null,
+    messageRouter: null,
+    scheduler: null,
+    proactiveEngine: null,
+    connectorSyncScheduler: null,
+    controlPlane: null, // populated after connectCloudAndConsolidate
+    bus: ctx.bus,
+  };
+  registry.register(primaryWsCtx);
+
+  // Register secondary workspaces (all except primary)
+  for (const wsName of allWorkspaceNames) {
+    if (wsName === primaryName) continue; // already registered above
+    try {
+      const { TypedEventBus } = await import('../lib/typed-event-bus.js');
+      const { initDatabase } = await import('../db/init.js');
+      const { createSqliteAdapter } = await import('../db/sqlite-adapter.js');
+      const { createRpcHandlers } = await import('../db/rpc-handlers.js');
+      const { signDaemonToken, verifyDaemonToken } = await import('./token-codec.js');
+      const { existsSync: fsExistsSync, readFileSync: fsReadFileSync, writeFileSync: fsWriteFileSync } = await import('fs');
+      const { join: pathJoin } = await import('path');
+      const { randomUUID } = await import('crypto');
+
+      const layout = workspaceLayoutFor(wsName);
+
+      // Initialise per-workspace SQLite
+      const wsRawDb = initDatabase(layout.dbPath);
+      const wsRpcHandlers = createRpcHandlers(wsRawDb);
+      const wsDb = createSqliteAdapter(wsRawDb, { rpcHandlers: wsRpcHandlers });
+
+      // Per-workspace event bus (must not be shared between workspaces)
+      const wsBus = new TypedEventBus<RuntimeEvents>();
+
+      // Reuse or mint session token for this workspace
+      const tokenPath = pathJoin(layout.dataDir, 'daemon.token');
+      let wsSessionToken: string | null = null;
+      if (fsExistsSync(tokenPath)) {
+        try {
+          const existing = fsReadFileSync(tokenPath, 'utf8').trim();
+          if (existing && ctx.config.jwtSecret) {
+            const payload = await verifyDaemonToken(existing, ctx.config.jwtSecret);
+            if (payload?.workspaceName === wsName) {
+              wsSessionToken = existing;
+            }
+          } else if (existing) {
+            wsSessionToken = existing;
+          }
+        } catch { /* fall through */ }
+      }
+      if (!wsSessionToken) {
+        if (ctx.config.jwtSecret) {
+          wsSessionToken = await signDaemonToken(wsName, ctx.config.jwtSecret);
+        } else {
+          wsSessionToken = randomUUID();
+        }
+        try {
+          fsWriteFileSync(tokenPath, wsSessionToken, { mode: 0o600 });
+        } catch { /* non-fatal */ }
+      }
+
+      // Read business context for this workspace
+      let wsBusinessContext: import('../execution/types.js').BusinessContext = {
+        businessName: 'My Business',
+        businessType: 'saas_startup',
+      };
+      try {
+        const row = wsRawDb.prepare(
+          'SELECT business_name, business_type FROM agent_workforce_workspaces LIMIT 1',
+        ).get() as { business_name: string; business_type: string } | undefined;
+        if (row?.business_name) {
+          wsBusinessContext = {
+            businessName: row.business_name,
+            businessType: row.business_type || 'saas_startup',
+          };
+        }
+      } catch { /* table may not exist yet */ }
+
+      // Build workspace config by inheriting the primary config and overriding
+      // workspace-specific DB path. Secondary workspaces share global settings
+      // but read their own DB file.
+      const wsConfig: import('../config.js').RuntimeConfig = {
+        ...ctx.config,
+        dbPath: layout.dbPath,
+      };
+
+      const wsCtx: WorkspaceContext = {
+        workspaceName: wsName,
+        workspaceId: 'local',
+        dataDir: layout.dataDir,
+        sessionToken: wsSessionToken,
+        rawDb: wsRawDb,
+        db: wsDb,
+        config: wsConfig,
+        businessContext: wsBusinessContext,
+        engine: null,
+        orchestrator: null,
+        triggerEvaluator: null,
+        channelRegistry: null,
+        connectorRegistry: null,
+        messageRouter: null,
+        scheduler: null,
+        proactiveEngine: null,
+        connectorSyncScheduler: null,
+        controlPlane: null,
+        bus: wsBus,
+      };
+
+      registry.register(wsCtx);
+      logger.info(`[registry] Loaded secondary workspace '${wsName}'`);
+    } catch (err) {
+      logger.error({ err }, `[registry] Failed to load workspace '${wsName}' — skipping`);
+    }
+  }
 
   // 7. Connect to cloud + consolidate workspace identity
   await connectCloudAndConsolidate(ctx);
