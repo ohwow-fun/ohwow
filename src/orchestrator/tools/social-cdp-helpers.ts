@@ -261,6 +261,46 @@ export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Wait for `ms` milliseconds ±`factor` random jitter.
+ * e.g. jitteredWait(2500, 0.3) waits 1750–3250ms.
+ */
+export function jitteredWait(ms: number, factor = 0.3): Promise<void> {
+  const delta = ms * factor;
+  const actual = ms + (Math.random() * 2 - 1) * delta;
+  return wait(Math.max(50, Math.round(actual)));
+}
+
+/**
+ * Return a randomized inter-keystroke delay in ms to simulate human typing rhythm.
+ * 85% normal speed, 10% brief hesitation, 5% longer thinking pause.
+ */
+function humanTypingDelay(): number {
+  const r = Math.random();
+  if (r < 0.05) return 280 + Math.random() * 380;
+  if (r < 0.15) return 110 + Math.random() * 110;
+  return 28 + Math.random() * 75;
+}
+
+/**
+ * Briefly scroll and pause after landing on a page before taking action.
+ * Simulates reading/scanning before composing — avoids the instant-action bot signature.
+ */
+export async function warmupBrowse(page: RawCdpPage): Promise<void> {
+  try {
+    const scrolls = 1 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < scrolls; i++) {
+      const fraction = 0.3 + Math.random() * 0.35;
+      await page.evaluate(`window.scrollBy(0, Math.round(window.innerHeight * ${fraction}))`);
+      await jitteredWait(900, 0.45);
+    }
+    // Partially scroll back — humans rarely snap back to top
+    const backFraction = 0.25 + Math.random() * 0.35;
+    await page.evaluate(`window.scrollBy(0, -Math.round(window.scrollY * ${backFraction}))`);
+    await jitteredWait(500, 0.4);
+  } catch { /* best effort */ }
+}
+
 /** JPEG screenshot (base64), quality 70. Returns undefined on failure. */
 export async function captureScreenshot(page: RawCdpPage): Promise<string | undefined> {
   try {
@@ -473,14 +513,16 @@ export async function typeIntoRichTextbox(
   for (const ch of text) {
     if (ch === '\n') {
       try { await page.pressKey('Enter'); } catch { /* continue */ }
+      await wait(humanTypingDelay());
       continue;
     }
     try {
       await send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch });
     } catch { /* continue */ }
+    await wait(humanTypingDelay());
   }
-  await wait(400);
+  await jitteredWait(400, 0.4);
   let observed = await measureLen();
   if (observed >= minAccept) {
     return { ok: true, strategy: 'dispatchKeyEvent', observedLen: observed, expectedLen: expected };
