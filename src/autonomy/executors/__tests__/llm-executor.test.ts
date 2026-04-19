@@ -278,13 +278,12 @@ async function captureSystemPrompt(mode: Mode): Promise<string> {
 }
 
 describe('buildSystemPrompt — MCP_VERBS injection (gap 14.3 regression)', () => {
-  // Criterion 1: revenue mode injects all 7 revenue verbs
-  it('revenue: contains all 7 revenue mcp_verbs', async () => {
+  // Criterion 1: revenue mode injects all revenue verbs.
+  // ohwow_approve_x_draft and ohwow_draft_x_dm removed 2026-04-19 (X account banned).
+  it('revenue: contains all revenue mcp_verbs', async () => {
     const sys = await captureSystemPrompt('revenue');
     expect(sys).toContain('ohwow_list_approvals');
     expect(sys).toContain('ohwow_preview_approval');
-    expect(sys).toContain('ohwow_approve_x_draft');
-    expect(sys).toContain('ohwow_draft_x_dm');
     expect(sys).toContain('ohwow_update_deal');
     expect(sys).toContain('ohwow_pipeline_summary');
     expect(sys).toContain('ohwow_revenue_summary');
