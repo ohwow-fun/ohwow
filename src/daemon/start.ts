@@ -13,7 +13,7 @@ import { logger } from '../lib/logger.js';
 import { createEmptyContext, type DaemonContext } from './context.js';
 import { initDaemon, createServices, createEngine } from './init.js';
 import { setupInference } from './inference.js';
-import { connectCloudAndConsolidate, startCloudPolling } from './cloud.js';
+import { consolidateWorkspace, startCloudPolling } from './cloud.js';
 import { setupOrchestration } from './orchestration.js';
 import { setupHttpServer } from './http.js';
 import { initializeMessagingChannels } from './channels.js';
@@ -197,8 +197,29 @@ export async function startDaemon(): Promise<DaemonHandle> {
     }
   }
 
-  // 7. Connect to cloud + consolidate workspace identity
-  await connectCloudAndConsolidate(ctx);
+  // 7. Connect to cloud + consolidate workspace identity for every workspace.
+  // Each workspace independently resolves its canonical workspaceId and
+  // persists its cloud identity. Non-fatal per workspace: a failure keeps
+  // that workspace local-only while others proceed normally.
+  for (const wsCtx of ctx.registry!.getAll()) {
+    try {
+      await consolidateWorkspace(wsCtx);
+    } catch (err) {
+      logger.error({ err }, `[daemon] Cloud consolidation failed for workspace '${wsCtx.workspaceName}'`);
+      // Non-fatal: workspace stays local-only
+    }
+  }
+
+  // After the loop, sync primary workspace's resolved fields back to ctx
+  // for backward compat (callers that read ctx.workspaceId / ctx.controlPlane
+  // directly still work, e.g. wireConductor, startCloudPolling).
+  // Re-use primaryName declared above (ctx.workspaceName).
+  if (ctx.registry!.has(primaryName)) {
+    const primaryWs = ctx.registry!.get(primaryName);
+    ctx.workspaceId = primaryWs.workspaceId;
+    ctx.controlPlane = primaryWs.controlPlane;
+    ctx.businessContext = primaryWs.businessContext;
+  }
 
   // 7.5 Detect Claude Code CLI availability
   if (config.claudeCodeCliAutodetect) {
