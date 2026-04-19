@@ -108,6 +108,7 @@ export async function startDaemon(): Promise<DaemonHandle> {
     db: ctx.db,
     workspace_id: ctx.workspaceId,
     workspace_slug: activeWorkspace.name,
+    modelRouter: ctx.modelRouter,
   });
   if (conductorHandle) ctx.bus.once('shutdown', () => conductorHandle.stop());
 

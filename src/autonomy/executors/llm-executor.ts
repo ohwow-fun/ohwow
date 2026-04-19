@@ -254,6 +254,47 @@ const RETRY_NUDGE =
   'Your previous response did not parse as the required JSON block. Return ONLY the JSON object in a ```json fence, nothing else.';
 
 // ---------------------------------------------------------------------------
+// Spend cap guard
+// ---------------------------------------------------------------------------
+
+export class SpendCapExceeded extends Error {
+  constructor(public readonly cents: number, public readonly capCents: number) {
+    super(`LLM spend cap exceeded: ${cents.toFixed(4)}c > ${capCents}c`);
+    this.name = 'SpendCapExceeded';
+  }
+}
+
+/**
+ * Wrap a PlanModelClient with a per-meter spend cap. After each call the
+ * accumulated `meter.cents` is checked; if it has exceeded `capCents`, the
+ * NEXT call (or the check on the current call's result) throws
+ * `SpendCapExceeded`. The harness and production wiring both use this to
+ * enforce hard per-arc budget limits.
+ *
+ * Exported so `wire-daemon.ts` can apply a 5c/arc cap in production without
+ * duplicating the logic from `harness-llm.ts`.
+ */
+export function withSpendCap(
+  inner: PlanModelClient,
+  meter: LlmMeter,
+  capCents: number,
+): PlanModelClient {
+  return {
+    call: async (params) => {
+      const res = await inner.call(params);
+      // The executor updates meter.cents AFTER this resolves, so we
+      // check after-the-fact on the result. For a single plan round
+      // + at most one retry that means at most one small over-cap call.
+      // The production loop still closes the arc on the budget check.
+      if (meter.cents > capCents) {
+        throw new SpendCapExceeded(meter.cents, capCents);
+      }
+      return res;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Wall-clock guard
 // ---------------------------------------------------------------------------
 

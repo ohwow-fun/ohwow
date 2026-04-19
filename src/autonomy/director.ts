@@ -130,6 +130,12 @@ export interface ArcInput {
   kill_on_pulse_regression?: boolean;
   /** Defaults to `runPhase` (Phase 3 orchestrator). Tests inject a stub. */
   runPhase?: typeof runPhase;
+  /**
+   * Returns the LLM spend in cents accumulated by the executor for the
+   * current arc. Injected by the Conductor when it wires a real-LLM
+   * executor (see `wire-daemon.ts`). Absent for stub/test runs.
+   */
+  getLlmCents?: () => number;
 }
 
 export interface ArcResult {
@@ -701,7 +707,7 @@ export async function runArc(
       Math.round((phaseEndedAt.getTime() - phaseStartedMs) / 60_000),
     );
 
-    const cost_llm_cents = 0;
+    const cost_llm_cents = input.getLlmCents?.() ?? 0;
 
     await updatePhaseReport(db, {
       id: phaseReportId,
