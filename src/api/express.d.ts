@@ -10,6 +10,10 @@ declare global {
        * re-serializing req.body, which would break signature checks.
        */
       rawBody?: Buffer;
+      /** Workspace name decoded from a daemon JWT token. */
+      workspaceName?: string;
+      /** Per-workspace SQLite connection pool injected by auth middleware. */
+      dbPool?: import('../db/workspace-db-pool.js').WorkspaceDbPool;
     }
   }
 }
