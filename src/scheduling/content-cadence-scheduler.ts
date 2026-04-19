@@ -141,6 +141,19 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /** Minimum gap between consecutive posts per platform (ms). */
 const MIN_POST_GAP_MS = 30 * 60 * 1000;
 
+/**
+ * Agents blocked from the content-cadence posting pool even when idle
+ * and name-matching. The default-workspace seed creates a "Social Media
+ * Manager" agent with a generic SaaS-social-media system prompt
+ * (hashtags, CTAs, "behind the scenes" language) that overrides our
+ * cadence task voice brief at the system-prompt layer. When The Voice
+ * is busy and SMM is the fallback, the LLM drifts to off-brand output
+ * (salon / booking-link / beauty-shop content). The agent row stays
+ * for non-posting flows; we just remove it from this scheduler's pool.
+ */
+const EXCLUDED_POSTER_NAMES = new Set(['Social Media Manager']);
+const EXCLUDED_POSTER_ROLES = new Set(['Content Creator & Scheduler']);
+
 // ---------------------------------------------------------------------------
 // Options + class
 // ---------------------------------------------------------------------------
@@ -390,7 +403,20 @@ export class ContentCadenceScheduler {
         .eq('workspace_id', this.workspaceId)
         .eq('status', 'idle');
 
-      const agents = (data ?? []) as Array<{ id: string; name: string; role?: string | null }>;
+      const raw = (data ?? []) as Array<{ id: string; name: string; role?: string | null }>;
+      // Exclude the generic "Social Media Manager" seed agent from the
+      // posting pool. Its persona is a SaaS social-media template
+      // (hashtags, CTAs, "behind the scenes", casual tone) which
+      // overrides our cadence task voice brief at the system-prompt
+      // layer and produces off-brand posts (beauty-shop / salon /
+      // booking-link content) whenever The Voice is busy and SMM is
+      // the fallback. Keep the row for non-posting flows; block it
+      // here so content-cadence only lands on voice-aligned agents.
+      const agents = raw.filter(
+        (a) =>
+          !EXCLUDED_POSTER_NAMES.has(a.name) &&
+          !(a.role ? EXCLUDED_POSTER_ROLES.has(a.role) : false),
+      );
       if (agents.length === 0) return null;
 
       const tiers: Array<(a: { name: string; role?: string | null }) => boolean> = [

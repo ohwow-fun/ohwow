@@ -123,8 +123,11 @@ describe('ContentCadenceScheduler — integration', () => {
 
   it('dispatches a task to an idle agent, preferring social/content names', async () => {
     // Two idle agents; the scheduler should prefer the content one.
+    // Fixture uses "The Voice" — the canonical public-comms agent —
+    // because "Social Media Manager" is now on the exclusion list
+    // (generic SaaS persona that overrides our task voice brief).
     seedAgent(env.rawDb, { id: 'a-fallback', name: 'Random Agent', status: 'idle' });
-    seedAgent(env.rawDb, { id: 'a-social', name: 'Social Media Manager', status: 'idle' });
+    seedAgent(env.rawDb, { id: 'a-social', name: 'The Voice', status: 'idle' });
     await makeScheduler(env).tick();
 
     const tasks = env.rawDb
@@ -137,6 +140,22 @@ describe('ContentCadenceScheduler — integration', () => {
 
     expect(env.engine.executeTask).toHaveBeenCalledTimes(1);
     expect(env.engine.executeTask).toHaveBeenCalledWith('a-social', tasks[0].id);
+  });
+
+  it('excludes "Social Media Manager" from the posting pool even when idle', async () => {
+    // SMM seed agent carries a generic SaaS-social-media system prompt
+    // that overrides our cadence task voice brief at the system-prompt
+    // layer. The scheduler must skip it regardless of tier match.
+    seedAgent(env.rawDb, { id: 'a-fallback', name: 'Lead Qualifier', status: 'idle' });
+    seedAgent(env.rawDb, { id: 'a-smm', name: 'Social Media Manager', status: 'idle' });
+    await makeScheduler(env).tick();
+
+    const tasks = env.rawDb
+      .prepare("SELECT id, agent_id FROM agent_workforce_tasks WHERE workspace_id = ?")
+      .all(WORKSPACE_ID) as Array<{ id: string; agent_id: string }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].agent_id).toBe('a-fallback');
+    expect(tasks[0].agent_id).not.toBe('a-smm');
   });
 
   it('falls back to any idle agent when no name matches the content keywords', async () => {
@@ -289,7 +308,7 @@ describe('ContentCadenceScheduler — integration', () => {
   });
 
   it('bypass path: posts an operator-approved draft directly, skipping agent iteration', async () => {
-    seedAgent(env.rawDb, { id: 'a-1', name: 'Social Media Manager', status: 'idle' });
+    seedAgent(env.rawDb, { id: 'a-1', name: 'The Voice', status: 'idle' });
 
     const approvalsPath = join(env.dir, 'x-approvals.jsonl');
     const draftText = 'ship it and iterate in public';
@@ -379,7 +398,7 @@ describe('ContentCadenceScheduler — integration', () => {
   });
 
   it('bypass path: routes the task to failed when the executor reports ok=false', async () => {
-    seedAgent(env.rawDb, { id: 'a-1', name: 'Social Media Manager', status: 'idle' });
+    seedAgent(env.rawDb, { id: 'a-1', name: 'The Voice', status: 'idle' });
     const approvalsPath = join(env.dir, 'x-approvals-fail.jsonl');
     writeFileSync(
       approvalsPath,
