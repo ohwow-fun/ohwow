@@ -298,7 +298,20 @@ async function readQualifiedNoOutreach(
       /* hydrate is best-effort */
     }
 
-    return contactIds.map((cid) => ({
+    // Filter out deleted contacts: only emit candidates whose id was
+    // returned by the contacts hydration query. If the hydration query
+    // returned nothing at all (network/table error) fall through
+    // unfiltered so we don't silently drop the entire list.
+    const liveContactIds =
+      nameById.size === 0 && contactIds.length > 0
+        ? (logger.warn(
+            { workspace_id, count: contactIds.length },
+            'pulse.qualified_no_outreach.hydration_empty – emitting unfiltered to avoid silent drop',
+          ),
+          contactIds)
+        : contactIds.filter((cid) => nameById.has(cid));
+
+    return liveContactIds.map((cid) => ({
       id: cid,
       name: nameById.get(cid) ?? undefined,
       qualified_at: latestQualified.get(cid)!,
