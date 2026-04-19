@@ -28,6 +28,10 @@ this round); reason from the brief alone.
 MODE LENS
 {{MODE_LENS}}
 
+AVAILABLE MCP VERBS
+These are the only MCP tool names you may reference. Do not invent verb names.
+{{MCP_VERBS}}
+
 OUTPUT CONTRACT
 Return ONLY a JSON object matching the RoundReturn TypeScript interface
 below, wrapped in a triple-backtick fence with the language tag "json".
@@ -93,3 +97,9 @@ Return ONLY the JSON fence. Anything else is a parse failure.`;
  * Marker the executor replaces with the mode lens's plan_brief_preamble.
  */
 export const MODE_LENS_MARKER = '{{MODE_LENS}}';
+
+/**
+ * Marker the executor replaces with the mode lens's mcp_verbs joined by newlines.
+ * Substituted with the literal string 'none' when mcp_verbs is empty.
+ */
+export const MCP_VERBS_MARKER = '{{MCP_VERBS}}';
