@@ -78,6 +78,7 @@ import {
   type ApprovalEntry,
 } from '../../scheduling/approval-queue.js';
 import { isContactInCooldown, resolveCooldownHours } from '../../lib/outreach-policy.js';
+import { voiceCheck } from '../../lib/voice/voice-core.js';
 
 const CADENCE: ExperimentCadence = {
   everyMs: 30 * 60 * 1000,
@@ -567,6 +568,21 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       }
       const draft = buildDraftMessage(plan.channel, plan);
       if (!draft) continue;
+
+      // Voice gate: run voiceCheck on text-only drafts before proposing.
+      // Email drafts (EmailDraft object) carry subject + body; check body text.
+      // If the gate rejects, log and skip — do not throw.
+      const draftText = typeof draft === 'string' ? draft : draft.text;
+      const voicePlatform = plan.channel === 'email' ? 'threads' : (plan.channel === 'x_dm' || plan.channel === 'x_reply' ? 'x' : 'threads');
+      const voiceResult = voiceCheck(draftText, { platform: voicePlatform, useCase: 'reply' });
+      if (!voiceResult.ok) {
+        logger.warn(
+          { contactId: plan.contact_id, channel: plan.channel, reasons: voiceResult.reasons },
+          '[outreach-thermostat] voice gate rejected draft; skipping',
+        );
+        continue;
+      }
+
       const approvalKind = plan.channel === 'x_dm'
         ? 'x_dm_outbound'
         : plan.channel === 'email'

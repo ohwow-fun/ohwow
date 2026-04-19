@@ -440,6 +440,13 @@ export class ContentCadenceScheduler {
   // Dispatch
   // -------------------------------------------------------------------------
 
+  /**
+   * Voice gate chain for new channel additions:
+   *   1. buildDraftMessage() or LLM-authored fallback produces the text.
+   *   2. voiceCheck(text, { platform, useCase: 'post' }) enforces brand rules.
+   *   3. Only gate-passing drafts reach proposeApproval() or task dispatch.
+   * Skipping any step risks off-brand copy reaching the operator queue.
+   */
   private async dispatchPostTask(slot: PlatformSlot, agentId: string): Promise<void> {
     // Approved-draft bypass
     if (this.options.approvalsJsonlPath) {
