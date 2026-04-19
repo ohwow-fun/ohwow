@@ -1,13 +1,20 @@
 /**
- * Unit tests for readFullPulse() focusing on readQualifiedNoOutreach():
+ * Unit tests for readFullPulse() focusing on:
  *
+ *   readQualifiedNoOutreach():
  *   1. Deleted-contact filter: a contact_event row whose contact_id is absent
  *      from agent_workforce_contacts must NOT appear in qualified_no_outreach.
  *   2. Hydration-failure guard: when the contacts query returns 0 rows (empty
  *      table) the function must still emit all candidates (unfiltered) rather
  *      than silently dropping the list, and must log a warn.
  *
- * These tests cover the fix landed in commit cd4e8a2.
+ *   These tests cover the fix landed in commit cd4e8a2.
+ *
+ *   readApprovalsPending() — permission_denied filter (commit 5ca41d1):
+ *   3. A task with status=needs_approval AND approval_reason IS NOT NULL
+ *      (i.e. permission_denied) must NOT appear in approvals_pending.
+ *   4. Only tasks with approval_reason IS NULL (clean approvals) surface.
+ *   5. A DB with ONLY a permission_denied task returns zero approvals_pending.
  *
  * Uses the same in-memory SQLite + migration pattern as state.test.ts.
  */
@@ -179,5 +186,98 @@ describe('readFullPulse — qualified_no_outreach: hydration-empty guard logs a 
       args[1].includes('hydration_empty'),
     );
     expect(guardWarn).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readApprovalsPending() — permission_denied filter (commit 5ca41d1)
+// ---------------------------------------------------------------------------
+
+const CREATED_AT = new Date(Date.now() - 3_600_000).toISOString(); // 1 hour ago
+const WS2 = 'ws-approvals-test';
+
+describe('readFullPulse — approvals_pending: permission_denied filter', () => {
+  let rawDb: InstanceType<typeof Database>;
+  let adapter: ReturnType<typeof createSqliteAdapter>;
+
+  beforeEach(() => {
+    ({ rawDb, adapter } = setupDb());
+    // Seed workspace row so any FK constraints pass.
+    try {
+      rawDb.exec(
+        `INSERT INTO agent_workforce_workspaces (id, name, created_at, updated_at)
+         VALUES ('${WS2}', 'approvals-test', '${CREATED_AT}', '${CREATED_AT}')`,
+      );
+    } catch { /* table or column mismatch — ignore */ }
+  });
+
+  afterEach(() => {
+    rawDb.close();
+  });
+
+  it('returns only the clean approval when one permission_denied task co-exists', async () => {
+    // Clean approval: needs_approval + approval_reason IS NULL.
+    rawDb.prepare(
+      `INSERT INTO agent_workforce_tasks
+         (id, workspace_id, agent_id, title, status, approval_reason, created_at, updated_at)
+       VALUES (?, ?, 'agent-stub', ?, 'needs_approval', NULL, ?, ?)`,
+    ).run('task-clean-001', WS2, 'Post the draft reply', CREATED_AT, CREATED_AT);
+
+    // Permission-denied task: needs_approval + approval_reason NOT NULL.
+    rawDb.prepare(
+      `INSERT INTO agent_workforce_tasks
+         (id, workspace_id, agent_id, title, status, approval_reason, created_at, updated_at)
+       VALUES (?, ?, 'agent-stub', ?, 'needs_approval', 'permission_denied', ?, ?)`,
+    ).run('task-perm-001', WS2, 'Write file outside allowed path', CREATED_AT, CREATED_AT);
+
+    const snap = await readFullPulse(adapter, WS2);
+
+    const ids = snap.approvals_pending.map((a) => a.id);
+    expect(ids).toContain('task-clean-001');
+    expect(ids).not.toContain('task-perm-001');
+    expect(snap.approvals_pending).toHaveLength(1);
+    expect(snap.pending_approvals_count).toBe(1);
+  });
+
+  it('returns zero approvals when the DB contains only a permission_denied task', async () => {
+    rawDb.prepare(
+      `INSERT INTO agent_workforce_tasks
+         (id, workspace_id, agent_id, title, status, approval_reason, created_at, updated_at)
+       VALUES (?, ?, 'agent-stub', ?, 'needs_approval', 'permission_denied', ?, ?)`,
+    ).run('task-perm-002', WS2, 'Access /etc/passwd', CREATED_AT, CREATED_AT);
+
+    const snap = await readFullPulse(adapter, WS2);
+
+    expect(snap.approvals_pending).toHaveLength(0);
+    expect(snap.pending_approvals_count).toBe(0);
+  });
+
+  it('returns all clean approvals and none of the permission_denied ones in a mixed set', async () => {
+    for (let i = 0; i < 3; i++) {
+      rawDb.prepare(
+        `INSERT INTO agent_workforce_tasks
+           (id, workspace_id, agent_id, title, status, approval_reason, created_at, updated_at)
+         VALUES (?, ?, 'agent-stub', ?, 'needs_approval', NULL, ?, ?)`,
+      ).run(`task-clean-00${i}`, WS2, `Clean task ${i}`, CREATED_AT, CREATED_AT);
+    }
+    for (let i = 0; i < 2; i++) {
+      rawDb.prepare(
+        `INSERT INTO agent_workforce_tasks
+           (id, workspace_id, agent_id, title, status, approval_reason, created_at, updated_at)
+         VALUES (?, ?, 'agent-stub', ?, 'needs_approval', 'permission_denied', ?, ?)`,
+      ).run(`task-perm-00${i}`, WS2, `Permission denied task ${i}`, CREATED_AT, CREATED_AT);
+    }
+
+    const snap = await readFullPulse(adapter, WS2);
+
+    expect(snap.approvals_pending).toHaveLength(3);
+    expect(snap.pending_approvals_count).toBe(3);
+    const ids = snap.approvals_pending.map((a) => a.id);
+    for (let i = 0; i < 3; i++) {
+      expect(ids).toContain(`task-clean-00${i}`);
+    }
+    for (let i = 0; i < 2; i++) {
+      expect(ids).not.toContain(`task-perm-00${i}`);
+    }
   });
 });
