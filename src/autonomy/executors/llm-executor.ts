@@ -39,6 +39,7 @@ import type {
   RoundStatus,
 } from '../types.js';
 import { MCP_VERBS_MARKER, MODE_LENS_MARKER, PLAN_SYSTEM_PROMPT_TEMPLATE } from './prompts/plan.js';
+import { QA_CRITERIA_MARKER, QA_IMPL_SUMMARY_MARKER, QA_SYSTEM_PROMPT_TEMPLATE } from './prompts/qa.js';
 
 // ---------------------------------------------------------------------------
 // Pricing — Anthropic Haiku 4.5 published pricing per million tokens.
@@ -460,6 +461,205 @@ export function makeLlmPlanExecutor(opts: LlmExecutorOptions): RoundExecutor {
       );
       throw new LlmExecutorError(
         `LLM plan round failed validation after retry: ${secondParse.reason}`,
+        second.body,
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// QA judge executor
+// ---------------------------------------------------------------------------
+
+export interface QaExecutorOptions {
+  model: string;
+  client: PlanModelClient;
+  fallback: RoundExecutor;
+  meter?: LlmMeter;
+  maxOutputTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+}
+
+const QA_USER_MESSAGE_TEMPLATE = `ACCEPTANCE CRITERIA:\n${QA_CRITERIA_MARKER}\n\nIMPL SUMMARY:\n${QA_IMPL_SUMMARY_MARKER}\n\nReturn ONLY the JSON object in a \`\`\`json fence.`;
+
+const QA_RETRY_NUDGE =
+  'Your previous response did not parse as the required JSON block. Return ONLY the JSON object in a ```json fence, nothing else.';
+
+/** Minimal structural check for a QA judge return. */
+function parseAndValidateQa(body: string): ParseResult {
+  const fenceMatch = FENCE_RE.exec(body);
+  let jsonText: string;
+  if (fenceMatch) {
+    jsonText = fenceMatch[1].trim();
+  } else {
+    jsonText = body.trim();
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(jsonText);
+  } catch (err) {
+    return { ok: false, reason: `JSON.parse failed: ${(err as Error).message}` };
+  }
+  if (typeof raw !== 'object' || raw === null) {
+    return { ok: false, reason: 'parsed JSON is not an object' };
+  }
+  const r = raw as Partial<RoundReturn>;
+  if (r.status !== 'continue') {
+    return { ok: false, reason: `status must be 'continue', got: ${String(r.status)}` };
+  }
+  if (typeof r.summary !== 'string' || r.summary.length === 0) {
+    return { ok: false, reason: 'summary missing or empty' };
+  }
+  if (
+    typeof r.evaluation !== 'object' ||
+    r.evaluation === null
+  ) {
+    return { ok: false, reason: 'evaluation missing or not an object' };
+  }
+  const ev = r.evaluation as Partial<NonNullable<RoundReturn['evaluation']>>;
+  const validVerdicts = ['passed', 'failed-fixed', 'failed-escalate'] as const;
+  if (!validVerdicts.includes(ev.verdict as (typeof validVerdicts)[number])) {
+    return { ok: false, reason: `evaluation.verdict invalid: ${String(ev.verdict)}` };
+  }
+  if (!Array.isArray(ev.criteria) || ev.criteria.length === 0) {
+    return { ok: false, reason: 'evaluation.criteria must be a non-empty array' };
+  }
+  // Ensure findings_written + commits are present (RoundReturn contract)
+  if (!isStringArray(r.findings_written ?? [])) {
+    return { ok: false, reason: 'findings_written must be a string[]' };
+  }
+  if (!isStringArray(r.commits ?? [])) {
+    return { ok: false, reason: 'commits must be a string[]' };
+  }
+  // Normalise missing array fields
+  if (!r.findings_written) (r as RoundReturn).findings_written = [];
+  if (!r.commits) (r as RoundReturn).commits = [];
+  return { ok: true, value: r as RoundReturn };
+}
+
+/**
+ * Build a `RoundExecutor` whose `qa` rounds hit a real LLM to judge whether
+ * the impl summary covers the plan's acceptance criteria. Non-qa rounds
+ * delegate to `opts.fallback` immediately (no LLM call).
+ *
+ * The executor extracts criteria from `brief.prior?.prior?.next_round_brief`
+ * (the plan round's next_round_brief, which becomes the impl brief body) and
+ * the impl summary from `brief.prior?.summary`. It uses the same
+ * `withTimeout` / `isTransientError` / retry pattern as `makeLlmPlanExecutor`.
+ */
+export function makeQaJudgeExecutor(opts: QaExecutorOptions): RoundExecutor {
+  const maxOutputTokens = opts.maxOutputTokens ?? 1024;
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const temperature = opts.temperature ?? 0;
+  const meter = opts.meter;
+
+  const callOnce = async (
+    brief: RoundBrief,
+    retryAppendix: string | null,
+  ): Promise<{ body: string; response: ModelResponse }> => {
+    // The QA brief's body is the impl round's next_round_brief (the
+    // acceptance criteria inherited from the plan round via the impl).
+    // The QA brief's prior is the impl RoundReturn, whose summary is what
+    // the impl round reported it did.
+    const criteriaSource = brief.body.trim() || (brief.prior?.next_round_brief ?? '');
+    const implSummary = brief.prior?.summary ?? 'No impl summary available.';
+
+    const userContent = QA_USER_MESSAGE_TEMPLATE
+      .replace(QA_CRITERIA_MARKER, criteriaSource)
+      .replace(QA_IMPL_SUMMARY_MARKER, implSummary);
+
+    const messages: ModelMessage[] = [{ role: 'user', content: userContent }];
+    if (retryAppendix) {
+      messages.push({ role: 'user', content: retryAppendix });
+    }
+    const params: CreateMessageParams = {
+      model: opts.model,
+      system: QA_SYSTEM_PROMPT_TEMPLATE,
+      messages,
+      maxTokens: maxOutputTokens,
+      temperature,
+    };
+    let response: ModelResponse;
+    try {
+      response = await withTimeout(
+        opts.client.call(params),
+        timeoutMs,
+        `llm-qa-executor:${brief.trio_id}`,
+      );
+    } catch (err) {
+      if (isTransientNetworkError(err)) {
+        logger.warn(
+          { trio_id: brief.trio_id, err: (err as Error).message },
+          'autonomy.llm_qa_executor.network_retry',
+        );
+        await new Promise<void>((r) => setTimeout(r, 2000));
+        response = await withTimeout(
+          opts.client.call(params),
+          timeoutMs,
+          `llm-qa-executor:${brief.trio_id}`,
+        );
+      } else {
+        throw err;
+      }
+    }
+    if (meter) {
+      meter.input_tokens += response.inputTokens;
+      meter.output_tokens += response.outputTokens;
+      meter.cents += estimateCostCents(response.inputTokens, response.outputTokens);
+    }
+    logger.info(
+      {
+        trio_id: brief.trio_id,
+        kind: brief.kind,
+        model: opts.model,
+        input_tokens: response.inputTokens,
+        output_tokens: response.outputTokens,
+        meter_cents: meter ? Number(meter.cents.toFixed(4)) : undefined,
+        retry: retryAppendix !== null,
+      },
+      'autonomy.llm_qa_executor.call',
+    );
+    return { body: response.content, response };
+  };
+
+  return {
+    async run(brief: RoundBrief): Promise<RoundReturn> {
+      if (brief.kind !== 'qa') {
+        return opts.fallback.run(brief);
+      }
+
+      const first = await callOnce(brief, null);
+      const firstParse = parseAndValidateQa(first.body);
+      if (firstParse.ok) {
+        return firstParse.value;
+      }
+      logger.warn(
+        {
+          trio_id: brief.trio_id,
+          kind: brief.kind,
+          reason: firstParse.reason,
+        },
+        'autonomy.llm_qa_executor.parse_failed.retry',
+      );
+
+      const second = await callOnce(brief, QA_RETRY_NUDGE);
+      const secondParse = parseAndValidateQa(second.body);
+      if (secondParse.ok) {
+        return secondParse.value;
+      }
+
+      logger.error(
+        {
+          trio_id: brief.trio_id,
+          kind: brief.kind,
+          first_reason: firstParse.reason,
+          second_reason: secondParse.reason,
+        },
+        'autonomy.llm_qa_executor.parse_failed.terminal',
+      );
+      throw new LlmExecutorError(
+        `LLM qa round failed validation after retry: ${secondParse.reason}`,
         second.body,
       );
     },

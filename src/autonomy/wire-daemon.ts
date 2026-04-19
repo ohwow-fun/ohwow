@@ -24,6 +24,7 @@ import type { RoundExecutor } from './types.js';
 import type { ModelRouter } from '../execution/model-router.js';
 import {
   makeLlmPlanExecutor,
+  makeQaJudgeExecutor,
   modelClientFromRouter,
   newLlmMeter,
   withSpendCap,
@@ -134,10 +135,17 @@ export function wireConductor(
           currentMeter,
           CONDUCTOR_ARC_SPEND_CAP_CENTS,
         );
-        return makeLlmPlanExecutor({
+        const stubFallback = defaultMakeStubExecutor();
+        const planExecutor = makeLlmPlanExecutor({
           model: DEFAULT_LLM_MODEL,
           client: cappedClient,
-          fallback: defaultMakeStubExecutor(),
+          fallback: stubFallback,
+          meter: currentMeter,
+        });
+        return makeQaJudgeExecutor({
+          model: DEFAULT_LLM_MODEL,
+          client: cappedClient,
+          fallback: planExecutor,
           meter: currentMeter,
         });
       }
