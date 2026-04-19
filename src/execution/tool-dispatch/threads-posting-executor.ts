@@ -27,6 +27,7 @@ import {
   openProfileWindow,
   findReusableTabForHost,
   closeTabById,
+  resolveBrowserContextForProfile,
 } from '../browser/chrome-profile-router.js';
 import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
 import { withProfileLock } from '../browser/profile-mutex.js';
@@ -143,12 +144,24 @@ export const threadsPostingExecutor: ToolExecutor = {
       let localFreshTargetId: string | null = null;
       await withProfileLock(target.directory, async () => {
         await ensureDebugChrome({ preferredProfile: target.directory });
-        const reusable = await findReusableTabForHost({
-          hostMatch: 'threads.com',
-          profileDir: target.directory,
-          owner: claimOwner,
-          resetUrl: 'https://www.threads.com/',
-        });
+        // Pin tab-reuse to the target profile's browser context so a
+        // human's threads.com tab in a DIFFERENT profile can't be
+        // grabbed. `resolveBrowserContextForProfile` returns the
+        // context seen by a prior `openProfileWindow` call this
+        // daemon lifetime. On the very first tick after daemon
+        // restart (no cache hit) we deliberately skip the reusable
+        // lookup entirely and fall through to `openProfileWindow` so
+        // we never hijack an unrelated tab on a cold start.
+        const expectedContext = resolveBrowserContextForProfile(target.directory);
+        const reusable = expectedContext
+          ? await findReusableTabForHost({
+            hostMatch: 'threads.com',
+            profileDir: target.directory,
+            owner: claimOwner,
+            resetUrl: 'https://www.threads.com/',
+            expectedBrowserContextId: expectedContext,
+          })
+          : null;
         if (reusable) {
           localContextId = reusable.browserContextId ?? undefined;
           reusable.page.close();
