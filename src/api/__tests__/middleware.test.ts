@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SignJWT } from 'jose';
 import { createAuthMiddleware } from '../middleware.js';
+import { signDaemonToken } from '../../daemon/token-codec.js';
 import type { Request, Response, NextFunction } from 'express';
+import type { WorkspaceDbPool } from '../../db/workspace-db-pool.js';
 
 const JWT_SECRET = 'test-jwt-secret-key-for-testing-only';
 const LOCAL_SESSION = 'local-session-token-abc';
@@ -196,5 +198,95 @@ describe('createAuthMiddleware', () => {
     expect(updateFn).toHaveBeenCalled();
     const updateArg = updateFn.mock.calls[0][0] as { last_seen_at: string };
     expect(updateArg).toHaveProperty('last_seen_at');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-workspace daemon token path (Phase 1)
+// ---------------------------------------------------------------------------
+
+function mockDbPool(opts: { throwOnGet?: boolean } = {}): WorkspaceDbPool {
+  return {
+    get: vi.fn().mockImplementation(() => {
+      if (opts.throwOnGet) throw new Error('Workspace not found');
+      return {}; // mock db instance
+    }),
+    close: vi.fn(),
+    closeAll: vi.fn(),
+  } as unknown as WorkspaceDbPool;
+}
+
+describe('createAuthMiddleware — multi-workspace dbPool path', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('accepts daemon JWT and sets req.workspaceName + req.dbPool', async () => {
+    const token = await signDaemonToken('default', JWT_SECRET);
+    const dbPool = mockDbPool();
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceName).toBe('default');
+    expect(req.dbPool).toBe(dbPool);
+    expect(req.userId).toBe('local');
+  });
+
+  it('sets workspaceName from the JWT claim, not a hardcoded value', async () => {
+    const token = await signDaemonToken('avenued', JWT_SECRET);
+    const dbPool = mockDbPool();
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceName).toBe('avenued');
+  });
+
+  it('returns 401 when dbPool.get() throws (workspace inaccessible)', async () => {
+    const token = await signDaemonToken('missing', JWT_SECRET);
+    const dbPool = mockDbPool({ throwOnGet: true });
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('Workspace') }));
+  });
+
+  it('falls through to cloud JWT path when dbPool is undefined (backward compat)', async () => {
+    // No dbPool — use classic cloud JWT
+    const token = await signJwt({ type: 'content', workspaceId: 'ws-legacy', userId: 'u-legacy' }, JWT_SECRET);
+
+    const middleware = createAuthMiddleware(JWT_SECRET, LOCAL_SESSION);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceId).toBe('ws-legacy');
+    expect(req.userId).toBe('u-legacy');
+    expect(req.workspaceName).toBeUndefined();
+  });
+
+  it('local session token still works when dbPool is present (fast path takes priority)', async () => {
+    const dbPool = mockDbPool();
+
+    const middleware = createAuthMiddleware(JWT_SECRET, LOCAL_SESSION, undefined, undefined, undefined, dbPool);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${LOCAL_SESSION}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.userId).toBe('local');
+    // dbPool.get should NOT have been called — session token fast-path runs first
+    expect((dbPool.get as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
   });
 });
