@@ -53,6 +53,17 @@ export function createShutdownHandler(ctx: DaemonContext): () => void {
     import('../execution/conversation-memory-sync.js').then(m => m.cancelAllExtractionTimers()).catch(() => {});
     ctx.bus.emit('shutdown');
     ctx.controlPlane?.disconnect();
+    // Unload secondary workspace contexts (closes their SQLite handles and
+    // stops their schedulers). The primary workspace's rawDb is closed below
+    // by rawDb.close() in the server.close callback, so we unload all
+    // workspaces except the primary to avoid a double-close.
+    if (ctx.registry) {
+      const primaryName = ctx.workspaceName;
+      const secondaries = ctx.registry.getAll().filter(w => w.workspaceName !== primaryName);
+      for (const ws of secondaries) {
+        void ctx.registry.unload(ws.workspaceName).catch(() => {});
+      }
+    }
     ctx.server.close(() => {
       ctx.rawDb.close();
       releaseLock(getPidPath(ctx.dataDir));
