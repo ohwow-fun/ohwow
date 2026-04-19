@@ -38,7 +38,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import { createWsAuthVerifier, type WsAuthDeps } from './ws-auth.js';
 import { logger } from '../lib/logger.js';
-import { ensureCdpBrowser } from '../execution/browser/chrome-profile-router.js';
+import { ensureCdpBrowser, ensureTargetDestroyedSubscription } from '../execution/browser/chrome-profile-router.js';
 import { debugSnapshot } from '../execution/browser/browser-claims.js';
 import { startScreencast, stopScreencast } from '../execution/browser/screencast.js';
 import type { RawCdpBrowser } from '../execution/browser/raw-cdp.js';
@@ -303,6 +303,57 @@ async function acquireGroup(targetId: string): Promise<TargetGroup | null> {
       });
 
       groups.set(targetId, group);
+
+      // Ensure Target.targetDestroyed events fire on this browser connection
+      // so the one-shot listener below can detect when the tab disappears.
+      ensureTargetDestroyedSubscription(browser).catch((err) => {
+        logger.debug(
+          { err: err instanceof Error ? err.message : err, targetId },
+          '[screencast-ws] ensureTargetDestroyedSubscription failed (non-fatal)',
+        );
+      });
+
+      // One-shot listener: when the subscribed tab is closed externally,
+      // broadcast idle (not offline — the daemon is still healthy) and
+      // close subscriber connections with code 4002 ("target gone, daemon
+      // healthy") so the cloud hook can show the idle state instead of
+      // the offline banner.
+      //
+      // We store the unsubscribe fn in a box so the closure can call it
+      // without triggering prefer-const (the variable is mutated after
+      // the const binding is created, so a plain `let` would flag).
+      const unsubBox: { off?: () => void } = {};
+      unsubBox.off = browser.on('Target.targetDestroyed', (params: unknown): void => {
+        const p = params as { targetId?: unknown } | null | undefined;
+        const destroyedId = p && typeof p.targetId === 'string' ? p.targetId : null;
+        if (destroyedId !== targetId) return;
+
+        // Unsubscribe this one-shot listener.
+        unsubBox.off?.();
+        const g = groups.get(targetId);
+        if (!g) return;
+
+        // Broadcast idle status to every subscriber before closing.
+        const idlePayload = JSON.stringify({
+          type: 'status',
+          state: 'idle',
+          reason: 'target_closed',
+        });
+        for (const ws of g.subscribers) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(idlePayload);
+            ws.close(4002, 'target gone, daemon healthy');
+          }
+        }
+
+        teardownGroup(targetId).catch((err) => {
+          logger.debug(
+            { err: err instanceof Error ? err.message : err, targetId },
+            '[screencast-ws] teardownGroup after targetDestroyed failed (non-fatal)',
+          );
+        });
+      });
+
       return group;
     } catch (err) {
       // Best-effort cleanup of the dangling browser connection if we
