@@ -763,13 +763,18 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       await wait(800);
     }
     await page.goto(COMPOSE_URL);
-    await wait(HYDRATION_WAIT_MS);
+    await wait(3500); // compose-specific: DraftJS needs longer bootstrap than other paths
     const currentUrl = await page.url();
     if (isLoginRedirect(currentUrl)) {
       return { success: false, message: `X redirected to login (${currentUrl}).`, currentUrl };
     }
 
-    const focused = await focusByTestid(page, 'tweetTextarea_0');
+    let focused = false;
+    for (let i = 0; i < 5; i++) {
+      focused = await focusByTestid(page, 'tweetTextarea_0');
+      if (focused) break;
+      await wait(200);
+    }
     if (!focused) {
       return {
         success: false,
