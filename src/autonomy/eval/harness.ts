@@ -172,12 +172,12 @@ function makeFakeDirectorIO(
 }
 
 // ----------------------------------------------------------------------------
-// Deterministic conductor tick — mirrors src/autonomy/conductor.ts
+// Per-tick harness state
 // ----------------------------------------------------------------------------
 
 /**
- * Per-tick state held by the harness. Tracks the per-arc phase index so
- * `phaseIndex.get(arcId)` -> next phase id sequence number.
+ * Per-tick state held by the harness. Tracks the fake clock + id factory so
+ * each `conductorTick` call gets deterministic timestamps and ids.
  */
 interface HarnessTickState {
   workspace_id: string;
@@ -188,40 +188,6 @@ interface HarnessTickState {
   executor: RoundExecutor;
   /** Scenario name; used to look up an optional mid-arc mutation hook. */
   scenario_name: string;
-}
-
-async function runDeterministicTick(
-  state: HarnessTickState,
-): Promise<ConductorTickResult> {
-  // Wrap runPhase with the mid-arc hook (eval-only seam) so scenarios can
-  // mutate DB state between phase iterations (e.g. inject a pulse drop).
-  // The hook is keyed by scenario name and is a no-op for most scenarios.
-  const hook = getMidArcHook(state.scenario_name);
-  const wrappedRunPhase: typeof runPhase = hook
-    ? async (phaseInput, executor, db) => {
-        const result = await runPhase(phaseInput, executor, db);
-        try {
-          await hook(db, {
-            workspace_id: state.workspace_id,
-            now: () => state.clock.now(),
-          });
-        } catch {
-          /* hook failures don't crash the arc */
-        }
-        return result;
-      }
-    : runPhase;
-
-  return conductorTick({
-    db: state.db,
-    io: state.io,
-    workspace_id: state.workspace_id,
-    makeExecutor: () => state.executor,
-    idFactory: (prefix) => state.ids.next(prefix),
-    nowOverride: state.clock.now,
-    refTimeMs: state.clock.getMs(),
-    runPhaseOverride: wrappedRunPhase,
-  });
 }
 
 // ----------------------------------------------------------------------------
@@ -373,7 +339,33 @@ async function applyStep(
   switch (step.kind) {
     case 'tick': {
       const before = await readInboxIds(adapter, workspace_id);
-      const result = await runDeterministicTick(tickState);
+      // Wrap runPhase with the mid-arc hook (eval-only seam) so scenarios can
+      // mutate DB state between phase iterations (e.g. inject a pulse drop).
+      const _hook = getMidArcHook(tickState.scenario_name);
+      const _wrappedRunPhase: typeof runPhase = _hook
+        ? async (phaseInput, executor, db) => {
+            const r = await runPhase(phaseInput, executor, db);
+            try {
+              await _hook(db, {
+                workspace_id: tickState.workspace_id,
+                now: () => tickState.clock.now(),
+              });
+            } catch {
+              /* hook failures don't crash the arc */
+            }
+            return r;
+          }
+        : runPhase;
+      const result = await conductorTick({
+        db: tickState.db,
+        io: tickState.io,
+        workspace_id: tickState.workspace_id,
+        makeExecutor: () => tickState.executor,
+        idFactory: (prefix) => tickState.ids.next(prefix),
+        nowOverride: tickState.clock.now,
+        refTimeMs: tickState.clock.getMs(),
+        runPhaseOverride: _wrappedRunPhase,
+      });
       base.tick_result = result;
       if (result.arc_id) {
         base.arc_summary = await summariseArc(adapter, result.arc_id);
