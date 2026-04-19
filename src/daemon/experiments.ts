@@ -87,6 +87,8 @@ import { AgentLockContentionExperiment } from '../self-bench/experiments/agent-l
 import { ListCompletenessSummaryExperiment } from '../self-bench/experiments/list-completeness-summary.js';
 import {
   refreshRuntimeConfigCache,
+  setRuntimeConfig,
+  getRuntimeConfig,
   RUNTIME_CONFIG_REFRESH_INTERVAL_MS,
 } from '../self-bench/runtime-config.js';
 import { setSelfCommitRepoRoot } from '../self-bench/self-commit.js';
@@ -116,7 +118,7 @@ import {
 } from './seed-content-automations.js';
 
 export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<void> {
-  const { config: _config, db, engine, workspaceId, scraplingService, modelRouter } =
+  const { config, db, engine, workspaceId, scraplingService, modelRouter } =
     ctx as DaemonContext;
 
   // Phase 5-B: runtime config overrides cache. Experiments read
@@ -342,15 +344,30 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     threadsReply.start();
     logger.info('[daemon] threads-reply-scheduler started');
 
-    // XReplyScheduler — sibling of the Threads loop for X post-replies.
-    // Same pipeline (scan → rank → draft → publish), platform='x', its
-    // own runtime_config namespace (x_reply.*), and warmup staggered
-    // ~90s after Threads to avoid CDP-lane contention on daemon boot.
-    const xReply = new XReplyScheduler({
-      db, engine, workspaceId, workspaceSlug,
-    });
-    xReply.start();
-    logger.info('[daemon] x-reply-scheduler started');
+    // Belt-and-suspenders: seed x_reply.enabled = false so the scheduler's
+    // per-tick guard also rejects work even if the boot flag is later
+    // toggled on before the account is reviewed and restored. Only writes
+    // when the key is not already set, preserving any operator override.
+    if (getRuntimeConfig<boolean | undefined>('x_reply.enabled', undefined) === undefined) {
+      void setRuntimeConfig(db, 'x_reply.enabled', false).catch((err) => {
+        logger.warn({ err }, '[daemon] could not seed x_reply.enabled=false');
+      });
+    }
+
+    // XReplyScheduler and XReplyDispatcher are gated by xReplySchedulerEnabled
+    // (default false). The X account was flagged for suspicious behavior;
+    // the channel is deprecated pending review. Set
+    // OHWOW_X_REPLY_SCHEDULER_ENABLED=true to re-enable after account is
+    // restored and reviewed.
+    if (config.xReplySchedulerEnabled) {
+      const xReply = new XReplyScheduler({
+        db, engine, workspaceId, workspaceSlug,
+      });
+      xReply.start();
+      logger.info('[daemon] x-reply-scheduler started');
+    } else {
+      logger.info('[daemon] x-reply-scheduler disabled (xReplySchedulerEnabled=false)');
+    }
 
     // ReplyDispatchers — 5-min tick consumers that pick up approved rows
     // from x_reply_drafts and post them via the platform's posting
@@ -359,11 +376,15 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     // dispatchers are the only path from draft → published reply. Daily
     // cap (x_reply.daily_cap / threads_reply.daily_cap, default 10) is
     // enforced here at dispatch time.
-    const xReplyDispatcher = new ReplyDispatcher({
-      db, workspaceId, workspaceSlug, platform: 'x',
-    });
-    xReplyDispatcher.start();
-    logger.info('[daemon] x-reply-dispatcher started');
+    if (config.xReplySchedulerEnabled) {
+      const xReplyDispatcher = new ReplyDispatcher({
+        db, workspaceId, workspaceSlug, platform: 'x',
+      });
+      xReplyDispatcher.start();
+      logger.info('[daemon] x-reply-dispatcher started');
+    } else {
+      logger.info('[daemon] x-reply-dispatcher disabled (xReplySchedulerEnabled=false)');
+    }
 
     const threadsReplyDispatcher = new ReplyDispatcher({
       db, workspaceId, workspaceSlug, platform: 'threads',

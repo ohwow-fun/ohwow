@@ -36,6 +36,7 @@ import {
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { logger } from '../lib/logger.js';
 import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
+import { INTEL_LEAK_PHRASES } from '../lib/voice/voice-core.js';
 
 /**
  * runtime_config_overrides key for the distiller's min novelty score.
@@ -300,6 +301,17 @@ export function sanitizeDraft(raw: string): string | null {
   if (body.length === 0) return null;
   // The prompt invites SKIP when evidence is thin — honor it as a null draft.
   if (/^skip\.?$/i.test(body)) return null;
+  // Reject drafts containing internal-mechanism vocabulary. These phrases
+  // (verdict flipped, latest scan, we've been watching) expose pipeline
+  // internals to a public audience. A draft that contains them slipped
+  // past the prompt guard; drop it rather than publish internal framing.
+  const bodyLower = body.toLowerCase();
+  for (const phrase of INTEL_LEAK_PHRASES) {
+    if (bodyLower.includes(phrase)) {
+      logger.info({ phrase }, '[x-draft-distiller] draft rejected: internal vocab leak');
+      return null;
+    }
+  }
   if (body.length > TWEET_CHAR_CAP * 2 + 10) {
     body = body.slice(0, TWEET_CHAR_CAP * 2 + 10);
   }

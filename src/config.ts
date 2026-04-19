@@ -249,6 +249,15 @@ export interface RuntimeConfig {
   xHumorIntervalMinutes: number;
 
   /**
+   * Boot-level gate for the XReplyScheduler and XReplyDispatcher. When
+   * false (the default), neither object is constructed at daemon startup,
+   * preventing autonomous X reply drafting entirely. The account was
+   * flagged for suspicious behavior; channel is deprecated pending review.
+   * Env: OHWOW_X_REPLY_SCHEDULER_ENABLED. Default: false.
+   */
+  xReplySchedulerEnabled: boolean;
+
+  /**
    * Master kill switch for the YouTube Shorts engine. When false, every
    * per-series automation is paused regardless of its own toggle. Env:
    * OHWOW_YT_SHORTS_ENABLED. Default: false.
@@ -939,6 +948,7 @@ export function loadConfig(configPath?: string): RuntimeConfig {
     xAuthorsBuckets: Array.isArray(fileConfig.xAuthorsBuckets) && fileConfig.xAuthorsBuckets.length > 0
       ? fileConfig.xAuthorsBuckets
       : ['market_signal', 'competitors'],
+    xReplySchedulerEnabled: process.env.OHWOW_X_REPLY_SCHEDULER_ENABLED === 'true' || false,
     xComposeEnabled: process.env.OHWOW_X_COMPOSE_ENABLED === 'true' || fileConfig.xComposeEnabled === true,
     xReplyEnabled: process.env.OHWOW_X_REPLY_ENABLED === 'true' || fileConfig.xReplyEnabled === true,
     xHumorEnabled: process.env.OHWOW_X_HUMOR_ENABLED === 'true' || fileConfig.xHumorEnabled === true,

@@ -79,6 +79,20 @@ export const CORPORATE_SOFTENERS: ReadonlyArray<string> = [
   'the key is',
 ];
 
+/**
+ * Internal-vocabulary phrases that must never appear in published copy.
+ * These are mechanism labels from the pipeline (verdict_flipped,
+ * latest scan, we've been watching) that expose internal framing to
+ * an external audience. If they appear in a draft it means the LLM
+ * picked up context it should not be surfacing. Checked case-
+ * insensitively as substrings.
+ */
+export const INTEL_LEAK_PHRASES: ReadonlyArray<string> = [
+  'verdict flipped',
+  'latest scan',
+  "we've been watching",
+];
+
 /** Sign-off patterns — treated as "you're not writing an email." */
 export const SIGN_OFFS: ReadonlyArray<string> = [
   'thanks!',
@@ -196,6 +210,9 @@ export function voiceCheck(text: string, ctx: VoiceCheckContext): { ok: boolean;
   }
   for (const s of SIGN_OFFS) {
     if (lower.includes(s)) reasons.push(`signoff:${s}`);
+  }
+  for (const s of INTEL_LEAK_PHRASES) {
+    if (lower.includes(s)) reasons.push(`intelLeak:${s}`);
   }
 
   return { ok: reasons.length === 0, reasons };
