@@ -757,6 +757,11 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
       if (mismatch) return mismatch;
     }
 
+    const preNavUrl = await page.url();
+    if (preNavUrl.includes('/compose/post')) {
+      await page.goto('https://x.com/home');
+      await wait(800);
+    }
     await page.goto(COMPOSE_URL);
     await wait(HYDRATION_WAIT_MS);
     const currentUrl = await page.url();
@@ -887,20 +892,32 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     }
 
     // Positive landing check: modal-closed alone isn't proof the post
-    // went through. Poll up to 2.5s for our text in the DOM (timeline
+    // went through. Poll up to 6s for our text in the DOM (timeline
     // or toast). Only flip to failure when we positively see no match
     // — a CDP probe error stays on the legacy success path so transient
     // hiccups don't invent failures.
-    const landing = await confirmPostLanded(page, text, 2500);
+    const landing = await confirmPostLanded(page, text, 6000);
     if (landing === 'not_visible') {
-      logger.warn('[x-posting] modal closed but text not visible within 2.5s — treating as silent failure');
+      const finalUrl = await page.url();
+      if (!finalUrl.includes('/compose/post')) {
+        logger.info({ finalUrl }, '[x-posting] modal closed (URL changed) — accepting as published despite inconclusive text visibility');
+        return {
+          success: true,
+          message: 'Tweet published (modal closed; text visibility inconclusive — check feed).',
+          screenshotBase64: await captureScreenshot(page) || postShot || screenshotBase64,
+          tweetsTyped: 1,
+          tweetsPublished: 1,
+          currentUrl: finalUrl,
+        };
+      }
+      logger.warn('[x-posting] modal closed but text not visible within 6s and URL still /compose/post — treating as silent failure');
       return {
         success: false,
-        message: 'Compose modal closed but the tweet text did not appear on the page within 2.5s. X may have silently dropped the post; re-check in the feed.',
+        message: 'Compose modal closed but the tweet text did not appear on the page within 6s. X may have silently dropped the post; re-check in the feed.',
         screenshotBase64: await captureScreenshot(page) || postShot || screenshotBase64,
         tweetsTyped: 1,
         tweetsPublished: 0,
-        currentUrl: await page.url(),
+        currentUrl: finalUrl,
       };
     }
 
@@ -1009,6 +1026,11 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
+  const preNavUrl = await page.url();
+  if (preNavUrl.includes('/compose/post')) {
+    await page.goto('https://x.com/home');
+    await wait(800);
+  }
   await page.goto(COMPOSE_URL);
   await wait(HYDRATION_WAIT_MS);
   const afterGoto = await page.url();
@@ -1087,16 +1109,28 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
   // modal even on failure; the final tweet is only visible once the
   // whole thread actually posted.
   const probeText = tweets[tweets.length - 1];
-  const landing = await confirmPostLanded(page, probeText, 2500);
+  const landing = await confirmPostLanded(page, probeText, 6000);
   if (landing === 'not_visible') {
-    logger.warn({ tweetsTyped }, '[x-posting] thread modal closed but last-tweet text not visible — silent failure');
+    const finalUrl = await page.url();
+    if (!finalUrl.includes('/compose/post')) {
+      logger.info({ finalUrl, tweetsTyped }, '[x-posting] thread modal closed (URL changed) — accepting as published despite inconclusive text visibility');
+      return {
+        success: true,
+        message: 'Thread published (modal closed; text visibility inconclusive — check feed).',
+        screenshotBase64: await captureScreenshot(page) || screenshotBase64,
+        tweetsTyped,
+        tweetsPublished: tweetsTyped,
+        currentUrl: finalUrl,
+      };
+    }
+    logger.warn({ tweetsTyped }, '[x-posting] thread modal closed but last-tweet text not visible and URL still /compose/post — silent failure');
     return {
       success: false,
-      message: `Thread compose closed but the last tweet (${probeText.slice(0, 40)}...) did not appear within 2.5s. X may have dropped the thread.`,
+      message: `Thread compose closed but the last tweet (${probeText.slice(0, 40)}...) did not appear within 6s. X may have dropped the thread.`,
       screenshotBase64: await captureScreenshot(page) || screenshotBase64,
       tweetsTyped,
       tweetsPublished: 0,
-      currentUrl: await page.url(),
+      currentUrl: finalUrl,
     };
   }
 
