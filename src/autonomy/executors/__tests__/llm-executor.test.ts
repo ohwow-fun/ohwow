@@ -12,6 +12,7 @@ import {
   SpendCapExceeded,
   estimateCostCents,
   makeLlmPlanExecutor,
+  makeQaJudgeExecutor,
   newLlmMeter,
   type LlmMeter,
   type PlanModelClient,
@@ -614,5 +615,180 @@ describe('transient network error retry', () => {
     const ret = await exec.run(makeBrief('plan'));
     expect(ret.status).toBe('continue');
     expect(count).toBe(2);
+  });
+});
+
+// ----------------------------------------------------------------------------
+// makeQaJudgeExecutor (gap 14.4)
+//
+// Tests verify: delegation, single LLM call, user-message composition,
+// parse-failure retry, double-failure error, and meter accumulation.
+// No real model is used — the client is fully stubbed.
+// ----------------------------------------------------------------------------
+
+function makeQaBrief(overrides?: {
+  body?: string;
+  priorSummary?: string;
+  priorNextRoundBrief?: string;
+}): import('../../types.js').RoundBrief {
+  return {
+    trio_id: 'trio_qa_test',
+    kind: 'qa',
+    mode: 'revenue',
+    goal: 'fire approval ap_demo',
+    body: overrides?.body ?? 'Criterion A: approval was processed.\nCriterion B: DM was sent.',
+    prior: {
+      status: 'continue',
+      summary: overrides?.priorSummary ?? 'Impl ran ohwow_approve_x_draft(ap_demo) successfully.',
+      next_round_brief: overrides?.priorNextRoundBrief,
+      findings_written: [],
+      commits: [],
+    },
+  };
+}
+
+const VALID_QA_JSON = JSON.stringify({
+  status: 'continue',
+  summary: 'All criteria covered.',
+  evaluation: {
+    verdict: 'passed',
+    criteria: [
+      { criterion: 'Criterion A: approval was processed.', outcome: 'covered' },
+      { criterion: 'Criterion B: DM was sent.', outcome: 'covered' },
+    ],
+    rationale: 'The impl summary confirms both criteria were addressed.',
+  },
+  findings_written: [],
+  commits: [],
+});
+
+const VALID_QA_FENCED = '```json\n' + VALID_QA_JSON + '\n```';
+
+describe('makeQaJudgeExecutor', () => {
+  // (a) Non-qa briefs delegate to fallback without calling the LLM client.
+  it('non-qa brief (plan kind) delegates to fallback, client.call never called', async () => {
+    const { client, calls } = makeStubClient([]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    const ret = await exec.run(makeBrief('plan'));
+    // Fallback returns summary 'fallback plan'
+    expect(ret.summary).toBe('fallback plan');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('non-qa brief (impl kind) delegates to fallback, client.call never called', async () => {
+    const { client, calls } = makeStubClient([]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    const ret = await exec.run(makeBrief('impl'));
+    expect(ret.summary).toBe('fallback impl');
+    expect(calls).toHaveLength(0);
+  });
+
+  // (b) QA brief with valid JSON -> single LLM call -> RoundReturn with evaluation.verdict.
+  it('qa brief with valid fenced JSON -> single LLM call -> RoundReturn with evaluation.verdict', async () => {
+    const { client, calls } = makeStubClient([{ content: VALID_QA_FENCED }]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    const ret = await exec.run(makeQaBrief());
+    expect(ret.status).toBe('continue');
+    const validVerdicts = ['passed', 'failed-fixed', 'failed-escalate'];
+    expect(validVerdicts).toContain(ret.evaluation?.verdict);
+    expect(ret.evaluation?.verdict).toBe('passed');
+    expect(calls).toHaveLength(1);
+  });
+
+  // (c) Criteria from brief.body and impl summary from brief.prior?.summary appear in user message.
+  it('user message contains criteria from brief.body and impl summary from brief.prior.summary', async () => {
+    const criteriaText = 'Criterion A: approval was processed.\nCriterion B: DM was sent.';
+    const implSummary = 'Impl executed approve action and confirmed delivery.';
+    const { client, calls } = makeStubClient([{ content: VALID_QA_FENCED }]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    await exec.run(makeQaBrief({ body: criteriaText, priorSummary: implSummary }));
+    expect(calls).toHaveLength(1);
+    const userMsg = calls[0].messages[0].content as string;
+    expect(userMsg).toContain(criteriaText);
+    expect(userMsg).toContain(implSummary);
+  });
+
+  // (d) First parse failure -> retry -> second parse ok -> resolves.
+  it('first parse failure triggers retry; second parse success -> resolves', async () => {
+    const { client, calls } = makeStubClient([
+      { content: 'Sorry, I cannot provide a JSON response here.' },
+      { content: VALID_QA_FENCED },
+    ]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    const ret = await exec.run(makeQaBrief());
+    expect(ret.status).toBe('continue');
+    expect(ret.evaluation?.verdict).toBe('passed');
+    // Two calls: first (parse fail) + retry.
+    expect(calls).toHaveLength(2);
+    // The retry appends a nudge message.
+    const retryMessages = calls[1].messages;
+    const lastMsg = retryMessages[retryMessages.length - 1];
+    expect(typeof lastMsg.content).toBe('string');
+    expect(lastMsg.content as string).toMatch(/JSON fence/i);
+  });
+
+  // (e) Two parse failures -> throws LlmExecutorError.
+  it('two consecutive parse failures -> throws LlmExecutorError', async () => {
+    const { client, calls } = makeStubClient([
+      { content: 'First invalid prose, no JSON.' },
+      { content: 'Second invalid prose, still no JSON.' },
+    ]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    await expect(exec.run(makeQaBrief())).rejects.toBeInstanceOf(LlmExecutorError);
+    expect(calls).toHaveLength(2);
+  });
+
+  // (f) Meter accumulates tokens from the qa call.
+  it('meter.cents is incremented after a qa call', async () => {
+    const { client } = makeStubClient([
+      { content: VALID_QA_FENCED, inputTokens: 300, outputTokens: 100 },
+    ]);
+    const meter: LlmMeter = newLlmMeter();
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+      meter,
+    });
+    await exec.run(makeQaBrief());
+    expect(meter.input_tokens).toBe(300);
+    expect(meter.output_tokens).toBe(100);
+    expect(meter.cents).toBeGreaterThan(0);
+  });
+
+  // Bonus: system prompt is the QA template (not the PLAN template).
+  it('system prompt contains QA judge role text', async () => {
+    const { client, calls } = makeStubClient([{ content: VALID_QA_FENCED }]);
+    const exec = makeQaJudgeExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+    await exec.run(makeQaBrief());
+    expect(calls[0].system).toContain('You are the QA judge for an ohwow autonomy trio');
   });
 });
