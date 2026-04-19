@@ -163,6 +163,7 @@ export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
   ctx.bus = bus;
   ctx.startTime = startTime;
   ctx.businessContext = businessContext;
+  ctx.workspaceName = workspaceName;
 }
 
 export function createServices(ctx: Partial<DaemonContext>): void {

@@ -42,6 +42,7 @@ import type { DocumentWorker } from '../execution/workers/document-worker.js';
 import type { PeerDiscovery } from '../peers/discovery.js';
 import type { PeerMonitor } from '../peers/peer-monitor.js';
 import type { TunnelResult } from '../tunnel/tunnel.js';
+import type { WorkspaceRegistry } from './workspace-registry.js';
 
 export interface DaemonContext {
   // Phase 1 — init
@@ -54,6 +55,8 @@ export interface DaemonContext {
   sessionToken: string;
   startTime: number;
   businessContext: BusinessContext;
+  /** Workspace slug for this daemon's primary workspace (e.g. 'default'). */
+  workspaceName: string;
 
   // Phase 2 — inference
   modelRouter: ModelRouter;
@@ -87,6 +90,11 @@ export interface DaemonContext {
   server: Server;
 
   // Phase 7 — channels + scheduling + extras
+  /**
+   * Multi-workspace registry — populated after createServices() in start.ts.
+   * Holds all WorkspaceContext instances, including the primary workspace.
+   */
+  registry?: WorkspaceRegistry;
   waClient: WhatsAppClient | null;
   tgClient: TelegramClient | null;
   scheduler: LocalScheduler | null;
