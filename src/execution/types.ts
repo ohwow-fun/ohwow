@@ -52,6 +52,12 @@ export interface EngineConfig {
    * agent gets desktop tools.
    */
   desktopToolsEnabled?: boolean;
+  /**
+   * Workspace slug (e.g. 'default', 'avenued'). When set, browser-enabled
+   * tasks are serialized per workspace via BrowserJobQueue so that two
+   * tasks in the same workspace never race on the same CDP surface.
+   */
+  workspaceName?: string;
 }
 
 // ============================================================================
