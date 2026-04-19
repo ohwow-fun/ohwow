@@ -295,6 +295,30 @@ describe('sanitizeDraft', () => {
       'Linear quietly bumped Pro to $12.',
     );
   });
+
+  // INTEL_LEAK_PHRASES scrub — Phase: deprecate X channel / content-gen prompts fix
+  it('returns null for drafts containing "verdict flipped" (internal vocab leak)', () => {
+    expect(sanitizeDraft('Interesting: the verdict flipped on their pricing page.')).toBeNull();
+  });
+
+  it('returns null for drafts containing "latest scan" (internal vocab leak)', () => {
+    expect(sanitizeDraft('Our latest scan of linear.app turned up a price change.')).toBeNull();
+  });
+
+  it("returns null for drafts containing \"we've been watching\" (internal vocab leak)", () => {
+    expect(sanitizeDraft("We've been watching this company for a while — it moved.")).toBeNull();
+  });
+
+  it('INTEL_LEAK phrase check is case-insensitive', () => {
+    expect(sanitizeDraft('VERDICT FLIPPED on the pricing page.')).toBeNull();
+    expect(sanitizeDraft('Latest Scan shows new tiers.')).toBeNull();
+    expect(sanitizeDraft("WE'VE BEEN WATCHING this space.")).toBeNull();
+  });
+
+  it('does not reject drafts that do not contain any banned phrase', () => {
+    const clean = 'Linear raised Pro from $9 to $12. Small bump with a real margin play behind it.';
+    expect(sanitizeDraft(clean)).toBe(clean);
+  });
 });
 
 describe('hasExternalSignal', () => {
