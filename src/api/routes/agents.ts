@@ -13,9 +13,10 @@
  * src/mcp-server/tools/agents.ts can target existing by-id endpoints.
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import crypto from 'node:crypto';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 import { validate } from '../validate.js';
 import { createAgentSchema } from '../schemas/index.js';
 import { DEFAULT_AGENT_TOOLS } from '../../tui/data/agent-presets.js';
@@ -51,14 +52,19 @@ function validateToolAllowlist(names: string[]): string[] {
   return unknown;
 }
 
-export function createAgentsRouter(db: DatabaseAdapter): Router {
+export function createAgentsRouter(
+  db: DatabaseAdapter,
+  getWorkspaceCtx?: (req: Request) => WorkspaceContext | null,
+): Router {
   const router = Router();
+  const resolveDb = (req: Request) => (getWorkspaceCtx?.(req)?.db) ?? db;
 
   // List agents
   router.get('/api/agents', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
-      const { data, error } = await db.from('agent_workforce_agents')
+      const { data, error } = await activeDb.from('agent_workforce_agents')
         .select('*')
         .eq('workspace_id', workspaceId);
 
@@ -76,6 +82,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Create agent
   router.post('/api/agents', validate(createAgentSchema), async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
       const {
         name,
@@ -100,7 +107,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       // (workspace_id, name), so the check is race-prone under heavy
       // concurrent writes — acceptable here because agent creation is a
       // single-operator action via the MCP tool or TUI.
-      const { data: existing } = await db.from('agent_workforce_agents')
+      const { data: existing } = await activeDb.from('agent_workforce_agents')
         .select('id')
         .eq('workspace_id', workspaceId)
         .eq('name', name)
@@ -132,7 +139,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
 
-      const { error } = await db.from('agent_workforce_agents').insert({
+      const { error } = await activeDb.from('agent_workforce_agents').insert({
         id,
         workspace_id: workspaceId,
         department_id: department_id || null,
@@ -172,7 +179,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
         return;
       }
 
-      const { data } = await db.from('agent_workforce_agents')
+      const { data } = await activeDb.from('agent_workforce_agents')
         .select('*')
         .eq('id', id)
         .single();
@@ -186,8 +193,9 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Get single agent
   router.get('/api/agents/:id', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
-      const { data, error } = await db.from('agent_workforce_agents')
+      const { data, error } = await activeDb.from('agent_workforce_agents')
         .select('*')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -207,6 +215,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Update agent fields
   router.patch('/api/agents/:id', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
       const allowedFields = [
         'voice_profile_id',
@@ -236,7 +245,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
 
       // If renaming, enforce workspace-unique name.
       if (typeof updates.name === 'string') {
-        const { data: conflict } = await db.from('agent_workforce_agents')
+        const { data: conflict } = await activeDb.from('agent_workforce_agents')
           .select('id')
           .eq('workspace_id', workspaceId)
           .eq('name', updates.name)
@@ -281,7 +290,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       }
 
       if (Object.keys(configPatch).length > 0) {
-        const { data: existing } = await db.from('agent_workforce_agents')
+        const { data: existing } = await activeDb.from('agent_workforce_agents')
           .select('config')
           .eq('id', req.params.id)
           .eq('workspace_id', workspaceId)
@@ -300,7 +309,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
 
       updates.updated_at = new Date().toISOString();
 
-      const { error } = await db.from('agent_workforce_agents')
+      const { error } = await activeDb.from('agent_workforce_agents')
         .update(updates)
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId);
@@ -311,7 +320,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       }
 
       // Return updated agent
-      const { data } = await db.from('agent_workforce_agents')
+      const { data } = await activeDb.from('agent_workforce_agents')
         .select('*')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -326,10 +335,11 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Delete agent
   router.delete('/api/agents/:id', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
 
       // Verify agent exists and belongs to workspace
-      const { data: existing } = await db.from('agent_workforce_agents')
+      const { data: existing } = await activeDb.from('agent_workforce_agents')
         .select('id')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -341,12 +351,12 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       }
 
       // Delete agent memory
-      await db.from('agent_workforce_agent_memory')
+      await activeDb.from('agent_workforce_agent_memory')
         .delete()
         .eq('agent_id', req.params.id);
 
       // Delete the agent
-      const { error } = await db.from('agent_workforce_agents')
+      const { error } = await activeDb.from('agent_workforce_agents')
         .delete()
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId);
@@ -365,8 +375,9 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Trigger memory maintenance for an agent
   router.post('/api/agents/:id/maintenance', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
-      const { data: agent } = await db.from('agent_workforce_agents')
+      const { data: agent } = await activeDb.from('agent_workforce_agents')
         .select('id')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -378,7 +389,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       }
 
       const { runAgentMemoryMaintenance } = await import('../../lib/memory-maintenance.js');
-      const result = await runAgentMemoryMaintenance(db, workspaceId, { agentId: req.params.id });
+      const result = await runAgentMemoryMaintenance(activeDb, workspaceId, { agentId: req.params.id });
       res.json({ data: result });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Maintenance failed' });
@@ -388,8 +399,9 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Get agent budget status
   router.get('/api/agents/:id/budget-status', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
-      const { data: agent, error } = await db.from('agent_workforce_agents')
+      const { data: agent, error } = await activeDb.from('agent_workforce_agents')
         .select('autonomy_budget')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -417,7 +429,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
 
       // Query today's spend
       const today = new Date().toISOString().slice(0, 10);
-      const { data: todayRow } = await db
+      const { data: todayRow } = await activeDb
         .from('resource_usage_daily')
         .select('total_cost_cents')
         .eq('workspace_id', workspaceId)
@@ -431,7 +443,7 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
       const monthEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-31`;
 
-      const { data: monthRows } = await db
+      const { data: monthRows } = await activeDb
         .from('resource_usage_daily')
         .select('total_cost_cents')
         .eq('workspace_id', workspaceId)
@@ -450,7 +462,8 @@ export function createAgentsRouter(db: DatabaseAdapter): Router {
   // Get agent memory
   router.get('/api/agents/:id/memory', async (req, res) => {
     try {
-      const { data, error } = await db.from('agent_workforce_agent_memory')
+      const activeDb = resolveDb(req);
+      const { data, error } = await activeDb.from('agent_workforce_agent_memory')
         .select('*')
         .eq('agent_id', req.params.id)
         .eq('is_active', 1)

@@ -9,15 +9,17 @@
  * without going through the full agent execution path.
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { ModelRouter } from '../../execution/model-router.js';
+import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { logger } from '../../lib/logger.js';
 
 export function createLlmRouter(
   db: DatabaseAdapter,
   modelRouter: ModelRouter | null,
+  getWorkspaceCtx?: (req: Request) => WorkspaceContext | null,
 ): Router {
   const router = Router();
 
@@ -29,6 +31,8 @@ export function createLlmRouter(
       return;
     }
 
+    const wsCtx = getWorkspaceCtx?.(req);
+    const activeDb = wsCtx?.db ?? db;
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     // Callers may pass agentId explicitly so the router loads that agent's
@@ -48,7 +52,7 @@ export function createLlmRouter(
       const result = await runLlmCall(
         {
           modelRouter,
-          db,
+          db: activeDb,
           workspaceId,
           currentAgentId: agentId,
           currentTaskId: taskId,

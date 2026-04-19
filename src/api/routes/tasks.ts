@@ -5,31 +5,38 @@
  * GET /api/tasks/:id/messages — Get task conversation
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { RuntimeEngine } from '../../execution/engine.js';
+import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 import { logger } from '../../lib/logger.js';
 
-export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | null): Router {
+export function createTasksRouter(
+  db: DatabaseAdapter,
+  engine?: RuntimeEngine | null,
+  getWorkspaceCtx?: (req: Request) => WorkspaceContext | null,
+): Router {
   const router = Router();
 
   // List tasks (with optional filters)
   router.get('/api/tasks', async (req, res) => {
     try {
+      const wsCtx = getWorkspaceCtx?.(req);
+      const activeDb = wsCtx?.db ?? db;
       const { workspaceId } = req;
       const { agentId, status, limit = '50', offset = '0' } = req.query;
       const limNum = Math.max(1, Math.min(500, parseInt(limit as string, 10) || 50));
       const offNum = Math.max(0, parseInt(offset as string, 10) || 0);
 
       // Count first so the client can paginate without a second round trip.
-      let countQuery = db.from('agent_workforce_tasks')
+      let countQuery = activeDb.from('agent_workforce_tasks')
         .select('id', { count: 'exact', head: true })
         .eq('workspace_id', workspaceId);
       if (agentId) countQuery = countQuery.eq('agent_id', agentId as string);
       if (status) countQuery = countQuery.eq('status', status as string);
       const { count: total } = await countQuery;
 
-      let query = db.from('agent_workforce_tasks')
+      let query = activeDb.from('agent_workforce_tasks')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false })
@@ -58,8 +65,10 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get single task
   router.get('/api/tasks/:id', async (req, res) => {
     try {
+      const wsCtx = getWorkspaceCtx?.(req);
+      const activeDb = wsCtx?.db ?? db;
       const { workspaceId } = req;
-      const { data, error } = await db.from('agent_workforce_tasks')
+      const { data, error } = await activeDb.from('agent_workforce_tasks')
         .select('*')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -79,6 +88,9 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Dispatch a new task
   router.post('/api/tasks', async (req, res) => {
     try {
+      const wsCtx = getWorkspaceCtx?.(req);
+      const activeDb = wsCtx?.db ?? db;
+      const activeEngine = wsCtx?.engine ?? engine;
       const { workspaceId } = req;
       const { agentId, title, description } = req.body as {
         agentId?: string;
@@ -94,7 +106,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       const taskId = crypto.randomUUID();
       const now = new Date().toISOString();
 
-      const { error: insertErr } = await db.from('agent_workforce_tasks').insert({
+      const { error: insertErr } = await activeDb.from('agent_workforce_tasks').insert({
         id: taskId,
         agent_id: agentId,
         workspace_id: workspaceId,
@@ -113,16 +125,16 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       }
 
       // Execute async if engine is available
-      if (engine) {
-        engine.executeTask(agentId, taskId).catch(async (err) => {
+      if (activeEngine) {
+        activeEngine.executeTask(agentId, taskId).catch(async (err) => {
           logger.error({ err, taskId, agentId }, '[TaskRoute] Task execution failed');
           try {
-            await db.from('agent_workforce_tasks').update({
+            await activeDb.from('agent_workforce_tasks').update({
               status: 'failed',
               error_message: err instanceof Error ? err.message : 'Task execution failed unexpectedly',
               updated_at: new Date().toISOString(),
             }).eq('id', taskId);
-            await db.from('agent_workforce_agents').update({
+            await activeDb.from('agent_workforce_agents').update({
               status: 'idle',
               updated_at: new Date().toISOString(),
             }).eq('id', agentId);
@@ -139,13 +151,16 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Execute an existing task
   router.post('/api/tasks/:id/execute', async (req, res) => {
     try {
-      if (!engine) {
+      const wsCtx = getWorkspaceCtx?.(req);
+      const activeDb = wsCtx?.db ?? db;
+      const activeEngine = wsCtx?.engine ?? engine;
+      if (!activeEngine) {
         res.status(503).json({ error: 'Engine not available' });
         return;
       }
 
       const { workspaceId } = req;
-      const { data: task, error: fetchErr } = await db.from('agent_workforce_tasks')
+      const { data: task, error: fetchErr } = await activeDb.from('agent_workforce_tasks')
         .select('*')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -160,15 +175,15 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       const agentId = row.agent_id as string;
 
       // Fire-and-forget execution
-      engine.executeTask(agentId, req.params.id).catch(async (err) => {
+      activeEngine.executeTask(agentId, req.params.id).catch(async (err) => {
         logger.error({ err, taskId: req.params.id, agentId }, '[TaskRoute] Task execution failed');
         try {
-          await db.from('agent_workforce_tasks').update({
+          await activeDb.from('agent_workforce_tasks').update({
             status: 'failed',
             error_message: err instanceof Error ? err.message : 'Task execution failed unexpectedly',
             updated_at: new Date().toISOString(),
           }).eq('id', req.params.id);
-          await db.from('agent_workforce_agents').update({
+          await activeDb.from('agent_workforce_agents').update({
             status: 'idle',
             updated_at: new Date().toISOString(),
           }).eq('id', agentId);
@@ -183,7 +198,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task messages
   router.get('/api/tasks/:id/messages', async (req, res) => {
     try {
-      const { data, error } = await db.from('agent_workforce_task_messages')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data, error } = await activeDb.from('agent_workforce_task_messages')
         .select('*')
         .eq('task_id', req.params.id)
         .order('created_at', { ascending: true });
@@ -202,7 +218,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task trace (ReAct steps from metadata)
   router.get('/api/tasks/:id/trace', async (req, res) => {
     try {
-      const { data: task } = await db.from('agent_workforce_tasks')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data: task } = await activeDb.from('agent_workforce_tasks')
         .select('id, metadata')
         .eq('id', req.params.id)
         .single();
@@ -226,7 +243,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task activity feed
   router.get('/api/tasks/:id/activity', async (req, res) => {
     try {
-      const { data } = await db.from('agent_workforce_activity')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data } = await activeDb.from('agent_workforce_activity')
         .select('*')
         .eq('task_id', req.params.id)
         .order('created_at', { ascending: true });
@@ -240,7 +258,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get agent state for this task's agent
   router.get('/api/tasks/:id/state', async (req, res) => {
     try {
-      const { data: task } = await db.from('agent_workforce_tasks')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data: task } = await activeDb.from('agent_workforce_tasks')
         .select('agent_id')
         .eq('id', req.params.id)
         .single();
@@ -248,7 +267,7 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
       if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
       const agentId = (task as Record<string, unknown>).agent_id as string;
-      const { data } = await db.from('agent_workforce_task_state')
+      const { data } = await activeDb.from('agent_workforce_task_state')
         .select('*')
         .eq('agent_id', agentId)
         .order('updated_at', { ascending: false });
@@ -262,7 +281,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task deliverables
   router.get('/api/tasks/:id/deliverables', async (req, res) => {
     try {
-      const { data } = await db.from('agent_workforce_deliverables')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data } = await activeDb.from('agent_workforce_deliverables')
         .select('*')
         .eq('task_id', req.params.id)
         .order('created_at', { ascending: true });
@@ -276,7 +296,8 @@ export function createTasksRouter(db: DatabaseAdapter, engine?: RuntimeEngine | 
   // Get task replay (merged timeline)
   router.get('/api/tasks/:id/replay', async (req, res) => {
     try {
-      const { data: task } = await db.from('agent_workforce_tasks')
+      const activeDb = (getWorkspaceCtx?.(req)?.db) ?? db;
+      const { data: task } = await activeDb.from('agent_workforce_tasks')
         .select('id, title, status, output, metadata, duration_seconds, tokens_used, completed_at')
         .eq('id', req.params.id)
         .single();
