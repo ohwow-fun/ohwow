@@ -36,7 +36,7 @@ import {
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { logger } from '../lib/logger.js';
 import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
-import { INTEL_LEAK_PHRASES, buildVoicePrinciples, buildLengthDirective } from '../lib/voice/voice-core.js';
+import { INTEL_LEAK_PHRASES, AI_CLICHE_PHRASES, buildVoicePrinciples, buildLengthDirective } from '../lib/voice/voice-core.js';
 
 /**
  * runtime_config_overrides key for the distiller's min novelty score.
@@ -313,6 +313,12 @@ export function sanitizeDraft(raw: string): string | null {
   for (const phrase of INTEL_LEAK_PHRASES) {
     if (bodyLower.includes(phrase)) {
       logger.info({ phrase }, '[x-draft-distiller] draft rejected: internal vocab leak');
+      return null;
+    }
+  }
+  for (const phrase of AI_CLICHE_PHRASES) {
+    if (bodyLower.includes(phrase)) {
+      logger.info({ phrase }, '[x-draft-distiller] draft rejected: AI cliche phrase');
       return null;
     }
   }
