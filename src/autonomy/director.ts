@@ -136,6 +136,22 @@ export interface ArcInput {
    * executor (see `wire-daemon.ts`). Absent for stub/test runs.
    */
   getLlmCents?: () => number;
+  /**
+   * Optional deterministic id factory injected by the eval harness.
+   * When provided, `runArc` uses `idFactory('pr')` for phase-report ids
+   * and `idFactory('fi')` for founder-question ids so eval transcripts
+   * are byte-stable across runs. Production leaves this undefined; the
+   * built-in generators (`genPhaseReportId`, `genFounderQuestionId`)
+   * are used instead.
+   */
+  idFactory?: (prefix: string) => string;
+  /**
+   * Optional `now` override injected by the eval harness fake clock.
+   * When provided, all internal timestamp calls (`io.now()`) are
+   * replaced by this function so cadence / novelty windows are
+   * deterministic. Production leaves this undefined.
+   */
+  now?: () => Date;
 }
 
 export interface ArcResult {
@@ -186,7 +202,7 @@ function phaseStatusToReportStatus(s: PhaseStatus): PhaseReportStatus {
  * check to fire — missing data is not a regression. Equality is OK;
  * only a strict drop counts.
  */
-function detectPulseRegression(
+export function detectPulseRegression(
   baseline: PulseSnapshot,
   current: PulseSnapshot,
 ): string | null {
@@ -398,13 +414,15 @@ function makeFounderQuestionHook(
   arc_id: string,
   phase_report_id: string,
   mode: Mode,
+  nowFn: () => Date,
+  idFactory?: (prefix: string) => string,
 ): NonNullable<PhaseInput['onFounderQuestion']> {
   return async ({ ret }) => {
     // The trio runner hands us `ret.summary` as the blocker. The plan
     // round's `next_round_brief` (when set) is the longer context.
     const summary = ret.summary || 'phase needs founder input';
     const context = ret.next_round_brief ?? '';
-    const id = genFounderQuestionId(io.now());
+    const id = idFactory ? idFactory('fi') : genFounderQuestionId(nowFn());
     try {
       await writeFounderQuestion(db, {
         id,
@@ -417,7 +435,7 @@ function makeFounderQuestionHook(
         options: [],
         recommended: null,
         screenshot_path: null,
-        asked_at: io.now().toISOString(),
+        asked_at: nowFn().toISOString(),
       });
     } catch (err) {
       logger.error(
@@ -448,9 +466,11 @@ export async function runArc(
   const budget_max_minutes = input.budget_max_minutes ?? DEFAULT_BUDGET_MAX_MINUTES;
   const budget_max_inbox_qs = input.budget_max_inbox_qs ?? DEFAULT_BUDGET_MAX_INBOX_QS;
   const kill_on_pulse_regression = input.kill_on_pulse_regression ?? true;
+  // Use the injected clock when provided (eval harness); fall back to io.now().
+  const nowFn: () => Date = input.now ?? (() => io.now());
 
-  const openedAt = io.now();
-  const arc_id = input.arc_id ?? genArcId(openedAt);
+  const openedAt = nowFn();
+  const arc_id = input.arc_id ?? (input.idFactory ? input.idFactory('arc') : genArcId(openedAt));
   const pulseAtEntry = await io.readPulse(input.workspace_id);
 
   await openArc(db, {
@@ -491,7 +511,7 @@ export async function runArc(
     }
 
     // ---- 1b. budget cap: minutes ----
-    const elapsedMs = io.now().getTime() - startedAtMs;
+    const elapsedMs = nowFn().getTime() - startedAtMs;
     if (elapsedMs > budget_max_minutes * 60_000) {
       exit_reason = 'budget';
       break;
@@ -561,11 +581,13 @@ export async function runArc(
     }
 
     // ---- 6. capture entry SHAs + write phase report row ----
-    const phaseStartedAt = io.now();
+    const phaseStartedAt = nowFn();
     const phaseStartIso = phaseStartedAt.toISOString();
     const phaseStartedMs = phaseStartedAt.getTime();
     const reportIdx = phases_run + 1;
-    const phaseReportId = genPhaseReportId(arc_id, reportIdx);
+    const phaseReportId = input.idFactory
+      ? input.idFactory('pr')
+      : genPhaseReportId(arc_id, reportIdx);
 
     let runtime_sha_start: string | null = null;
     let cloud_sha_start: string | null = null;
@@ -633,6 +655,8 @@ export async function runArc(
         arc_id,
         phaseReportId,
         pick.mode,
+        nowFn,
+        input.idFactory,
       ),
     };
 
@@ -651,7 +675,7 @@ export async function runArc(
       // Mark the report aborted, then end the arc as aborted via budget
       // path: there's no spec'd "phase-threw" exit reason. Treat as a
       // pulse-ko-equivalent abort.
-      const phaseEndedAt = io.now();
+      const phaseEndedAt = nowFn();
       await updatePhaseReport(db, {
         id: phaseReportId,
         status: 'phase-aborted',
@@ -700,7 +724,7 @@ export async function runArc(
     }
 
     currentPulse = await io.readPulse(input.workspace_id);
-    const phaseEndedAt = io.now();
+    const phaseEndedAt = nowFn();
     const inbox_added = await countInboxAddedForPhase(db, phaseReportId);
     const cost_minutes = Math.max(
       0,
@@ -794,7 +818,7 @@ export async function runArc(
     status: arcStatus,
     exit_reason,
     pulse_at_close: pulseAtClose,
-    closed_at: io.now().toISOString(),
+    closed_at: nowFn().toISOString(),
   });
 
   const reports = await listPhaseReportsForArc(db, arc_id);

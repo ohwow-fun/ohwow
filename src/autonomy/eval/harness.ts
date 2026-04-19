@@ -1,20 +1,20 @@
 /**
  * Evaluation harness (Phase 6 of the autonomy retrofit).
  *
- * Drives `conductorTick`-equivalent runs against an in-memory SQLite,
- * with a fake clock + deterministic id factory + stub executor, so each
- * scenario produces a byte-identical ASCII transcript on every run.
- * The transcript is diffed against a committed golden snapshot. Drift
- * = regression.
+ * Drives production `conductorTick` against an in-memory SQLite, with a
+ * fake clock + deterministic id factory + stub executor, so each scenario
+ * produces a byte-identical ASCII transcript on every run. The transcript
+ * is diffed against a committed golden snapshot. Drift = regression.
  *
- * The harness deliberately does NOT call `conductorTick` itself —
- * `conductorTick` builds its own ranker picker that genenerates
- * non-deterministic phase ids using `new Date()`. Instead the harness
- * mirrors the conductor's tick logic exactly (open-arc check, pulse +
- * ledger pre-read, ranker probe for thesis, picker built from ranker,
- * `runArc`) but threads our id factory through for arc + phase ids and
- * routes time through the injected `DirectorIO.now` and our `refTimeMs`
- * so cadence / novelty windows are deterministic.
+ * Determinism is achieved by threading the harness's fake clock and id
+ * factory into `ConductorDeps` via the `nowOverride`, `idFactory`, and
+ * `runPhaseOverride` injectors added in Phase 6.10. The conductor and
+ * director use these when present; production leaves them undefined.
+ *
+ * The `runPhaseOverride` wraps the production `runPhase` with the
+ * scenario's optional mid-arc mutation hook (`getMidArcHook`), which
+ * lets scenarios inject pulse drops or other DB mutations between phase
+ * iterations without touching the production conductor.
  *
  * Real-LLM eval seam: `RunOptions.makeExecutor` lets a future phase
  * swap in a sub-orchestrator-backed executor without touching the
@@ -26,32 +26,22 @@ import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
-import { defaultMakeStubExecutor, reconstructPickedKeys } from '../conductor.js';
+import { conductorTick, defaultMakeStubExecutor, reconstructPickedKeys } from '../conductor.js';
 import {
-  closeArc,
-  countInboxAddedForPhase,
-  listAnsweredFounderInbox,
   listAnsweredUnresolvedFounderInbox,
-  listOpenArcs,
   listOpenFounderInbox,
   listPhaseReportsForArc,
-  openArc,
-  resolveFounderQuestion,
-  updatePhaseReport,
-  writePhaseReport,
-  type ArcExitReason,
-  type FounderInboxRecord,
   type PhaseReportRecord,
   type PulseSnapshot,
 } from '../director-persistence.js';
-import { runPhase, type PhaseInput, type PhaseStatus } from '../phase-orchestrator.js';
+import { runPhase } from '../phase-orchestrator.js';
 import { readFullPulse, type FullPulseSnapshot } from '../pulse.js';
 import {
   rankNextPhase,
   readLedgerSnapshot,
   type RankedPhase,
 } from '../ranker.js';
-import type { DirectorIO, PickerOutput } from '../director.js';
+import type { DirectorIO } from '../director.js';
 import type { ConductorTickResult } from '../conductor.js';
 import type { RoundExecutor } from '../types.js';
 import { applySeed, summarizeSeed } from './seed.js';
@@ -200,433 +190,38 @@ interface HarnessTickState {
   scenario_name: string;
 }
 
-// MIRROR OF conductor.ts:conductorTick + director.ts:runArc — keep in lockstep.
-// Bug fixes that change conductor/director behavior MUST be reflected here
-// (Phase 6.5 Bugs #1 and #2 are mirrored below: per-arc picked_keys dedupe
-// and cross-arc workspace-wide answered seed).
 async function runDeterministicTick(
   state: HarnessTickState,
 ): Promise<ConductorTickResult> {
-  // 1. Open-arc check (mirrors conductor.ts).
-  const open = await listOpenArcs(state.db, state.workspace_id);
-  if (open.length > 0) {
-    return { ran: false, reason: 'arc-in-flight' };
-  }
-
-  // 2. Probe pulse + ledger to build the thesis line.
-  const pulse = await readFullPulse(state.db, state.workspace_id);
-  const ledger = await readLedgerSnapshot(state.db, state.workspace_id);
-  const refMs = state.clock.getMs();
-
-  // Bug #2 (mirror): pre-fetch workspace-wide answered+unresolved inbox
-  // rows so the first picker call resumes cross-arc answers.
-  const seedAnswered = await listAnsweredUnresolvedFounderInbox(
-    state.db,
-    state.workspace_id,
-  );
-
-  const probe = rankNextPhase({
-    pulse,
-    ledger,
-    newly_answered: seedAnswered,
-    refTimeMs: refMs,
-  });
-  const thesis =
-    probe.length > 0
-      ? `autonomous: ${probe[0].goal}`
-      : 'autonomous: scan for next-best phase';
-
-  // 3. Build a deterministic picker. Mirrors conductor.ts but uses our
-  //    id factory for phase ids and our clock for refTimeMs. Phase 6.5
-  //    additions:
-  //      - per-arc picked_keys dedupe (Bug #1)
-  //      - one-shot seedAnswered drain merged into newly_answered, with
-  //        seeded rows resolved so subsequent picker calls don't see
-  //        them again (Bug #2)
-  const picked_keys = new Set<string>();
-  let seedAnsweredPending: FounderInboxRecord[] = seedAnswered;
-
-  const picker = async ({
-    newly_answered,
-  }: {
-    newly_answered: FounderInboxRecord[];
-  }): Promise<PickerOutput | null> => {
-    const curRefMs = state.clock.getMs();
-    const fresh = await readFullPulse(state.db, state.workspace_id);
-    const freshLedger = await readLedgerSnapshot(state.db, state.workspace_id);
-
-    let mergedAnswered = newly_answered;
-    let seedDrained: FounderInboxRecord[] = [];
-    if (seedAnsweredPending.length > 0) {
-      const seen = new Set(newly_answered.map((r) => r.id));
-      const merged = [...newly_answered];
-      for (const row of seedAnsweredPending) {
-        if (!seen.has(row.id)) {
-          merged.push(row);
-          seen.add(row.id);
+  // Wrap runPhase with the mid-arc hook (eval-only seam) so scenarios can
+  // mutate DB state between phase iterations (e.g. inject a pulse drop).
+  // The hook is keyed by scenario name and is a no-op for most scenarios.
+  const hook = getMidArcHook(state.scenario_name);
+  const wrappedRunPhase: typeof runPhase = hook
+    ? async (phaseInput, executor, db) => {
+        const result = await runPhase(phaseInput, executor, db);
+        try {
+          await hook(db, {
+            workspace_id: state.workspace_id,
+            now: () => state.clock.now(),
+          });
+        } catch {
+          /* hook failures don't crash the arc */
         }
+        return result;
       }
-      mergedAnswered = merged;
-      // Phase 6.7 Deliverable B (mirror): defer the resolve until the
-      // Director has written the phase report row at status='in-flight'.
-      // If pulse-ko fires before the picker returns again, the inbox row
-      // stays answered so the next tick can re-surface it.
-      seedDrained = seedAnsweredPending;
-      seedAnsweredPending = [];
-    }
+    : runPhase;
 
-    const ranked: RankedPhase[] = rankNextPhase({
-      pulse: fresh,
-      ledger: freshLedger,
-      newly_answered: mergedAnswered,
-      refTimeMs: curRefMs,
-    });
-    const filtered = ranked.filter(
-      (c) => !picked_keys.has(`${c.mode}|${c.source}|${c.source_id ?? ''}`),
-    );
-    if (filtered.length === 0) return null;
-    const top = filtered[0];
-    picked_keys.add(`${top.mode}|${top.source}|${top.source_id ?? ''}`);
-    return {
-      phase_id: state.ids.next('phase'),
-      mode: top.mode,
-      goal: top.goal,
-      initial_plan_brief: top.initial_plan_brief,
-      resolves_inbox_ids: seedDrained.map((r) => r.id),
-    };
-  };
-
-  // 4. Open arc with our deterministic id and run it via runArcDeterministic
-  //    (a near-copy of director.runArc that uses `state.ids` for the
-  //    phase report id and the founder question id).
-  const arcId = state.ids.next('arc');
-  const result = await runArcDeterministic({
-    state,
-    arc_id: arcId,
-    thesis,
-    picker,
-  });
-
-  return {
-    ran: true,
-    arc_id: result.arc_id,
-    arc_status: result.status,
-    exit_reason: result.exit_reason,
-  };
-}
-
-interface RunArcDeterministicInput {
-  state: HarnessTickState;
-  arc_id: string;
-  thesis: string;
-  picker: (input: {
-    newly_answered: FounderInboxRecord[];
-  }) => Promise<PickerOutput | null>;
-}
-
-interface RunArcDeterministicResult {
-  arc_id: string;
-  status: 'closed' | 'aborted';
-  exit_reason: ArcExitReason;
-  phases_run: number;
-  reports: PhaseReportRecord[];
-}
-
-/**
- * Mirror of director.runArc with two changes:
- *   - phase report ids come from `state.ids` (so transcripts are stable
- *     across runs);
- *   - founder question ids come from `state.ids` too, via a hook that
- *     overrides the default one (used by the orchestrator on
- *     status='needs-input' rounds).
- *
- * The control flow is intentionally identical to production. Any drift
- * between this mirror and director.runArc invalidates the eval — keep
- * them in lockstep.
- */
-async function runArcDeterministic(
-  input: RunArcDeterministicInput,
-): Promise<RunArcDeterministicResult> {
-  const { state } = input;
-  const { db, io } = state;
-  const budget_max_phases = 6;
-  const budget_max_minutes = 240;
-  const budget_max_inbox_qs = 3;
-  const kill_on_pulse_regression = true;
-
-  const openedAt = io.now();
-  const pulseAtEntry = await io.readPulse(state.workspace_id);
-
-  await openArc(db, {
-    id: input.arc_id,
+  return conductorTick({
+    db: state.db,
+    io: state.io,
     workspace_id: state.workspace_id,
-    mode_of_invocation: 'loop-tick',
-    thesis: input.thesis,
-    budget_max_phases,
-    budget_max_minutes,
-    budget_max_inbox_qs,
-    kill_on_pulse_regression,
-    pulse_at_entry: pulseAtEntry,
-    opened_at: openedAt.toISOString(),
+    makeExecutor: () => state.executor,
+    idFactory: (prefix) => state.ids.next(prefix),
+    nowOverride: state.clock.now,
+    refTimeMs: state.clock.getMs(),
+    runPhaseOverride: wrappedRunPhase,
   });
-
-  let phases_run = 0;
-  let exit_reason: ArcExitReason = 'nothing-queued';
-  const startedAtMs = openedAt.getTime();
-
-  while (true) {
-    if (phases_run >= budget_max_phases) {
-      exit_reason = 'budget';
-      break;
-    }
-    const elapsedMs = io.now().getTime() - startedAtMs;
-    if (elapsedMs > budget_max_minutes * 60_000) {
-      exit_reason = 'budget';
-      break;
-    }
-
-    const openInbox = await listOpenFounderInbox(db, state.workspace_id);
-    if (openInbox.length >= budget_max_inbox_qs) {
-      exit_reason = 'founder-returned';
-      break;
-    }
-
-    let currentPulse = await io.readPulse(state.workspace_id);
-    if (kill_on_pulse_regression) {
-      const regressionReason = detectPulseRegressionLocal(
-        pulseAtEntry,
-        currentPulse,
-      );
-      if (regressionReason) {
-        exit_reason = 'pulse-ko';
-        break;
-      }
-    }
-
-    const answered = await listAnsweredFounderInbox(db, input.arc_id);
-    for (const row of answered) {
-      try {
-        await resolveFounderQuestion(db, row.id);
-      } catch {
-        /* best-effort */
-      }
-    }
-
-    const pick = await input.picker({ newly_answered: answered });
-    if (!pick) {
-      exit_reason = 'nothing-queued';
-      break;
-    }
-
-    const phaseStartedAt = io.now();
-    const phaseStartIso = phaseStartedAt.toISOString();
-    const phaseStartedMs = phaseStartedAt.getTime();
-    const phaseReportId = state.ids.next('pr');
-
-    let runtime_sha_start: string | null = null;
-    let cloud_sha_start: string | null = null;
-    try {
-      runtime_sha_start = await io.readRuntimeSha();
-    } catch {
-      /* swallow */
-    }
-    try {
-      cloud_sha_start = await io.readCloudSha();
-    } catch {
-      /* swallow */
-    }
-
-    await writePhaseReport(db, {
-      id: phaseReportId,
-      arc_id: input.arc_id,
-      workspace_id: state.workspace_id,
-      phase_id: pick.phase_id,
-      mode: pick.mode,
-      goal: pick.goal,
-      status: 'in-flight',
-      started_at: phaseStartIso,
-    });
-
-    // Phase 6.7 Deliverable B (mirror): resolve picker-drained inbox
-    // rows AFTER the phase report is in-flight, matching director.ts.
-    for (const inboxId of pick.resolves_inbox_ids ?? []) {
-      try {
-        await resolveFounderQuestion(db, inboxId);
-      } catch {
-        /* swallow; the next tick can re-surface it */
-      }
-    }
-
-    const onFounderQuestion: PhaseInput['onFounderQuestion'] = async ({
-      ret,
-    }) => {
-      const summary = ret.summary || 'phase needs founder input';
-      const context = ret.next_round_brief ?? '';
-      const fiId = state.ids.next('fi');
-      try {
-        await db.from('founder_inbox').insert({
-          id: fiId,
-          workspace_id: state.workspace_id,
-          arc_id: input.arc_id,
-          phase_id: phaseReportId,
-          mode: pick.mode,
-          blocker: summary.split('\n')[0].slice(0, 240),
-          context,
-          options_json: '[]',
-          recommended: null,
-          screenshot_path: null,
-          asked_at: io.now().toISOString(),
-          status: 'open',
-        });
-      } catch {
-        /* swallow */
-      }
-    };
-
-    const phaseInput: PhaseInput = {
-      phase_id: pick.phase_id,
-      workspace_id: state.workspace_id,
-      mode: pick.mode,
-      goal: pick.goal,
-      initial_plan_brief: pick.initial_plan_brief,
-      onFounderQuestion,
-    };
-
-    let phaseStatus: PhaseStatus = 'phase-aborted';
-    let triosRun = 0;
-    let rawReport = '';
-    try {
-      const phaseResult = await runPhase(phaseInput, state.executor, db);
-      phaseStatus = phaseResult.status;
-      triosRun = phaseResult.trios.length;
-      rawReport = phaseResult.report;
-    } catch (err) {
-      const phaseEndedAt = io.now();
-      await updatePhaseReport(db, {
-        id: phaseReportId,
-        status: 'phase-aborted',
-        trios_run: 0,
-        runtime_sha_start,
-        runtime_sha_end: runtime_sha_start,
-        cloud_sha_start,
-        cloud_sha_end: cloud_sha_start,
-        delta_pulse_json: { entry: pulseAtEntry, exit: currentPulse },
-        delta_ledger: 'phase orchestrator threw',
-        inbox_added: '0',
-        remaining_scope: pick.goal,
-        next_phase_recommendation: 'arc-stop',
-        cost_trios: 0,
-        cost_minutes: 0,
-        cost_llm_cents: 0,
-        raw_report: `phase-aborted: ${(err as Error).message}`,
-        ended_at: phaseEndedAt.toISOString(),
-      });
-      exit_reason = 'pulse-ko';
-      phases_run += 1;
-      break;
-    }
-
-    let runtime_sha_end: string | null = runtime_sha_start;
-    let cloud_sha_end: string | null = cloud_sha_start;
-    try {
-      runtime_sha_end = await io.readRuntimeSha();
-    } catch {
-      /* swallow */
-    }
-    try {
-      cloud_sha_end = await io.readCloudSha();
-    } catch {
-      /* swallow */
-    }
-    currentPulse = await io.readPulse(state.workspace_id);
-    const phaseEndedAt = io.now();
-    const inbox_added = await countInboxAddedForPhase(db, phaseReportId);
-    const cost_minutes = Math.max(
-      0,
-      Math.round((phaseEndedAt.getTime() - phaseStartedMs) / 60_000),
-    );
-
-    await updatePhaseReport(db, {
-      id: phaseReportId,
-      status: phaseStatus,
-      trios_run: triosRun,
-      runtime_sha_start,
-      runtime_sha_end,
-      cloud_sha_start,
-      cloud_sha_end,
-      delta_pulse_json: { entry: pulseAtEntry, exit: currentPulse },
-      delta_ledger: `trios=${triosRun}`,
-      inbox_added: String(inbox_added),
-      remaining_scope:
-        phaseStatus === 'phase-closed' ? null : pick.goal,
-      next_phase_recommendation: null,
-      cost_trios: triosRun,
-      cost_minutes,
-      cost_llm_cents: 0,
-      raw_report: rawReport,
-      ended_at: phaseEndedAt.toISOString(),
-    });
-
-    phases_run += 1;
-
-    // ---- mid-arc hook (eval-only): mutates DB between iterations so a
-    // scenario can simulate a pulse drop, a new approval landing, etc.
-    const hook = getMidArcHook(state.scenario_name);
-    if (hook) {
-      try {
-        await hook(db, {
-          workspace_id: state.workspace_id,
-          now: () => io.now(),
-        });
-      } catch {
-        /* hook failures don't crash the arc */
-      }
-    }
-  }
-
-  const pulseAtClose = await io.readPulse(state.workspace_id);
-  const arcStatus: 'closed' | 'aborted' =
-    exit_reason === 'pulse-ko' ? 'aborted' : 'closed';
-
-  await closeArc(db, {
-    id: input.arc_id,
-    status: arcStatus,
-    exit_reason,
-    pulse_at_close: pulseAtClose,
-    closed_at: io.now().toISOString(),
-  });
-
-  const reports = await listPhaseReportsForArc(db, input.arc_id);
-
-  return {
-    arc_id: input.arc_id,
-    status: arcStatus,
-    exit_reason,
-    phases_run,
-    reports,
-  };
-}
-
-/** Local mirror of director-private `detectPulseRegression`. */
-function detectPulseRegressionLocal(
-  baseline: PulseSnapshot,
-  current: PulseSnapshot,
-): string | null {
-  if (
-    typeof baseline.mrr_cents === 'number' &&
-    typeof current.mrr_cents === 'number' &&
-    current.mrr_cents < baseline.mrr_cents
-  ) {
-    return `mrr_cents ${baseline.mrr_cents}->${current.mrr_cents}`;
-  }
-  if (
-    typeof baseline.pipeline_count === 'number' &&
-    typeof current.pipeline_count === 'number' &&
-    current.pipeline_count < baseline.pipeline_count
-  ) {
-    return `pipeline_count ${baseline.pipeline_count}->${current.pipeline_count}`;
-  }
-  return null;
 }
 
 // ----------------------------------------------------------------------------
