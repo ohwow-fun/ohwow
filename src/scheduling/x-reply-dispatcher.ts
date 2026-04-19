@@ -44,20 +44,29 @@ const POSTING_EXECUTORS: Record<ReplyDraftPlatform, {
   executor: ToolExecutor;
   toolName: string;
   cfgDailyCap: string;
+  cfgMinGapSeconds: string;
 }> = {
   x: {
     executor: xPostingExecutor,
     toolName: 'x_compose_reply',
     cfgDailyCap: 'x_reply.daily_cap',
+    cfgMinGapSeconds: 'x_reply.min_gap_seconds',
   },
   threads: {
     executor: threadsPostingExecutor,
     toolName: 'threads_compose_reply',
     cfgDailyCap: 'threads_reply.daily_cap',
+    cfgMinGapSeconds: 'threads_reply.min_gap_seconds',
   },
 };
 
 const DEFAULT_DAILY_CAP = 10;
+// Minimum time between successful replies on a platform. A scheduler
+// tick may find several approved drafts lined up; without this gate,
+// the dispatcher fires them back-to-back over a handful of minutes,
+// which both reads as bot cadence to human viewers and gets us rate-
+// flagged. The platform-specific runtime_config key overrides this.
+const DEFAULT_MIN_GAP_SECONDS = 20 * 60;
 
 export interface ReplyDispatcherOpts {
   db: DatabaseAdapter;
@@ -131,7 +140,7 @@ export class ReplyDispatcher {
   }
 
   private async attempt(): Promise<void> {
-    const { executor, toolName, cfgDailyCap } = POSTING_EXECUTORS[this.platform];
+    const { executor, toolName, cfgDailyCap, cfgMinGapSeconds } = POSTING_EXECUTORS[this.platform];
 
     // Daily cap — previously enforced in the scheduler; moved here because
     // this is the side that actually posts. We count posted_log rows for
@@ -141,6 +150,30 @@ export class ReplyDispatcher {
     if (todayCount >= dailyCap) {
       logger.info({ todayCount, dailyCap }, `${this.label()} daily cap reached; skipping`);
       return;
+    }
+
+    // Per-platform minimum gap between dispatches. The scheduler queues
+    // up drafts in bursts, and without this the dispatcher fires the
+    // first N approved rows back-to-back every tick — which looked
+    // exactly like the bot cadence we're trying to stop. A 20-minute
+    // default spreads replies across the active window and is
+    // override-able via <platform>_reply.min_gap_seconds at runtime.
+    const minGapSecondsRaw = getRuntimeConfig<number>(cfgMinGapSeconds, DEFAULT_MIN_GAP_SECONDS);
+    const minGapSeconds = Number.isFinite(minGapSecondsRaw) && minGapSecondsRaw >= 0
+      ? minGapSecondsRaw
+      : DEFAULT_MIN_GAP_SECONDS;
+    if (minGapSeconds > 0) {
+      const lastAppliedAt = await this.lastAppliedAt();
+      if (lastAppliedAt) {
+        const sinceSeconds = (Date.now() - lastAppliedAt.getTime()) / 1000;
+        if (sinceSeconds < minGapSeconds) {
+          logger.debug(
+            { sinceSeconds: Math.round(sinceSeconds), minGapSeconds },
+            `${this.label()} within min-gap window; skipping`,
+          );
+          return;
+        }
+      }
     }
 
     const drafts = await listApprovedForDispatch(
@@ -239,6 +272,28 @@ export class ReplyDispatcher {
       return Array.isArray(data) ? data.length : 0;
     } catch {
       return 0;
+    }
+  }
+
+  private async lastAppliedAt(): Promise<Date | null> {
+    try {
+      const { data } = await this.db
+        .from<{ applied_at: string | null }>('x_reply_drafts')
+        .select('applied_at')
+        .eq('workspace_id', this.workspaceId)
+        .eq('platform', this.platform)
+        .order('applied_at', { ascending: false })
+        .limit(5);
+      const rows = Array.isArray(data) ? data : [];
+      for (const r of rows) {
+        if (r.applied_at) {
+          const d = new Date(r.applied_at);
+          if (!Number.isNaN(d.getTime())) return d;
+        }
+      }
+      return null;
+    } catch {
+      return null;
     }
   }
 

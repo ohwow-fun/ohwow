@@ -239,14 +239,15 @@ describe('buildReplySystemPrompt — first-principles semantics', () => {
       expect(p).toContain('ohwow.fun');
     });
 
-    it('frames money flowing FROM the poster outward', () => {
+    it('frames the poster as a budget-holder already decided to pay', () => {
       const p = buildReplySystemPrompt('x', 'buyer_intent');
       // Money-direction is the first-principles reason this class
-      // exists at all. Freeze it in the prompt. `[\s\S]` allows
-      // the phrase to wrap across the prompt's hard line breaks
-      // ("Money is\nflowing FROM the poster outward").
-      expect(p).toMatch(/money\s+is\s+flowing/i);
+      // exists at all. The prompt must communicate it; we test for
+      // "budget" + "pay" as the load-bearing terms rather than a
+      // frozen phrase, so the prompt can be reworded without the
+      // test going stale.
       expect(p).toMatch(/budget/i);
+      expect(p).toMatch(/\bpay\b/i);
     });
 
     it('bans qualification probes', () => {
