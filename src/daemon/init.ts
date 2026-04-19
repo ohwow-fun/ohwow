@@ -15,8 +15,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { dirname, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { dirname, basename, join } from 'path';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { signDaemonToken, verifyDaemonToken } from './token-codec.js';
 import { TypedEventBus } from '../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../tui/types.js';
 import { loadConfig, isFirstRun } from '../config.js';
@@ -58,18 +59,38 @@ export async function initDaemon(ctx: Partial<DaemonContext>): Promise<void> {
   const dataDir = dirname(config.dbPath);
   const pidPath = getPidPath(dataDir);
 
-  // Reuse the existing session token if one is already on disk so browser
-  // sessions survive a daemon restart. Only mint a new UUID when there's no
-  // token yet (first boot, or someone cleared state).
+  // Reuse the existing session token if it is a valid JWT carrying this
+  // workspace name. Mint and persist a new one if there's no token yet,
+  // the file is missing, or the claim doesn't match (e.g. workspace rename).
   const tokenPath = join(dataDir, 'daemon.token');
+  const workspaceName = basename(dataDir);
   let sessionToken: string | null = null;
   if (existsSync(tokenPath)) {
     try {
       const existing = readFileSync(tokenPath, 'utf8').trim();
-      if (existing) sessionToken = existing;
+      if (existing && config.jwtSecret) {
+        const payload = await verifyDaemonToken(existing, config.jwtSecret);
+        if (payload?.workspaceName === workspaceName) {
+          sessionToken = existing;
+        }
+      } else if (existing) {
+        // No jwtSecret yet — fall back to legacy UUID behaviour
+        sessionToken = existing;
+      }
     } catch { /* fall through to regenerate */ }
   }
-  ctx.sessionToken = sessionToken ?? randomUUID();
+  if (!sessionToken) {
+    if (config.jwtSecret) {
+      sessionToken = await signDaemonToken(workspaceName, config.jwtSecret);
+    } else {
+      // Fallback: no secret configured, use UUID (legacy / onboarding path)
+      sessionToken = randomUUID();
+    }
+    try {
+      writeFileSync(tokenPath, sessionToken, { mode: 0o600 });
+    } catch { /* non-fatal; token still usable in-memory */ }
+  }
+  ctx.sessionToken = sessionToken;
 
   // 2. Pre-check: is another daemon running? (before binding port)
   if (!acquireLock(pidPath, config.port, VERSION)) {
