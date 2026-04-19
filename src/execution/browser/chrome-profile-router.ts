@@ -532,10 +532,14 @@ export async function resetTab(page: RawCdpPage, url: string = 'about:blank'): P
  * Two-pass reusable-tab lookup that plays nice with the task-scoped
  * claims model:
  *
- *   1. Iterate page targets whose URL host matches `hostMatch`.
+ *   1. Iterate page targets whose URL host matches `hostMatch`, AND
+ *      (when `expectedBrowserContextId` is supplied) whose CDP
+ *      `browserContextId` equals it, AND (when `ownershipMode === 'ours'`)
+ *      that are already agent-owned via `hasAnyClaimForTarget`.
  *   2. For each match, check `currentOwner({profileDir, targetId})`.
- *      An UNOWNED tab is reusable. Attempt to `claimTarget` under the
- *      caller's `owner`.
+ *      An UNOWNED tab is reusable under `'any'` (legacy default) but
+ *      not under `'ours'` — `'ours'` rejects anything with no live
+ *      claim, so a human's Threads tab can't be hijacked.
  *   3. On successful claim, attach a `RawCdpPage` and (optionally)
  *      `resetTab(page, resetUrl)` to flush prior state. Return the
  *      handle so the caller can release + close it at task end.
@@ -565,9 +569,32 @@ export async function findReusableTabForHost(opts: {
   owner: string;
   /** URL to navigate the reused tab to via resetTab. Default 'about:blank'. Pass the host landing page (e.g. x.com/home) to land ready-to-compose. */
   resetUrl?: string;
+  /**
+   * Ownership gate. Default 'any' preserves the pre-existing cross-tick
+   * reuse pattern (executor releases its task-scoped claim at task end
+   * and relies on URL+profile match to pick the tab back up). Callers
+   * that want strict hijack-proof semantics AND manage a persistent
+   * claim layer can opt in to 'ours'.
+   */
+  ownershipMode?: TabOwnershipMode;
+  /**
+   * Require matched tabs to live in this Chrome browser context. Pins
+   * the lookup to a specific profile so a human's threads.com tab in
+   * another profile can't be grabbed. Undefined = don't filter by
+   * context (legacy behavior).
+   */
+  expectedBrowserContextId?: string;
   port?: number;
 }): Promise<ReusableTabHandle | null> {
-  const { hostMatch, profileDir, owner, resetUrl, port = DEFAULT_CDP_PORT } = opts;
+  const {
+    hostMatch,
+    profileDir,
+    owner,
+    resetUrl,
+    ownershipMode = 'any',
+    expectedBrowserContextId,
+    port = DEFAULT_CDP_PORT,
+  } = opts;
   let browser: RawCdpBrowser | null = null;
   try {
     // spawnIfDown=false mirrors findExistingTabForHost — if Chrome is
@@ -575,8 +602,11 @@ export async function findReusableTabForHost(opts: {
     browser = await ensureCdpBrowser({ port, spawnIfDown: false });
     const targets = await browser.getTargets();
     const needle = hostMatch.toLowerCase();
-    const matches = targets.filter(
-      (t) => t.type === 'page' && t.url.toLowerCase().includes(needle),
+    const matches = targets.filter((t) =>
+      t.type === 'page'
+      && t.url.toLowerCase().includes(needle)
+      && (expectedBrowserContextId === undefined || t.browserContextId === expectedBrowserContextId)
+      && (ownershipMode === 'any' || hasAnyClaimForTarget(t.targetId)),
     );
     for (const match of matches) {
       const existingOwner = currentOwner({ profileDir, targetId: match.targetId });
@@ -865,5 +895,6 @@ export {
   ensureDebugChrome,
   quitDebugChrome,
   assertNoConsentPending,
+  resolveBrowserContextForProfile,
 } from './chrome-lifecycle.js';
 export type { ProfileInfo, DebugChromeHandle } from './chrome-lifecycle.js';

@@ -775,6 +775,25 @@ export interface OpenProfileWindowResult {
   browserContextId: string | null;
 }
 
+// Module-level cache of the last-seen `browserContextId` for each
+// profileDir, populated by `openProfileWindow` on success. Callers
+// (posting executors) read it to pin tab-reuse lookups to the correct
+// profile, preventing a human's threads.com tab in another profile
+// from being grabbed and typed into. Cleared on daemon restart — by
+// design, since Chrome context ids don't survive a process restart.
+const profileDirToContextId = new Map<string, string>();
+
+/**
+ * Return the most recently observed CDP `browserContextId` for this
+ * profile directory (populated by `openProfileWindow`). Undefined
+ * means we haven't opened a window for that profile yet in this
+ * daemon's lifetime; callers should skip cross-profile reuse and
+ * open a fresh window instead.
+ */
+export function resolveBrowserContextForProfile(profileDir: string): string | undefined {
+  return profileDirToContextId.get(profileDir);
+}
+
 export async function openProfileWindow(opts: {
   profileDir: string;
   port?: number;
@@ -874,6 +893,10 @@ export async function openProfileWindow(opts: {
       { err: err instanceof Error ? err.message : err, targetId: newOne.id.slice(0, 8) },
       '[chrome-lifecycle] could not resolve browserContextId for new profile window',
     );
+  }
+
+  if (browserContextId) {
+    profileDirToContextId.set(opts.profileDir, browserContextId);
   }
 
   logger.info(
