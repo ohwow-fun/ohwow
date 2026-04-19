@@ -6,9 +6,10 @@
  * scenario lives under `src/autonomy/eval/scenarios-llm/` and is run
  * only when `OHWOW_AUTONOMY_EVAL_REAL=1` + `--real`.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import {
   LlmExecutorError,
+  SpendCapExceeded,
   estimateCostCents,
   makeLlmPlanExecutor,
   newLlmMeter,
@@ -344,5 +345,274 @@ describe('buildSystemPrompt — MCP_VERBS injection (gap 14.3 regression)', () =
     // Confirm the raw marker is NOT in any rendered prompt
     expect(revSys).not.toContain('{{MODE_LENS}}');
     expect(revSys).not.toContain('{{MCP_VERBS}}');
+  });
+});
+
+// ----------------------------------------------------------------------------
+// Transient network error retry (gap ECONNRESET fix — 634355a regression)
+//
+// These tests verify that callOnce inside makeLlmPlanExecutor retries once
+// on transient network errors (ECONNRESET, fetch failed, ECONNREFUSED) with
+// a 2-second backoff, and that non-transient errors propagate immediately.
+// Fake timers are used so the 2s delay does not slow down CI.
+// ----------------------------------------------------------------------------
+
+/**
+ * Build a stub client that throws the given error on the first call and
+ * returns a valid response on the second. If secondError is provided, both
+ * calls throw.
+ */
+function makeThrowingClient(
+  firstError: Error,
+  secondResponse:
+    | { content: string; inputTokens?: number; outputTokens?: number }
+    | Error,
+): { client: PlanModelClient; callCount: () => number } {
+  let count = 0;
+  const client: PlanModelClient = {
+    call: async (): Promise<ModelResponse> => {
+      count++;
+      if (count === 1) throw firstError;
+      if (secondResponse instanceof Error) throw secondResponse;
+      return {
+        content: secondResponse.content,
+        inputTokens: secondResponse.inputTokens ?? 100,
+        outputTokens: secondResponse.outputTokens ?? 50,
+        model: 'stub',
+        provider: 'anthropic',
+      };
+    },
+  };
+  return { client, callCount: () => count };
+}
+
+describe('transient network error retry', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Criterion: ECONNRESET on first call -> retry once -> success
+  it('retries once on ECONNRESET and succeeds if second call succeeds', async () => {
+    const econnreset = new Error('read ECONNRESET');
+    const { client, callCount } = makeThrowingClient(econnreset, {
+      content: VALID_PLAN_FENCED,
+    });
+    const meter = newLlmMeter();
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+      meter,
+    });
+
+    const runPromise = exec.run(makeBrief('plan'));
+    // Advance past the 2s backoff so the retry fires.
+    await vi.runAllTimersAsync();
+    const ret = await runPromise;
+
+    expect(ret.status).toBe('continue');
+    expect(callCount()).toBe(2);
+    // Meter should reflect the one successful call (first threw before billing).
+    expect(meter.input_tokens).toBeGreaterThan(0);
+  });
+
+  // Criterion: ECONNRESET on both calls -> error propagates
+  // Note: this test uses real timers (vi.useRealTimers) to avoid a Vitest
+  // unhandled-rejection edge case when fake timers are active and both
+  // calls throw. The 2s delay makes this test slow so we override timeoutMs
+  // to 0 — the retry fires immediately.
+  it('propagates error when both first and second calls throw ECONNRESET', async () => {
+    vi.useRealTimers();
+    const econnreset1 = new Error('read ECONNRESET');
+    const econnreset2 = new Error('read ECONNRESET');
+    const { client, callCount } = makeThrowingClient(econnreset1, econnreset2);
+    // Use retryDelayMs override: since isTransientNetworkError fires a 2s
+    // setTimeout we skip the delay by pointing timeoutMs to a very large
+    // value (the wall-clock guard) and relying on the real event loop.
+    // We override the internal delay by setting a 0-length timeout via a
+    // custom stub that replaces setTimeout for this one test.
+    const origSetTimeout = globalThis.setTimeout;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(
+      (fn: (...args: unknown[]) => void, _delay?: number) =>
+        origSetTimeout(fn, 0),
+    );
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    try {
+      await expect(exec.run(makeBrief('plan'))).rejects.toThrow('ECONNRESET');
+      expect(callCount()).toBe(2);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  // Criterion: SpendCapExceeded is never retried
+  it('propagates SpendCapExceeded immediately without retry', async () => {
+    let count = 0;
+    const client: PlanModelClient = {
+      call: async (): Promise<ModelResponse> => {
+        count++;
+        throw new SpendCapExceeded(100, 50);
+      },
+    };
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    await expect(exec.run(makeBrief('plan'))).rejects.toBeInstanceOf(SpendCapExceeded);
+    // Should have thrown on the first call — no retry.
+    expect(count).toBe(1);
+  });
+
+  // Criterion: non-transient errors (e.g. generic LlmExecutorError) propagate immediately
+  it('propagates non-transient errors immediately without retry', async () => {
+    let count = 0;
+    const client: PlanModelClient = {
+      call: async (): Promise<ModelResponse> => {
+        count++;
+        throw new Error('HTTP 500 Internal Server Error');
+      },
+    };
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    await expect(exec.run(makeBrief('plan'))).rejects.toThrow('HTTP 500');
+    expect(count).toBe(1);
+  });
+
+  // Criterion: warning log entry is emitted before the retry
+  it('emits autonomy.llm_executor.network_retry warning before retrying', async () => {
+    const { logger } = await import('../../../lib/logger.js');
+    const warnSpy = vi.spyOn(logger, 'warn');
+
+    const econnreset = new Error('read ECONNRESET');
+    const { client } = makeThrowingClient(econnreset, { content: VALID_PLAN_FENCED });
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    const runPromise = exec.run(makeBrief('plan'));
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    const networkRetryCall = warnSpy.mock.calls.find(
+      (args) => args[1] === 'autonomy.llm_executor.network_retry',
+    );
+    expect(networkRetryCall).toBeDefined();
+    // First arg should include trio_id and err message.
+    const meta = networkRetryCall![0] as Record<string, unknown>;
+    expect(meta).toHaveProperty('trio_id', 'trio_test');
+    expect(meta).toHaveProperty('err');
+
+    warnSpy.mockRestore();
+  });
+
+  // Criterion: 2s delay is included in the retry path (observable via fake timers)
+  it('includes a 2s delay between first failure and retry', async () => {
+    const econnreset = new Error('fetch failed');
+    const { client, callCount } = makeThrowingClient(econnreset, {
+      content: VALID_PLAN_FENCED,
+    });
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    const runPromise = exec.run(makeBrief('plan'));
+
+    // Advance only 1999ms — the retry should NOT have fired yet.
+    await vi.advanceTimersByTimeAsync(1999);
+    // Still on call 1 (threw); call 2 hasn't been made yet.
+    expect(callCount()).toBe(1);
+
+    // Advance past the 2s mark — now the retry fires.
+    await vi.advanceTimersByTimeAsync(2);
+    await runPromise;
+    expect(callCount()).toBe(2);
+  });
+
+  // Criterion: isTransientNetworkError returns true for ECONNRESET / fetch failed / ECONNREFUSED
+  // (tested indirectly: only these errors trigger a retry)
+  it('treats "fetch failed" as transient', async () => {
+    const fetchFailed = new Error('fetch failed');
+    const { client, callCount } = makeThrowingClient(fetchFailed, {
+      content: VALID_PLAN_FENCED,
+    });
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    const runPromise = exec.run(makeBrief('plan'));
+    await vi.runAllTimersAsync();
+    const ret = await runPromise;
+
+    expect(ret.status).toBe('continue');
+    expect(callCount()).toBe(2);
+  });
+
+  it('treats "ECONNREFUSED" as transient', async () => {
+    const econnrefused = new Error('connect ECONNREFUSED 127.0.0.1:11434');
+    const { client, callCount } = makeThrowingClient(econnrefused, {
+      content: VALID_PLAN_FENCED,
+    });
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    const runPromise = exec.run(makeBrief('plan'));
+    await vi.runAllTimersAsync();
+    const ret = await runPromise;
+
+    expect(ret.status).toBe('continue');
+    expect(callCount()).toBe(2);
+  });
+
+  // Criterion: parse-failure retry path unaffected (still works with fake timers active)
+  it('parse-failure retry still works when fake timers are active', async () => {
+    // First call returns prose (parse failure), second returns valid JSON.
+    // The parse-failure retry does NOT sleep — so no timer advance needed.
+    let count = 0;
+    const client: PlanModelClient = {
+      call: async (): Promise<ModelResponse> => {
+        count++;
+        return {
+          content: count === 1 ? 'No JSON here, sorry.' : VALID_PLAN_FENCED,
+          inputTokens: 100,
+          outputTokens: 50,
+          model: 'stub',
+          provider: 'anthropic',
+        };
+      },
+    };
+    const exec = makeLlmPlanExecutor({
+      model: 'stub-haiku',
+      client,
+      fallback: PASS_FALLBACK,
+    });
+
+    const ret = await exec.run(makeBrief('plan'));
+    expect(ret.status).toBe('continue');
+    expect(count).toBe(2);
   });
 });
