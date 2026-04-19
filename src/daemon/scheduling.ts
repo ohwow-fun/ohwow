@@ -38,6 +38,47 @@ import {
   seedXHumorAutomation,
 } from './seed-x-automations.js';
 import type { DaemonContext } from './context.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type { RuntimeEngine } from '../execution/engine.js';
+import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
+import type { ModelRouter } from '../execution/model-router.js';
+import type { RuntimeConfig } from '../config.js';
+import type { TypedEventBus } from '../lib/typed-event-bus.js';
+import type { RuntimeEvents } from '../tui/types.js';
+import type { LocalTriggerEvaluator } from '../triggers/local-trigger-evaluator.js';
+import type { ChannelRegistry } from '../integrations/channel-registry.js';
+import type { ConnectorRegistry } from '../integrations/connector-registry.js';
+import type { ControlPlaneClient } from '../control-plane/client.js';
+import type { DigitalBody } from '../body/digital-body.js';
+
+/**
+ * Explicit workspace parameters for the scheduling phase.
+ * Extracted from DaemonContext so secondary workspaces can call
+ * initializeWorkspaceScheduling directly, without a full DaemonContext.
+ */
+export interface WorkspaceSchedulingDeps {
+  workspaceName: string;
+  workspaceId: string;
+  db: DatabaseAdapter;
+  engine: RuntimeEngine;
+  orchestrator: LocalOrchestrator | null;
+  modelRouter: ModelRouter;
+  config: RuntimeConfig;
+  bus: TypedEventBus<RuntimeEvents>;
+  dataDir: string;
+  startTime: number;
+  triggerEvaluator: LocalTriggerEvaluator;
+  channelRegistry: ChannelRegistry;
+  connectorRegistry: ConnectorRegistry;
+  controlPlane: ControlPlaneClient | null;
+  digitalBody: DigitalBody;
+}
+
+export interface SchedulingHandles {
+  scheduler: LocalScheduler | null;
+  proactiveEngine: ProactiveEngine | null;
+  connectorSyncScheduler: ConnectorSyncScheduler | null;
+}
 
 /** Convert an interval in minutes into a cron expression the
  * LocalScheduler can evaluate. Whole-hour divisors of 24 become comma-
@@ -64,16 +105,58 @@ export function cronForIntervalMinutes(minutes: number, minuteOffset = 0): strin
   return `*/${n} * * * *`;
 }
 
+/**
+ * Primary wrapper — extracts WorkspaceSchedulingDeps from a full DaemonContext,
+ * delegates to initializeWorkspaceScheduling, and writes handles back onto ctx.
+ * Also calls registerExperiments which needs the full ctx (primary only).
+ */
 export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise<void> {
-  const { config, db, rawDb, bus, engine, orchestrator, workspaceId, modelRouter, triggerEvaluator, connectorRegistry, channelRegistry, controlPlane, digitalBody, dataDir } = ctx as DaemonContext;
+  const full = ctx as DaemonContext;
+  const { config } = full;
   const isWorker = config.deviceRole === 'worker';
   if (isWorker) return;
+
+  const deps: WorkspaceSchedulingDeps = {
+    workspaceName: full.workspaceName ?? 'default',
+    workspaceId: full.workspaceId,
+    db: full.db,
+    engine: full.engine,
+    orchestrator: full.orchestrator ?? null,
+    modelRouter: full.modelRouter,
+    config: full.config,
+    bus: full.bus,
+    dataDir: full.dataDir,
+    startTime: full.startTime ?? Date.now(),
+    triggerEvaluator: full.triggerEvaluator,
+    channelRegistry: full.channelRegistry,
+    connectorRegistry: full.connectorRegistry,
+    controlPlane: full.controlPlane ?? null,
+    digitalBody: full.digitalBody,
+  };
+
+  const handles = await initializeWorkspaceScheduling(deps);
+  ctx.scheduler = handles.scheduler;
+  ctx.proactiveEngine = handles.proactiveEngine;
+  ctx.connectorSyncScheduler = handles.connectorSyncScheduler;
+
+  // registerExperiments requires the full ctx (primary workspace only)
+  await registerExperiments(ctx);
+}
+
+/**
+ * Workspace-scoped scheduling init. Accepts explicit deps instead of the
+ * monolithic DaemonContext so secondary workspaces can call this directly.
+ * Returns the three scheduling handles that need to be stored and stopped on
+ * shutdown. Does NOT call registerExperiments — that's primary-only logic
+ * that stays in the wrapper above.
+ */
+export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDeps): Promise<SchedulingHandles> {
+  const { config, db, bus, engine, orchestrator, workspaceId, modelRouter, triggerEvaluator, connectorRegistry, channelRegistry, controlPlane, digitalBody, dataDir } = deps;
 
   const activeWsName = resolveActiveWorkspace().name;
 
   // Scheduler
   const scheduler = new LocalScheduler(db, engine, workspaceId);
-  ctx.scheduler = scheduler;
   scheduler.setTriggerEvaluator(triggerEvaluator);
   scheduler.start().catch(err => {
     logger.warn(`[daemon] Scheduler failed: ${err instanceof Error ? err.message : err}`);
@@ -206,7 +289,6 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
 
   // Proactive engine
   const proactiveEngine = new ProactiveEngine(db, workspaceId, bus);
-  ctx.proactiveEngine = proactiveEngine;
   proactiveEngine.start().catch(err => {
     logger.warn(`[daemon] Proactive engine failed: ${err instanceof Error ? err.message : err}`);
   });
@@ -296,9 +378,6 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
     }, REFINEMENT_INTERVAL);
     logger.debug('[daemon] Person model refinement scheduled (1h interval)');
   }
-
-  await registerExperiments(ctx);
-
 
   // Human Growth Engine: compute growth snapshots alongside refinement
   {
@@ -500,7 +579,6 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
 
   // Connector sync scheduler: periodically syncs data source connectors
   const connectorSyncScheduler = new ConnectorSyncScheduler(db, workspaceId, connectorRegistry, bus);
-  ctx.connectorSyncScheduler = connectorSyncScheduler;
   connectorSyncScheduler.start();
 
   // Heart: every 15 min, aggregate task costs + (optionally) Stripe
@@ -515,4 +593,6 @@ export async function initializeScheduling(ctx: Partial<DaemonContext>): Promise
   // Unset env = watcher runs but every tick is a no-op.
   const logTailWatcher = new LogTailWatcher(db);
   logTailWatcher.start();
+
+  return { scheduler, proactiveEngine, connectorSyncScheduler };
 }
