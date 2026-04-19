@@ -38,7 +38,7 @@ import type {
   RoundReturn,
   RoundStatus,
 } from '../types.js';
-import { MODE_LENS_MARKER, PLAN_SYSTEM_PROMPT_TEMPLATE } from './prompts/plan.js';
+import { MCP_VERBS_MARKER, MODE_LENS_MARKER, PLAN_SYSTEM_PROMPT_TEMPLATE } from './prompts/plan.js';
 
 // ---------------------------------------------------------------------------
 // Pricing — Anthropic Haiku 4.5 published pricing per million tokens.
@@ -233,7 +233,10 @@ function parseAndValidate(body: string, brief: RoundBrief): ParseResult {
 
 function buildSystemPrompt(brief: RoundBrief): string {
   const lens = getLens(brief.mode);
-  return PLAN_SYSTEM_PROMPT_TEMPLATE.replace(MODE_LENS_MARKER, lens.plan_brief_preamble);
+  const verbsText = lens.mcp_verbs.length > 0 ? lens.mcp_verbs.join('\n') : 'none';
+  return PLAN_SYSTEM_PROMPT_TEMPLATE
+    .replace(MODE_LENS_MARKER, lens.plan_brief_preamble)
+    .replace(MCP_VERBS_MARKER, verbsText);
 }
 
 function buildUserMessage(brief: RoundBrief): string {
