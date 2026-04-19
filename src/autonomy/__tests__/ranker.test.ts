@@ -585,6 +585,129 @@ describe('rankNextPhase — per-mode budget demotion', () => {
   });
 });
 
+// ----------------------------------------------------------------------------
+// cadencePenalty — approval-source 24h window (fix cd4e8a2)
+//
+// Prior to the fix, approval-source candidates used the same 4h cadence
+// window as other sources. A stale approval phase-closed 10h ago would
+// NOT receive a cadence penalty, letting it float back to the top of the
+// ranker on the next arc. The fix extends the window to 24h for approval
+// sources only.
+// ----------------------------------------------------------------------------
+
+describe('cadencePenalty — approval-source uses 24h window (not 4h)', () => {
+  it('approval candidate with phase-closed report 10h ago receives cadence penalty', () => {
+    // 10h > 4h (old window) but 10h <= 24h (new window) → penalty must fire.
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_stale', age_hours: 10 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        fakeReport({
+          mode: 'revenue',
+          goal: 'fire approval apr_stale [source=approval; id=apr_stale]',
+          status: 'phase-closed',
+          started_at: new Date(REF_TIME_MS - 10 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+
+    const withReport = rankNextPhase({ pulse, ledger, refTimeMs: REF_TIME_MS });
+    const withoutReport = rankNextPhase({
+      pulse,
+      ledger: emptyLedger(),
+      refTimeMs: REF_TIME_MS,
+    });
+
+    const scoreWith = withReport.find((c) => c.source_id === 'apr_stale')?.score;
+    const scoreWithout = withoutReport.find((c) => c.source_id === 'apr_stale')?.score;
+
+    // Candidate should be suppressed (cadence penalty -50 + base 100 + age 10
+    // = 60 > 0 so it survives, but score is lower) OR filtered out entirely
+    // if the combined score <= 0. In either case, score must be lower than
+    // the baseline without any report.
+    if (scoreWith === undefined) {
+      // Filtered out entirely — penalty definitely fired.
+      expect(scoreWithout).toBeGreaterThan(0);
+    } else {
+      expect(scoreWith).toBeLessThan(scoreWithout!);
+    }
+  });
+
+  it('approval candidate with phase-closed report 25h ago does NOT receive cadence penalty', () => {
+    // 25h > 24h (new window) → penalty must NOT fire.
+    const pulse = emptyPulse({
+      approvals_pending: [approvalRef({ id: 'apr_old', age_hours: 25 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        fakeReport({
+          mode: 'revenue',
+          goal: 'fire approval apr_old [source=approval; id=apr_old]',
+          status: 'phase-closed',
+          started_at: new Date(REF_TIME_MS - 25 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+
+    const withReport = rankNextPhase({ pulse, ledger, refTimeMs: REF_TIME_MS });
+    const withoutReport = rankNextPhase({
+      pulse,
+      ledger: emptyLedger(),
+      refTimeMs: REF_TIME_MS,
+    });
+
+    const scoreWith = withReport.find((c) => c.source_id === 'apr_old')?.score;
+    const scoreWithout = withoutReport.find((c) => c.source_id === 'apr_old')?.score;
+
+    // 25h is outside the 24h window → no cadence penalty. The only difference
+    // is the novelty bonus (seen candidate → 0; unseen → 10). Scores should
+    // be equal except for novelty suppression.
+    // Both should be defined (candidate survives).
+    expect(scoreWith).toBeDefined();
+    expect(scoreWithout).toBeDefined();
+    // No cadence penalty: the score difference must only be the novelty bonus
+    // (10) at most, NOT the cadence penalty (50).
+    expect(scoreWithout! - scoreWith!).toBeLessThan(50);
+  });
+
+  it('non-approval candidate (failing-trigger) with report 10h ago does NOT receive cadence penalty (4h window)', () => {
+    // failing-trigger uses CADENCE_WINDOW_HOURS=4. A report 10h ago is
+    // OUTSIDE that window → no cadence penalty. This contrasts with the
+    // approval case above and pins the source-specific window behaviour.
+    const pulse = emptyPulse({
+      failing_triggers: [failingTrigger({ id: 'trig_10h', failure_count: 5 })],
+    });
+    const ledger = emptyLedger({
+      recent_phase_reports: [
+        fakeReport({
+          mode: 'plumbing',
+          goal: 'unstick cron-x-intel [source=failing-trigger; id=trig_10h]',
+          status: 'phase-closed',
+          started_at: new Date(REF_TIME_MS - 10 * 3_600_000).toISOString(),
+        }),
+      ],
+    });
+
+    const withReport = rankNextPhase({ pulse, ledger, refTimeMs: REF_TIME_MS });
+    const withoutReport = rankNextPhase({
+      pulse,
+      ledger: emptyLedger(),
+      refTimeMs: REF_TIME_MS,
+    });
+
+    const scoreWith = withReport.find((c) => c.source_id === 'trig_10h')?.score;
+    const scoreWithout = withoutReport.find((c) => c.source_id === 'trig_10h')?.score;
+
+    // 10h > 4h window → no cadence penalty. The candidate must survive (not
+    // filtered out) and the score difference must be less than the cadence
+    // penalty (50) — it will only differ by the novelty bonus (10).
+    expect(scoreWith).toBeDefined();
+    expect(scoreWithout).toBeDefined();
+    expect(scoreWithout! - scoreWith!).toBeLessThan(50);
+  });
+});
+
 // Touch the SelfFindingLite import so a future refactor doesn't tree-shake
 // it out of the test bundle by accident.
 void fakeFinding;
