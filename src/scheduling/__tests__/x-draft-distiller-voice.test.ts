@@ -74,9 +74,9 @@ describe('buildPrompt — buildVoicePrinciples output present', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildPrompt — buildLengthDirective output present', () => {
-  it('includes "hard cap 280" for x/post context', () => {
+  it('includes "hard cap 500" for threads/post context', () => {
     const prompt = buildPrompt(makeInsight());
-    expect(prompt).toContain('hard cap 280');
+    expect(prompt).toContain('hard cap 500');
   });
 
   it('includes LENGTH: directive label', () => {
@@ -111,7 +111,7 @@ describe('sanitizeDraft — rejects new INTEL_LEAK_PHRASES', () => {
   });
 
   it('does not reject drafts that do not contain banned phrases', () => {
-    const clean = 'Linear raised Pro from $9 to $12 quietly.';
+    const clean = 'Linear raised Pro from $9 to $12 quietly';
     expect(sanitizeDraft(clean)).toBe(clean);
   });
 });
@@ -197,7 +197,7 @@ describe('sanitizeDraft — rejects AI cliché phrases', () => {
   });
 
   it('does not reject clean drafts that contain no banned AI cliché phrases', () => {
-    const clean = 'Prices went up 30%. Nobody is talking about it.';
+    const clean = 'Prices went up 30%. Nobody is talking about it';
     expect(sanitizeDraft(clean)).toBe(clean);
   });
 });

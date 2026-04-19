@@ -291,8 +291,8 @@ describe('sanitizeDraft', () => {
   });
 
   it('returns the post body when the model writes something real', () => {
-    expect(sanitizeDraft('Linear quietly bumped Pro to $12.')).toBe(
-      'Linear quietly bumped Pro to $12.',
+    expect(sanitizeDraft('Linear quietly bumped Pro to $12')).toBe(
+      'Linear quietly bumped Pro to $12',
     );
   });
 
@@ -316,7 +316,7 @@ describe('sanitizeDraft', () => {
   });
 
   it('does not reject drafts that do not contain any banned phrase', () => {
-    const clean = 'Linear raised Pro from $9 to $12. Small bump with a real margin play behind it.';
+    const clean = 'Linear raised Pro from $9 to $12. Small bump with a real margin play behind it';
     expect(sanitizeDraft(clean)).toBe(clean);
   });
 });

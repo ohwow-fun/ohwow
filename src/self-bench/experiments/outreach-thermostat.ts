@@ -219,21 +219,22 @@ export interface EmailDraft {
 
 export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): string | EmailDraft {
   const name = plan.display_name || plan.handle || 'there';
-  const bucketHint = plan.bucket === 'market_signal'
-    ? 'workflow'
-    : plan.bucket === 'competitors'
-      ? 'stack'
-      : 'recent';
+  const bucket = plan.bucket;
+  const bucketSubject = bucket === 'market_signal'
+    ? 'workflow problem you described'
+    : bucket === 'competitors'
+      ? 'stack tradeoff you laid out'
+      : 'thread you posted';
   if (channel === 'x_dm') {
-    return `Hey ${name}, that ${bucketHint} thread you posted is exactly the problem ohwow is built around. Worth a quick swap if you want to compare notes`;
+    return `Saw ${bucketSubject}. Exactly what ohwow is built around. Worth a quick chat`;
   }
   if (channel === 'x_reply') {
     return `Handoff design matters more than agent choice here. ohwow takes a different angle on that tradeoff`;
   }
   if (channel === 'email') {
     return {
-      subject: `${name}, note on your ${bucketHint} post`,
-      text: `Hi ${name},\n\nThat ${bucketHint} post is the exact problem ohwow is built around. Worth a quick swap to compare notes.\n\nJesus Onoro\nohwow.fun`,
+      subject: `${name}, on your ${bucket === 'market_signal' ? 'workflow' : bucket === 'competitors' ? 'stack' : 'recent'} post`,
+      text: `Saw ${bucketSubject}. Exactly the problem ohwow is built around. Worth a look at the angle ohwow takes on it.\n\nJesus Onoro\nohwow.fun`,
     };
   }
   return '';
