@@ -1,11 +1,12 @@
 /**
  * SYNC_REGISTRY ↔ cloud-schema agreement pin.
  *
- * Trio 3 of the 5-trio sync arc (2026-04-18) ported the autonomy-retrofit
- * tables (director_arcs, phase_trios, phase_rounds, director_phase_reports)
- * to cloud and registered them in SYNC_REGISTRY alongside the founder_inbox
- * entry from Trio 2. This test bakes in the cloud-schema column lists
- * for those 5 tables and asserts the registry's `columns` arrays line up.
+ * Trio 4 just landed (2026-04-18) — porting the x-intel + content engine
+ * tables (posted_log, x_post_drafts, x_reply_drafts, x_dm_threads,
+ * x_dm_messages, x_dm_observations) to cloud and registering them in
+ * SYNC_REGISTRY alongside the autonomy-retrofit + founder_inbox entries
+ * from Trios 2-3. This test bakes in the cloud-schema column lists for
+ * all 11 tables and asserts the registry's `columns` arrays line up.
  *
  * Drift catches in two directions:
  *
@@ -16,9 +17,9 @@
  *   2. A new cloud table ships without a SYNC_REGISTRY entry: the test
  *      fails until both halves move together.
  *
- * When Trios 4-5 add x-intel + content-engine tables, KNOWN_CLOUD_SCHEMAS
- * MUST be updated alongside the SYNC_REGISTRY edit and the cloud
- * migration. Three-way lockstep is the point.
+ * When Trio 5 closes the arc, KNOWN_CLOUD_SCHEMAS MUST be updated
+ * alongside any new SYNC_REGISTRY edit and the cloud migration.
+ * Three-way lockstep is the point.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -108,6 +109,86 @@ const KNOWN_CLOUD_SCHEMAS: Record<string, readonly string[]> = {
     'outcome',
     'started_at',
     'ended_at',
+  ],
+  posted_log: [
+    'id',
+    'workspace_id',
+    'platform',
+    'text_hash',
+    'text_preview',
+    'text_length',
+    'posted_at',
+    'approval_id',
+    'task_id',
+    'source',
+  ],
+  x_dm_messages: [
+    'id',
+    'workspace_id',
+    'conversation_pair',
+    'message_id',
+    'direction',
+    'text',
+    'is_media',
+    'observed_at',
+  ],
+  x_dm_observations: [
+    'id',
+    'workspace_id',
+    'conversation_pair',
+    'primary_name',
+    'preview_text',
+    'preview_hash',
+    'has_unread',
+    'observed_at',
+  ],
+  x_dm_threads: [
+    'id',
+    'workspace_id',
+    'conversation_pair',
+    'primary_name',
+    'last_preview',
+    'last_preview_hash',
+    'has_unread',
+    'observation_count',
+    'first_seen_at',
+    'last_seen_at',
+    'raw_meta',
+    'last_message_id',
+    'last_message_text',
+    'last_message_direction',
+    'counterparty_user_id',
+    'contact_id',
+  ],
+  x_post_drafts: [
+    'id',
+    'workspace_id',
+    'body',
+    'source_finding_id',
+    'status',
+    'created_at',
+    'approved_at',
+    'rejected_at',
+  ],
+  x_reply_drafts: [
+    'id',
+    'workspace_id',
+    'platform',
+    'reply_to_url',
+    'reply_to_author',
+    'reply_to_text',
+    'reply_to_likes',
+    'reply_to_replies',
+    'mode',
+    'body',
+    'alternates_json',
+    'verdict_json',
+    'score',
+    'status',
+    'created_at',
+    'approved_at',
+    'rejected_at',
+    'applied_at',
   ],
 };
 

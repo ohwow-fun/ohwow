@@ -106,6 +106,97 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       '*_at TEXT → timestamptz. CHECK constraints on mode + outcome ' +
       'preserved verbatim cloud-side.',
   },
+  {
+    table: 'posted_log',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'platform', 'text_hash', 'text_preview',
+      'text_length', 'posted_at', 'approval_id', 'task_id', 'source',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex, not uuid) → cloud text; workspace_id → uuid; ' +
+      'text_length INTEGER → integer; posted_at TEXT → timestamptz. ' +
+      'UNIQUE (workspace_id, platform, text_hash) preserved cloud-side ' +
+      'so dedup works in both directions.',
+  },
+  {
+    table: 'x_dm_messages',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'conversation_pair', 'message_id', 'direction',
+      'text', 'is_media', 'observed_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
+      'is_media INTEGER → integer; observed_at TEXT → timestamptz. ' +
+      'CHECK on direction (outbound|inbound|unknown) and UNIQUE ' +
+      '(workspace_id, message_id) preserved cloud-side.',
+  },
+  {
+    table: 'x_dm_observations',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'conversation_pair', 'primary_name',
+      'preview_text', 'preview_hash', 'has_unread', 'observed_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
+      'has_unread INTEGER → integer; observed_at TEXT → timestamptz. ' +
+      'UNIQUE (workspace_id, conversation_pair, preview_hash) preserved.',
+  },
+  {
+    table: 'x_dm_threads',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'conversation_pair', 'primary_name',
+      'last_preview', 'last_preview_hash', 'has_unread', 'observation_count',
+      'first_seen_at', 'last_seen_at', 'raw_meta',
+      'last_message_id', 'last_message_text', 'last_message_direction',
+      'counterparty_user_id', 'contact_id',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
+      'has_unread/observation_count INTEGER → integer; ' +
+      'first_seen_at/last_seen_at TEXT → timestamptz. raw_meta TEXT ' +
+      '(JSON, no `_json` suffix) → cloud text (script coerceValue auto- ' +
+      'parses by suffix only — keeps upserts working). UNIQUE ' +
+      '(workspace_id, conversation_pair) preserved.',
+  },
+  {
+    table: 'x_post_drafts',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'body', 'source_finding_id', 'status',
+      'created_at', 'approved_at', 'rejected_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
+      '*_at TEXT → timestamptz. CHECK on status (pending|approved|rejected) ' +
+      'and UNIQUE (workspace_id, source_finding_id) preserved cloud-side.',
+  },
+  {
+    table: 'x_reply_drafts',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'platform', 'reply_to_url', 'reply_to_author',
+      'reply_to_text', 'reply_to_likes', 'reply_to_replies', 'mode', 'body',
+      'alternates_json', 'verdict_json', 'score', 'status',
+      'created_at', 'approved_at', 'rejected_at', 'applied_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
+      'alternates_json/verdict_json TEXT (JSON, `_json` suffix) → cloud ' +
+      'jsonb (auto-parsed); score REAL → double precision; ' +
+      '*_at TEXT → timestamptz. CHECK on platform (x|threads), mode ' +
+      '(direct|viral), status (pending|approved|rejected|applied|auto_applied) ' +
+      'and UNIQUE (workspace_id, reply_to_url) preserved cloud-side.',
+  },
 ];
 
 export function getSpec(table: string): SyncTableSpec | undefined {
