@@ -19,6 +19,8 @@ import type { RuntimeEngine } from '../execution/engine.js';
 import type { LocalOrchestrator } from '../orchestrator/local-orchestrator.js';
 import { createAuthMiddleware } from './middleware.js';
 import type { WorkspaceDbPool } from '../db/workspace-db-pool.js';
+import type { WorkspaceRegistry } from '../daemon/workspace-registry.js';
+import type { WorkspaceContext } from '../daemon/workspace-context.js';
 import { createHealthRouter, type HealthBppDeps } from './routes/health.js';
 import { createTasksRouter } from './routes/tasks.js';
 import { createLlmRouter } from './routes/llm.js';
@@ -129,6 +131,7 @@ export interface ServerDeps {
   onScheduleChange?: () => void;
   ragConfig?: import('./routes/rag.js').RagRouterConfig;
   dbPool?: WorkspaceDbPool;
+  registry?: WorkspaceRegistry;
 }
 
 export interface ServerConfig {
@@ -168,7 +171,15 @@ export function createServer(deps: ServerDeps): {
   app: express.Application;
   attachWs: (server: Server) => void;
 } {
-  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, vibeVoiceService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange, dbPool } = deps;
+  const { config, db, rawDb, startTime, eventBus, engine, orchestrator, sessionToken, triggerEvaluator, workspaceId, voiceboxService, vibeVoiceService, modelRouter, getWhatsAppClient, channelRegistry, messageRouter, controlPlane, onScheduleChange, dbPool, registry } = deps;
+
+  /**
+   * Resolve the WorkspaceContext for an incoming request. Returns the
+   * workspace-specific context when the request carried a daemon JWT that
+   * matched a loaded workspace, or null for primary/legacy callers.
+   */
+  const getWorkspaceCtx = (req: express.Request): WorkspaceContext | null =>
+    req.workspaceCtx ?? null;
   const app = express();
 
   // CORS — restrict to known origins (localhost and cloud app)
@@ -571,6 +582,7 @@ export function createServer(deps: ServerDeps): {
     db,
     () => workspaceId || 'local',
     dbPool,
+    registry,
   );
   app.use('/api', auth);
   app.use('/browser/session', auth);
@@ -588,16 +600,16 @@ export function createServer(deps: ServerDeps): {
   app.get('/api/human-tasks/my-tasks', (_req, res) => res.json({ data: [] }));
 
   // Register all API routes
-  app.use(createLlmRouter(db, modelRouter ?? null));
-  app.use(createTasksRouter(db, engine));
-  app.use(createAgentsRouter(db));
+  app.use(createLlmRouter(db, modelRouter ?? null, getWorkspaceCtx));
+  app.use(createTasksRouter(db, engine, getWorkspaceCtx));
+  app.use(createAgentsRouter(db, getWorkspaceCtx));
   app.use(createActivityRouter(db));
   app.use(createApprovalsRouter(db));
   app.use(createXRouter());
   app.use(createDeliverablesRouter(db));
   app.use(createMarketingRouter(db));
   app.use(createSocialRouter(db));
-  app.use(createSchedulesRouter(db, onScheduleChange));
+  app.use(createSchedulesRouter(db, onScheduleChange, getWorkspaceCtx));
   app.use(createKnowledgeRouter(db, config.dataDir));
   app.use(createSystemRouter(db, rawDb, startTime));
   if (orchestrator) {

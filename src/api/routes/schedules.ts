@@ -7,18 +7,25 @@
  * POST /api/schedules/:id/toggle — Toggle schedule enabled/disabled
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 
-export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: () => void): Router {
+export function createSchedulesRouter(
+  db: DatabaseAdapter,
+  onScheduleChange?: () => void,
+  getWorkspaceCtx?: (req: Request) => WorkspaceContext | null,
+): Router {
   const router = Router();
+  const resolveDb = (req: Request) => (getWorkspaceCtx?.(req)?.db) ?? db;
 
   // List schedules
   router.get('/api/schedules', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
 
-      const { data, error } = await db.from('agent_workforce_schedules')
+      const { data, error } = await activeDb.from('agent_workforce_schedules')
         .select('*')
         .eq('workspace_id', workspaceId)
         .order('created_at', { ascending: false });
@@ -37,6 +44,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
   // Create schedule
   router.post('/api/schedules', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
       const { label, agent_id, cron, task_prompt, description } = req.body as {
         label?: string;
@@ -58,7 +66,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
       const now = new Date().toISOString();
       const id = crypto.randomUUID();
 
-      const { error } = await db.from('agent_workforce_schedules')
+      const { error } = await activeDb.from('agent_workforce_schedules')
         .insert({
           id,
           workspace_id: workspaceId,
@@ -87,6 +95,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
   // Update schedule
   router.put('/api/schedules/:id', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
       const { label, agent_id, cron, task_prompt, enabled } = req.body as {
         label?: string;
@@ -97,7 +106,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
       };
 
       // Verify ownership
-      const { data: existing, error: fetchErr } = await db.from('agent_workforce_schedules')
+      const { data: existing, error: fetchErr } = await activeDb.from('agent_workforce_schedules')
         .select('id')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -118,7 +127,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
       if (task_prompt !== undefined) updates.task_prompt = task_prompt;
       if (enabled !== undefined) updates.enabled = enabled ? 1 : 0;
 
-      const { error: updateErr } = await db.from('agent_workforce_schedules')
+      const { error: updateErr } = await activeDb.from('agent_workforce_schedules')
         .update(updates)
         .eq('id', req.params.id);
 
@@ -137,9 +146,10 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
   // Delete schedule
   router.delete('/api/schedules/:id', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
 
-      const { error } = await db.from('agent_workforce_schedules')
+      const { error } = await activeDb.from('agent_workforce_schedules')
         .delete()
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId);
@@ -159,9 +169,10 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
   // Toggle schedule enabled/disabled
   router.post('/api/schedules/:id/toggle', async (req, res) => {
     try {
+      const activeDb = resolveDb(req);
       const { workspaceId } = req;
 
-      const { data: schedule, error: fetchErr } = await db.from('agent_workforce_schedules')
+      const { data: schedule, error: fetchErr } = await activeDb.from('agent_workforce_schedules')
         .select('*')
         .eq('id', req.params.id)
         .eq('workspace_id', workspaceId)
@@ -175,7 +186,7 @@ export function createSchedulesRouter(db: DatabaseAdapter, onScheduleChange?: ()
       const row = schedule as Record<string, unknown>;
       const newEnabled = row.enabled ? 0 : 1;
 
-      const { error: updateErr } = await db.from('agent_workforce_schedules')
+      const { error: updateErr } = await activeDb.from('agent_workforce_schedules')
         .update({ enabled: newEnabled, updated_at: new Date().toISOString() })
         .eq('id', req.params.id);
 
