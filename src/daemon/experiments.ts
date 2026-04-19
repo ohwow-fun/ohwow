@@ -25,7 +25,7 @@ import { InterventionAuditExperiment } from '../self-bench/experiments/intervent
 import { StaleTaskCleanupExperiment } from '../self-bench/experiments/stale-task-cleanup.js';
 import { StrategistExperiment } from '../self-bench/experiments/strategist.js';
 import { StaleTaskThresholdTunerExperiment } from '../self-bench/experiments/stale-threshold-tuner.js';
-import { ContentCadenceTunerExperiment } from '../self-bench/experiments/content-cadence-tuner.js';
+import { ContentCadenceTunerExperiment, CONTENT_CADENCE_CONFIG_KEY } from '../self-bench/experiments/content-cadence-tuner.js';
 import { ContentCadenceLoopHealthExperiment } from '../self-bench/experiments/content-cadence-loop-health.js';
 import { AdaptiveSchedulerExperiment } from '../self-bench/experiments/adaptive-scheduler.js';
 import { AgentCoverageGapExperiment } from '../self-bench/experiments/agent-coverage-gap.js';
@@ -55,8 +55,8 @@ import { ObservationProbeExperiment } from '../self-bench/experiments/observatio
 import { ResearchIngestProbeExperiment } from '../self-bench/experiments/research-ingest-probe.js';
 import { CodePaperCompareProbeExperiment } from '../self-bench/experiments/code-paper-compare-probe.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
-import { XOpsObserverExperiment } from '../self-bench/experiments/x-ops-observer.js';
-import { XShapeTunerExperiment } from '../self-bench/experiments/x-shape-tuner.js';
+// XOpsObserverExperiment and XShapeTunerExperiment retired 2026-04-19 (X account banned).
+// XEngagementObserverExperiment and XAutonomyRampExperiment retired 2026-04-19.
 import { MigrationDriftSentinelExperiment } from '../self-bench/experiments/migration-drift-sentinel.js';
 import { BrowserProfileGuardianExperiment } from '../self-bench/experiments/browser-profile-guardian.js';
 import { DeliverableActionSentinelExperiment } from '../self-bench/experiments/deliverable-action-sentinel.js';
@@ -64,8 +64,7 @@ import { AgentStateHygieneSentinelExperiment } from '../self-bench/experiments/a
 import { RevenuePipelineObserverExperiment } from '../self-bench/experiments/revenue-pipeline-observer.js';
 import { AttributionObserverExperiment } from '../self-bench/experiments/attribution-observer.js';
 import { OutreachThermostatExperiment } from '../self-bench/experiments/outreach-thermostat.js';
-import { XEngagementObserverExperiment } from '../self-bench/experiments/x-engagement-observer.js';
-import { XAutonomyRampExperiment } from '../self-bench/experiments/x-autonomy-ramp.js';
+// XEngagementObserverExperiment import retired; see retirement comment above.
 import { DailySurpriseDigestExperiment } from '../self-bench/experiments/daily-surprise-digest.js';
 import { RevenuePulseExperiment } from '../self-bench/experiments/revenue-pulse.js';
 import { LlmBudgetPulseExperiment } from '../self-bench/experiments/llm-budget-pulse.js';
@@ -96,8 +95,7 @@ import { ContentCadenceScheduler } from '../scheduling/content-cadence-scheduler
 import { ThreadsReplyScheduler } from '../scheduling/threads-reply-scheduler.js';
 import { XReplyScheduler } from '../scheduling/x-reply-scheduler.js';
 import { ReplyDispatcher } from '../scheduling/x-reply-dispatcher.js';
-import { XDmPollerScheduler } from '../scheduling/x-dm-poller-scheduler.js';
-import { XDmReplyDispatcher } from '../scheduling/x-dm-reply-dispatcher.js';
+// XDmPollerScheduler and XDmReplyDispatcher retired 2026-04-19 (X account banned; CDP session dead).
 import { EmailDispatcher } from '../scheduling/email-dispatcher.js';
 import { createResendSender } from '../integrations/email/resend.js';
 import { XDmSignalsRollupExperiment } from '../self-bench/experiments/x-dm-signals-rollup.js';
@@ -204,8 +202,8 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new ResearchIngestProbeExperiment());
   experimentRunner.register(new CodePaperCompareProbeExperiment());
   experimentRunner.register(new GitVelocityExperiment());
-  experimentRunner.register(new XOpsObserverExperiment());
-  experimentRunner.register(new XShapeTunerExperiment());
+  // XOpsObserverExperiment and XShapeTunerExperiment retired 2026-04-19:
+  // X account permanently banned; no browser session to observe or tune.
   experimentRunner.register(new MigrationDriftSentinelExperiment());
   experimentRunner.register(new BrowserProfileGuardianExperiment());
   // Deliverable action sentinel: scans recent deferred-action tasks
@@ -228,10 +226,9 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   // Reads the migration-128 view and surfaces bucket-level conversion
   // stats + the worst-performing bucket as strategy.attribution_findings.
   experimentRunner.register(new AttributionObserverExperiment());
-  // Piece 4b: X per-shape engagement observer.
-  experimentRunner.register(new XEngagementObserverExperiment());
-  // Piece 4c: X autonomy ramp.
-  experimentRunner.register(new XAutonomyRampExperiment());
+  // XEngagementObserverExperiment and XAutonomyRampExperiment retired 2026-04-19:
+  // X account permanently banned; engagement data and autonomy ramp both require
+  // an active authenticated browser session which no longer exists.
   // Piece 6: daily surprise digest. 24h cadence, runOnBoot=false,
   // gates internally on "already ran today" so a daemon restart
   // doesn't spawn duplicates.
@@ -321,7 +318,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
       db,
       engine,
       workspaceId,
-      { approvalsJsonlPath, enabledPlatforms: ['x', 'threads'] },
+      { approvalsJsonlPath, enabledPlatforms: ['threads'] },
     );
     registerInternalHandler(CONTENT_CADENCE_HANDLER, async () => {
       await cadenceScheduler.tick();
@@ -352,6 +349,17 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     if (getRuntimeConfig<boolean | undefined>('x_reply.enabled', undefined) === undefined) {
       void setRuntimeConfig(db, 'x_reply.enabled', false).catch((err) => {
         logger.warn({ err }, '[daemon] could not seed x_reply.enabled=false');
+      });
+    }
+
+    // Belt-and-suspenders: seed content_cadence.posts_per_day = 0 for X so
+    // ContentCadenceScheduler never dispatches X post tasks even if the
+    // enabledPlatforms list is later widened. The X account is permanently
+    // banned; there is no posting path. Only writes when the key is not
+    // already set, preserving any operator override.
+    if (getRuntimeConfig<number | undefined>(CONTENT_CADENCE_CONFIG_KEY, undefined) === undefined) {
+      void setRuntimeConfig(db, CONTENT_CADENCE_CONFIG_KEY, 0).catch((err) => {
+        logger.warn({ err }, '[daemon] could not seed content_cadence.posts_per_day=0');
       });
     }
 
@@ -391,61 +399,46 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
     threadsReplyDispatcher.start();
     logger.info('[daemon] threads-reply-dispatcher started');
 
-    // Market-radar distiller — turns novel market:* findings into
-    // candidate X post drafts (stored in x_post_drafts, operator-
-    // approved via the ohwow_approve_x_draft MCP tool). Default
-    // workspace only; avenued has its own goals.
-    const xDraftDistiller = new XDraftDistillerScheduler(
-      db,
-      modelRouter ?? null,
-      workspaceId,
-      {
-        // Gap 13: the distiller is an hourly autonomous job, so its
-        // LLM calls enroll in the per-workspace daily cap + operator
-        // toasts. Lazy (not evaluated until each tick) so the distiller
-        // can be constructed before setBudgetDeps has run during
-        // daemon boot.
-        getBudgetDeps: () => engine.getAutonomousBudgetDeps(),
-      },
-    );
-    registerInternalHandler(X_DRAFT_DISTILLER_HANDLER, async () => {
-      const result = await xDraftDistiller.tick();
-      return { ...result, status: 'ticked' };
-    });
-    await seedXDraftDistillerAutomation(db, workspaceId).catch((err) => {
-      logger.warn({ err }, '[daemon] seed-x-draft-distiller-automation failed');
-    });
-    logger.info('[daemon] x-draft-distiller automation seeded');
+    // XDraftDistillerScheduler — gated behind runtime config
+    // x_draft_distiller.enabled (default false). The distiller turns novel
+    // market:* findings into candidate post drafts; the class is retained for
+    // future channel reuse. Seed the kill-switch key on boot so the config
+    // surface is visible to operators; only writes when key is absent.
+    if (getRuntimeConfig<boolean | undefined>('x_draft_distiller.enabled', undefined) === undefined) {
+      void setRuntimeConfig(db, 'x_draft_distiller.enabled', false).catch((err) => {
+        logger.warn({ err }, '[daemon] could not seed x_draft_distiller.enabled=false');
+      });
+    }
+    if (getRuntimeConfig<boolean>('x_draft_distiller.enabled', false)) {
+      const xDraftDistiller = new XDraftDistillerScheduler(
+        db,
+        modelRouter ?? null,
+        workspaceId,
+        {
+          // Gap 13: the distiller is an hourly autonomous job, so its
+          // LLM calls enroll in the per-workspace daily cap + operator
+          // toasts. Lazy (not evaluated until each tick) so the distiller
+          // can be constructed before setBudgetDeps has run during
+          // daemon boot.
+          getBudgetDeps: () => engine.getAutonomousBudgetDeps(),
+        },
+      );
+      registerInternalHandler(X_DRAFT_DISTILLER_HANDLER, async () => {
+        const result = await xDraftDistiller.tick();
+        return { ...result, status: 'ticked' };
+      });
+      await seedXDraftDistillerAutomation(db, workspaceId).catch((err) => {
+        logger.warn({ err }, '[daemon] seed-x-draft-distiller-automation failed');
+      });
+      logger.info('[daemon] x-draft-distiller automation seeded');
+    } else {
+      logger.info('[daemon] x-draft-distiller disabled (x_draft_distiller.enabled=false); set runtime config to enable');
+    }
 
-    // Phase 8-A.4: XDmPollerScheduler — read-only DM ingest. Polls the
-    // X inbox via listDmsViaBrowser, upserts threads + observations
-    // into x_dm_threads / x_dm_observations, mirrors deltas to a daily
-    // JSONL ledger. No findings, no contact linking, no auto-replies
-    // in this commit; layered on after a clean ingest is observed.
-    const dmPoller = new XDmPollerScheduler(
-      db,
-      workspaceId,
-      { dataDir: workspaceLayoutFor(workspaceSlug).dataDir },
-    );
-    dmPoller.start();
-    logger.info('[daemon] x-dm-poller-scheduler started');
-
-    // XDmReplyDispatcher — SEND side of the DM loop. Drains operator-
-    // approved kind='x_dm_outbound' entries from the shared approvals
-    // ledger, serializes on the workspace CDP lane with the poller +
-    // content-cadence, and delivers via sendDmViaBrowser. No autonomous
-    // producer today; this is the infrastructure that lets a human-
-    // reviewed reply actually leave the daemon.
-    const dmReplyDispatcher = new XDmReplyDispatcher(
-      db,
-      workspaceId,
-      {
-        approvalsJsonlPath,
-        dataDir: workspaceLayoutFor(workspaceSlug).dataDir,
-      },
-    );
-    dmReplyDispatcher.start();
-    logger.info({ approvalsJsonlPath }, '[daemon] x-dm-reply-dispatcher started');
+    // XDmPollerScheduler and XDmReplyDispatcher retired 2026-04-19:
+    // X account permanently banned; the CDP browser session is dead. DM ingest
+    // and dispatch both require an authenticated X browser profile which
+    // no longer exists. Classes are retained for potential future channels.
 
     // Phase 8-A.3: ContentCadenceLoopHealthExperiment — meta-watcher
     // that detects silent failures across the closed loop's stages.

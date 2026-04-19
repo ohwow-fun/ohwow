@@ -138,33 +138,10 @@ export async function seedXIntelAutomation(
     });
   }
 
-  if (opts.compose !== false) {
-    steps.push({
-      id: 'x_compose',
-      step_type: 'shell_script',
-      label: 'x-compose: draft posts from fresh sidecars',
-      action_config: {
-        script_path: 'scripts/x-experiments/x-compose.mjs',
-        timeout_seconds: timeoutSeconds,
-        heartbeat_filename: 'x-compose-last-run.json',
-        env: { DRY: '0' },
-      },
-    });
-  }
-
-  if (opts.reply !== false) {
-    steps.push({
-      id: 'x_reply',
-      step_type: 'shell_script',
-      label: 'x-reply: draft replies to inbound posts',
-      action_config: {
-        script_path: 'scripts/x-experiments/x-reply.mjs',
-        timeout_seconds: timeoutSeconds,
-        heartbeat_filename: 'x-reply-last-run.json',
-        env: { DRY: '0' },
-      },
-    });
-  }
+  // X channel permanently banned 2026-04-19 — account suspended for automated behavior.
+  // x-compose and x-reply steps are permanently excluded from new seeds regardless of
+  // opts.compose / opts.reply. Existing automation rows retain whatever steps they already
+  // have (idempotent early-return above). Re-enabling requires removing this guard.
 
   const created = await service.create({
     name: X_INTEL_AUTOMATION_NAME,
