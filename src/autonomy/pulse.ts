@@ -106,6 +106,7 @@ interface TaskRow {
   description: string | null;
   created_at: string;
   status: string;
+  approval_reason: string | null;
 }
 
 async function readApprovalsPending(
@@ -116,9 +117,10 @@ async function readApprovalsPending(
   try {
     const { data, error } = await db
       .from<TaskRow>('agent_workforce_tasks')
-      .select('id, title, description, created_at, status')
+      .select('id, title, description, created_at, status, approval_reason')
       .eq('workspace_id', workspace_id)
       .eq('status', 'needs_approval')
+      .is('approval_reason', null)
       .order('created_at', { ascending: true });
     if (error) return { rows: [], count: 0 };
     const rows = (data ?? []).map((r) => ({
