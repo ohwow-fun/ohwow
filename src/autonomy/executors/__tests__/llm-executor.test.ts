@@ -234,3 +234,115 @@ describe('makeLlmPlanExecutor', () => {
     expect(meter.cents).toBeGreaterThan(0);
   });
 });
+
+// ----------------------------------------------------------------------------
+// Regression tests: MCP_VERBS injection into PLAN system prompt (gap 14.3)
+//
+// These tests verify that buildSystemPrompt() splices the correct verb list
+// for each mode via MCP_VERBS_MARKER, and that the placement and
+// MODE_LENS_MARKER substitution are both intact.
+// ----------------------------------------------------------------------------
+
+import type { Mode } from '../../types.js';
+
+/**
+ * Build a RoundBrief for an arbitrary mode so we can inspect what
+ * buildSystemPrompt() produces for that mode without running a real model.
+ * The stub client captures `params.system` from the first call.
+ */
+async function captureSystemPrompt(mode: Mode): Promise<string> {
+  let capturedSystem: string | undefined;
+  const client: PlanModelClient = {
+    call: async (params: CreateMessageParams): Promise<ModelResponse> => {
+      capturedSystem = params.system;
+      // Return a valid fenced response so the executor doesn't throw.
+      return {
+        content: VALID_PLAN_FENCED,
+        inputTokens: 10,
+        outputTokens: 10,
+        model: 'stub',
+        provider: 'anthropic',
+      };
+    },
+  };
+  const exec = makeLlmPlanExecutor({
+    model: 'stub',
+    client,
+    fallback: PASS_FALLBACK,
+  });
+  await exec.run({ trio_id: 'trio_verbs_test', kind: 'plan', mode, goal: 'test', body: 'test' });
+  if (capturedSystem === undefined) throw new Error('system prompt was not captured');
+  return capturedSystem;
+}
+
+describe('buildSystemPrompt — MCP_VERBS injection (gap 14.3 regression)', () => {
+  // Criterion 1: revenue mode injects all 7 revenue verbs
+  it('revenue: contains all 7 revenue mcp_verbs', async () => {
+    const sys = await captureSystemPrompt('revenue');
+    expect(sys).toContain('ohwow_list_approvals');
+    expect(sys).toContain('ohwow_preview_approval');
+    expect(sys).toContain('ohwow_approve_x_draft');
+    expect(sys).toContain('ohwow_draft_x_dm');
+    expect(sys).toContain('ohwow_update_deal');
+    expect(sys).toContain('ohwow_pipeline_summary');
+    expect(sys).toContain('ohwow_revenue_summary');
+  });
+
+  // Criterion 2: plumbing mode injects all 3 plumbing verbs
+  it('plumbing: contains all 3 plumbing mcp_verbs', async () => {
+    const sys = await captureSystemPrompt('plumbing');
+    expect(sys).toContain('ohwow_list_failing_triggers');
+    expect(sys).toContain('ohwow_daemon_status');
+    expect(sys).toContain('ohwow_workspace_status');
+  });
+
+  // Criterion 3: polish mode (empty mcp_verbs) injects the literal 'none'
+  it('polish: injects literal "none" when mcp_verbs is empty', async () => {
+    const sys = await captureSystemPrompt('polish');
+    expect(sys).toContain('none');
+    // Must NOT contain a real verb (sanity: no cross-lens bleed)
+    expect(sys).not.toContain('ohwow_list_approvals');
+    expect(sys).not.toContain('ohwow_daemon_status');
+  });
+
+  // Criterion 4: tooling mode (empty mcp_verbs) injects the literal 'none'
+  it('tooling: injects literal "none" when mcp_verbs is empty', async () => {
+    const sys = await captureSystemPrompt('tooling');
+    expect(sys).toContain('none');
+    expect(sys).not.toContain('ohwow_list_approvals');
+    expect(sys).not.toContain('ohwow_daemon_status');
+  });
+
+  // Criterion 5: verb section appears BETWEEN the mode lens block and the output contract
+  it('placement: AVAILABLE MCP VERBS appears after MODE LENS and before OUTPUT CONTRACT', async () => {
+    const sys = await captureSystemPrompt('revenue');
+    const modeLensPos = sys.indexOf('MODE LENS');
+    const verbsPos = sys.indexOf('AVAILABLE MCP VERBS');
+    const outputContractPos = sys.indexOf('OUTPUT CONTRACT');
+    expect(modeLensPos).toBeGreaterThan(-1);
+    expect(verbsPos).toBeGreaterThan(-1);
+    expect(outputContractPos).toBeGreaterThan(-1);
+    expect(verbsPos).toBeGreaterThan(modeLensPos);
+    expect(outputContractPos).toBeGreaterThan(verbsPos);
+  });
+
+  // Criterion 7: MODE_LENS_MARKER replacement is still functional (regression)
+  it('MODE_LENS_MARKER replacement: mode-specific preamble is present in rendered prompt', async () => {
+    const revSys = await captureSystemPrompt('revenue');
+    // revenue preamble starts with "MODE: revenue."
+    expect(revSys).toContain('MODE: revenue');
+
+    const plumbSys = await captureSystemPrompt('plumbing');
+    expect(plumbSys).toContain('MODE: plumbing');
+
+    const polishSys = await captureSystemPrompt('polish');
+    expect(polishSys).toContain('MODE: polish');
+
+    const toolingSys = await captureSystemPrompt('tooling');
+    expect(toolingSys).toContain('MODE: tooling');
+
+    // Confirm the raw marker is NOT in any rendered prompt
+    expect(revSys).not.toContain('{{MODE_LENS}}');
+    expect(revSys).not.toContain('{{MCP_VERBS}}');
+  });
+});
