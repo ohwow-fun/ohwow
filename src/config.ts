@@ -251,9 +251,10 @@ export interface RuntimeConfig {
   /**
    * Boot-level gate for the XReplyScheduler and XReplyDispatcher. When
    * false (the default), neither object is constructed at daemon startup,
-   * preventing autonomous X reply drafting entirely. The account was
-   * flagged for suspicious behavior; channel is deprecated pending review.
-   * Env: OHWOW_X_REPLY_SCHEDULER_ENABLED. Default: false.
+   * preventing autonomous X reply drafting entirely. X account permanently
+   * banned; channel is deprecated and will not be reactivated. Setting
+   * OHWOW_X_REPLY_SCHEDULER_ENABLED=true has no operational effect.
+   * Default: false.
    */
   xReplySchedulerEnabled: boolean;
 
