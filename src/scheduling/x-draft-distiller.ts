@@ -36,7 +36,7 @@ import {
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import { logger } from '../lib/logger.js';
 import { findDraftByFindingId, insertDraft } from './x-draft-store.js';
-import { INTEL_LEAK_PHRASES, AI_CLICHE_PHRASES, buildVoicePrinciples, buildLengthDirective } from '../lib/voice/voice-core.js';
+import { buildVoicePrinciples, buildLengthDirective, voiceCheck } from '../lib/voice/voice-core.js';
 
 /**
  * runtime_config_overrides key for the distiller's min novelty score.
@@ -50,7 +50,6 @@ export const MARKET_SUBJECT_PREFIX = 'market:';
 
 const DEFAULT_MIN_SCORE = 0.7;
 const DEFAULT_LIMIT = 5;
-const TWEET_CHAR_CAP = 280;
 const MAX_COST_CENTS = 50;
 const EXPERIMENT_ID_TAG = 'x-draft-distiller';
 
@@ -241,20 +240,24 @@ export function hasExternalSignal(insight: DistilledInsight): boolean {
 export function buildPrompt(insight: DistilledInsight): string {
   const evidenceSummary = summarizeEvidence(insight.evidence);
   return [
-    "You're drafting a single short post for an X timeline.",
+    "You're drafting a single short post for a Threads feed.",
     '',
     "The reader is a stranger scrolling. They don't know your account,",
     "your tooling, or that an observation happened at all. You have a",
     'second or two to earn their attention.',
     '',
+    'Before writing, identify the one specific thing that moved (not a',
+    'category of movement, the actual named change). If you cannot name',
+    'it in a clause of under 10 words, return SKIP.',
+    '',
     'A post earns its place when one of two things is true:',
     ' - it names a specific thing that moved in the world, concrete enough',
     '   that the reader could repeat it to someone else, or',
-    " - it offers a read on that movement the reader didn't have before —",
+    " - it offers a read on that movement the reader didn't have before,",
     '   an implication, a pattern, a take worth a nod.',
     '',
     'Voice is a person thinking out loud. Not a dashboard, not a',
-    "newsletter. Don't describe watching, scanning, or flipping verdicts —",
+    "newsletter. Don't describe watching, scanning, or flipping verdicts,",
     "that's internal vocabulary the reader neither sees nor cares about.",
     'The post is about the thing, not the act of seeing it.',
     '',
@@ -263,7 +266,7 @@ export function buildPrompt(insight: DistilledInsight): string {
     'a reader would care about, reply with exactly `SKIP`. Silence beats',
     "filler, and you're trusted to judge that.",
     '',
-    'Format: one post, up to two tweets, each ≤280 characters. Plain text.',
+    'Format: one post, up to 500 characters. Plain text.',
     'No labels, no surrounding quotes, no hashtags.',
     '',
     '---',
@@ -273,7 +276,7 @@ export function buildPrompt(insight: DistilledInsight): string {
     '',
     buildVoicePrinciples(),
     '',
-    buildLengthDirective({ platform: 'x', useCase: 'post' }),
+    buildLengthDirective({ platform: 'threads', useCase: 'post' }),
   ]
     .filter(Boolean)
     .join('\n');
@@ -305,25 +308,13 @@ export function sanitizeDraft(raw: string): string | null {
   if (body.length === 0) return null;
   // The prompt invites SKIP when evidence is thin — honor it as a null draft.
   if (/^skip\.?$/i.test(body)) return null;
-  // Reject drafts containing internal-mechanism vocabulary. These phrases
-  // (verdict flipped, latest scan, we've been watching) expose pipeline
-  // internals to a public audience. A draft that contains them slipped
-  // past the prompt guard; drop it rather than publish internal framing.
-  const bodyLower = body.toLowerCase();
-  for (const phrase of INTEL_LEAK_PHRASES) {
-    if (bodyLower.includes(phrase)) {
-      logger.info({ phrase }, '[x-draft-distiller] draft rejected: internal vocab leak');
-      return null;
-    }
-  }
-  for (const phrase of AI_CLICHE_PHRASES) {
-    if (bodyLower.includes(phrase)) {
-      logger.info({ phrase }, '[x-draft-distiller] draft rejected: AI cliche phrase');
-      return null;
-    }
-  }
-  if (body.length > TWEET_CHAR_CAP * 2 + 10) {
-    body = body.slice(0, TWEET_CHAR_CAP * 2 + 10);
+  // Run the full voice gate (intel leak, AI cliché, structural checks,
+  // first-person, etc.) so every rule in voice-core applies here without
+  // reimplementing phrase loops in this file.
+  const { ok, reasons } = voiceCheck(body, { platform: 'threads', useCase: 'post' });
+  if (!ok) {
+    logger.info({ reasons }, '[x-draft-distiller] draft rejected by voice gate');
+    return null;
   }
   return body;
 }
