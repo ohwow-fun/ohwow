@@ -4,6 +4,8 @@ import { createAuthMiddleware } from '../middleware.js';
 import { signDaemonToken } from '../../daemon/token-codec.js';
 import type { Request, Response, NextFunction } from 'express';
 import type { WorkspaceDbPool } from '../../db/workspace-db-pool.js';
+import type { WorkspaceRegistry } from '../../daemon/workspace-registry.js';
+import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 
 const JWT_SECRET = 'test-jwt-secret-key-for-testing-only';
 const LOCAL_SESSION = 'local-session-token-abc';
@@ -288,5 +290,114 @@ describe('createAuthMiddleware — multi-workspace dbPool path', () => {
     expect(req.userId).toBe('local');
     // dbPool.get should NOT have been called — session token fast-path runs first
     expect((dbPool.get as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST D — Middleware workspaceCtx injection (Phase 2)
+// ---------------------------------------------------------------------------
+
+function mockWsCtx(name: string): WorkspaceContext {
+  return {
+    workspaceName: name,
+    workspaceId: 'local',
+    dataDir: `/tmp/${name}`,
+    sessionToken: `tok-${name}`,
+    rawDb: {} as never,
+    db: {} as never,
+    config: {} as never,
+    businessContext: { businessName: name, businessType: 'saas_startup' },
+    engine: null,
+    orchestrator: null,
+    triggerEvaluator: null,
+    channelRegistry: null,
+    connectorRegistry: null,
+    messageRouter: null,
+    scheduler: null,
+    proactiveEngine: null,
+    connectorSyncScheduler: null,
+    controlPlane: null,
+    bus: {} as never,
+  };
+}
+
+function mockRegistry(contexts: WorkspaceContext[]): WorkspaceRegistry {
+  const map = new Map(contexts.map(c => [c.workspaceName, c]));
+  return {
+    has: vi.fn((name: string) => map.has(name)),
+    get: vi.fn((name: string) => {
+      const ctx = map.get(name);
+      if (!ctx) throw new Error(`Workspace '${name}' is not loaded`);
+      return ctx;
+    }),
+    register: vi.fn(),
+    getAll: vi.fn(() => [...map.values()]),
+    unload: vi.fn(),
+    unloadAll: vi.fn(),
+  } as unknown as WorkspaceRegistry;
+}
+
+describe('createAuthMiddleware — workspaceCtx injection (Phase 2)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('sets req.workspaceCtx when registry.has(workspaceName) is true', async () => {
+    const wsCtx = mockWsCtx('default');
+    const registry = mockRegistry([wsCtx]);
+    const dbPool = mockDbPool();
+    const token = await signDaemonToken('default', JWT_SECRET);
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool, registry);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceCtx).toBe(wsCtx);
+    expect(req.workspaceName).toBe('default');
+  });
+
+  it('leaves req.workspaceCtx undefined when registry.has(workspaceName) is false', async () => {
+    const registry = mockRegistry([]); // empty — no workspace loaded
+    const dbPool = mockDbPool();
+    const token = await signDaemonToken('default', JWT_SECRET);
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool, registry);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceCtx).toBeUndefined();
+  });
+
+  it('does not set req.workspaceCtx when registry is undefined (old single-workspace path)', async () => {
+    const dbPool = mockDbPool();
+    const token = await signDaemonToken('default', JWT_SECRET);
+
+    // No registry arg — simulates old single-workspace boot
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceCtx).toBeUndefined();
+  });
+
+  it('injects the correct context for a secondary workspace (avenued)', async () => {
+    const defaultCtx = mockWsCtx('default');
+    const avenueCtx = mockWsCtx('avenued');
+    const registry = mockRegistry([defaultCtx, avenueCtx]);
+    const dbPool = mockDbPool();
+    const token = await signDaemonToken('avenued', JWT_SECRET);
+
+    const middleware = createAuthMiddleware(JWT_SECRET, undefined, undefined, undefined, undefined, dbPool, registry);
+    const { req, res, next } = mockReqResNext({ authorization: `Bearer ${token}` });
+
+    await middleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.workspaceCtx).toBe(avenueCtx);
+    expect(req.workspaceCtx).not.toBe(defaultCtx);
   });
 });
