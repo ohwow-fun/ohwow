@@ -110,7 +110,7 @@ const DEFAULTS = {
 } as const;
 
 /** Channels the thermostat can schedule. */
-export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'none';
+export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'threads_dm' | 'threads_reply' | 'none';
 
 interface ContactRow {
   id: string;
@@ -183,7 +183,7 @@ function parseCustomFields(raw: string | null): Record<string, unknown> {
   }
 }
 
-function pickChannel(
+export function pickChannel(
   cf: Record<string, unknown>,
   email: string | null,
   contactEvents: EventRow[],
@@ -209,6 +209,19 @@ function pickChannel(
   if (permalink) {
     return { channel: 'x_reply', reason: xUserId ? 'dm_in_cooldown_fallback_reply' : 'has_permalink' };
   }
+
+  const threadsHandle = typeof cf.threads_handle === 'string' && cf.threads_handle.length > 0
+    ? cf.threads_handle : null;
+  if (threadsHandle && recentReach.length === 0) {
+    return { channel: 'threads_dm', reason: 'has_threads_handle' };
+  }
+
+  const threadsReplyUrl = typeof cf.threads_reply_url === 'string' && cf.threads_reply_url.length > 0
+    ? cf.threads_reply_url : null;
+  if (threadsReplyUrl) {
+    return { channel: 'threads_reply', reason: 'has_threads_reply_url' };
+  }
+
   return { channel: 'none', reason: 'no_reach_channel' };
 }
 
@@ -229,6 +242,12 @@ export function buildDraftMessage(channel: OutreachChannel, plan: ChannelPlan): 
     return `Saw ${bucketSubject}. Exactly what ohwow is built around. Worth a quick chat`;
   }
   if (channel === 'x_reply') {
+    return `Handoff design matters more than agent choice here. ohwow takes a different angle on that tradeoff`;
+  }
+  if (channel === 'threads_dm') {
+    return `Saw ${bucketSubject}. ohwow approaches that exact problem from a different angle. Worth a look`;
+  }
+  if (channel === 'threads_reply') {
     return `Handoff design matters more than agent choice here. ohwow takes a different angle on that tradeoff`;
   }
   if (channel === 'email') {
@@ -548,7 +567,11 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
       // Probe already filtered with the default window; this second
       // check catches any contact_event inserted since the probe ran
       // (e.g. a concurrent x:reached from the attribution endpoint).
-      const policyChannel = plan.channel === 'x_dm' ? 'x_dm' : plan.channel === 'email' ? 'email' : 'x_reply';
+      const policyChannel = plan.channel === 'x_dm' ? 'x_dm'
+        : plan.channel === 'email' ? 'email'
+        : plan.channel === 'threads_dm' ? 'threads_dm'
+        : plan.channel === 'threads_reply' ? 'threads_reply'
+        : 'x_reply';
       const cooldown = await isContactInCooldown(
         ctx.db as DatabaseAdapter,
         ctx.workspaceId,
@@ -588,7 +611,11 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
         ? 'x_dm_outbound'
         : plan.channel === 'email'
           ? 'email_outbound'
-          : 'x_outbound_reply';
+          : plan.channel === 'threads_dm'
+            ? 'threads_dm_outbound'
+            : plan.channel === 'threads_reply'
+              ? 'threads_outbound_reply'
+              : 'x_outbound_reply';
       const approvalPayload: Record<string, unknown> = {
         contact_id: plan.contact_id,
         handle: plan.handle,
@@ -605,7 +632,7 @@ export class OutreachThermostatExperiment extends BusinessExperiment {
         approvalPayload.text = draft.text;
         approvalPayload.cta_url = 'https://ohwow.fun/';
       }
-      if (plan.channel === 'x_dm' && plan.conversation_pair) {
+      if ((plan.channel === 'x_dm' || plan.channel === 'threads_dm') && plan.conversation_pair) {
         approvalPayload.conversation_pair = plan.conversation_pair;
       }
       if (plan.channel === 'email' && plan.email) {

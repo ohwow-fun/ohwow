@@ -52,6 +52,7 @@ import * as approvalQueueModule from '../../scheduling/approval-queue.js';
 import {
   OutreachThermostatExperiment,
   buildDraftMessage,
+  pickChannel,
   type ChannelPlan,
 } from '../../self-bench/experiments/outreach-thermostat.js';
 import { voiceCheck } from '../../lib/voice/voice-core.js';
@@ -124,7 +125,7 @@ describe('voiceCheck — AI-cliché gate covers thermostat template phrases', ()
 // ---------------------------------------------------------------------------
 
 describe('buildDraftMessage — templates pass voiceCheck baseline', () => {
-  const channels: Array<ChannelPlan['channel']> = ['x_dm', 'x_reply'];
+  const channels: Array<ChannelPlan['channel']> = ['x_dm', 'x_reply', 'threads_dm', 'threads_reply'];
 
   for (const channel of channels) {
     it(`${channel} template passes voiceCheck`, () => {
@@ -142,7 +143,7 @@ describe('buildDraftMessage — templates pass voiceCheck baseline', () => {
       };
       const draft = buildDraftMessage(channel, plan);
       const draftText = typeof draft === 'string' ? draft : draft.text;
-      const platform = channel === 'email' ? 'threads' : 'x';
+      const platform = channel === 'email' || channel.startsWith('threads') ? 'threads' : 'x';
       const result = voiceCheck(draftText, { platform, useCase: 'reply' });
       // Templates should be clean out of the box; if they fail, fix the template.
       expect(result.ok).toBe(true);
@@ -167,6 +168,68 @@ describe('buildDraftMessage — templates pass voiceCheck baseline', () => {
     const result = voiceCheck(draftText, { platform: 'threads', useCase: 'reply' });
     // If this fails, the email template has a voice violation — fix the template.
     expect(result.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pickChannel — threads channel selection
+// ---------------------------------------------------------------------------
+
+// pickChannel is exported for direct unit-testing.
+const COOLDOWN_72H = 72 * 60 * 60 * 1000;
+
+describe('pickChannel — threads channel selection', () => {
+  it('threads_handle present → channel threads_dm, reason has_threads_handle', () => {
+    const result = pickChannel({ threads_handle: 'myhandle' }, null, [], COOLDOWN_72H);
+    expect(result.channel).toBe('threads_dm');
+    expect(result.reason).toBe('has_threads_handle');
+  });
+
+  it('threads_reply_url present → channel threads_reply, reason has_threads_reply_url', () => {
+    const result = pickChannel({ threads_reply_url: 'https://threads.net/@foo/post/1' }, null, [], COOLDOWN_72H);
+    expect(result.channel).toBe('threads_reply');
+    expect(result.reason).toBe('has_threads_reply_url');
+  });
+
+  it('neither threads_handle nor threads_reply_url → channel none', () => {
+    const result = pickChannel({}, null, [], COOLDOWN_72H);
+    expect(result.channel).toBe('none');
+  });
+
+  it('x_user_id + threads_handle → x_dm wins (priority preserved)', () => {
+    const result = pickChannel({ x_user_id: 'u123', threads_handle: 'myhandle' }, null, [], COOLDOWN_72H);
+    expect(result.channel).toBe('x_dm');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDraftMessage — threads channel templates
+// ---------------------------------------------------------------------------
+
+describe('buildDraftMessage — threads channel templates', () => {
+  const basePlan: ChannelPlan = {
+    contact_id: 'c-threads',
+    display_name: 'Test',
+    channel: 'threads_dm',
+    reason: 'has_threads_handle',
+    handle: 'testhandle',
+    permalink: null,
+    bucket: 'market_signal',
+    x_user_id: null,
+    conversation_pair: null,
+    email: null,
+  };
+
+  it('threads_dm returns non-empty string', () => {
+    const result = buildDraftMessage('threads_dm', { ...basePlan, channel: 'threads_dm' });
+    expect(typeof result).toBe('string');
+    expect((result as string).length).toBeGreaterThan(0);
+  });
+
+  it('threads_reply returns non-empty string', () => {
+    const result = buildDraftMessage('threads_reply', { ...basePlan, channel: 'threads_reply' });
+    expect(typeof result).toBe('string');
+    expect((result as string).length).toBeGreaterThan(0);
   });
 });
 
