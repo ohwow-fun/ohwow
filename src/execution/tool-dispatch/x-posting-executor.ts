@@ -62,6 +62,7 @@ import {
   findExistingTabForHost,
   findReusableTabForHost,
   closeTabById,
+  resolveBrowserContextForProfile,
 } from '../browser/chrome-profile-router.js';
 import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
 import { withProfileLock } from '../browser/profile-mutex.js';
@@ -201,13 +202,23 @@ export const xPostingExecutor: ToolExecutor = {
         // `findReusableTabForHost` atomically claims the tab and
         // navigates it back to the host landing page (resetTab) so a
         // prior task's dirty state — modal, scroll, half-typed draft —
-        // doesn't leak into this one.
-        const reusable = await findReusableTabForHost({
-          hostMatch: 'x.com',
-          profileDir: target.directory,
-          owner: claimOwner,
-          resetUrl: 'https://x.com/home',
-        });
+        // doesn't leak into this one. Pin the lookup to this
+        // profile's browser context so a human's x.com tab in another
+        // profile (or the agent's x.com tab in the wrong profile)
+        // can't be grabbed. On the very first tick after daemon start
+        // the cache is empty, so we skip the reusable lookup entirely
+        // and fall through to `openProfileWindow` — one cold-start
+        // window open is cheaper than a hijacked operator tab.
+        const expectedContext = resolveBrowserContextForProfile(target.directory);
+        const reusable = expectedContext
+          ? await findReusableTabForHost({
+            hostMatch: 'x.com',
+            profileDir: target.directory,
+            owner: claimOwner,
+            resetUrl: 'https://x.com/home',
+            expectedBrowserContextId: expectedContext,
+          })
+          : null;
         if (reusable) {
           localContextId = reusable.browserContextId ?? undefined;
           // Browser WS is per-lookup; drop it now so the composer's
