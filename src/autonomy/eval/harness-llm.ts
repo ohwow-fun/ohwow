@@ -29,6 +29,8 @@ import {
   makeLlmPlanExecutor,
   modelClientFromRouter,
   newLlmMeter,
+  SpendCapExceeded,
+  withSpendCap,
   type LlmMeter,
   type PlanModelClient,
 } from '../executors/llm-executor.js';
@@ -218,35 +220,6 @@ function withPlanCapture(
         capture.plan_return = ret;
       }
       return ret;
-    },
-  };
-}
-
-class SpendCapExceeded extends Error {
-  constructor(public readonly cents: number, public readonly capCents: number) {
-    super(`LLM spend cap exceeded: ${cents.toFixed(4)}c > ${capCents}c`);
-    this.name = 'SpendCapExceeded';
-  }
-}
-
-function withSpendCap(
-  inner: PlanModelClient,
-  meter: LlmMeter,
-  capCents: number,
-): PlanModelClient {
-  return {
-    call: async (params) => {
-      const res = await inner.call(params);
-      // The executor updates meter.cents AFTER this resolves, so we
-      // check `before + estimate` here using the same estimator the
-      // executor uses. Keeping a duplicate import-free; simplest is to
-      // check after-the-fact on the NEXT call. For a single plan round
-      // + at most one retry that means at most one small over-cap call.
-      // The harness still fails the scenario on cap overflow at exit.
-      if (meter.cents > capCents) {
-        throw new SpendCapExceeded(meter.cents, capCents);
-      }
-      return res;
     },
   };
 }

@@ -21,9 +21,29 @@ import {
 } from './conductor.js';
 import { defaultDirectorIO } from './director.js';
 import type { RoundExecutor } from './types.js';
+import type { ModelRouter } from '../execution/model-router.js';
+import {
+  makeLlmPlanExecutor,
+  modelClientFromRouter,
+  newLlmMeter,
+  withSpendCap,
+} from './executors/llm-executor.js';
 
 /** Default tick: 1h (matches the spec's IMPROVEMENT_INTERVAL_MS default). */
 export const DEFAULT_CONDUCTOR_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Model used for real-LLM plan rounds in production (dark-launch).
+ * Kept as a named constant so bumping the model requires a single edit.
+ */
+export const DEFAULT_LLM_MODEL = 'claude-haiku-4-5-20251001';
+
+/**
+ * Per-arc LLM spend cap in cents for the dark-launch conductor.
+ * Set intentionally below all MODE_BUDGETS values so the budget-exceeded
+ * check in director.ts is the outer guard; this cap is a safety floor.
+ */
+export const CONDUCTOR_ARC_SPEND_CAP_CENTS = 5;
 
 export interface WireConductorOptions {
   db: DatabaseAdapter;
@@ -45,6 +65,13 @@ export interface WireConductorOptions {
   cloudRepoRoot?: string;
   /** Optional executor factory; defaults to the Phase-5 stub. */
   makeExecutor?: () => RoundExecutor;
+  /**
+   * When provided, plan rounds use the real LLM (Haiku) via this router
+   * instead of the stub. A fresh `LlmMeter` is created per-arc; the arc
+   * spend is capped at `CONDUCTOR_ARC_SPEND_CAP_CENTS` (5c) for the
+   * dark-launch. If absent, falls back to `makeExecutor` or the stub.
+   */
+  modelRouter?: ModelRouter;
 }
 
 /**
@@ -87,11 +114,43 @@ export function wireConductor(
   io.requestImmediateTick = () => {
     trigger?.();
   };
+  // Build the per-arc executor factory. When a ModelRouter is available,
+  // plan rounds call the real LLM (Haiku) via a fresh meter per arc.
+  // A 5c/arc spend cap is enforced via withSpendCap so the dark-launch
+  // can't accumulate unexpected cost. impl + qa still use the stub.
+  //
+  // The current meter is tracked in a shared mutable ref so `getArcMeter`
+  // always returns the meter for the arc that `makeExecutor` last created.
+  // Conductor runs one arc at a time (arc-in-flight guard), so the ref
+  // is always coherent: makeExecutor() is called once per arc, before
+  // runArc starts, and getArcMeter is read synchronously in the same tick.
+  let currentMeter = newLlmMeter();
+  const makeExecutor: () => RoundExecutor = opts.modelRouter
+    ? () => {
+        currentMeter = newLlmMeter();
+        const baseClient = modelClientFromRouter(opts.modelRouter!, 'planning');
+        const cappedClient = withSpendCap(
+          baseClient,
+          currentMeter,
+          CONDUCTOR_ARC_SPEND_CAP_CENTS,
+        );
+        return makeLlmPlanExecutor({
+          model: DEFAULT_LLM_MODEL,
+          client: cappedClient,
+          fallback: defaultMakeStubExecutor(),
+          meter: currentMeter,
+        });
+      }
+    : opts.makeExecutor ?? defaultMakeStubExecutor;
+
   const handle = startConductorLoop({
     db: opts.db,
     io,
     workspace_id: opts.workspace_id,
-    makeExecutor: opts.makeExecutor ?? defaultMakeStubExecutor,
+    makeExecutor,
+    // Expose the current arc's meter so conductorTick can wire
+    // getLlmCents into ArcInput for live cost accounting.
+    getArcMeter: opts.modelRouter ? () => currentMeter : undefined,
     intervalMs: opts.intervalMs ?? DEFAULT_CONDUCTOR_INTERVAL_MS,
   });
   trigger = handle.requestImmediateTick;

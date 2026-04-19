@@ -31,6 +31,7 @@ import {
   type Picker,
   type PickerOutput,
 } from './director.js';
+import type { LlmMeter } from './executors/llm-executor.js';
 import {
   listAnsweredUnresolvedFounderInbox,
   listOpenArcs,
@@ -115,6 +116,13 @@ export interface ConductorDeps {
   workspace_id: string;
   /** Factory for the executor used by trios; allows test injection. */
   makeExecutor: () => RoundExecutor;
+  /**
+   * Optional accessor for the `LlmMeter` created by the most recent
+   * `makeExecutor()` call. When provided, `conductorTick` wires
+   * `arcInput.getLlmCents` so the Director can record real LLM cost in
+   * `director_phase_reports.cost_llm_cents`. Absent for stub/test runs.
+   */
+  getArcMeter?: () => LlmMeter;
   /** Override for tests / debugging. Defaults to `readFullPulse`. */
   pulseReader?: typeof readFullPulse;
   /** Override for tests / debugging. Defaults to `readLedgerSnapshot`. */
@@ -517,6 +525,16 @@ export async function conductorTick(
     thesis,
     mode_of_invocation: 'loop-tick',
   };
+
+  // Wire real-LLM cost accounting when a meter is available. The meter
+  // reference was captured during makeExecutor() above via the shared
+  // mutable ref in wireConductor, so getLlmCents() always reads the
+  // meter for THIS arc (one arc at a time is guaranteed by the
+  // arc-in-flight guard earlier in this function).
+  if (deps.getArcMeter) {
+    const meter = deps.getArcMeter();
+    arcInput.getLlmCents = () => meter.cents;
+  }
 
   try {
     const result = await runArc(arcInput, picker, executor, deps.db, deps.io);
