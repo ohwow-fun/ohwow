@@ -45,7 +45,7 @@ import { logger } from './logger.js';
 import { parseSqliteTimestamp } from './sqlite-time.js';
 import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 
-export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'any';
+export type OutreachChannel = 'x_dm' | 'x_reply' | 'email' | 'threads_dm' | 'threads_reply' | 'any';
 
 export const DEFAULT_COOLDOWN_HOURS = 72;
 
