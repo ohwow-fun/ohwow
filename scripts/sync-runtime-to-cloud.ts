@@ -155,11 +155,13 @@ function buildUpsertSql(spec: SyncTableSpec): string {
  * (pg serializes back to jsonb) and TEXT(datetime) must remain a string
  * because pg accepts ISO-ish strings into timestamptz natively.
  */
-function coerceValue(col: string, val: unknown): unknown {
+export function coerceValue(col: string, val: unknown): unknown {
   if (val === null || val === undefined) return null;
   if (col.endsWith('_json') && typeof val === 'string') {
     try {
-      return JSON.parse(val);
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) return JSON.stringify(parsed);
+      return parsed;
     } catch {
       return val;
     }
@@ -255,10 +257,13 @@ async function flushBatch(client: pg.Client, sql: string, batch: unknown[][]): P
   return n;
 }
 
-main().then(
-  () => process.exit(0),
-  (err) => {
-    logger.error({ err: err instanceof Error ? { message: err.message, stack: err.stack } : err }, '[sync] failed');
-    process.exit(1);
-  },
-);
+// Only run as CLI when invoked directly (not when imported by tests).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then(
+    () => process.exit(0),
+    (err) => {
+      logger.error({ err: err instanceof Error ? { message: err.message, stack: err.stack } : err }, '[sync] failed');
+      process.exit(1);
+    },
+  );
+}
