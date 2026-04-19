@@ -47,16 +47,13 @@ describe('seedXIntelAutomation', () => {
     expect(input.name).toBe(X_INTEL_AUTOMATION_NAME);
     expect(input.trigger_type).toBe('schedule');
     expect(input.trigger_config.cron).toBe('0 */3 * * *');
+    // x-compose and x-reply steps permanently removed 2026-04-19 (X account banned).
     expect(input.steps.map((s: { id: string }) => s.id)).toEqual([
       'x_intel',
       'x_authors_to_crm',
-      'x_compose',
-      'x_reply',
     ]);
     expect(input.steps[0].step_type).toBe('shell_script');
     expect(input.steps[0].action_config.heartbeat_filename).toBe('x-intel-last-run.json');
-    expect(input.steps[2].action_config.env).toEqual({ DRY: '0' });
-    expect(input.steps[3].action_config.env).toEqual({ DRY: '0' });
   });
 
   it('is idempotent: skips creation when an automation with the canonical name already exists', async () => {
