@@ -643,6 +643,10 @@ export async function findReusableTabForHost(opts: {
         await resetTab(page, resetUrl);
       }
 
+      logger.info(
+        { cdp: true, action: 'reuse:hit', profile: profileDir, contextId: match.browserContextId, targetId: match.targetId, owner, url: match.url },
+        '[chrome-profile-router] reusing existing tab',
+      );
       const closeBrowser = (): void => {
         try { browser?.close(); } catch { /* ignore */ }
       };
@@ -684,6 +688,7 @@ export async function closeTabById(
 ): Promise<void> {
   // Release any claim for this target regardless of owner — the tab is
   // about to disappear, so keeping the claim around is meaningless.
+  logger.debug({ cdp: true, action: 'tab:close', targetId }, '[chrome-profile-router] closing tab');
   releaseTarget(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
@@ -827,7 +832,7 @@ export async function ensureTargetDestroyedSubscription(
     const released = releaseByTargetId(targetId);
     if (released > 0) {
       logger.info(
-        { targetId: targetId.slice(0, 8), released },
+        { cdp: true, action: 'tab:destroyed', targetId: targetId.slice(0, 8), released },
         '[chrome-profile-router] tab destroyed externally; released claim(s)',
       );
     }
