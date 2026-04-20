@@ -54,6 +54,7 @@ export type ExperimentCategory =
   | 'business_outcome'
   | 'dm_intel'
   | 'data_freshness'
+  | 'model_releases'
   | 'other';
 
 /**
