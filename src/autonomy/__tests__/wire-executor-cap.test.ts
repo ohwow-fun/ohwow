@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSqliteAdapter } from '../../db/sqlite-adapter.js';
 import { wireConductor, CONDUCTOR_ARC_SPEND_CAP_CENTS, DEFAULT_LLM_MODEL } from '../wire-daemon.js';
+import { CURATED_OPENROUTER_MODELS } from '../../execution/model-router.js';
 import {
   newLlmMeter,
   withSpendCap,
@@ -295,5 +296,30 @@ describe('getLlmCents via makeLlmPlanExecutor + meter', () => {
 describe('CONDUCTOR_ARC_SPEND_CAP_CENTS constant', () => {
   it('is exactly 5 cents (the dark-launch budget for gap 14.2)', () => {
     expect(CONDUCTOR_ARC_SPEND_CAP_CENTS).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Freeze tests: DEFAULT_LLM_MODEL format pin
+// Guards against reverting to Anthropic API format (e.g. 'claude-haiku-4-5-20251001')
+// which causes OpenRouter 400 errors on every conductor plan round.
+// ---------------------------------------------------------------------------
+
+describe('DEFAULT_LLM_MODEL format', () => {
+  it('is in OpenRouter format (contains a forward slash)', () => {
+    // OpenRouter requires '<provider>/<model>' format.
+    // Anthropic SDK format (e.g. 'claude-haiku-4-5-20251001') causes 400 errors.
+    expect(DEFAULT_LLM_MODEL).toContain('/');
+  });
+
+  it('starts with the anthropic/ prefix', () => {
+    expect(DEFAULT_LLM_MODEL).toMatch(/^anthropic\//);
+  });
+
+  it('is registered in CURATED_OPENROUTER_MODELS', () => {
+    // Cross-checks that the model constant matches a known registered model ID
+    // in the model router. If the constant is changed, the router must also be updated.
+    const registeredIds = CURATED_OPENROUTER_MODELS.map((m) => m.id);
+    expect(registeredIds).toContain(DEFAULT_LLM_MODEL);
   });
 });
