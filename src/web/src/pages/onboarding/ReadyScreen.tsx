@@ -12,9 +12,10 @@ interface ReadyScreenProps {
   onLaunch: () => void;
   businessName?: string;
   agentCount?: number;
+  launchLabel?: string;
 }
 
-export function ReadyScreen({ selectedModel, loading, error, onLaunch, businessName, agentCount }: ReadyScreenProps) {
+export function ReadyScreen({ selectedModel, loading, error, onLaunch, businessName, agentCount, launchLabel = 'Start Chatting' }: ReadyScreenProps) {
   return (
     <div data-testid="onboarding-ready" className="min-h-screen bg-black flex flex-col items-center justify-center p-4">
       <div className="max-w-md w-full text-center space-y-8">
@@ -74,7 +75,7 @@ export function ReadyScreen({ selectedModel, loading, error, onLaunch, businessN
           disabled={loading}
           className="w-full bg-white text-black rounded-lg px-6 py-3.5 text-base font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50"
         >
-          {loading ? 'Saving...' : 'Start Chatting'}
+          {loading ? 'Saving...' : launchLabel}
         </button>
       </div>
     </div>
