@@ -208,3 +208,25 @@ describe('buildVoicePrinciples — FORBIDDEN section', () => {
     expect(principles).toContain('FORBIDDEN:');
   });
 });
+
+// ---------------------------------------------------------------------------
+// buildVoicePrinciples — product-mention gate (freeze: runtime 50ba17d)
+//
+// Two-branch rule:
+//   - General presence (no opts): blanket pitch-ban, no product names.
+//   - buyer_intent outreach (allowProductMention: true): ohwow.fun may appear.
+// ---------------------------------------------------------------------------
+
+describe('buildVoicePrinciples — product-mention gate', () => {
+  it('default: pitch-ban blocks all product names', () => {
+    const result = buildVoicePrinciples();
+    expect(result).toContain('No products, tools, companies named');
+    expect(result).not.toContain('ohwow.fun');
+  });
+
+  it('allowProductMention: pitch line permits ohwow.fun', () => {
+    const result = buildVoicePrinciples({ allowProductMention: true });
+    expect(result).toContain('ohwow.fun');
+    expect(result).not.toContain('No products, tools, companies named');
+  });
+});
