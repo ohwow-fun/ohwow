@@ -120,6 +120,8 @@ export interface ScanThreadsInput {
   limit?: number;
   expectedBrowserContextId?: string;
   scrollRounds?: number;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 export interface ScannedThread {
@@ -163,6 +165,8 @@ export interface ReplyThreadsInput {
   db?: DatabaseAdapter;
   /** Workspace id for posted_log row. Resolved positionally if null. */
   workspaceId?: string;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 export interface ReplyThreadsResult {
@@ -186,7 +190,7 @@ function isThreadsUrl(url: string): boolean {
   return url.includes('threads.com') || url.includes('threads.net');
 }
 
-async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHandle | null> {
+async function getThreadsCdpPage(expectedContextId?: string, profileDir?: string): Promise<CdpPageHandle | null> {
   return getCdpPageForPlatform({
     urlMatcher: isThreadsUrl,
     fallbackUrl: THREADS_HOME,
@@ -194,6 +198,7 @@ async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHan
     logTag: LOG_TAG,
     // Reply path must not touch a human's Threads tab.
     ownershipMode: 'ours',
+    profileDir,
   });
 }
 
@@ -353,7 +358,7 @@ export async function scanThreadsPostsViaBrowser(
     }
   }
 
-  const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const handle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!handle) {
     return {
       success: false,
@@ -604,7 +609,7 @@ export async function composeThreadsReplyViaBrowser(
     }
   }
 
-  const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const handle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!handle) {
     return {
       success: false,

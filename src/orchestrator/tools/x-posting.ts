@@ -253,12 +253,23 @@ export interface ComposeTweetInput {
    * `ensureProfileChrome` / tool-executor paths own that lookup.
    */
   expectedBrowserContextId?: string;
+  /**
+   * Filesystem path of the Chrome profile directory (e.g.
+   * `~/.ohwow/chrome-cdp/Profile 1`). When provided, claims registered
+   * for newly opened tabs use this path as the `profileDir` key so
+   * `findReusableTabForHost` can find them on the next tick. Without
+   * this, claims are keyed on the UUID `browserContextId` and the reuse
+   * lookup misses them.
+   */
+  profileDir?: string;
 }
 
 export interface ComposeThreadInput {
   tweets: string[];
   dryRun?: boolean;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface ComposeArticleInput {
@@ -266,6 +277,8 @@ export interface ComposeArticleInput {
   body: string;
   dryRun?: boolean;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface SendDmInput {
@@ -281,11 +294,15 @@ export interface SendDmInput {
   text: string;
   dryRun?: boolean;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface ListDmsInput {
   limit?: number;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface DeleteLastTweetInput {
@@ -295,6 +312,8 @@ export interface DeleteLastTweetInput {
   marker: string;
   dryRun?: boolean;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface ComposeResult {
@@ -378,6 +397,7 @@ export async function getCdpPage(
   urlHint?: string,
   expectedContextId?: string,
   ownershipMode: TabOwnershipMode = 'any',
+  profileDir?: string,
 ): Promise<CdpPage | null> {
   let browser: RawCdpBrowser | null = null;
   // 'ours' hides tabs we didn't create, so the human's x.com sessions
@@ -430,8 +450,13 @@ export async function getCdpPage(
           // id, so we fall back to a pid+context-scoped owner. Replace
           // with a threaded owner when the composer signatures carry
           // one (see spec Step C).
+          //
+          // Use the filesystem profileDir when threaded (so the claim key
+          // matches findReusableTabForHost's profileDir lookup). Fall back
+          // to the browserContextId UUID for call sites that haven't
+          // threaded profileDir yet (preserves legacy semantics).
           claimTarget(
-            { profileDir: expectedContextId, targetId: newTargetId },
+            { profileDir: profileDir ?? expectedContextId, targetId: newTargetId },
             `x-composer:${process.pid}`,
           );
           logger.info(
@@ -748,7 +773,7 @@ export async function composeTweetViaBrowser(input: ComposeTweetInput): Promise<
     };
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no x.com tab open in any profile window, or debug Chrome is down. Open x.com in the target profile window and retry.' };
 
   try {
@@ -1027,7 +1052,7 @@ export async function composeThreadViaBrowser(input: ComposeThreadInput): Promis
     }
   }
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
@@ -1165,7 +1190,7 @@ export async function composeArticleViaBrowser(input: ComposeArticleInput): Prom
   if (!title) return { success: false, message: 'title is required' };
   if (!body || body.length < 100) return { success: false, message: 'body must be at least 100 chars for an article' };
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours');
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'ours', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
@@ -1366,7 +1391,7 @@ export interface ListDmsResult {
 
 export async function listDmsViaBrowser(input: ListDmsInput): Promise<ListDmsResult> {
   const limit = Math.max(1, Math.min(50, input.limit ?? 20));
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'any', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
@@ -1425,6 +1450,8 @@ export interface ReadDmThreadInput {
   /** Cap on number of messages returned, newest-first after the cap is applied. */
   limit?: number;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see `ComposeTweetInput.profileDir`. */
+  profileDir?: string;
 }
 
 export interface DmMessage {
@@ -1489,7 +1516,7 @@ export async function readDmThreadViaBrowser(input: ReadDmThreadInput): Promise<
   const pairHyphen = pair.replace(/:/g, '-');
   const limit = Math.max(1, Math.min(200, input.limit ?? DEFAULT_THREAD_READ_LIMIT));
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'any', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.', conversationName: null };
 
   try {
@@ -1599,7 +1626,7 @@ export async function sendDmViaBrowser(input: SendDmInput): Promise<ComposeResul
   const pairColon = pair.replace(/-/g, ':');
   const pairHyphen = pair.replace(/:/g, '-');
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'any', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {
@@ -1706,7 +1733,7 @@ export async function deleteLastTweetViaBrowser(input: DeleteLastTweetInput): Pr
   if (!handle) return { success: false, message: 'handle is required' };
   if (!marker) return { success: false, message: 'marker is required' };
 
-  const page = await getCdpPage('x.com', input.expectedBrowserContextId);
+  const page = await getCdpPage('x.com', input.expectedBrowserContextId, 'any', input.profileDir);
   if (!page) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   try {

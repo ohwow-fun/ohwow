@@ -323,11 +323,12 @@ export const xPostingExecutor: ToolExecutor = {
                 dryRun,
                 expectedHandle,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
             }
             if (toolName === 'x_compose_thread') {
               const tweets = Array.isArray(input.tweets) ? (input.tweets as string[]) : [];
-              return composeThreadViaBrowser({ tweets, dryRun, expectedBrowserContextId });
+              return composeThreadViaBrowser({ tweets, dryRun, expectedBrowserContextId, profileDir: target.directory });
             }
             if (toolName === 'x_compose_article') {
               return composeArticleViaBrowser({
@@ -335,6 +336,7 @@ export const xPostingExecutor: ToolExecutor = {
                 body: String(input.body || ''),
                 dryRun,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
             }
             if (toolName === 'x_send_dm') {
@@ -344,12 +346,14 @@ export const xPostingExecutor: ToolExecutor = {
                 text: String(input.text || ''),
                 dryRun,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
             }
             if (toolName === 'x_list_dms') {
               const listed = await listDmsViaBrowser({
                 limit: input.limit as number | undefined,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
               return {
                 success: listed.success,
@@ -405,6 +409,7 @@ export const xPostingExecutor: ToolExecutor = {
               marker: String(input.marker || ''),
               dryRun,
               expectedBrowserContextId,
+              profileDir: target.directory,
             });
           });
         },

@@ -246,11 +246,12 @@ export const threadsPostingExecutor: ToolExecutor = {
                 dryRun,
                 expectedHandle,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
             }
             if (toolName === 'threads_compose_thread') {
               const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
-              return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId });
+              return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId, profileDir: target.directory });
             }
             if (toolName === 'threads_scan_posts') {
               const scanned = await scanThreadsPostsViaBrowser({
@@ -258,6 +259,7 @@ export const threadsPostingExecutor: ToolExecutor = {
                 limit: typeof input.limit === 'number' ? input.limit : undefined,
                 scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
               return {
                 success: scanned.success,
@@ -276,6 +278,7 @@ export const threadsPostingExecutor: ToolExecutor = {
                 expectedBrowserContextId,
                 db: ctx.db,
                 workspaceId: ctx.workspaceId,
+                profileDir: target.directory,
               });
             }
             if (toolName === 'threads_delete_reply') {
@@ -286,6 +289,7 @@ export const threadsPostingExecutor: ToolExecutor = {
                 index: typeof input.index === 'number' ? input.index : undefined,
                 dryRun,
                 expectedBrowserContextId,
+                profileDir: target.directory,
               });
               return {
                 success: del.success,
@@ -295,7 +299,7 @@ export const threadsPostingExecutor: ToolExecutor = {
               };
             }
             // threads_read_profile
-            return readThreadsProfileViaBrowser({ expectedBrowserContextId });
+            return readThreadsProfileViaBrowser({ expectedBrowserContextId, profileDir: target.directory });
           });
         },
       );
