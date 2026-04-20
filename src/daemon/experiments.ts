@@ -54,6 +54,7 @@ import { RoadmapObserverExperiment } from '../self-bench/experiments/roadmap-obs
 import { ObservationProbeExperiment } from '../self-bench/experiments/observation-probe.js';
 import { ResearchIngestProbeExperiment } from '../self-bench/experiments/research-ingest-probe.js';
 import { ModelReleaseMonitorExperiment } from '../self-bench/experiments/model-release-monitor.js';
+import { ModelInductionProbeExperiment } from '../self-bench/experiments/model-induction-probe.js';
 import { CodePaperCompareProbeExperiment } from '../self-bench/experiments/code-paper-compare-probe.js';
 import { GitVelocityExperiment } from '../self-bench/experiments/git-velocity.js';
 // XOpsObserverExperiment and XShapeTunerExperiment retired 2026-04-19 (X account banned).
@@ -202,6 +203,7 @@ export async function registerExperiments(ctx: Partial<DaemonContext>): Promise<
   experimentRunner.register(new ObservationProbeExperiment());
   experimentRunner.register(new ResearchIngestProbeExperiment());
   experimentRunner.register(new ModelReleaseMonitorExperiment());
+  experimentRunner.register(new ModelInductionProbeExperiment());
   experimentRunner.register(new CodePaperCompareProbeExperiment());
   experimentRunner.register(new GitVelocityExperiment());
   // XOpsObserverExperiment and XShapeTunerExperiment retired 2026-04-19:
