@@ -34,6 +34,7 @@ import {
   Eye,
   Megaphone,
   ChatsCircle,
+  Buildings,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -48,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
   // Primary (unlabeled)
   { path: '/', label: 'Pulse', icon: Pulse, group: 'primary' },
   { path: '/chat', label: 'Chat', icon: ChatCircle, group: 'primary' },
+  { path: '/portfolio', label: 'Businesses', icon: Buildings, group: 'primary' },
   { path: '/dashboard', label: 'Overview', icon: SquaresFour, group: 'primary' },
   { path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'primary' },
   { path: '/activity', label: 'Activity', icon: Lightning, group: 'primary' },
