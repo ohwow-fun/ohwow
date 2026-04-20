@@ -29,8 +29,16 @@ import {
 } from '../lib/posted-text-log.js';
 import { composeTweetViaBrowser, sendDmViaBrowser } from '../orchestrator/tools/x-posting.js';
 import { composeThreadsPostViaBrowser } from '../orchestrator/tools/threads-posting.js';
-import { ensureDebugChrome, findProfileByIdentity, listProfiles, openProfileWindow } from './browser/chrome-profile-router.js';
+import {
+  ensureDebugChrome,
+  findProfileByIdentity,
+  listProfiles,
+  openProfileWindow,
+  findReusableTabForHost,
+  resolveBrowserContextForProfile,
+} from './browser/chrome-profile-router.js';
 import { profileByHandleHint } from './browser/chrome-lifecycle.js';
+import { withProfileLock } from './browser/profile-mutex.js';
 
 export interface DeliverableRow {
   id: string;
@@ -277,22 +285,35 @@ async function ensureProfileChrome(
     || profiles.find((p) => !!p.email)
     || profiles[0];
   try {
-    await ensureDebugChrome({ preferredProfile: target.directory });
-    // ensureDebugChrome only guarantees the process is running; it does
-    // not guarantee a window for THIS profile is open. openProfileWindow
-    // is idempotent — it no-ops if the window already exists. We return
-    // its browserContextId so x-posting can attach to a tab in THIS
-    // profile's context, not just any x.com tab in CDP.
-    // url='https://x.com/home' guarantees `open -a` creates a fresh tab
-    // (needed when the profile window is already open — without a URL
-    // arg Chrome just focuses it and no new CDP target appears). The
-    // tab lands in the intended profile's browserContextId, which is
-    // the handle x-posting uses to pin its CDP attach.
-    const opened = await openProfileWindow({
-      profileDir: target.directory,
-      url: 'https://x.com/home',
+    let browserContextId: string | null = null;
+    await withProfileLock(target.directory, async () => {
+      await ensureDebugChrome({ preferredProfile: target.directory });
+      // First pass: reuse an existing x.com tab in this profile's context
+      // to avoid opening a new window on every cadence tick.
+      const expectedContext = resolveBrowserContextForProfile(target.directory);
+      const reusable = expectedContext
+        ? await findReusableTabForHost({
+          hostMatch: 'x.com',
+          profileDir: target.directory,
+          owner: 'deliverable-executor',
+          resetUrl: 'https://x.com/home',
+          expectedBrowserContextId: expectedContext,
+        })
+        : null;
+      if (reusable) {
+        browserContextId = reusable.browserContextId ?? null;
+        reusable.page.close();
+        reusable.closeBrowser();
+        return;
+      }
+      // Second pass: no reusable tab — open a fresh profile window.
+      const opened = await openProfileWindow({
+        profileDir: target.directory,
+        url: 'https://x.com/home',
+      });
+      browserContextId = opened.browserContextId;
     });
-    return { ok: true, browserContextId: opened.browserContextId };
+    return { ok: true, browserContextId };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -489,12 +510,34 @@ async function ensureThreadsProfileChrome(
     || profiles.find((p) => !!p.email)
     || profiles[0];
   try {
-    await ensureDebugChrome({ preferredProfile: target.directory });
-    const opened = await openProfileWindow({
-      profileDir: target.directory,
-      url: 'https://www.threads.com/',
+    let browserContextId: string | null = null;
+    await withProfileLock(target.directory, async () => {
+      await ensureDebugChrome({ preferredProfile: target.directory });
+      // First pass: reuse an existing threads.com tab in this profile's context.
+      const expectedContext = resolveBrowserContextForProfile(target.directory);
+      const reusable = expectedContext
+        ? await findReusableTabForHost({
+          hostMatch: 'threads.com',
+          profileDir: target.directory,
+          owner: 'deliverable-executor',
+          resetUrl: 'https://www.threads.com/',
+          expectedBrowserContextId: expectedContext,
+        })
+        : null;
+      if (reusable) {
+        browserContextId = reusable.browserContextId ?? null;
+        reusable.page.close();
+        reusable.closeBrowser();
+        return;
+      }
+      // Second pass: no reusable tab — open a fresh profile window.
+      const opened = await openProfileWindow({
+        profileDir: target.directory,
+        url: 'https://www.threads.com/',
+      });
+      browserContextId = opened.browserContextId;
     });
-    return { ok: true, browserContextId: opened.browserContextId };
+    return { ok: true, browserContextId };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
