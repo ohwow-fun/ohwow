@@ -182,7 +182,8 @@ function renderPhaseMd(
   lines.push(jsonBlock('delta_pulse', report.delta_pulse_json ?? null));
   lines.push('## Inbox added');
   lines.push('');
-  lines.push(report.inbox_added_json ?? '_(none)_');
+  const inboxCount = (report.inbox_added_json as { count?: number } | null)?.count ?? 0;
+  lines.push(`${inboxCount} question(s) added to founder inbox`);
   lines.push('');
   lines.push('## Remaining scope');
   lines.push('');

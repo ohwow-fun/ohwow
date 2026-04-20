@@ -84,8 +84,8 @@ export interface PhaseReportRecord {
   cloud_sha_start: string | null;
   cloud_sha_end: string | null;
   delta_pulse_json: Record<string, unknown> | null;
-  delta_ledger_json: string | null;
-  inbox_added_json: string | null;
+  delta_ledger_json: { trios: number; error?: string; note?: string } | null;
+  inbox_added_json: { count: number } | null;
   remaining_scope: string | null;
   next_phase_recommendation: string | null;
   cost_trios: number | null;
@@ -243,8 +243,14 @@ function rowToPhaseReport(row: PhaseReportRow): PhaseReportRecord {
           null,
         )
       : null,
-    delta_ledger_json: row.delta_ledger_json,
-    inbox_added_json: row.inbox_added_json,
+    delta_ledger_json: parseJsonColumn<{ trios: number; error?: string; note?: string } | null>(
+      row.delta_ledger_json,
+      null,
+    ),
+    inbox_added_json: parseJsonColumn<{ count: number } | null>(
+      row.inbox_added_json,
+      null,
+    ),
     remaining_scope: row.remaining_scope,
     next_phase_recommendation: row.next_phase_recommendation,
     cost_trios: row.cost_trios,
