@@ -102,14 +102,44 @@ async function syncTable(
     : new Map<string, boolean>();
 
   const upsertSql = buildUpsertSql(spec);
-  const whereClause = spec.isWorkspaceScoped ? `WHERE workspace_id = ?` : '';
-  const selectSql = `SELECT ${spec.columns.join(',')} FROM ${spec.table} ${whereClause}`.trim();
-  const bindParams = spec.isWorkspaceScoped ? [workspaceId] : [];
+
+  let selectSql: string;
+  let bindParams: unknown[];
+
+  if (spec.parentJoin) {
+    const { parentTable, parentColumn, childColumn, parentWorkspaceColumn } = spec.parentJoin;
+    const cols = spec.columns.map((c) => `child.${c}`).join(', ');
+    selectSql =
+      `SELECT ${cols} FROM ${spec.table} child ` +
+      `JOIN ${parentTable} parent ON parent.${parentColumn} = child.${childColumn} ` +
+      `WHERE parent.${parentWorkspaceColumn} = ?`;
+    bindParams = [workspaceId];
+  } else if (spec.isWorkspaceScoped) {
+    selectSql = `SELECT ${spec.columns.join(', ')} FROM ${spec.table} WHERE workspace_id = ?`;
+    bindParams = [workspaceId];
+  } else {
+    selectSql = `SELECT ${spec.columns.join(', ')} FROM ${spec.table}`;
+    bindParams = [];
+  }
 
   if (dryRun) {
-    const countRow = db
-      .prepare(`SELECT COUNT(*) AS n FROM ${spec.table} ${whereClause}`)
-      .get(...bindParams) as { n: number };
+    let countSql: string;
+    let countParams: unknown[];
+    if (spec.parentJoin) {
+      const { parentTable, parentColumn, childColumn, parentWorkspaceColumn } = spec.parentJoin;
+      countSql =
+        `SELECT COUNT(*) AS n FROM ${spec.table} child ` +
+        `JOIN ${parentTable} parent ON parent.${parentColumn} = child.${childColumn} ` +
+        `WHERE parent.${parentWorkspaceColumn} = ?`;
+      countParams = [workspaceId];
+    } else if (spec.isWorkspaceScoped) {
+      countSql = `SELECT COUNT(*) AS n FROM ${spec.table} WHERE workspace_id = ?`;
+      countParams = [workspaceId];
+    } else {
+      countSql = `SELECT COUNT(*) AS n FROM ${spec.table}`;
+      countParams = [];
+    }
+    const countRow = db.prepare(countSql).get(...countParams) as { n: number };
     result.read = countRow.n;
     return result;
   }
@@ -121,7 +151,9 @@ async function syncTable(
   for (const row of iter) {
     result.read++;
     if (spec.isWorkspaceScoped) {
-      const wsId = String(row.workspace_id ?? '');
+      const wsId = spec.parentJoin
+        ? workspaceId
+        : String((row as Record<string, unknown>).workspace_id ?? '');
       if (optoutMap.get(wsId) === false) continue;
     }
     batch.push(spec.columns.map((c) => coerceValue(c, row[c])));

@@ -4,6 +4,7 @@
  * Pins the two guard behaviors:
  *   1. Empty/missing cloudDatabaseUrl returns [] without throwing.
  *   2. Tables opted-out via workspace_sync_config are skipped.
+ *   3. parentJoin tables use JOIN queries instead of bare WHERE workspace_id.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -26,15 +27,29 @@ vi.mock('pg', () => {
   return { default: { Client } };
 });
 
-// Mock better-sqlite3 so tests don't need a real DB file.
+// ---------------------------------------------------------------------------
+// Mock better-sqlite3. We use a shared module-level array to capture all
+// db.prepare() SQL strings — tests can assert query shape against it.
+//
+// The factory creates a fresh db object per `new Database()` call. The db's
+// prepare() mock pushes the SQL string into the shared array so tests can
+// inspect all prepare calls made during a syncAllTables() run.
+// ---------------------------------------------------------------------------
+const prepareSqlLog: string[] = [];
+
 vi.mock('better-sqlite3', () => {
-  const Database = vi.fn(() => ({
-    close: vi.fn(),
-    prepare: vi.fn(() => ({
-      get: vi.fn(() => ({ n: 0 })),
-      iterate: vi.fn(() => [][Symbol.iterator]()),
-    })),
-  }));
+  function Database() {
+    return {
+      close: vi.fn(),
+      prepare: vi.fn(function (sql: string) {
+        prepareSqlLog.push(sql);
+        return {
+          get: vi.fn(function () { return { n: 0 }; }),
+          iterate: vi.fn(function () { return [][Symbol.iterator](); }),
+        };
+      }),
+    };
+  }
   return { default: Database };
 });
 
@@ -52,6 +67,7 @@ import { logger } from '../../lib/logger.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prepareSqlLog.length = 0;
   mockConnect.mockResolvedValue(undefined);
   mockEnd.mockResolvedValue(undefined);
   // Default: workspace_sync_config returns empty (no opt-outs)
@@ -60,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  prepareSqlLog.length = 0;
 });
 
 describe('syncAllTables', () => {
@@ -116,6 +133,65 @@ describe('syncAllTables', () => {
       expect(r.wrote).toBe(0);
     }
     // No INSERT/UPSERT queries should have been issued (only SELECT from opt-out map).
+    const upsertCalls = mockQuery.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && args[0].startsWith('INSERT'),
+    );
+    expect(upsertCalls).toHaveLength(0);
+  });
+});
+
+describe('parentJoin tables', () => {
+  const baseOpts = {
+    workspaceId: 'ws-abc-123',
+    sqlitePath: '/fake/runtime.db',
+    cloudDatabaseUrl: 'postgres://localhost/test',
+  };
+
+  it('parentJoin spec generates a JOIN query', async () => {
+    await syncAllTables(baseOpts);
+
+    const phaseRoundsSql = prepareSqlLog.find((s) => s.includes('phase_rounds'));
+    expect(phaseRoundsSql).toBeDefined();
+    expect(phaseRoundsSql).toContain('JOIN phase_trios parent');
+    expect(phaseRoundsSql).toContain('WHERE parent.workspace_id = ?');
+  });
+
+  it('parentJoin spec does NOT use bare WHERE workspace_id = ?', async () => {
+    await syncAllTables(baseOpts);
+
+    const phaseRoundsSql = prepareSqlLog.find((s) => s.includes('phase_rounds'));
+    expect(phaseRoundsSql).toBeDefined();
+    // Must NOT be the plain non-join form
+    expect(phaseRoundsSql).not.toMatch(/FROM phase_rounds WHERE workspace_id = \?/);
+  });
+
+  it('parentJoin dry-run uses COUNT with JOIN', async () => {
+    await syncAllTables({ ...baseOpts, dryRun: true });
+
+    const phaseRoundsCountSql = prepareSqlLog.find(
+      (s) => s.includes('phase_rounds') && s.includes('COUNT(*)'),
+    );
+    expect(phaseRoundsCountSql).toBeDefined();
+    expect(phaseRoundsCountSql).toContain('COUNT(*)');
+    expect(phaseRoundsCountSql).toContain('JOIN phase_trios parent');
+  });
+
+  it('parentJoin opt-out uses workspaceId directly and skips writes', async () => {
+    const targetWorkspaceId = 'ws-abc-123';
+
+    // Return opt-out for this workspace across all tables
+    mockQuery.mockResolvedValue({
+      rows: [{ workspace_id: targetWorkspaceId, enabled: false }],
+    });
+
+    const results = await syncAllTables({ ...baseOpts, workspaceId: targetWorkspaceId });
+
+    // phase_rounds entry should have wrote=0 because opt-out matched via workspaceId
+    const phaseRoundsResult = results.find((r) => r.table === 'phase_rounds');
+    expect(phaseRoundsResult).toBeDefined();
+    expect(phaseRoundsResult!.wrote).toBe(0);
+
+    // No upsert queries at all
     const upsertCalls = mockQuery.mock.calls.filter(
       (args) => typeof args[0] === 'string' && args[0].startsWith('INSERT'),
     );

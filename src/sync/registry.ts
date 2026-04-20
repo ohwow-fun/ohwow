@@ -26,6 +26,16 @@ export interface SyncTableSpec {
   isWorkspaceScoped: boolean;
   /** human note re typing/promotions, surfaced in --dry-run */
   notes?: string;
+  parentJoin?: {
+    /** Parent table name, e.g. 'phase_trios' */
+    parentTable: string;
+    /** PK column on the parent, e.g. 'id' */
+    parentColumn: string;
+    /** FK column on this (child) table, e.g. 'trio_id' */
+    childColumn: string;
+    /** Workspace column on the parent, e.g. 'workspace_id' */
+    parentWorkspaceColumn: string;
+  };
 }
 
 export const SYNC_REGISTRY: SyncTableSpec[] = [
@@ -85,10 +95,16 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       'findings_written', 'commits', 'evaluation_json', 'raw_return',
       'started_at', 'ended_at',
     ],
-    isWorkspaceScoped: false,
+    isWorkspaceScoped: true,
+    parentJoin: {
+      parentTable: 'phase_trios',
+      parentColumn: 'id',
+      childColumn: 'trio_id',
+      parentWorkspaceColumn: 'workspace_id',
+    },
     notes:
-      'No workspace_id column — sync runs WITHOUT --workspace; opt-out via ' +
-      'parent phase_trios. id/trio_id TEXT → cloud text (FK to phase_trios — ' +
+      'No workspace_id column — workspace filter applied via JOIN to phase_trios (trio_id → phase_trios.id).' +
+      ' id/trio_id TEXT → cloud text (FK to phase_trios — ' +
       'sync phase_trios first); evaluation_json TEXT (JSON, `_json` suffix) ' +
       '→ cloud jsonb (auto-parsed); findings_written/commits TEXT (JSON, no ' +
       '`_json` suffix) → cloud text; *_at TEXT → timestamptz.',
