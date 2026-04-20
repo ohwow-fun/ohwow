@@ -29,8 +29,10 @@ import { LocalWorkRouter } from '../hexis/work-router.js';
 import { HumanGrowthEngine } from '../hexis/human-growth.js';
 import { ObservationEngine } from '../hexis/observation-engine.js';
 import { runPersonModelRefinement } from '../lib/person-model-refinement.js';
+import { join } from 'node:path';
 import { resolveActiveWorkspace } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -593,6 +595,33 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
   // Unset env = watcher runs but every tick is a no-op.
   const logTailWatcher = new LogTailWatcher(db);
   logTailWatcher.start();
+
+  // Cloud sync cron: bulk-upsert all SYNC_REGISTRY tables to Postgres.
+  // Opt-in: only runs when OHWOW_CLOUD_DATABASE_URL is set. Interval
+  // defaults to 10 min, overridden via OHWOW_SYNC_INTERVAL_MINUTES.
+  // Uses .unref() so the timer doesn't prevent process exit.
+  {
+    const cloudDbUrl = process.env.OHWOW_CLOUD_DATABASE_URL;
+    if (cloudDbUrl) {
+      const syncIntervalMs =
+        (parseInt(process.env.OHWOW_SYNC_INTERVAL_MINUTES ?? '10', 10) || 10) * 60_000;
+      const sqlitePath = join(dataDir, 'runtime.db');
+      setInterval(async () => {
+        try {
+          await syncAllTables({
+            workspaceId,
+            sqlitePath,
+            cloudDatabaseUrl: cloudDbUrl,
+            dryRun: false,
+            batchSize: 500,
+          });
+        } catch (err) {
+          logger.warn({ err }, '[daemon] cloud sync cron error');
+        }
+      }, syncIntervalMs).unref();
+      logger.debug(`[daemon] cloud sync scheduled (${syncIntervalMs / 60_000}m interval)`);
+    }
+  }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };
 }

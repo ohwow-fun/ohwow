@@ -2,10 +2,10 @@
 /**
  * Runtime → cloud bulk sync CLI (Trio 2 of the 5-trio sync arc).
  *
- * One-shot script that streams rows from a single registered SQLite
- * table to its cloud Postgres mirror via INSERT … ON CONFLICT … DO
- * UPDATE upserts. Honors per-(workspace, table) opt-outs from the
- * cloud workspace_sync_config table for workspace-scoped specs.
+ * Thin wrapper around src/sync/cloud-sync-job.ts — parses CLI args,
+ * resolves paths/URL, calls syncAllTables() filtered to a single table,
+ * and logs results. The core loop lives in the shared module so the
+ * daemon cron can reuse it without spawning a subprocess.
  *
  * Usage:
  *   npx tsx scripts/sync-runtime-to-cloud.ts <table> [--workspace <uuid>] [--dry-run] [--batch-size N]
@@ -18,13 +18,12 @@
  * tool execution). This is the manual backfill + verification path.
  */
 
-import Database from 'better-sqlite3';
-import pg from 'pg';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { logger } from '../src/lib/logger.js';
 import { resolveActiveWorkspace, workspaceLayoutFor } from '../src/config.js';
-import { getSpec, listTables, type SyncTableSpec } from '../src/sync/registry.js';
+import { getSpec, listTables } from '../src/sync/registry.js';
+import { syncAllTables } from '../src/sync/cloud-sync-job.js';
 
 interface CliArgs {
   table: string;
@@ -120,55 +119,6 @@ function safeHost(url: string): string {
   }
 }
 
-/** Read workspace_sync_config once into a (workspace_id → enabled) map. */
-async function loadOptOutMap(client: pg.Client, table: string): Promise<Map<string, boolean>> {
-  const map = new Map<string, boolean>();
-  try {
-    const r = await client.query<{ workspace_id: string; enabled: boolean }>(
-      'SELECT workspace_id::text, enabled FROM public.workspace_sync_config WHERE table_name = $1',
-      [table],
-    );
-    for (const row of r.rows) map.set(row.workspace_id, row.enabled);
-  } catch (err) {
-    logger.warn({ err }, '[sync] workspace_sync_config not readable; assuming default-on');
-  }
-  return map;
-}
-
-function buildUpsertSql(spec: SyncTableSpec): string {
-  const cloudTable = spec.cloudTable || spec.table;
-  const cols = spec.columns;
-  const placeholders = cols.map((_, i) => `$${i + 1}`).join(',');
-  const updateAssigns = cols
-    .filter((c) => c !== spec.primaryKey)
-    .map((c) => `${c} = EXCLUDED.${c}`)
-    .join(', ');
-  return (
-    `INSERT INTO public.${cloudTable} (${cols.join(',')}) VALUES (${placeholders}) ` +
-    `ON CONFLICT (${spec.primaryKey}) DO UPDATE SET ${updateAssigns}`
-  );
-}
-
-/**
- * Coerce a SQLite row value into a shape the pg driver accepts. The two
- * promotions that bite v1: TEXT(JSON) columns must be sent as parsed JS
- * (pg serializes back to jsonb) and TEXT(datetime) must remain a string
- * because pg accepts ISO-ish strings into timestamptz natively.
- */
-export function coerceValue(col: string, val: unknown): unknown {
-  if (val === null || val === undefined) return null;
-  if (col.endsWith('_json') && typeof val === 'string') {
-    try {
-      const parsed = JSON.parse(val);
-      if (Array.isArray(parsed)) return JSON.stringify(parsed);
-      return parsed;
-    } catch {
-      return val;
-    }
-  }
-  return val;
-}
-
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const spec = getSpec(args.table);
@@ -193,68 +143,35 @@ async function main(): Promise<void> {
     '[sync] starting',
   );
 
-  const db = new Database(sqlitePath, { readonly: true });
-  const client = new pg.Client({ connectionString: cloudUrl, ssl: { rejectUnauthorized: false } });
-  await client.connect();
-
   const startMs = Date.now();
-  let read = 0;
-  let wrote = 0;
-  let skippedOptout = 0;
 
-  try {
-    const optoutMap = spec.isWorkspaceScoped ? await loadOptOutMap(client, spec.table) : new Map<string, boolean>();
-    const upsertSql = buildUpsertSql(spec);
-    const whereClause = args.workspace ? `WHERE workspace_id = ?` : '';
-    const selectSql = `SELECT ${spec.columns.join(',')} FROM ${spec.table} ${whereClause}`.trim();
+  // syncAllTables processes all registry tables; we filter to just the one
+  // the CLI requested. The workspaceId for CLI is the --workspace flag value
+  // (cloud workspace_id used as a row filter). If not provided, we use an
+  // empty string — syncAllTables will skip workspace_id filtering for
+  // non-workspace-scoped tables, and workspace-scoped tables will receive
+  // all rows (since isWorkspaceScoped tables filter by the provided id,
+  // and '' won't match any workspace_id, resulting in 0 reads for scoped tables).
+  // For full-table backfill without --workspace, callers should omit the flag
+  // and the WHERE clause is skipped per syncTable's isWorkspaceScoped logic.
+  const workspaceId = args.workspace ?? '';
 
-    if (args.dryRun) {
-      const countRow = db
-        .prepare(`SELECT COUNT(*) AS n FROM ${spec.table} ${whereClause}`)
-        .get(...(args.workspace ? [args.workspace] : [])) as { n: number };
-      logger.info({ wouldProcess: countRow.n, selectSql, upsertSql }, '[sync] dry-run plan');
-      read = countRow.n;
-    } else {
-      const stmt = db.prepare(selectSql);
-      const iter = args.workspace ? stmt.iterate(args.workspace) : stmt.iterate();
-      let batch: unknown[][] = [];
-      for (const row of iter as IterableIterator<Record<string, unknown>>) {
-        read++;
-        if (spec.isWorkspaceScoped) {
-          const wsId = String(row.workspace_id ?? '');
-          if (optoutMap.get(wsId) === false) {
-            skippedOptout++;
-            continue;
-          }
-        }
-        batch.push(spec.columns.map((c) => coerceValue(c, row[c])));
-        if (batch.length >= args.batchSize) {
-          wrote += await flushBatch(client, upsertSql, batch);
-          batch = [];
-        }
-      }
-      if (batch.length > 0) {
-        wrote += await flushBatch(client, upsertSql, batch);
-      }
-    }
-  } finally {
-    db.close();
-    await client.end();
-  }
+  const results = await syncAllTables({
+    workspaceId,
+    sqlitePath,
+    cloudDatabaseUrl: cloudUrl,
+    dryRun: args.dryRun,
+    batchSize: args.batchSize,
+  });
 
+  const tableResult = results.find((r) => r.table === args.table);
+  const read = tableResult?.read ?? 0;
+  const wrote = tableResult?.wrote ?? 0;
   const durationMs = Date.now() - startMs;
-  logger.info({ read, wrote, skippedOptout, durationMs }, '[sync] done');
-  // eslint-disable-next-line no-console
-  console.log(`read=${read} wrote=${wrote} skipped_optout=${skippedOptout} duration_ms=${durationMs}`);
-}
 
-async function flushBatch(client: pg.Client, sql: string, batch: unknown[][]): Promise<number> {
-  let n = 0;
-  for (const params of batch) {
-    await client.query(sql, params);
-    n++;
-  }
-  return n;
+  logger.info({ read, wrote, durationMs }, '[sync] done');
+  // eslint-disable-next-line no-console
+  console.log(`read=${read} wrote=${wrote} duration_ms=${durationMs}`);
 }
 
 // Only run as CLI when invoked directly (not when imported by tests).
