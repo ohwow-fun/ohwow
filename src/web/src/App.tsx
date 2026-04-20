@@ -39,6 +39,7 @@ import { EyePage } from './pages/Eye';
 import { PulsePage } from './pages/Pulse';
 import { MarketingPage } from './pages/Marketing';
 import { SocialPage } from './pages/Social';
+import { PortfolioPage } from './pages/Portfolio';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -96,6 +97,7 @@ export function App() {
           <Route path="eye" element={<EyePage />} />
           <Route path="marketing" element={<MarketingPage />} />
           <Route path="social" element={<SocialPage />} />
+          <Route path="portfolio" element={<PortfolioPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
