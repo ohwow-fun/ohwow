@@ -29,6 +29,8 @@
  * (window.name='ohwow-owned') lazily on the next lookup if needed.
  */
 
+import { logger } from '../../lib/logger.js';
+
 export interface ClaimKey {
   /** Chrome profile directory name, e.g. 'Default' or 'Profile 1'. Namespaces the claim so two profiles can't collide on a shared targetId. */
   profileDir: string;
@@ -73,7 +75,10 @@ export function claimTarget(key: ClaimKey, owner: string): ClaimHandle | null {
   const existing = claims.get(k);
   if (existing && existing.owner !== owner) return null;
   const claimedAt = existing?.claimedAt ?? Date.now();
-  if (!existing) claims.set(k, { owner, claimedAt });
+  if (!existing) {
+    claims.set(k, { owner, claimedAt });
+    logger.info({ cdp: true, action: 'claim', profile: key.profileDir, targetId: key.targetId, owner }, '[browser-claims] tab claimed');
+  }
   return {
     owner,
     profileDir: key.profileDir,
@@ -81,7 +86,10 @@ export function claimTarget(key: ClaimKey, owner: string): ClaimHandle | null {
     claimedAt,
     release: () => {
       const current = claims.get(k);
-      if (current && current.owner === owner) claims.delete(k);
+      if (current && current.owner === owner) {
+        claims.delete(k);
+        logger.info({ cdp: true, action: 'release', profile: key.profileDir, targetId: key.targetId, owner }, '[browser-claims] tab released');
+      }
     },
   };
 }
@@ -111,7 +119,11 @@ export function releaseAllForOwner(owner: string): number {
   let n = 0;
   for (const [k, entry] of claims) {
     if (entry.owner === owner) {
+      const sep = k.indexOf('::');
+      const profileDir = sep >= 0 ? k.slice(0, sep) : '';
+      const targetId = sep >= 0 ? k.slice(sep + 2) : k;
       claims.delete(k);
+      logger.info({ cdp: true, action: 'release', profile: profileDir, targetId, owner }, '[browser-claims] tab released (releaseAllForOwner)');
       n++;
     }
   }
@@ -129,6 +141,7 @@ export function releaseTarget(targetId: string): number {
   for (const k of claims.keys()) {
     if (k.endsWith(suffix)) {
       claims.delete(k);
+      logger.info({ cdp: true, action: 'release', targetId }, '[browser-claims] tab released (releaseTarget)');
       n++;
     }
   }
@@ -160,6 +173,7 @@ export function releaseByTargetId(targetId: string): number {
   for (const k of claims.keys()) {
     if (k.endsWith(suffix)) {
       claims.delete(k);
+      logger.info({ cdp: true, action: 'release', targetId }, '[browser-claims] tab released (releaseByTargetId)');
       n++;
     }
   }

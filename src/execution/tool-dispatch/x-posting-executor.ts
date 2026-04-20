@@ -221,6 +221,10 @@ export const xPostingExecutor: ToolExecutor = {
           : null;
         if (reusable) {
           localContextId = reusable.browserContextId ?? undefined;
+          logger.info(
+            { cdp: true, action: 'reuse:hit', profile: target.directory, owner: claimOwner, contextId: localContextId },
+            '[x-posting-executor] reusing existing x.com tab',
+          );
           // Browser WS is per-lookup; drop it now so the composer's
           // own ensureCdpBrowser gets a clean one.
           reusable.page.close();
@@ -247,6 +251,10 @@ export const xPostingExecutor: ToolExecutor = {
         });
         localContextId = opened.browserContextId ?? undefined;
         localFreshTargetId = opened.targetId;
+        logger.info(
+          { cdp: true, action: 'tab:open', profile: target.directory, targetId: opened.targetId, owner: claimOwner },
+          '[x-posting-executor] opened fresh x.com tab',
+        );
         const claim = claimTarget(
           { profileDir: target.directory, targetId: opened.targetId },
           claimOwner,

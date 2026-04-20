@@ -631,7 +631,7 @@ async function spawnDebugChrome(opts: {
   ];
 
   logger.info(
-    { port: opts.port, profile: opts.preferredProfile },
+    { cdp: true, action: 'browser:open', port: opts.port, profile: opts.preferredProfile },
     '[chrome-lifecycle] spawning debug Chrome',
   );
 
@@ -654,7 +654,7 @@ async function spawnDebugChrome(opts: {
       await sleep(1000);
       const pid = (await findDebugChromePid()) ?? 0;
       logger.info(
-        { port: opts.port, pid, browser: ver.browser },
+        { cdp: true, action: 'browser:open', port: opts.port, pid, profile: opts.preferredProfile, browser: ver.browser },
         '[chrome-lifecycle] debug Chrome ready',
       );
       return {
@@ -714,7 +714,7 @@ export async function ensureDebugChrome(opts: {
     const homeProfile = await getDebugChromeHomeProfile();
     const resolved = homeProfile ?? 'Default';
     logger.info(
-      { port, pid, homeProfile, preferredProfile, mismatch: resolved !== preferredProfile },
+      { cdp: true, action: 'browser:attach', port, pid, profile: resolved, homeProfile, preferredProfile, mismatch: resolved !== preferredProfile },
       '[chrome-lifecycle] attaching to existing debug Chrome',
     );
     void appendChromeProfileEvent({
@@ -923,7 +923,7 @@ export async function quitDebugChrome(): Promise<void> {
     await sleep(250);
     const stillRunning = await findDebugChromePid();
     if (!stillRunning) {
-      logger.info({ pid }, '[chrome-lifecycle] debug Chrome quit');
+      logger.info({ cdp: true, action: 'browser:close', pid }, '[chrome-lifecycle] debug Chrome quit');
       return;
     }
   }

@@ -134,7 +134,7 @@ export async function getCdpPageForPlatform(opts: {
             `social-composer:${process.pid}`,
           );
           logger.info(
-            { ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
+            { cdp: true, action: 'tab:open', ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             `[${logTag}] opened new tab in target profile context`,
           );
           const page = await browser.attachToPage(newTargetId);
@@ -203,7 +203,7 @@ export async function getCdpPageForPlatform(opts: {
             `social-composer:${process.pid}`,
           );
           logger.info(
-            { targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
+            { cdp: true, action: 'tab:open', targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
             `[${logTag}] opened new owned tab (no-context fallback)`,
           );
           const page = await browser.attachToPage(newTargetId);
@@ -314,6 +314,7 @@ export async function warmupBrowse(page: RawCdpPage): Promise<void> {
 /** JPEG screenshot (base64), quality 70. Returns undefined on failure. */
 export async function captureScreenshot(page: RawCdpPage): Promise<string | undefined> {
   try {
+    logger.debug({ cdp: true, action: 'screenshot', targetId: page.targetId }, '[social-cdp] capturing screenshot');
     return await page.screenshotJpeg(70);
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, '[social-cdp] screenshot failed');
@@ -458,6 +459,7 @@ export async function typeIntoRichTextbox(
   selector: string,
   text: string,
 ): Promise<TypeTextResult> {
+  logger.debug({ cdp: true, action: 'type', len: text.length }, '[social-cdp] typeIntoRichTextbox');
   const expected = text.length;
   const minAccept = Math.max(5, Math.floor(expected * 0.5));
 
