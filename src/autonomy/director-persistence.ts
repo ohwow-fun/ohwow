@@ -56,8 +56,8 @@ export interface ArcRecord {
   budget_max_minutes: number;
   budget_max_inbox_qs: number;
   kill_on_pulse_regression: boolean;
-  pulse_at_entry: PulseSnapshot;
-  pulse_at_close: PulseSnapshot | null;
+  pulse_at_entry_json: PulseSnapshot;
+  pulse_at_close_json: PulseSnapshot | null;
   exit_reason: ArcExitReason | null;
 }
 
@@ -84,8 +84,8 @@ export interface PhaseReportRecord {
   cloud_sha_start: string | null;
   cloud_sha_end: string | null;
   delta_pulse_json: Record<string, unknown> | null;
-  delta_ledger: string | null;
-  inbox_added: string | null;
+  delta_ledger_json: string | null;
+  inbox_added_json: string | null;
   remaining_scope: string | null;
   next_phase_recommendation: string | null;
   cost_trios: number | null;
@@ -136,8 +136,8 @@ interface ArcRow {
   budget_max_minutes: number;
   budget_max_inbox_qs: number;
   kill_on_pulse_regression: number;
-  pulse_at_entry: string;
-  pulse_at_close: string | null;
+  pulse_at_entry_json: string;
+  pulse_at_close_json: string | null;
   exit_reason: string | null;
 }
 
@@ -155,8 +155,8 @@ interface PhaseReportRow {
   cloud_sha_start: string | null;
   cloud_sha_end: string | null;
   delta_pulse_json: string | null;
-  delta_ledger: string | null;
-  inbox_added: string | null;
+  delta_ledger_json: string | null;
+  inbox_added_json: string | null;
   remaining_scope: string | null;
   next_phase_recommendation: string | null;
   cost_trios: number | null;
@@ -213,11 +213,11 @@ function rowToArc(row: ArcRow): ArcRecord {
     budget_max_minutes: row.budget_max_minutes,
     budget_max_inbox_qs: row.budget_max_inbox_qs,
     kill_on_pulse_regression: row.kill_on_pulse_regression === 1,
-    pulse_at_entry: parseJsonColumn<PulseSnapshot>(row.pulse_at_entry, {
+    pulse_at_entry_json: parseJsonColumn<PulseSnapshot>(row.pulse_at_entry_json, {
       ts: row.opened_at,
     }),
-    pulse_at_close: row.pulse_at_close
-      ? parseJsonColumn<PulseSnapshot | null>(row.pulse_at_close, null)
+    pulse_at_close_json: row.pulse_at_close_json
+      ? parseJsonColumn<PulseSnapshot | null>(row.pulse_at_close_json, null)
       : null,
     exit_reason: (row.exit_reason as ArcExitReason | null) ?? null,
   };
@@ -243,8 +243,8 @@ function rowToPhaseReport(row: PhaseReportRow): PhaseReportRecord {
           null,
         )
       : null,
-    delta_ledger: row.delta_ledger,
-    inbox_added: row.inbox_added,
+    delta_ledger_json: row.delta_ledger_json,
+    inbox_added_json: row.inbox_added_json,
     remaining_scope: row.remaining_scope,
     next_phase_recommendation: row.next_phase_recommendation,
     cost_trios: row.cost_trios,
@@ -288,7 +288,7 @@ export interface OpenArcInput {
   budget_max_minutes: number;
   budget_max_inbox_qs: number;
   kill_on_pulse_regression: boolean;
-  pulse_at_entry: PulseSnapshot;
+  pulse_at_entry_json: PulseSnapshot;
   opened_at: string;
 }
 
@@ -307,7 +307,7 @@ export async function openArc(
     budget_max_minutes: input.budget_max_minutes,
     budget_max_inbox_qs: input.budget_max_inbox_qs,
     kill_on_pulse_regression: input.kill_on_pulse_regression ? 1 : 0,
-    pulse_at_entry: JSON.stringify(input.pulse_at_entry),
+    pulse_at_entry_json: JSON.stringify(input.pulse_at_entry_json),
   });
   if (error) {
     throw new Error(`openArc failed: ${error.message}`);
@@ -318,7 +318,7 @@ export interface CloseArcInput {
   id: string;
   status: 'closed' | 'aborted';
   exit_reason: ArcExitReason;
-  pulse_at_close: PulseSnapshot;
+  pulse_at_close_json: PulseSnapshot;
   closed_at: string;
 }
 
@@ -331,7 +331,7 @@ export async function closeArc(
     .update({
       status: input.status,
       exit_reason: input.exit_reason,
-      pulse_at_close: JSON.stringify(input.pulse_at_close),
+      pulse_at_close_json: JSON.stringify(input.pulse_at_close_json),
       closed_at: input.closed_at,
     })
     .eq('id', input.id);
@@ -418,8 +418,8 @@ export interface UpdatePhaseReportInput {
   cloud_sha_start: string | null;
   cloud_sha_end: string | null;
   delta_pulse_json: Record<string, unknown> | null;
-  delta_ledger: string | null;
-  inbox_added: string | null;
+  delta_ledger_json: string | null;
+  inbox_added_json: string | null;
   remaining_scope: string | null;
   next_phase_recommendation: string | null;
   cost_trios: number | null;
@@ -445,8 +445,8 @@ export async function updatePhaseReport(
       delta_pulse_json: input.delta_pulse_json
         ? JSON.stringify(input.delta_pulse_json)
         : null,
-      delta_ledger: input.delta_ledger,
-      inbox_added: input.inbox_added,
+      delta_ledger_json: input.delta_ledger_json,
+      inbox_added_json: input.inbox_added_json,
       remaining_scope: input.remaining_scope,
       next_phase_recommendation: input.next_phase_recommendation,
       cost_trios: input.cost_trios,

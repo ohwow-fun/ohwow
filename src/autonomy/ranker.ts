@@ -119,8 +119,8 @@ interface PhaseReportRow {
   cloud_sha_start: string | null;
   cloud_sha_end: string | null;
   delta_pulse_json: string | null;
-  delta_ledger: string | null;
-  inbox_added: string | null;
+  delta_ledger_json: string | null;
+  inbox_added_json: string | null;
   remaining_scope: string | null;
   next_phase_recommendation: string | null;
   cost_trios: number | null;
@@ -218,8 +218,8 @@ export async function readLedgerSnapshot(
       cloud_sha_start: r.cloud_sha_start,
       cloud_sha_end: r.cloud_sha_end,
       delta_pulse_json: null,
-      delta_ledger: r.delta_ledger,
-      inbox_added: r.inbox_added,
+      delta_ledger_json: r.delta_ledger_json,
+      inbox_added_json: r.inbox_added_json,
       remaining_scope: r.remaining_scope,
       next_phase_recommendation: r.next_phase_recommendation,
       cost_trios: r.cost_trios,

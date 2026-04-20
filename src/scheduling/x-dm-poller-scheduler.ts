@@ -315,7 +315,7 @@ export class XDmPollerScheduler {
           last_seen_at: nowIso,
           counterparty_user_id: resolution.counterpartyUserId,
           contact_id: resolution.contactId,
-          raw_meta: JSON.stringify({ ingested_at: nowIso }),
+          raw_meta_json: JSON.stringify({ ingested_at: nowIso }),
         });
       } catch (err) {
         // Race: another tick may have inserted between findThread and

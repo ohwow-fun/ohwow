@@ -80,8 +80,8 @@ interface ArcRow {
   budget_max_minutes: number;
   budget_max_inbox_qs: number;
   kill_on_pulse_regression: number;
-  pulse_at_entry: string;
-  pulse_at_close: string | null;
+  pulse_at_entry_json: string;
+  pulse_at_close_json: string | null;
   exit_reason: string | null;
 }
 

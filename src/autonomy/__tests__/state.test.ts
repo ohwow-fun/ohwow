@@ -97,7 +97,7 @@ describe('getConductorState', () => {
       budget_max_minutes: 240,
       budget_max_inbox_qs: 3,
       kill_on_pulse_regression: true,
-      pulse_at_entry: { ts: openedAt },
+      pulse_at_entry_json: { ts: openedAt },
       opened_at: openedAt,
     });
     await writePhaseReport(adapter, {
@@ -136,14 +136,14 @@ describe('getConductorState', () => {
         budget_max_minutes: 240,
         budget_max_inbox_qs: 3,
         kill_on_pulse_regression: true,
-        pulse_at_entry: { ts: opened },
+        pulse_at_entry_json: { ts: opened },
         opened_at: opened,
       });
       await closeArc(adapter, {
         id,
         status: 'closed',
         exit_reason: 'nothing-queued',
-        pulse_at_close: { ts: closed },
+        pulse_at_close_json: { ts: closed },
         closed_at: closed,
       });
     }

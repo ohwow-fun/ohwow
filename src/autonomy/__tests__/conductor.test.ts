@@ -251,7 +251,7 @@ describe('conductorTick — arc already in flight', () => {
       budget_max_minutes: 240,
       budget_max_inbox_qs: 3,
       kill_on_pulse_regression: true,
-      pulse_at_entry: { ts: new Date().toISOString() },
+      pulse_at_entry_json: { ts: new Date().toISOString() },
       opened_at: new Date().toISOString(),
     });
 
@@ -418,7 +418,7 @@ describe('conductorTick — cross-arc workspace-wide answered seed (Bug #2, Phas
       budget_max_minutes: 240,
       budget_max_inbox_qs: 3,
       kill_on_pulse_regression: true,
-      pulse_at_entry: { ts: new Date().toISOString() },
+      pulse_at_entry_json: { ts: new Date().toISOString() },
       opened_at: new Date(Date.now() - 7200_000).toISOString(),
     });
     // Close it via direct UPDATE so listOpenArcs sees no open arc.
@@ -616,7 +616,7 @@ describe('parsePhaseId / reconstructPickedKeys (Phase 6.7 Deliverable A)', () =>
       budget_max_minutes: 240,
       budget_max_inbox_qs: 3,
       kill_on_pulse_regression: true,
-      pulse_at_entry: { ts: openedAt },
+      pulse_at_entry_json: { ts: openedAt },
       opened_at: openedAt,
     });
     await writePhaseReport(adapter, {
@@ -735,14 +735,14 @@ describe('conductorTick — deferred resolve preserves inbox on pre-in-flight ab
       budget_max_minutes: 240,
       budget_max_inbox_qs: 3,
       kill_on_pulse_regression: true,
-      pulse_at_entry: { ts: new Date().toISOString() },
+      pulse_at_entry_json: { ts: new Date().toISOString() },
       opened_at: new Date(Date.now() - 7200_000).toISOString(),
     });
     await closeArc(adapter, {
       id: 'arc_prior',
       status: 'closed',
       exit_reason: 'founder-returned',
-      pulse_at_close: { ts: new Date().toISOString() },
+      pulse_at_close_json: { ts: new Date().toISOString() },
       closed_at: new Date().toISOString(),
     });
     await writeFounderQuestion(adapter, {

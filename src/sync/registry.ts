@@ -46,15 +46,14 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       'id', 'workspace_id', 'opened_at', 'closed_at',
       'mode_of_invocation', 'thesis', 'status',
       'budget_max_phases', 'budget_max_minutes', 'budget_max_inbox_qs',
-      'kill_on_pulse_regression', 'pulse_at_entry', 'pulse_at_close',
+      'kill_on_pulse_regression', 'pulse_at_entry_json', 'pulse_at_close_json',
       'exit_reason',
     ],
     isWorkspaceScoped: true,
     notes:
       'id TEXT (non-uuid runtime ids) → cloud text; workspace_id → uuid; ' +
-      '*_at TEXT → timestamptz; pulse_at_entry/pulse_at_close TEXT (JSON) ' +
-      '→ cloud text (no `_json` suffix → script coerceValue passes through ' +
-      'as-is, cloud column typed text not jsonb).',
+      '*_at TEXT → timestamptz; pulse_at_entry_json/pulse_at_close_json TEXT (JSON, ' +
+      '`_json` suffix) → cloud jsonb (auto-parsed by coerceValue).',
   },
   {
     table: 'director_phase_reports',
@@ -64,7 +63,7 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       'trios_run',
       'runtime_sha_start', 'runtime_sha_end',
       'cloud_sha_start', 'cloud_sha_end',
-      'delta_pulse_json', 'delta_ledger', 'inbox_added',
+      'delta_pulse_json', 'delta_ledger_json', 'inbox_added_json',
       'remaining_scope', 'next_phase_recommendation',
       'cost_trios', 'cost_minutes', 'cost_llm_cents',
       'raw_report', 'started_at', 'ended_at',
@@ -72,8 +71,8 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     isWorkspaceScoped: true,
     notes:
       'id/arc_id/phase_id TEXT → cloud text; workspace_id → uuid; ' +
-      'delta_pulse_json TEXT (JSON, `_json` suffix) → cloud jsonb (auto-parsed); ' +
-      'delta_ledger/inbox_added TEXT (JSON, no `_json` suffix) → cloud text; ' +
+      'delta_pulse_json/delta_ledger_json/inbox_added_json TEXT (JSON, `_json` suffix) ' +
+      '→ cloud jsonb (auto-parsed by coerceValue); ' +
       '*_at TEXT → timestamptz. FK to director_arcs — sync director_arcs first.',
   },
   {
@@ -92,7 +91,7 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     primaryKey: 'id',
     columns: [
       'id', 'trio_id', 'kind', 'status', 'summary',
-      'findings_written', 'commits', 'evaluation_json', 'raw_return',
+      'findings_written_json', 'commits_json', 'evaluation_json', 'raw_return',
       'started_at', 'ended_at',
     ],
     isWorkspaceScoped: true,
@@ -105,9 +104,9 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     notes:
       'No workspace_id column — workspace filter applied via JOIN to phase_trios (trio_id → phase_trios.id).' +
       ' id/trio_id TEXT → cloud text (FK to phase_trios — ' +
-      'sync phase_trios first); evaluation_json TEXT (JSON, `_json` suffix) ' +
-      '→ cloud jsonb (auto-parsed); findings_written/commits TEXT (JSON, no ' +
-      '`_json` suffix) → cloud text; *_at TEXT → timestamptz.',
+      'sync phase_trios first); evaluation_json/findings_written_json/commits_json ' +
+      'TEXT (JSON, `_json` suffix) → cloud jsonb (auto-parsed); ' +
+      '*_at TEXT → timestamptz.',
   },
   {
     table: 'phase_trios',
@@ -169,7 +168,7 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     columns: [
       'id', 'workspace_id', 'conversation_pair', 'primary_name',
       'last_preview', 'last_preview_hash', 'has_unread', 'observation_count',
-      'first_seen_at', 'last_seen_at', 'raw_meta',
+      'first_seen_at', 'last_seen_at', 'raw_meta_json',
       'last_message_id', 'last_message_text', 'last_message_direction',
       'counterparty_user_id', 'contact_id',
     ],
@@ -177,9 +176,8 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
     notes:
       'id TEXT (32-char hex) → cloud text; workspace_id → uuid; ' +
       'has_unread/observation_count INTEGER → integer; ' +
-      'first_seen_at/last_seen_at TEXT → timestamptz. raw_meta TEXT ' +
-      '(JSON, no `_json` suffix) → cloud text (script coerceValue auto- ' +
-      'parses by suffix only — keeps upserts working). UNIQUE ' +
+      'first_seen_at/last_seen_at TEXT → timestamptz. raw_meta_json TEXT ' +
+      '(JSON, `_json` suffix) → cloud jsonb (auto-parsed by coerceValue). UNIQUE ' +
       '(workspace_id, conversation_pair) preserved.',
   },
   {
