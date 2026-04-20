@@ -54,8 +54,11 @@ import {
   findProfileByIdentity,
   listProfiles,
   openProfileWindow,
+  findReusableTabForHost,
+  resolveBrowserContextForProfile,
 } from '../execution/browser/chrome-profile-router.js';
 import { profileByHandleHint } from '../execution/browser/chrome-lifecycle.js';
+import { withProfileLock } from '../execution/browser/profile-mutex.js';
 import { logger } from '../lib/logger.js';
 
 // ============================================================================
@@ -597,19 +600,32 @@ Constraints:
         || profiles[0];
       yield { type: 'status', message: `Ensuring Chrome profile "${target.email || target.directory}" for X...` };
       try {
-        await ensureDebugChrome({ preferredProfile: target.directory });
-        // Capture browserContextId from the opened window so we can pin
-        // x-posting's CDP attach to THIS profile's tab rather than any
-        // x.com tab Chrome happens to have open in another profile.
-        // url='https://x.com/home' forces `open -a` to create a fresh
-        // tab even when the profile window is already open — without
-        // it Chrome just focuses the existing window and no new CDP
-        // target appears, making the polling step time out.
-        const opened = await openProfileWindow({
-          profileDir: target.directory,
-          url: 'https://x.com/home',
+        await withProfileLock(target.directory, async () => {
+          await ensureDebugChrome({ preferredProfile: target.directory });
+          // First pass: reuse an existing x.com tab in this profile's context.
+          const expectedContext = resolveBrowserContextForProfile(target.directory);
+          const reusable = expectedContext
+            ? await findReusableTabForHost({
+              hostMatch: 'x.com',
+              profileDir: target.directory,
+              owner: 'tool-executor',
+              resetUrl: 'https://x.com/home',
+              expectedBrowserContextId: expectedContext,
+            })
+            : null;
+          if (reusable) {
+            xBrowserContextId = reusable.browserContextId ?? null;
+            reusable.page.close();
+            reusable.closeBrowser();
+            return;
+          }
+          // Second pass: no reusable tab — open a fresh profile window.
+          const opened = await openProfileWindow({
+            profileDir: target.directory,
+            url: 'https://x.com/home',
+          });
+          xBrowserContextId = opened.browserContextId;
         });
-        xBrowserContextId = opened.browserContextId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errorResult: ToolResult = { success: false, error: `Couldn't open Chrome profile for X: ${msg}` };
@@ -835,12 +851,32 @@ Constraints:
         || profiles[0];
       yield { type: 'status', message: `Ensuring Chrome profile "${target.email || target.directory}" for Threads...` };
       try {
-        await ensureDebugChrome({ preferredProfile: target.directory });
-        const opened = await openProfileWindow({
-          profileDir: target.directory,
-          url: 'https://www.threads.com/',
+        await withProfileLock(target.directory, async () => {
+          await ensureDebugChrome({ preferredProfile: target.directory });
+          // First pass: reuse an existing threads.com tab in this profile's context.
+          const expectedContext = resolveBrowserContextForProfile(target.directory);
+          const reusable = expectedContext
+            ? await findReusableTabForHost({
+              hostMatch: 'threads.com',
+              profileDir: target.directory,
+              owner: 'tool-executor',
+              resetUrl: 'https://www.threads.com/',
+              expectedBrowserContextId: expectedContext,
+            })
+            : null;
+          if (reusable) {
+            threadsBrowserContextId = reusable.browserContextId ?? null;
+            reusable.page.close();
+            reusable.closeBrowser();
+            return;
+          }
+          // Second pass: no reusable tab — open a fresh profile window.
+          const opened = await openProfileWindow({
+            profileDir: target.directory,
+            url: 'https://www.threads.com/',
+          });
+          threadsBrowserContextId = opened.browserContextId;
         });
-        threadsBrowserContextId = opened.browserContextId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const errorResult: ToolResult = { success: false, error: `Couldn't open Chrome profile for Threads: ${msg}` };
