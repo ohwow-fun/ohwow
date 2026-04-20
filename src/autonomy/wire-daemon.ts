@@ -37,7 +37,7 @@ export const DEFAULT_CONDUCTOR_INTERVAL_MS = 60 * 60 * 1000;
  * Model used for real-LLM plan rounds in production (dark-launch).
  * Kept as a named constant so bumping the model requires a single edit.
  */
-export const DEFAULT_LLM_MODEL = 'claude-haiku-4-5-20251001';
+export const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
 
 /**
  * Per-arc LLM spend cap in cents for the dark-launch conductor.
