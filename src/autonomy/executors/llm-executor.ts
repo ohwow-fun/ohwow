@@ -123,7 +123,7 @@ export function modelClientFromRouter(
 }
 
 export interface LlmExecutorOptions {
-  /** Model id as the project's router expects (e.g. 'claude-haiku-4-5-20251001'). */
+  /** Model id as the project's router expects (e.g. 'anthropic/claude-haiku-4.5'). */
   model: string;
   /** Per-call hard budget for output tokens; re-prompts count toward this. */
   maxOutputTokens?: number;
