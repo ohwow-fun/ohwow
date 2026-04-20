@@ -124,9 +124,21 @@ export interface OnboardingState {
   discoveredGoal: { title: string; metric?: string; target?: number; unit?: string } | null;
 }
 
-export function useOnboarding() {
+export interface UseOnboardingOptions {
+  mode?: 'new-workspace';
+  onWorkspaceCreated?: () => void;
+}
+
+function slugify(name: string): string {
+  return name.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9\-_]/g, '');
+}
+
+export function useOnboarding(options: UseOnboardingOptions = {}) {
+  const { mode, onWorkspaceCreated } = options;
+  const isNewWorkspace = mode === 'new-workspace';
+
   const [state, setState] = useState<OnboardingState>({
-    screen: 'splash',
+    screen: isNewWorkspace ? 'business_info' : 'splash',
     status: null,
     selectedModel: null,
     loading: false,
@@ -564,6 +576,31 @@ export function useOnboarding() {
     setState(s => ({ ...s, loading: true, error: null }));
 
     try {
+      if (isNewWorkspace) {
+        const workspaceName = slugify(state.businessName) || 'new-workspace';
+        const res = await fetch('/api/workspaces/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceName,
+            displayName: state.businessName,
+            businessType: state.businessType,
+            businessDescription: state.businessDescription,
+            founderPath: state.founderPath,
+            founderFocus: state.founderFocus,
+            agents,
+            goal: state.discoveredGoal,
+          }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(body.error || "Couldn't create workspace");
+        }
+        setState(s => ({ ...s, loading: false, completed: true }));
+        onWorkspaceCreated?.();
+        return null;
+      }
+
       const res = await fetch('/api/onboarding/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -587,7 +624,7 @@ export function useOnboarding() {
       setState(s => ({ ...s, loading: false, error: msg }));
       return msg;
     }
-  }, [state.selectedModel, state.businessName, state.businessType, state.businessDescription, state.founderPath, state.founderFocus, state.presets, state.selectedAgentIds, state.discoveredGoal]);
+  }, [isNewWorkspace, onWorkspaceCreated, state.selectedModel, state.businessName, state.businessType, state.businessDescription, state.founderPath, state.founderFocus, state.presets, state.selectedAgentIds, state.discoveredGoal]);
 
   return {
     ...state,

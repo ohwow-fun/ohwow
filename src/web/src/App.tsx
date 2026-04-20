@@ -40,6 +40,7 @@ import { PulsePage } from './pages/Pulse';
 import { MarketingPage } from './pages/Marketing';
 import { SocialPage } from './pages/Social';
 import { PortfolioPage } from './pages/Portfolio';
+import { NewBusinessPage } from './pages/NewBusiness';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = getToken();
@@ -53,6 +54,7 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/new-business" element={<NewBusinessPage />} />
         <Route
           path="/*"
           element={
