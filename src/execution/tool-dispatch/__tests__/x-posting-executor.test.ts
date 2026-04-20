@@ -124,6 +124,7 @@ describe('xPostingExecutor', () => {
       dryRun: true,
       expectedHandle: 'example_com',
       expectedBrowserContextId: 'ctx-profile-1',
+      profileDir: 'Profile 1',
     });
     expect(res.is_error).toBeFalsy();
   });
@@ -205,6 +206,7 @@ describe('xPostingExecutor', () => {
       tweets: ['a', 'b', 'c'],
       dryRun: false,
       expectedBrowserContextId: 'ctx-profile-1',
+      profileDir: 'Profile 1',
     });
     expect(res.is_error).toBeFalsy();
   });

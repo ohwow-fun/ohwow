@@ -84,8 +84,17 @@ export async function getCdpPageForPlatform(opts: {
    * using.
    */
   ownershipMode?: TabOwnershipMode;
+  /**
+   * Filesystem path of the Chrome profile directory (e.g.
+   * `~/.ohwow/chrome-cdp/Profile 1`). When provided, claims registered
+   * for newly opened tabs use this path as the `profileDir` key so
+   * `findReusableTabForHost` can find them on the next tick. Without
+   * this, claims are keyed on the UUID `browserContextId` and the reuse
+   * lookup misses them.
+   */
+  profileDir?: string;
 }): Promise<CdpPageHandle | null> {
-  const { urlMatcher, fallbackUrl, expectedContextId, logTag, ownershipMode = 'any' } = opts;
+  const { urlMatcher, fallbackUrl, expectedContextId, logTag, ownershipMode = 'any', profileDir } = opts;
   // Tabs we create during this call are claimed in the browser-claims
   // registry + DOM-tagged with window.name='ohwow-owned'. The lookup
   // uses `hasAnyClaimForTarget` to match the pre-claims semantics
@@ -116,11 +125,12 @@ export async function getCdpPageForPlatform(opts: {
         try {
           const newTargetId = await browser.createTargetInContext(expectedContextId, fallbackUrl);
           // TODO(claim-owner): composer-level, no task id threaded.
-          // Use the browser context id as a pseudo profileDir and a
-          // pid-scoped owner. See spec Step C for the replacement
-          // plan (thread owner through composer signatures).
+          // Use profileDir (filesystem path) when threaded so the claim
+          // key matches findReusableTabForHost's profileDir lookup. Fall
+          // back to the browserContextId UUID for callers that haven't
+          // threaded profileDir yet. See spec Step C for full threading plan.
           claimTarget(
-            { profileDir: expectedContextId, targetId: newTargetId },
+            { profileDir: profileDir ?? expectedContextId, targetId: newTargetId },
             `social-composer:${process.pid}`,
           );
           logger.info(

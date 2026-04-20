@@ -125,6 +125,8 @@ export interface ComposeThreadsPostInput {
   dryRun?: boolean;
   expectedHandle?: string;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 export interface ComposeThreadsThreadInput {
@@ -132,10 +134,14 @@ export interface ComposeThreadsThreadInput {
   dryRun?: boolean;
   expectedHandle?: string;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 export interface ReadThreadsProfileInput {
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +164,7 @@ function isThreadsUrl(url: string): boolean {
   return url.includes('threads.com') || url.includes('threads.net');
 }
 
-async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHandle | null> {
+async function getThreadsCdpPage(expectedContextId?: string, profileDir?: string): Promise<CdpPageHandle | null> {
   return getCdpPageForPlatform({
     urlMatcher: isThreadsUrl,
     fallbackUrl: THREADS_HOME,
@@ -166,6 +172,7 @@ async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHan
     logTag: LOG_TAG,
     // Compose + reply paths must not touch a human's Threads tab.
     ownershipMode: 'ours',
+    profileDir,
   });
 }
 
@@ -401,7 +408,7 @@ export async function composeThreadsPostViaBrowser(input: ComposeThreadsPostInpu
     };
   }
 
-  const handle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const handle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!handle) {
     return {
       success: false,
@@ -593,7 +600,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
     }
   }
 
-  const handle2 = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const handle2 = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!handle2) return { success: false, message: 'Could not attach to Chrome CDP.' };
 
   const { page, created } = handle2;
@@ -757,7 +764,7 @@ export async function composeThreadsThreadViaBrowser(input: ComposeThreadsThread
 // ---------------------------------------------------------------------------
 
 export async function readThreadsProfileViaBrowser(input: ReadThreadsProfileInput): Promise<ComposeResult & { handle?: string }> {
-  const profileHandle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const profileHandle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!profileHandle) {
     return { success: false, message: 'Could not attach to Chrome CDP. No threads.com tab open, or debug Chrome is down.' };
   }

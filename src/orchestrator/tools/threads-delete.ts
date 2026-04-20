@@ -84,6 +84,8 @@ export interface DeleteThreadsReplyInput {
   index?: number;
   dryRun?: boolean;
   expectedBrowserContextId?: string;
+  /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
+  profileDir?: string;
 }
 
 export interface DeleteThreadsReplyOutput {
@@ -107,12 +109,13 @@ function isThreadsUrl(url: string): boolean {
   return url.includes('threads.com') || url.includes('threads.net');
 }
 
-async function getThreadsCdpPage(expectedContextId?: string): Promise<CdpPageHandle | null> {
+async function getThreadsCdpPage(expectedContextId?: string, profileDir?: string): Promise<CdpPageHandle | null> {
   return getCdpPageForPlatform({
     urlMatcher: isThreadsUrl,
     fallbackUrl: THREADS_HOME,
     expectedContextId,
     logTag: LOG_TAG,
+    profileDir,
   });
 }
 
@@ -128,7 +131,7 @@ export async function deleteThreadsReplyViaBrowser(
   const dryRun = input.dryRun !== false;
   const containsText = input.containsText?.toLowerCase() ?? null;
 
-  const cdpHandle = await getThreadsCdpPage(input.expectedBrowserContextId);
+  const cdpHandle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
   if (!cdpHandle) {
     return { success: false, message: 'Could not attach to Chrome CDP at :9222 — no threads.com tab open, or debug Chrome is down.' };
   }
