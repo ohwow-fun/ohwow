@@ -45,9 +45,9 @@ interface RoundRow {
   status: RoundStatus;
   summary: string;
   /** JSON string (string[]) */
-  findings_written: string | null;
+  findings_written_json: string | null;
   /** JSON string (string[]) */
-  commits: string | null;
+  commits_json: string | null;
   /** JSON string (RoundEvaluation) */
   evaluation_json: string | null;
   /** JSON string (full RoundReturn) */
@@ -154,8 +154,8 @@ export async function writeRound(
     kind: input.kind,
     status: input.ret.status,
     summary: input.ret.summary,
-    findings_written: JSON.stringify(input.ret.findings_written),
-    commits: JSON.stringify(input.ret.commits),
+    findings_written_json: JSON.stringify(input.ret.findings_written),
+    commits_json: JSON.stringify(input.ret.commits),
     evaluation_json: input.ret.evaluation
       ? JSON.stringify(input.ret.evaluation)
       : null,
@@ -190,8 +190,8 @@ function parseJsonColumn<T>(raw: unknown, fallback: T): T {
 }
 
 function rowToRoundRecord(row: RoundRow): RoundRecord {
-  const findings = parseJsonColumn<string[]>(row.findings_written, []);
-  const commits = parseJsonColumn<string[]>(row.commits, []);
+  const findings = parseJsonColumn<string[]>(row.findings_written_json, []);
+  const commits = parseJsonColumn<string[]>(row.commits_json, []);
   const evaluation = parseJsonColumn<RoundEvaluation | null>(
     row.evaluation_json,
     null,

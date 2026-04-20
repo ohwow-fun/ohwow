@@ -482,7 +482,7 @@ export async function runArc(
     budget_max_minutes,
     budget_max_inbox_qs,
     kill_on_pulse_regression,
-    pulse_at_entry: pulseAtEntry,
+    pulse_at_entry_json: pulseAtEntry,
     opened_at: openedAt.toISOString(),
   });
 
@@ -565,8 +565,8 @@ export async function runArc(
       budget_max_minutes,
       budget_max_inbox_qs,
       kill_on_pulse_regression,
-      pulse_at_entry: pulseAtEntry,
-      pulse_at_close: null,
+      pulse_at_entry_json: pulseAtEntry,
+      pulse_at_close_json: null,
       exit_reason: null,
     };
     const pick = await picker({
@@ -685,8 +685,8 @@ export async function runArc(
         cloud_sha_start,
         cloud_sha_end: cloud_sha_start,
         delta_pulse_json: buildDeltaPulse(pulseAtEntry, currentPulse),
-        delta_ledger: 'phase orchestrator threw',
-        inbox_added: '0',
+        delta_ledger_json: 'phase orchestrator threw',
+        inbox_added_json: '0',
         remaining_scope: pick.goal,
         next_phase_recommendation: 'arc-stop',
         cost_trios: 0,
@@ -742,8 +742,8 @@ export async function runArc(
       cloud_sha_start,
       cloud_sha_end,
       delta_pulse_json: buildDeltaPulse(pulseAtEntry, currentPulse),
-      delta_ledger: `trios=${phaseResult.trios.length}`,
-      inbox_added: String(inbox_added),
+      delta_ledger_json: `trios=${phaseResult.trios.length}`,
+      inbox_added_json: String(inbox_added),
       remaining_scope:
         phaseResult.status === 'phase-closed' ? null : pick.goal,
       next_phase_recommendation: null,
@@ -817,7 +817,7 @@ export async function runArc(
     id: arc_id,
     status: arcStatus,
     exit_reason,
-    pulse_at_close: pulseAtClose,
+    pulse_at_close_json: pulseAtClose,
     closed_at: nowFn().toISOString(),
   });
 

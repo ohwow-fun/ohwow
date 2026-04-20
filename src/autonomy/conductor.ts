@@ -372,7 +372,7 @@ function buildConductorPicker(
     let pulse: FullPulseSnapshot;
     let ledger: LedgerSnapshot;
     try {
-      pulse = await pulseReader(deps.db, deps.workspace_id);
+      pulse = await pulseReader(deps.db, deps.workspace_id, deps.refTimeMs);
     } catch (err) {
       logger.warn(
         { workspace_id: deps.workspace_id, err: (err as Error).message },
@@ -481,7 +481,7 @@ export async function conductorTick(
   const pulseReader = deps.pulseReader ?? readFullPulse;
   let pulse: FullPulseSnapshot;
   try {
-    pulse = await pulseReader(deps.db, deps.workspace_id);
+    pulse = await pulseReader(deps.db, deps.workspace_id, deps.refTimeMs);
   } catch (err) {
     return { ran: false, reason: `pulse-failed: ${(err as Error).message}` };
   }

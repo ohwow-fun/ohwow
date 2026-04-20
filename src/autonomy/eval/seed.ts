@@ -271,8 +271,8 @@ async function seedPriorPhaseReports(
         budget_max_minutes: 240,
         budget_max_inbox_qs: 3,
         kill_on_pulse_regression: 1,
-        pulse_at_entry: '{}',
-        pulse_at_close: want_open ? null : '{}',
+        pulse_at_entry_json: '{}',
+        pulse_at_close_json: want_open ? null : '{}',
         exit_reason: want_open ? null : 'nothing-queued',
       });
       arcsCreated.set(arcId, { open: want_open });
@@ -293,8 +293,8 @@ async function seedPriorPhaseReports(
       cloud_sha_start: null,
       cloud_sha_end: null,
       delta_pulse_json: null,
-      delta_ledger: 'eval prior',
-      inbox_added: '0',
+      delta_ledger_json: 'eval prior',
+      inbox_added_json: '0',
       remaining_scope: null,
       next_phase_recommendation: null,
       cost_trios: 1,

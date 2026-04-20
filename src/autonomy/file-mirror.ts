@@ -123,8 +123,8 @@ function renderArcMd(
   lines.push('');
   lines.push('## Pulse');
   lines.push('');
-  lines.push(jsonBlock('pulse_at_entry', arc.pulse_at_entry));
-  lines.push(jsonBlock('pulse_at_close', arc.pulse_at_close));
+  lines.push(jsonBlock('pulse_at_entry', arc.pulse_at_entry_json));
+  lines.push(jsonBlock('pulse_at_close', arc.pulse_at_close_json));
   lines.push('## Phases');
   lines.push('');
   if (phases.length === 0) {
@@ -182,7 +182,7 @@ function renderPhaseMd(
   lines.push(jsonBlock('delta_pulse', report.delta_pulse_json ?? null));
   lines.push('## Inbox added');
   lines.push('');
-  lines.push(report.inbox_added ?? '_(none)_');
+  lines.push(report.inbox_added_json ?? '_(none)_');
   lines.push('');
   lines.push('## Remaining scope');
   lines.push('');

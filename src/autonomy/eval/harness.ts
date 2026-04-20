@@ -421,7 +421,7 @@ async function applyStep(
             budget_max_minutes: number;
             budget_max_inbox_qs: number;
             kill_on_pulse_regression: number;
-            pulse_at_entry: string;
+            pulse_at_entry_json: string;
           }>('director_arcs')
           .select()
           .eq('id', arcId)

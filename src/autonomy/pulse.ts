@@ -517,8 +517,9 @@ async function readPipelineCount(
 export async function readFullPulse(
   db: DatabaseAdapter,
   workspace_id: string,
+  nowMs?: number,
 ): Promise<FullPulseSnapshot> {
-  const now = Date.now();
+  const now = nowMs ?? Date.now();
   const ts = new Date(now).toISOString();
 
   const [
