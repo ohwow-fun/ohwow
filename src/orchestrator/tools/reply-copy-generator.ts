@@ -276,7 +276,7 @@ function buildBuyerIntentSystemPrompt(platform: 'x' | 'threads'): string {
     'have scoped the task, and they are asking who should do it. They',
     'want a concrete answer, not a conversation.',
     '',
-    buildVoicePrinciples(),
+    buildVoicePrinciples({ allowProductMention: true }),
     '',
     'READER MODEL. The poster is a real buyer scanning the replies for',
     'someone who can actually deliver. The other replies are a mix of',

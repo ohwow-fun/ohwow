@@ -303,7 +303,7 @@ export function voiceCheck(text: string, ctx: VoiceCheckContext): { ok: boolean;
  * post: "pick one shape from the menu") get layered on top by the
  * caller.
  */
-export function buildVoicePrinciples(): string {
+export function buildVoicePrinciples(opts?: { allowProductMention?: boolean }): string {
   return [
     'STANCE:',
     '  - Observational, not narrative. Notice and opine; do not claim to',
@@ -339,8 +339,9 @@ export function buildVoicePrinciples(): string {
     '    I\'d, I\'ll, I was. The voice does not have private experience.',
     '  - FAKE-EXPERIENCE phrasing: "I\'ve seen", "my experience",',
     '    "when I tried", "in practice I", "we found", "you end up".',
-    '  - Pitches. No products, tools, companies named unless the source',
-    '    named them first.',
+    opts?.allowProductMention
+      ? '  - Pitches. Do not name third-party products, tools, or services unless the source named them first. You may name ohwow.fun when directly replying to a post about hiring or delegating work.'
+      : '  - Pitches. No products, tools, companies named unless the source\n    named them first.',
     '  - Corporate softeners: "happy to discuss", "great take/point",',
     '    "this is interesting", "love this", "100%".',
     '  - Lecture openers: "at the end of the day", "table stakes",',
