@@ -30,6 +30,7 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { ModelProvider } from './model-router.js';
 import type { DifficultyLevel } from './difficulty-scorer.js';
 import { logger } from '../lib/logger.js';
+import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 
 /**
  * Model tiers for per-iteration selection (from CURATED_OPENROUTER_MODELS).
@@ -197,4 +198,13 @@ export function selectAgentModelForIteration(
   // Later iterations: cheap tool-result routing.
   if (iteration >= 3) return escalateIfDemoted(AGENT_MODEL_TIERS.FREE);
   return escalateIfDemoted(AGENT_MODEL_TIERS.FAST);
+}
+
+/**
+ * Returns the list of models that have been promoted to the active pool
+ * by the ModelInductionProbeExperiment. Callers can use this to expand
+ * the set of models considered during routing.
+ */
+export function getInductedModelCandidates(_db: DatabaseAdapter): Promise<string[]> {
+  return Promise.resolve(getRuntimeConfig('model_induction.promoted_models', [] as string[]));
 }

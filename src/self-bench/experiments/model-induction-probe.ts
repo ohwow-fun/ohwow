@@ -35,6 +35,7 @@ import type {
 } from '../experiment-types.js';
 import { runLlmCall } from '../../execution/llm-organ.js';
 import { logger } from '../../lib/logger.js';
+import { getRuntimeConfig, setRuntimeConfig } from '../runtime-config.js';
 
 const MAX_CANDIDATES_PER_TICK = 3;
 
@@ -233,9 +234,51 @@ export class ModelInductionProbeExperiment implements Experiment {
   async intervene(
     verdict: Verdict,
     result: ProbeResult,
-    _ctx: ExperimentContext,
+    ctx: ExperimentContext,
   ): Promise<InterventionApplied | null> {
-    if (verdict === 'pass') return null;
+    if (verdict === 'pass') {
+      const ev = result.evidence as ModelInductionEvidence;
+
+      // Read history to check for consecutive passes
+      const history = await ctx.recentFindings('model-induction-probe', 10);
+
+      const toPromote: string[] = [];
+      for (const m of ev.per_model) {
+        if (!m.ok) continue;
+
+        // Check if the previous finding also had this model passing
+        const prevFinding = history[0];
+        if (!prevFinding) continue;
+
+        let prevEv: ModelInductionEvidence | null = null;
+        try {
+          prevEv = JSON.parse(prevFinding.evidence as unknown as string) as ModelInductionEvidence;
+        } catch {
+          // evidence may already be parsed as an object
+          prevEv = prevFinding.evidence as unknown as ModelInductionEvidence;
+        }
+
+        const prevModelEntry = prevEv?.per_model?.find((p) => p.model_id === m.model_id);
+        if (!prevModelEntry?.ok) continue;
+
+        // Consecutive pass confirmed — candidate for promotion
+        const current = getRuntimeConfig('model_induction.promoted_models', [] as string[]);
+        if (!current.includes(m.model_id)) {
+          toPromote.push(m.model_id);
+        }
+      }
+
+      if (toPromote.length === 0) return null;
+
+      const current = getRuntimeConfig('model_induction.promoted_models', [] as string[]);
+      const updated = [...new Set([...current, ...toPromote])];
+      await setRuntimeConfig(ctx.db, 'model_induction.promoted_models', updated, { setBy: this.id });
+
+      return {
+        description: `Promoted ${toPromote.length} model${toPromote.length === 1 ? '' : 's'} to active pool`,
+        details: { promoted: toPromote, total_pool: updated.length },
+      };
+    }
 
     const ev = result.evidence as ModelInductionEvidence;
     if (ev.per_model.length === 0) return null;
