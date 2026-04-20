@@ -91,6 +91,7 @@ import { createTicketsRouter } from './routes/tickets.js';
 import { createAnalyticsRouter } from './routes/analytics.js';
 import { createExpensesRouter } from './routes/expenses.js';
 import { createTimeTrackingRouter } from './routes/time-tracking.js';
+import { createWorkspacesRouter } from './routes/workspaces.js';
 import { errorHandler } from './error-handler.js';
 import { VoiceSession } from '../voice/voice-session.js';
 import { VoiceboxSTTProvider } from '../voice/voicebox-stt-provider.js';
@@ -663,6 +664,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createAnalyticsRouter(db, eventBus));
   app.use(createExpensesRouter(db, eventBus));
   app.use(createTimeTrackingRouter(db, eventBus));
+  app.use(createWorkspacesRouter({ registry, jwtSecret: config.jwtSecret }));
   app.use(createXDraftsRouter(db, workspaceId || 'local'));
   app.use(createXReplyDraftsRouter(db, workspaceId || 'local'));
   app.use(createContentQueueRouter(db));
