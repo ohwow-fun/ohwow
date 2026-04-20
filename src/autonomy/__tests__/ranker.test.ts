@@ -95,7 +95,7 @@ function fakeReport(over: Partial<PhaseReportRecord>): PhaseReportRecord {
     cloud_sha_end: null,
     delta_pulse_json: null,
     delta_ledger_json: null,
-    inbox_added_json: '0',
+    inbox_added_json: { count: 0 },
     remaining_scope: null,
     next_phase_recommendation: null,
     cost_trios: 1,

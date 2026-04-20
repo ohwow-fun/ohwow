@@ -218,8 +218,12 @@ export async function readLedgerSnapshot(
       cloud_sha_start: r.cloud_sha_start,
       cloud_sha_end: r.cloud_sha_end,
       delta_pulse_json: null,
-      delta_ledger_json: r.delta_ledger_json,
-      inbox_added_json: r.inbox_added_json,
+      delta_ledger_json: (() => {
+        try { return r.delta_ledger_json ? JSON.parse(r.delta_ledger_json) : null; } catch { return null; }
+      })(),
+      inbox_added_json: (() => {
+        try { return r.inbox_added_json ? JSON.parse(r.inbox_added_json) : null; } catch { return null; }
+      })(),
       remaining_scope: r.remaining_scope,
       next_phase_recommendation: r.next_phase_recommendation,
       cost_trios: r.cost_trios,
