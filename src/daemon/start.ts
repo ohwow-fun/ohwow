@@ -22,7 +22,7 @@ import { initializePeersAndDocuments } from './peers.js';
 import { setupOptionalIntegrations } from './extras.js';
 import { createShutdownHandler } from './shutdown.js';
 import { wireConductor } from '../autonomy/wire-daemon.js';
-import { resolveActiveWorkspace, workspaceLayoutFor } from '../config.js';
+import { resolveActiveWorkspace, workspaceLayoutFor, readWorkspaceConfig } from '../config.js';
 import { getSharedEmbedder, warmSharedEmbedder } from '../embeddings/singleton.js';
 import { runEmbeddingBackfill } from '../embeddings/backfill.js';
 import { createEmbedRouter } from '../api/routes/embed.js';
@@ -161,11 +161,29 @@ export async function startDaemon(): Promise<DaemonHandle> {
       } catch { /* table may not exist yet */ }
 
       // Build workspace config by inheriting the primary config and overriding
-      // workspace-specific DB path. Secondary workspaces share global settings
-      // but read their own DB file.
+      // workspace-specific settings. Apply each workspace's own workspace.json
+      // overrides for licenseKey and tier — without this, secondary workspaces
+      // inherit the primary's license key and all connect to the same cloud
+      // workspace, overwriting each other's instance_id and killing heartbeats.
+      const wsWorkspaceCfg = readWorkspaceConfig(wsName);
+      let wsLicenseKey: string;
+      let wsTier: 'free' | 'connected';
+      if (wsWorkspaceCfg?.mode === 'local-only') {
+        wsLicenseKey = '';
+        wsTier = 'free';
+      } else if (wsWorkspaceCfg?.mode === 'cloud') {
+        wsLicenseKey = wsWorkspaceCfg.licenseKey ?? '';
+        wsTier = wsLicenseKey ? 'connected' : 'free';
+      } else {
+        // No workspace.json — inherit primary (legacy default workspace behavior)
+        wsLicenseKey = ctx.config.licenseKey;
+        wsTier = ctx.config.tier;
+      }
       const wsConfig: import('../config.js').RuntimeConfig = {
         ...ctx.config,
         dbPath: layout.dbPath,
+        licenseKey: wsLicenseKey,
+        tier: wsTier,
       };
 
       const wsCtx: WorkspaceContext = {
