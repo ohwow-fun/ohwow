@@ -673,6 +673,46 @@ async function spawnDebugChrome(opts: {
 }
 
 /**
+ * Kill a stale Chrome process that holds the singleton lock on our
+ * debug user-data-dir WITHOUT having opened a CDP port. This happens
+ * when Chrome (or a leftover Chrome) is running with
+ * `--user-data-dir=<DEBUG_DATA_DIR>` but WITHOUT
+ * `--remote-debugging-port`. In that state any new Chrome spawn with
+ * `--remote-debugging-port=9222` silently forwards its command to the
+ * stale singleton and exits — port 9222 is never opened — so the CDP
+ * readiness poll times out. Killing the stale holder before spawning
+ * allows the new process to take the lock and bind the port correctly.
+ */
+async function killStaleDebugChrome(): Promise<void> {
+  const pid = await findDebugChromePid();
+  if (!pid) return;
+
+  const { stdout: psOut } = await execCapture(`ps -o args= -p ${pid}`);
+  const args = psOut.trim();
+  if (!args) return;
+
+  // If the process already has --remote-debugging-port it is not stale
+  // (it's a legit debug Chrome that somehow isn't answering CDP yet).
+  if (/--remote-debugging-port/.test(args)) return;
+
+  const profile = parseProfileDirectoryArg(args) ?? 'Default';
+  logger.warn(
+    { cdp: true, action: 'stale-chrome-killed', pid, profile },
+    '[chrome-lifecycle] stale debug Chrome (no CDP port) found; killing before respawn',
+  );
+
+  await execCapture(`kill -TERM ${pid}`);
+  // Wait up to 3s for graceful exit, then SIGKILL.
+  for (let i = 0; i < 12; i++) {
+    await sleep(250);
+    const { code } = await execCapture(`kill -0 ${pid}`);
+    if (code !== 0) return; // process is gone
+  }
+  await execCapture(`kill -KILL ${pid}`);
+  await sleep(250);
+}
+
+/**
  * Ensure a debug Chrome is running with CDP enabled. If one is
  * already up, return its handle. Otherwise spawn it. Never wipes,
  * clones, or touches profile files. Never quits real Chrome (which
@@ -731,6 +771,12 @@ export async function ensureDebugChrome(opts: {
       profileDirAtLaunch: resolved,
     };
   }
+
+  // Before spawning, check if a stale Chrome is holding the singleton
+  // lock on our debug user-data-dir WITHOUT a --remote-debugging-port.
+  // If so, the new spawn would silently forward to the stale process
+  // and exit — port 9222 never opens — causing a CDP timeout.
+  await killStaleDebugChrome();
 
   // No Chrome on the port. Spawn one. The spawn path resolves the
   // profile to whatever --profile-directory ends up sticking, which

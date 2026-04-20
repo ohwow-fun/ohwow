@@ -5,8 +5,14 @@ import {
   refreshDemotedAgentModels,
   getAgentModelDemotionSnapshot,
   _resetAgentModelDemotionCacheForTests,
+  getInductedModelCandidates,
 } from '../agent-model-tiers.js';
 import type { ModelProvider } from '../model-router.js';
+import {
+  _resetRuntimeConfigCacheForTests,
+  _seedRuntimeConfigCacheForTests,
+} from '../../self-bench/runtime-config.js';
+import type { DatabaseAdapter } from '../../db/adapter-types.js';
 
 // A stub OpenRouter provider — only the `name` field matters here.
 const openrouter = { name: 'openrouter' } as unknown as ModelProvider;
@@ -169,5 +175,37 @@ describe('selectAgentModelForIteration — escalation', () => {
     await refreshDemotedAgentModels(fakeDb(rows));
     expect(selectAgentModelForIteration(0, 'simple', false, false, false, openrouter))
       .toBe(AGENT_MODEL_TIERS.FAST);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getInductedModelCandidates()
+// ---------------------------------------------------------------------------
+
+describe('getInductedModelCandidates()', () => {
+  // Use a stub db — getInductedModelCandidates reads only from the module cache.
+  const stubDb = {} as unknown as DatabaseAdapter;
+
+  beforeEach(() => {
+    _resetRuntimeConfigCacheForTests();
+  });
+
+  it('returns [] when runtime_config key is absent', async () => {
+    const result = await getInductedModelCandidates(stubDb);
+    expect(result).toEqual([]);
+  });
+
+  it('returns stored list when key is present in cache', async () => {
+    _seedRuntimeConfigCacheForTests('model_induction.promoted_models', ['org/model-a', 'org/model-b']);
+    const result = await getInductedModelCandidates(stubDb);
+    expect(result).toEqual(['org/model-a', 'org/model-b']);
+  });
+
+  it('returns stable empty array reference when key absent (not a new [] each call)', async () => {
+    // Calling twice without seeding should never throw and always return [].
+    const a = await getInductedModelCandidates(stubDb);
+    const b = await getInductedModelCandidates(stubDb);
+    expect(a).toEqual([]);
+    expect(b).toEqual([]);
   });
 });

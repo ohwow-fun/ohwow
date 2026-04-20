@@ -24,8 +24,27 @@ vi.mock('../../execution/llm-organ.js', () => ({
   runLlmCall: vi.fn(),
 }));
 
+// Mock runtime-config so intervene() promotion tests never touch a real DB.
+// The test-hook helpers are passed through as no-ops; they are only exercised
+// in the agent-model-tiers test file which does NOT mock this module.
+vi.mock('../runtime-config.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../runtime-config.js')>();
+  return {
+    ...real,
+    getRuntimeConfig: vi.fn(),
+    setRuntimeConfig: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 import { runLlmCall } from '../../execution/llm-organ.js';
+import {
+  getRuntimeConfig,
+  setRuntimeConfig,
+} from '../runtime-config.js';
+
 const mockRunLlmCall = vi.mocked(runLlmCall);
+const mockGetRuntimeConfig = vi.mocked(getRuntimeConfig);
+const mockSetRuntimeConfig = vi.mocked(setRuntimeConfig);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +79,7 @@ function fakeDb(selfFindingsRows: Array<Record<string, unknown>>) {
 function fakeCtx(
   selfFindingsRows: Array<Record<string, unknown>>,
   engineOverride?: Partial<ExperimentContext['engine']> | null,
+  recentFindingsOverride?: (experimentId: string, limit: number) => Promise<Finding[]>,
 ): ExperimentContext {
   return {
     db: fakeDb(selfFindingsRows),
@@ -67,7 +87,7 @@ function fakeCtx(
     engine: (engineOverride === null
       ? undefined
       : (engineOverride ?? {})) as ExperimentContext['engine'],
-    recentFindings: async (): Promise<Finding[]> => [],
+    recentFindings: recentFindingsOverride ?? (async (): Promise<Finding[]> => []),
   };
 }
 
@@ -411,5 +431,170 @@ describe('ModelInductionProbeExperiment — intervene()', () => {
     expect(intervention).not.toBeNull();
     expect(intervention?.description).toContain('0 passed');
     expect(intervention?.description).toContain('1 failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// intervene() — promotion hook (consecutive-pass path)
+// ---------------------------------------------------------------------------
+
+describe('ModelInductionProbeExperiment — intervene() promotion hook', () => {
+  const exp = new ModelInductionProbeExperiment();
+
+  /** Minimal Finding whose evidence encodes a ModelInductionEvidence. */
+  function makePriorFinding(ev: ModelInductionEvidence): Finding {
+    return {
+      id: 'finding-prev',
+      experimentId: 'model-induction-probe',
+      category: 'model_health',
+      subject: null,
+      hypothesis: null,
+      verdict: 'pass',
+      summary: 'prior pass',
+      // intervene() tries JSON.parse first, then falls back to raw object.
+      // Storing as a JSON string inside the Record satisfies both branches.
+      evidence: JSON.stringify(ev) as unknown as Record<string, unknown>,
+      interventionApplied: null,
+      ranAt: new Date(Date.now() - 86400_000).toISOString(),
+      durationMs: 500,
+      status: 'active',
+      supersededBy: null,
+      createdAt: new Date(Date.now() - 86400_000).toISOString(),
+    };
+  }
+
+  function makeResult(ev: ModelInductionEvidence): ProbeResult {
+    return {
+      subject: null,
+      summary: 'test',
+      evidence: ev as unknown as Record<string, unknown>,
+    };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // Default: no existing promoted models in pool.
+    mockGetRuntimeConfig.mockReturnValue([]);
+    mockSetRuntimeConfig.mockResolvedValue(undefined);
+  });
+
+  it('promotes model when current pass AND prior finding also had ok=true for same model', async () => {
+    const modelId = 'org/consecutive-model';
+    const priorFinding = makePriorFinding({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: true, latency_ms: 100, response_snippet: 'ok' }],
+    });
+    const ctx = fakeCtx(
+      [],
+      undefined,
+      async () => [priorFinding],
+    );
+    const result = makeResult({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: true, latency_ms: 110, response_snippet: 'ok' }],
+    });
+
+    const intervention = await exp.intervene('pass', result, ctx);
+
+    expect(intervention).not.toBeNull();
+    expect(intervention?.description).toContain('Promoted 1 model');
+    expect(mockSetRuntimeConfig).toHaveBeenCalledTimes(1);
+    const [, key, value] = mockSetRuntimeConfig.mock.calls[0];
+    expect(key).toBe('model_induction.promoted_models');
+    expect(value).toContain(modelId);
+  });
+
+  it('does NOT duplicate model when it is already in the promoted pool (idempotent)', async () => {
+    const modelId = 'org/already-promoted';
+    // Simulate: model is already in the runtime_config pool.
+    mockGetRuntimeConfig.mockReturnValue([modelId]);
+
+    const priorFinding = makePriorFinding({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: true, latency_ms: 100, response_snippet: 'ok' }],
+    });
+    const ctx = fakeCtx([], undefined, async () => [priorFinding]);
+    const result = makeResult({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: true, latency_ms: 110, response_snippet: 'ok' }],
+    });
+
+    // toPromote is empty because model already in current, so intervene returns null.
+    const intervention = await exp.intervene('pass', result, ctx);
+
+    expect(intervention).toBeNull();
+    expect(mockSetRuntimeConfig).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when no prior finding exists for the model (first-run grace)', async () => {
+    // recentFindings returns empty — no history yet.
+    const ctx = fakeCtx([], undefined, async () => []);
+    const result = makeResult({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: 'org/new-model', score: 1, ok: true, latency_ms: 100, response_snippet: 'ok' }],
+    });
+
+    const intervention = await exp.intervene('pass', result, ctx);
+
+    expect(intervention).toBeNull();
+    expect(mockSetRuntimeConfig).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when prior finding had ok=false for that model', async () => {
+    const modelId = 'org/flaky-model';
+    const priorFinding = makePriorFinding({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: false, latency_ms: 50, response_snippet: '', error: 'timeout' }],
+    });
+    const ctx = fakeCtx([], undefined, async () => [priorFinding]);
+    const result = makeResult({
+      candidates_found: 1,
+      candidates_tested: 1,
+      per_model: [{ model_id: modelId, score: 1, ok: true, latency_ms: 110, response_snippet: 'ok' }],
+    });
+
+    const intervention = await exp.intervene('pass', result, ctx);
+
+    expect(intervention).toBeNull();
+    expect(mockSetRuntimeConfig).not.toHaveBeenCalled();
+  });
+
+  it('merged list passed to setRuntimeConfig deduplicates across multiple candidates', async () => {
+    const modelA = 'org/model-a';
+    const modelB = 'org/model-b';
+    // Both in prior finding with ok=true.
+    const priorFinding = makePriorFinding({
+      candidates_found: 2,
+      candidates_tested: 2,
+      per_model: [
+        { model_id: modelA, score: 2, ok: true, latency_ms: 100, response_snippet: 'ok' },
+        { model_id: modelB, score: 1, ok: true, latency_ms: 120, response_snippet: 'ok' },
+      ],
+    });
+    const ctx = fakeCtx([], undefined, async () => [priorFinding]);
+    const result = makeResult({
+      candidates_found: 2,
+      candidates_tested: 2,
+      per_model: [
+        { model_id: modelA, score: 2, ok: true, latency_ms: 105, response_snippet: 'ok' },
+        { model_id: modelB, score: 1, ok: true, latency_ms: 125, response_snippet: 'ok' },
+      ],
+    });
+
+    const intervention = await exp.intervene('pass', result, ctx);
+
+    expect(intervention).not.toBeNull();
+    const [, , value] = mockSetRuntimeConfig.mock.calls[0];
+    const promoted = value as string[];
+    // Both models promoted, no duplicates.
+    expect(promoted).toContain(modelA);
+    expect(promoted).toContain(modelB);
+    expect(new Set(promoted).size).toBe(promoted.length);
   });
 });
