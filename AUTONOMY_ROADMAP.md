@@ -109,3 +109,4 @@
 - **model-release-monitor** — [src/self-bench/experiments/model-release-monitor.ts]
 - **subprocess-smoke-1776593263549** — [src/self-bench/experiments/subprocess-smoke-1776593263549.ts]
 - **tmpl-smoke-1776593263549** — [src/self-bench/experiments/tmpl-smoke-1776593263549.ts]
+- **roadmap-updater** — [src/self-bench/experiments/roadmap-updater.ts]
