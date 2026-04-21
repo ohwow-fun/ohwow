@@ -101,3 +101,11 @@
 - **x-shape-tuner** — [src/self-bench/experiments/x-shape-tuner.ts]
 - **xiaomi-mimo-v2-flash-latency** — [src/self-bench/experiments/xiaomi-mimo-v2-flash-latency.ts]
 - **xiaomi-mimo-v2-pro-latency** — [src/self-bench/experiments/xiaomi-mimo-v2-pro-latency.ts]
+
+### Missing Experiments (not in roadmap)
+
+- **mig-smoke-1776593263549** — [src/self-bench/experiments/mig-smoke-1776593263549.ts]
+- **model-induction-probe** — [src/self-bench/experiments/model-induction-probe.ts]
+- **model-release-monitor** — [src/self-bench/experiments/model-release-monitor.ts]
+- **subprocess-smoke-1776593263549** — [src/self-bench/experiments/subprocess-smoke-1776593263549.ts]
+- **tmpl-smoke-1776593263549** — [src/self-bench/experiments/tmpl-smoke-1776593263549.ts]
