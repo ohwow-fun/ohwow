@@ -27,12 +27,15 @@ import {
 import type { VideoClipProviderName } from '../media/video-clip-provider.js';
 import { generateClip } from '../media/video-clip-router.js';
 import { LyriaOpenRouterBridge } from '../media/lyria-openrouter-bridge.js';
+import { generateAvatarVideo } from '../media/video-clip-providers/heygen-adapter.js';
 
 const CLIP_PROVIDER_NAMES: ReadonlySet<VideoClipProviderName> = new Set([
   'openrouter-veo',
   'fal',
   'replicate',
   'custom-http',
+  'higgsfield',
+  'heygen',
 ]);
 
 function parseFlags(args: string[]): {
@@ -255,6 +258,57 @@ async function cmdClip(args: string[]): Promise<void> {
   console.log(`GenTime: ${(result.result.generationMs / 1000).toFixed(1)}s`);
 }
 
+async function cmdAvatar(args: string[]): Promise<void> {
+  const { positional, flags } = parseFlags(args);
+  const script = positional[0];
+  if (!script) {
+    console.error('Usage: ohwow video avatar "<script>" [--avatar=<id>] [--voice=<id>] [--aspect=16:9|9:16|1:1] [--out=<path>]');
+    process.exit(1);
+  }
+
+  const cfg = loadConfigSafe();
+  const apiKey = process.env.HEYGEN_API_KEY || (cfg.heygenApiKey as string | undefined) || '';
+  const avatarId = typeof flags.avatar === 'string'
+    ? flags.avatar
+    : process.env.HEYGEN_AVATAR_ID || (cfg.heygenAvatarId as string | undefined) || '';
+
+  if (!apiKey) {
+    console.error('No HeyGen API key. Set HEYGEN_API_KEY or configure heygenApiKey in ~/.ohwow/config.json.');
+    process.exit(1);
+  }
+  if (!avatarId) {
+    console.error('No avatar ID. Set HEYGEN_AVATAR_ID, configure heygenAvatarId in ~/.ohwow/config.json, or pass --avatar=<id>.');
+    process.exit(1);
+  }
+
+  const voiceId = typeof flags.voice === 'string' ? flags.voice : undefined;
+  const aspectRaw = typeof flags.aspect === 'string' ? flags.aspect : '16:9';
+  if (!['16:9', '9:16', '1:1'].includes(aspectRaw)) {
+    console.error(`Unknown --aspect "${aspectRaw}". Use 16:9, 9:16, or 1:1.`);
+    process.exit(1);
+  }
+  const aspectRatio = aspectRaw as '16:9' | '9:16' | '1:1';
+  const outRaw = typeof flags.out === 'string' ? flags.out : `avatar-${Date.now()}.mp4`;
+  const { isAbsolute: isAbs, resolve: res } = await import('node:path');
+  const outPath = isAbs(outRaw) ? outRaw : res(process.cwd(), outRaw);
+
+  console.log(`Generating HeyGen avatar video (avatar: ${avatarId})...`);
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  const { dirname } = await import('node:path');
+
+  try {
+    const { buffer, videoId } = await generateAvatarVideo({ apiKey, avatarId, voiceId, script, aspectRatio });
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, buffer);
+    console.log(`Output:   ${outPath}`);
+    console.log(`VideoID:  ${videoId}`);
+    console.log(`Size:     ${(buffer.byteLength / 1024).toFixed(1)}KB`);
+  } catch (err) {
+    console.error('Avatar generation failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+}
+
 function cmdStatus(): void {
   const cfg = loadConfigSafe();
   console.log('== ohwow video-gen status ==\n');
@@ -263,6 +317,9 @@ function cmdStatus(): void {
   console.log(`  falVideoModel:     ${cfg.falVideoModel ?? '(default fal-ai/luma-dream-machine)'}`);
   console.log(`  openRouterApiKey:  ${mask(cfg.openRouterApiKey as string | undefined)}`);
   console.log(`  replicateApiToken: ${mask(cfg.replicateApiToken as string | undefined)}`);
+  console.log(`  higgsfieldApiKey:  ${mask(cfg.higgsfieldApiKey as string | undefined)}`);
+  console.log(`  heygenApiKey:      ${mask(cfg.heygenApiKey as string | undefined)}`);
+  console.log(`  heygenAvatarId:    ${cfg.heygenAvatarId ?? 'unset'}`);
   console.log('');
   console.log('env overrides:');
   console.log(`  FAL_KEY:              ${mask(process.env.FAL_KEY)}`);
@@ -271,12 +328,24 @@ function cmdStatus(): void {
   console.log(`  OPENAI_API_KEY:       ${mask(process.env.OPENAI_API_KEY)}`);
   console.log(`  REPLICATE_API_TOKEN:  ${mask(process.env.REPLICATE_API_TOKEN)}`);
   console.log(`  OHWOW_VIDEO_HTTP_URL: ${process.env.OHWOW_VIDEO_HTTP_URL ?? 'unset'}`);
+  console.log(`  HIGGSFIELD_API_KEY:   ${mask(process.env.HIGGSFIELD_API_KEY)}`);
+  console.log(`  HEYGEN_API_KEY:       ${mask(process.env.HEYGEN_API_KEY)}`);
+  console.log(`  HEYGEN_AVATAR_ID:     ${process.env.HEYGEN_AVATAR_ID ?? 'unset'}`);
   console.log('');
   const hasFal = process.env.FAL_KEY || cfg.falKey;
   const hasOr = process.env.OPENROUTER_API_KEY || cfg.openRouterApiKey;
   const hasRep = process.env.REPLICATE_API_TOKEN || cfg.replicateApiToken;
   const hasHttp = process.env.OHWOW_VIDEO_HTTP_URL;
-  const available = [hasFal && 'fal', hasOr && 'openrouter-veo', hasRep && 'replicate', hasHttp && 'custom-http'].filter(Boolean);
+  const hasHiggs = process.env.HIGGSFIELD_API_KEY || cfg.higgsfieldApiKey;
+  const hasHeygen = (process.env.HEYGEN_API_KEY || cfg.heygenApiKey) && (process.env.HEYGEN_AVATAR_ID || cfg.heygenAvatarId);
+  const available = [
+    hasFal && 'fal',
+    hasHiggs && 'higgsfield',
+    hasOr && 'openrouter-veo',
+    hasRep && 'replicate',
+    hasHttp && 'custom-http',
+    hasHeygen && 'heygen',
+  ].filter(Boolean);
   console.log(`available clip providers: ${available.length ? available.join(', ') : 'NONE'}`);
 }
 
@@ -584,6 +653,7 @@ function usage(): void {
   console.log('  ohwow video tts "<text>" [--voice=<v>] [--out=<path>] [--speed=<n>]');
   console.log('  ohwow video music "<prompt>" [--duration=<s>] [--genre=<g>] [--mood=<m>] [--bpm=<n>]');
   console.log('  ohwow video clip "<prompt>" [--duration=<s>] [--aspect=<a>] [--provider=<p>] [--seed=<n>] [--max-cost=<cents>] [--dry-run]');
+  console.log('  ohwow video avatar "<script>" [--avatar=<id>] [--voice=<id>] [--aspect=<a>] [--out=<path>]');
   console.log('  ohwow video status                                    show active provider config');
   console.log('  ohwow video swap-model <model-slug>                   set falVideoModel in ~/.ohwow/config.json');
   console.log('  ohwow video lint-prompt "<prompt>"                    static check for text-to-video prompts');
@@ -621,6 +691,8 @@ export async function runVideoCli(args: string[]): Promise<void> {
     await cmdMusic(args.slice(1));
   } else if (sub === 'clip') {
     await cmdClip(args.slice(1));
+  } else if (sub === 'avatar') {
+    await cmdAvatar(args.slice(1));
   } else if (sub === 'status') {
     cmdStatus();
   } else if (sub === 'swap-model') {
