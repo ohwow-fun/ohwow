@@ -31,12 +31,18 @@ import {
   type Picker,
   type PickerOutput,
 } from './director.js';
-import { getEternalState } from '../eternal/index.js';
+import {
+  getEternalState,
+  DEFAULT_ETERNAL_SPEC,
+  modeToDecisionType,
+  requiresTrusteeApproval,
+} from '../eternal/index.js';
 import type { LlmMeter } from './executors/llm-executor.js';
 import {
   listAnsweredUnresolvedFounderInbox,
   listOpenArcs,
   listPhaseReportsForArc,
+  writeFounderQuestion,
   type ArcExitReason,
   type FounderInboxRecord,
 } from './director-persistence.js';
@@ -150,6 +156,11 @@ export interface ConductorDeps {
    * Absent in production.
    */
   runPhaseOverride?: typeof runPhase;
+  /**
+   * Optional eternal spec override. When absent, the default spec is used
+   * to evaluate escalation rules before each arc.
+   */
+  eternalSpec?: import('../eternal/types.js').EternalSpec;
 }
 
 export interface ConductorTickResult {
@@ -553,6 +564,51 @@ export async function conductorTick(
   const thesis = probe.length > 0
     ? `autonomous: ${probe[0].goal}`
     : 'autonomous: scan for next-best phase';
+
+  // Eternal Systems escalation check: if the top phase maps to a decision
+  // type that requires trustee approval, open a founder inbox item and skip
+  // the arc. This prevents autonomous execution of high-stakes decision
+  // categories until a trustee explicitly approves.
+  if (probe.length > 0) {
+    const topPhase = probe[0];
+    const decisionType = modeToDecisionType(topPhase.mode);
+    const escalationRules = deps.eternalSpec?.escalationMap ?? DEFAULT_ETERNAL_SPEC.escalationMap;
+    if (requiresTrusteeApproval(decisionType, undefined, escalationRules)) {
+      try {
+        const { randomUUID } = await import('node:crypto');
+        await writeFounderQuestion(deps.db, {
+          id: randomUUID(),
+          workspace_id: deps.workspace_id,
+          arc_id: null,
+          phase_id: null,
+          mode: topPhase.mode,
+          blocker: `Trustee approval required for decision type: ${decisionType}`,
+          context: `The next planned phase "${topPhase.goal}" is classified as "${decisionType}" and requires trustee approval before execution.`,
+          options: [
+            { label: 'Approve', text: 'Proceed with this phase' },
+            { label: 'Skip', text: 'Defer this phase' },
+          ],
+          recommended: 'approve',
+          screenshot_path: null,
+          asked_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        logger.warn(
+          { workspace_id: deps.workspace_id, err: (err as Error).message },
+          'conductor.eternal.escalation_question.write.failed',
+        );
+      }
+      logger.info(
+        {
+          workspace_id: deps.workspace_id,
+          phase_mode: topPhase.mode,
+          decision_type: decisionType,
+        },
+        'conductor.tick.skipped.trustee-escalation-required',
+      );
+      return { ran: false, reason: 'trustee-escalation-required' };
+    }
+  }
 
   const picker = buildConductorPicker(deps, { seedAnswered });
   const executor = deps.makeExecutor();

@@ -27,3 +27,8 @@ export {
 } from './inactivity-watcher.js';
 
 export { readValuesCorpus } from './values-reader.js';
+
+export {
+  modeToDecisionType,
+  requiresTrusteeApproval,
+} from './escalation.js';
