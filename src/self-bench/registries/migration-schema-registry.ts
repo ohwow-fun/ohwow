@@ -120,6 +120,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '144-director-arcs.sql', expectedTables: ['director_arcs', 'director_phase_reports', 'founder_inbox'] },
   { migrationFile: '147-cdp-trace-events.sql', expectedTables: ['cdp_trace_events'] },
   { migrationFile: '148-eternal-state.sql', expectedTables: ['eternal_state'] },
+  { migrationFile: '149-eternal-notifications.sql', expectedTables: ['eternal_notifications'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —

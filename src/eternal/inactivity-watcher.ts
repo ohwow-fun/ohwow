@@ -10,6 +10,7 @@ import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { EternalMode, EternalSpec } from './types.js';
 import { getEternalState, setEternalMode } from './state.js';
+import { notifyTrustee } from './notifications.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -75,5 +76,11 @@ export async function checkAndMaybeUpdate(
   );
 
   await setEternalMode(db, targetMode, reason);
+
+  // Notify trustee whenever the mode moves to conservative or estate.
+  if (targetMode === 'conservative' || targetMode === 'estate') {
+    await notifyTrustee(db, targetMode, reason);
+  }
+
   return targetMode;
 }
