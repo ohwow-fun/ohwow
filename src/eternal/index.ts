@@ -28,6 +28,8 @@ export {
 
 export { readValuesCorpus } from './values-reader.js';
 
+export { loadEternalSpec } from './load-spec.js';
+
 export {
   modeToDecisionType,
   requiresTrusteeApproval,

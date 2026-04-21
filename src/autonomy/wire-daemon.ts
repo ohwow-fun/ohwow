@@ -11,6 +11,7 @@
  */
 import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import type { EternalSpec } from '../eternal/types.js';
 import { isValidWorkspaceName } from '../config.js';
 import {
   CONDUCTOR_ENV_FLAG,
@@ -73,6 +74,11 @@ export interface WireConductorOptions {
    * dark-launch. If absent, falls back to `makeExecutor` or the stub.
    */
   modelRouter?: ModelRouter;
+  /**
+   * Operator-configured eternal spec. When absent, the conductor falls back
+   * to DEFAULT_ETERNAL_SPEC for escalation rule evaluation.
+   */
+  eternalSpec?: EternalSpec;
 }
 
 /**
@@ -160,6 +166,7 @@ export function wireConductor(
     // getLlmCents into ArcInput for live cost accounting.
     getArcMeter: opts.modelRouter ? () => currentMeter : undefined,
     intervalMs: opts.intervalMs ?? DEFAULT_CONDUCTOR_INTERVAL_MS,
+    eternalSpec: opts.eternalSpec,
   });
   trigger = handle.requestImmediateTick;
   logger.info(

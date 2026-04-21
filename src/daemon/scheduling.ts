@@ -34,7 +34,7 @@ import { resolveActiveWorkspace } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
-import { DEFAULT_ETERNAL_SPEC } from '../eternal/defaults.js';
+import { loadEternalSpec } from '../eternal/load-spec.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -627,10 +627,13 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
 
   // Eternal Systems: hourly inactivity check — transitions conservative/estate
   // modes automatically when the operator goes dark beyond protocol thresholds.
+  // Spec is loaded once at scheduling boot so runtime changes to eternal.config.json
+  // take effect on the next daemon restart (not mid-session).
   {
     const INACTIVITY_CHECK_MS = 60 * 60_000; // 1 hour
+    const eternalSpec = loadEternalSpec(deps.dataDir);
     const runInactivityCheck = () => {
-      checkAndMaybeUpdate(db, DEFAULT_ETERNAL_SPEC).catch((err) => {
+      checkAndMaybeUpdate(db, eternalSpec).catch((err) => {
         logger.warn({ err }, '[daemon] eternal.inactivity_check.failed');
       });
     };
