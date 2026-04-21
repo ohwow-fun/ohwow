@@ -10,6 +10,8 @@ import { genericHttpProvider } from './video-clip-providers/generic-http-adapter
 import { openrouterVeoProvider } from './video-clip-providers/openrouter-veo.js';
 import { falProvider } from './video-clip-providers/fal-adapter.js';
 import { replicateProvider } from './video-clip-providers/replicate-adapter.js';
+import { higgsfieldProvider } from './video-clip-providers/higgsfield-adapter.js';
+import { heygenProvider } from './video-clip-providers/heygen-adapter.js';
 import type {
   ProviderInfo,
   VideoClipProvider,
@@ -32,8 +34,10 @@ export interface RouterOptions {
 const BUILT_IN: VideoClipProvider[] = [
   genericHttpProvider,
   falProvider,
+  higgsfieldProvider,
   replicateProvider,
   openrouterVeoProvider,
+  heygenProvider,
 ];
 
 export async function listAvailableProviders(

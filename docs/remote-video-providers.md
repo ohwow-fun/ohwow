@@ -27,8 +27,10 @@ the router picks the cheapest available.
 | ---------------- | ------------------------------------------------------------ | -------- |
 | `custom-http`    | `OHWOW_VIDEO_HTTP_URL`                                       | 10       |
 | `fal`            | `FAL_KEY`                                                    | 20       |
+| `higgsfield`     | `HIGGSFIELD_API_KEY`                                         | 22       |
 | `replicate`      | `REPLICATE_API_TOKEN`, `REPLICATE_VIDEO_MODEL`               | 25       |
 | `openrouter-veo` | `OPENROUTER_API_KEY`                                         | 30       |
+| `heygen`         | `HEYGEN_API_KEY`, `HEYGEN_AVATAR_ID`                         | 35       |
 
 Force a specific provider with `--clips-provider=<name>`.
 
@@ -145,3 +147,25 @@ def generate_video(req: VideoRequest) -> Response:
 ```
 
 That's it. No ohwow SDK, no specific schema beyond the contract above.
+
+## HeyGen avatar videos
+
+HeyGen generates talking-head avatar videos where an AI presenter speaks a script. It is integrated two ways:
+
+### As a clip provider (routed)
+
+When `HEYGEN_API_KEY` and `HEYGEN_AVATAR_ID` are set, the router can pick `heygen` for `video-clip` layers. The layer's `prompt` field is treated as the spoken script. Priority 35 means it only wins if no other provider is available or it is forced explicitly:
+
+```bash
+ohwow video clip "Welcome to ohwow. Your AI team is ready." --provider=heygen
+```
+
+### As a dedicated avatar command
+
+For full control over avatar, voice, and background, use the `avatar` subcommand:
+
+```bash
+ohwow video avatar "<script>" [--avatar=<avatar_id>] [--voice=<voice_id>] [--aspect=16:9|9:16|1:1] [--out=<path>]
+```
+
+`--avatar` defaults to `HEYGEN_AVATAR_ID` (env var or `~/.ohwow/config.json { heygenAvatarId }`). Output is cached at `~/.ohwow/media/cache/video/<hash>.mp4`.

@@ -20,7 +20,9 @@ export type VideoClipProviderName =
   | 'openrouter-veo'
   | 'fal'
   | 'replicate'
-  | 'custom-http';
+  | 'custom-http'
+  | 'higgsfield'
+  | 'heygen';
 
 export type VideoAspectRatio = '16:9' | '9:16' | '1:1';
 
