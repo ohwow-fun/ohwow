@@ -32,3 +32,5 @@ export {
   modeToDecisionType,
   requiresTrusteeApproval,
 } from './escalation.js';
+
+export { notifyTrustee } from './notifications.js';
