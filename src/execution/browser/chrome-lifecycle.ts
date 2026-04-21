@@ -682,8 +682,11 @@ async function spawnDebugChrome(opts: {
  * stale singleton and exits — port 9222 is never opened — so the CDP
  * readiness poll times out. Killing the stale holder before spawning
  * allows the new process to take the lock and bind the port correctly.
+ *
+ * Exported for unit testing. Runtime callers should use
+ * `ensureDebugChrome` which calls this automatically before spawning.
  */
-async function killStaleDebugChrome(): Promise<void> {
+export async function killStaleDebugChrome(): Promise<void> {
   const pid = await findDebugChromePid();
   if (!pid) return;
 
