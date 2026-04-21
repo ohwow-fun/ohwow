@@ -282,7 +282,7 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
           setState(s => ({
             ...s,
             initializing: false,
-            error: `Couldn't start the daemon. ${reason}`,
+            error: `Couldn't start the process. ${reason}`,
           }));
           return;
         }
@@ -293,7 +293,7 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
         setState(s => ({
           ...s,
           initializing: false,
-          error: `Couldn't start the daemon. ${reason}`,
+          error: `Couldn't start the process. ${reason}`,
         }));
       } catch (err) {
         setState(s => ({

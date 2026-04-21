@@ -29,7 +29,7 @@ export function registerBriefingTools(server: McpServer, client: DaemonApiClient
 
 Use available tools to fetch real data. Format the briefing clearly with sections. Keep it scannable.`,
         }, 60_000);
-        return { content: [{ type: 'text' as const, text: text || 'Could not generate briefing. Make sure the daemon is running and has data.' }] };
+        return { content: [{ type: 'text' as const, text: text || 'Could not generate briefing. Make sure the process is running and has data.' }] };
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
       }

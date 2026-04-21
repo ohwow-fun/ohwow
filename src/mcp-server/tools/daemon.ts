@@ -4,11 +4,11 @@
  * Exposes the same stop/start/restart primitives the TUI uses via its
  * `/restart` slash command so that Claude Code (or any MCP client) can
  * restart the ohwow daemon remotely — e.g. after a code change lands in
- * `dist/index.js` and the running daemon needs to pick it up.
+ * `dist/index.js` and the running process needs to pick it up.
  *
  * These tools intentionally go straight to `daemon/lifecycle.ts` rather
  * than through `DaemonApiClient`, because the whole point is that they
- * must work when the daemon is down, misbehaving, or stale.
+ * must work when the process is down, misbehaving, or stale.
  */
 
 import { z } from 'zod';
@@ -80,7 +80,7 @@ export function registerDaemonTools(server: McpServer): void {
   // ohwow_daemon_status — Check if the daemon is running/healthy.
   server.tool(
     'ohwow_daemon_status',
-    '[Daemon] Check whether the ohwow local daemon is running. Reports pid, port, health, and the resolved entry path. Does not modify state.',
+    '[Process] Check whether the ohwow local process is running. Reports pid, port, health, and the resolved entry path. Does not modify state.',
     {},
     async () => {
       try {
@@ -101,12 +101,12 @@ export function registerDaemonTools(server: McpServer): void {
   // ohwow_daemon_stop — Gracefully stop the running daemon.
   server.tool(
     'ohwow_daemon_stop',
-    '[Daemon] Stop the running ohwow daemon gracefully (SIGTERM on Unix, /shutdown on Windows). Returns whether it actually stopped within the timeout.',
+    '[Process] Stop the running ohwow process gracefully (SIGTERM on Unix, /shutdown on Windows). Returns whether it actually stopped within the timeout.',
     {
       timeoutMs: z
         .number()
         .optional()
-        .describe('How long to wait for the daemon to stop before reporting failure. Default 5000ms.'),
+        .describe('How long to wait for the process to stop before reporting failure. Default 5000ms.'),
     },
     async ({ timeoutMs }) => {
       try {
@@ -144,12 +144,12 @@ export function registerDaemonTools(server: McpServer): void {
   // ohwow_daemon_start — Start the daemon if it's not already running.
   server.tool(
     'ohwow_daemon_start',
-    '[Daemon] Start the ohwow daemon in the background if it is not already running. Waits for the health endpoint before returning. No-op if the daemon is already healthy.',
+    '[Process] Start the ohwow process in the background if it is not already running. Waits for the health endpoint before returning. No-op if the daemon is already healthy.',
     {
       timeoutMs: z
         .number()
         .optional()
-        .describe('How long to wait for the daemon to become healthy. Default 15000ms.'),
+        .describe('How long to wait for the process to become healthy. Default 15000ms.'),
     },
     async ({ timeoutMs }) => {
       try {
@@ -162,7 +162,7 @@ export function registerDaemonTools(server: McpServer): void {
         }
         if (!config.entryPath) {
           return {
-            content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: 'Could not locate daemon entry (dist/index.js or src/index.ts)', ...(await snapshotStatus(config)) }, null, 2) }],
+            content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: 'Could not locate process entry (dist/index.js or src/index.ts)', ...(await snapshotStatus(config)) }, null, 2) }],
             isError: true,
           };
         }
@@ -189,7 +189,7 @@ export function registerDaemonTools(server: McpServer): void {
   // ohwow_daemon_restart — Full stop + start cycle.
   server.tool(
     'ohwow_daemon_restart',
-    '[Daemon] Restart the ohwow daemon: stop if running, wait for the PID to clear, then spawn a fresh background instance and wait for health. Use this after rebuilding dist/index.js so the running daemon picks up the new code. Safe to call even when the daemon is already dead — it will just start a fresh one.',
+    '[Process] Restart the ohwow process: stop if running, wait for the PID to clear, then spawn a fresh background instance and wait for health. Use this after rebuilding dist/index.js so the running process picks up the new code. Safe to call even when the daemon is already dead — it will just start a fresh one.',
     {
       stopTimeoutMs: z
         .number()
@@ -205,7 +205,7 @@ export function registerDaemonTools(server: McpServer): void {
         const config = resolveConfig();
         if (!config.entryPath) {
           return {
-            content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: 'Could not locate daemon entry (dist/index.js or src/index.ts)', ...(await snapshotStatus(config)) }, null, 2) }],
+            content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: 'Could not locate process entry (dist/index.js or src/index.ts)', ...(await snapshotStatus(config)) }, null, 2) }],
             isError: true,
           };
         }
@@ -229,7 +229,7 @@ export function registerDaemonTools(server: McpServer): void {
           phases.stopped = stopped;
           if (!stopped) {
             return {
-              content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, phase: 'stop', error: 'Previous daemon did not exit within timeout', ...phases, ...(await snapshotStatus(config)) }, null, 2) }],
+              content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, phase: 'stop', error: 'Previous process did not exit within timeout', ...phases, ...(await snapshotStatus(config)) }, null, 2) }],
               isError: true,
             };
           }

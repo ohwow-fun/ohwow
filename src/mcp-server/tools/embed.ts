@@ -26,7 +26,7 @@ interface EmbedResponse {
 export function registerEmbedTools(server: McpServer, client: DaemonApiClient): void {
   server.tool(
     'ohwow_embed',
-    '[Embeddings] Embed one or more texts into dense vectors using the daemon\'s in-process Qwen3-Embedding-0.6B model (1024-dim, L2-normalized). Direct HTTP, no orchestrator round-trip. First call after daemon start may block up to ~30s waiting on model warmup; subsequent calls are sub-second. Pass is_query=true with an optional instruction for asymmetric query encoding. Hard cap: 256 texts per call.',
+    '[Embeddings] Embed one or more texts into dense vectors using the daemon\'s in-process Qwen3-Embedding-0.6B model (1024-dim, L2-normalized). Direct HTTP, no orchestrator round-trip. First call after process start may block up to ~30s waiting on model warmup; subsequent calls are sub-second. Pass is_query=true with an optional instruction for asymmetric query encoding. Hard cap: 256 texts per call.',
     {
       texts: z
         .array(z.string().min(1))

@@ -18,7 +18,7 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | [Orchestrator](#orchestrator) | 2 | Send messages to the AI orchestrator |
 | [Agents](#agents) | 9 | Agent lifecycle, paths, CRUD |
 | [Tasks](#tasks) | 2 | Task execution and status |
-| [Workspace](#workspace) | 4 | Workspace switching, daemon lifecycle |
+| [Workspace](#workspace) | 4 | Workspace switching, process lifecycle |
 | [CRM](#crm) | 3 | Contact management |
 | [Deals](#deals) | 5 | Deal pipeline, revenue |
 | [Calendar](#calendar) | 3 | Events and availability |
@@ -35,7 +35,7 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | [Workflows](#workflows) | 2 | Workflow execution |
 | [Automations](#automations) | 2 | Automation management |
 | [Knowledge](#knowledge) | 4 | Knowledge base (RAG) |
-| [Embeddings](#embeddings) | 1 | In-daemon text → vector encoding |
+| [Embeddings](#embeddings) | 1 | In-process text → vector encoding |
 | [Research](#research) | 2 | Web research and scraping |
 | [Messaging](#messaging) | 2 | WhatsApp and Telegram |
 | [Cloud](#cloud) | 2 | Cloud dashboard |
@@ -81,9 +81,9 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 | `ohwow_workspace_status` | Direct | Agent count, uptime, tier, system stats. |
 | `ohwow_workspace_list` | Direct | List all local workspaces with port and status. |
 | `ohwow_workspace_use` | Direct | Switch this MCP session to a different workspace. |
-| `ohwow_daemon_status` | Direct | Check if the daemon is running. |
-| `ohwow_daemon_start` | Direct | Start the daemon. |
-| `ohwow_daemon_stop` | Direct | Stop the daemon. |
+| `ohwow_process_status` | Direct | Check if the process is running. |
+| `ohwow_process_start` | Direct | Start the process. |
+| `ohwow_process_stop` | Direct | Stop the process. |
 | `ohwow_daemon_restart` | Direct | Full stop + start cycle. |
 
 ## CRM
@@ -212,7 +212,7 @@ Claude Code  →  MCP Server (stdio)  →  DaemonApiClient  →  Express API  �
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `ohwow_embed` | Direct | Encode 1-256 texts into 1024-dim L2-normalized vectors via the daemon's in-process Qwen3-Embedding-0.6B ONNX model. Sub-second warm; the first call after a fresh daemon boot may block up to ~30s if the background warmup hasn't finished. Supports `is_query` + `instruction` for asymmetric query encoding. |
+| `ohwow_embed` | Direct | Encode 1-256 texts into 1024-dim L2-normalized vectors via the process's in-process Qwen3-Embedding-0.6B ONNX model. Sub-second warm; the first call after a fresh process boot may block up to ~30s if the background warmup hasn't finished. Supports `is_query` + `instruction` for asymmetric query encoding. |
 
 ## Research
 

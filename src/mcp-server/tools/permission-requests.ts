@@ -56,7 +56,7 @@ export function registerPermissionRequestTools(
   // ─── ohwow_list_permission_requests ──────────────────────────────
   server.tool(
     'ohwow_list_permission_requests',
-    '[Permissions] List every task currently paused on a filesystem or bash permission request. Returns the task id, agent name, attempted path, suggested exact + parent paths the operator can grant, the guard reason, and when the denial happened. These are the actionable items in the "agent wants access to X" queue. Pair with ohwow_approve_permission_request to resolve any row. Workspace-scoped to the focused daemon.',
+    '[Permissions] List every task currently paused on a filesystem or bash permission request. Returns the task id, agent name, attempted path, suggested exact + parent paths the operator can grant, the guard reason, and when the denial happened. These are the actionable items in the "agent wants access to X" queue. Pair with ohwow_approve_permission_request to resolve any row. Workspace-scoped to the focused process.',
     {},
     async () => {
       try {

@@ -29,7 +29,7 @@ After running an agent:
 
 ## Error Recovery
 
-- If `ohwow_run_agent` returns an error, check daemon status with `ohwow_workspace_status`
+- If `ohwow_run_agent` returns an error, check process status with `ohwow_workspace_status`
 - If the task shows status "failed", read the error details in the `ohwow_get_task` output
 - For long-running agents, poll `ohwow_get_task` every 10-15 seconds until status is "completed" or "failed"
 
