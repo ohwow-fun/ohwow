@@ -17,6 +17,7 @@ import { Router } from 'express';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { dryRunRanker } from '../../autonomy/dry-run.js';
 import { getConductorState } from '../../autonomy/state.js';
+import { getEternalState } from '../../eternal/index.js';
 
 export function createAutonomyStatusRouter(db: DatabaseAdapter): Router {
   const router = Router();
@@ -46,6 +47,17 @@ export function createAutonomyStatusRouter(db: DatabaseAdapter): Router {
       }
       const snapshot = await dryRunRanker(db, workspaceId, { limit });
       res.json({ data: snapshot });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Internal error',
+      });
+    }
+  });
+
+  router.get('/api/eternal/state', async (req, res) => {
+    try {
+      const state = await getEternalState(db);
+      res.json({ data: state });
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Internal error',
