@@ -27,6 +27,14 @@ Running in under 5 minutes. A setup wizard connects to [Ollama](https://ollama.c
 
 ohwow was designed as the operating system for a digital life that keeps running — not just while you're at the keyboard, but when you're busy, when you're away, when you're gone. The [Eternal Systems framework](docs/eternal-systems.md) is the philosophy behind why ohwow is built the way it is: local-first so no vendor can take it away, open-source so it can be restarted by anyone who finds it, and architecturally autonomous so your agents carry your values even when you're not there to guide them.
 
+When activity stops for an extended period, ohwow can shift into **conservative mode**: all autonomous action halts, no external messages are sent, and the system waits for a human to restore it. You can also give the conductor a **values corpus** — a plain-language document of your principles — and it will reference those principles before making consequential decisions. Template: [`docs/templates/values-corpus.md`](docs/templates/values-corpus.md).
+
+```bash
+ohwow eternal status          # current mode, last activity, days since active
+ohwow eternal conservative    # shift to conservative mode (no autonomous action)
+ohwow eternal normal          # restore normal operation
+```
+
 ---
 
 ## Introducing Vibe Working
@@ -340,6 +348,9 @@ Layer 0: Runtime    — Orchestrator, engine, 150+ tools, DB, API, scheduling, m
 | `ohwow stop` | Stop the daemon |
 | `ohwow status` | Check daemon status |
 | `ohwow logs` | Tail daemon logs |
+| `ohwow eternal status` | Show current mode, last activity, and days since active |
+| `ohwow eternal conservative` | Shift to conservative mode — no autonomous action until restored |
+| `ohwow eternal normal` | Restore normal operation |
 
 Docker:
 
