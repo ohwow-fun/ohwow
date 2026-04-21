@@ -224,6 +224,22 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       'ts/created_at TEXT → timestamptz; metadata_json TEXT (JSON, `_json` suffix) ' +
       '→ cloud jsonb (auto-parsed by coerceValue).',
   },
+  {
+    table: 'self_findings',
+    cloudTable: 'self_findings',
+    primaryKey: 'id',
+    columns: [
+      'id', 'experiment_id', 'category', 'subject', 'hypothesis', 'verdict',
+      'summary', 'evidence', 'intervention_applied', 'ran_at', 'duration_ms',
+      'status', 'superseded_by', 'workspace_id', 'created_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT → cloud text; workspace_id → uuid (injected from --workspace arg ' +
+      'since local table has no workspace_id column; the sync script must set it); ' +
+      'ran_at/created_at TEXT → timestamptz; evidence TEXT (JSON) → cloud jsonb; ' +
+      'duration_ms INTEGER → integer. Experiment loop writes one row per run.',
+  },
 ];
 
 export function getSpec(table: string): SyncTableSpec | undefined {
