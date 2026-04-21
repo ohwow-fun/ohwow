@@ -211,6 +211,19 @@ export const SYNC_REGISTRY: SyncTableSpec[] = [
       '(direct|viral), status (pending|approved|rejected|applied|auto_applied) ' +
       'and UNIQUE (workspace_id, reply_to_url) preserved cloud-side.',
   },
+  {
+    table: 'cdp_trace_events',
+    primaryKey: 'id',
+    columns: [
+      'id', 'workspace_id', 'ts', 'action', 'profile', 'target_id',
+      'owner', 'url', 'metadata_json', 'created_at',
+    ],
+    isWorkspaceScoped: true,
+    notes:
+      'id TEXT (uuid) → cloud text; workspace_id → uuid; ' +
+      'ts/created_at TEXT → timestamptz; metadata_json TEXT (JSON, `_json` suffix) ' +
+      '→ cloud jsonb (auto-parsed by coerceValue).',
+  },
 ];
 
 export function getSpec(table: string): SyncTableSpec | undefined {

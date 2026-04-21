@@ -70,6 +70,7 @@ import { withTabRecovery } from '../browser/tab-recovery.js';
 import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
 import { logger } from '../../lib/logger.js';
 import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
+import { insertCdpTraceEvent } from '../browser/cdp-trace-store.js';
 
 const X_POSTING_TOOL_NAMES = new Set([
   'x_compose_tweet',
@@ -225,6 +226,7 @@ export const xPostingExecutor: ToolExecutor = {
             { cdp: true, action: 'reuse:hit', profile: target.directory, owner: claimOwner, contextId: localContextId },
             '[x-posting-executor] reusing existing x.com tab',
           );
+          insertCdpTraceEvent({ action: 'reuse:hit', profile: target.directory, owner: claimOwner, contextId: localContextId });
           // Browser WS is per-lookup; drop it now so the composer's
           // own ensureCdpBrowser gets a clean one.
           reusable.page.close();
@@ -255,6 +257,7 @@ export const xPostingExecutor: ToolExecutor = {
           { cdp: true, action: 'tab:open', profile: target.directory, targetId: opened.targetId, owner: claimOwner },
           '[x-posting-executor] opened fresh x.com tab',
         );
+        insertCdpTraceEvent({ action: 'tab:open', profile: target.directory, targetId: opened.targetId, owner: claimOwner });
         const claim = claimTarget(
           { profileDir: target.directory, targetId: opened.targetId },
           claimOwner,

@@ -86,6 +86,7 @@ import { homedir } from 'node:os';
 import { logger } from '../../lib/logger.js';
 import { appendChromeProfileEvent } from './chrome-profile-ledger.js';
 import { RawCdpBrowser } from './raw-cdp.js';
+import { insertCdpTraceEvent } from './cdp-trace-store.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -634,6 +635,7 @@ async function spawnDebugChrome(opts: {
     { cdp: true, action: 'browser:open', port: opts.port, profile: opts.preferredProfile },
     '[chrome-lifecycle] spawning debug Chrome',
   );
+  insertCdpTraceEvent({ action: 'browser:open', profile: opts.preferredProfile, port: opts.port });
 
   try {
     const child = spawn(chromeBinaryPath(), args, { detached: true, stdio: 'ignore' });
@@ -657,6 +659,7 @@ async function spawnDebugChrome(opts: {
         { cdp: true, action: 'browser:open', port: opts.port, pid, profile: opts.preferredProfile, browser: ver.browser },
         '[chrome-lifecycle] debug Chrome ready',
       );
+      insertCdpTraceEvent({ action: 'browser:open', profile: opts.preferredProfile, port: opts.port, pid, browser: ver.browser });
       return {
         cdpHttpUrl: `http://localhost:${opts.port}`,
         cdpWsUrl: ver.wsUrl,
@@ -703,6 +706,7 @@ export async function killStaleDebugChrome(): Promise<void> {
     { cdp: true, action: 'stale-chrome-killed', pid, profile },
     '[chrome-lifecycle] stale debug Chrome (no CDP port) found; killing before respawn',
   );
+  insertCdpTraceEvent({ action: 'stale-chrome-killed', profile, pid });
 
   await execCapture(`kill -TERM ${pid}`);
   // Wait up to 3s for graceful exit, then SIGKILL.
@@ -760,6 +764,7 @@ export async function ensureDebugChrome(opts: {
       { cdp: true, action: 'browser:attach', port, pid, profile: resolved, homeProfile, preferredProfile, mismatch: resolved !== preferredProfile },
       '[chrome-lifecycle] attaching to existing debug Chrome',
     );
+    insertCdpTraceEvent({ action: 'browser:attach', profile: resolved, port, pid, homeProfile, preferredProfile, mismatch: resolved !== preferredProfile });
     void appendChromeProfileEvent({
       source: 'attach',
       port,
@@ -973,6 +978,7 @@ export async function quitDebugChrome(): Promise<void> {
     const stillRunning = await findDebugChromePid();
     if (!stillRunning) {
       logger.info({ cdp: true, action: 'browser:close', pid }, '[chrome-lifecycle] debug Chrome quit');
+      insertCdpTraceEvent({ action: 'browser:close', pid });
       return;
     }
   }

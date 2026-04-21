@@ -110,6 +110,8 @@ import { VERSION } from '../version.js';
 import { logger } from '../lib/logger.js';
 import { attachTerminalWebSocket } from './terminal-websocket.js';
 import { attachScreencastWebSocket } from './screencast-websocket.js';
+import { initCdpTraceDb } from '../execution/browser/cdp-trace-store.js';
+import { createCdpTraceEventsRouter } from './routes/cdp-trace-events.js';
 
 export interface ServerDeps {
   config: ServerConfig;
@@ -667,6 +669,8 @@ export function createServer(deps: ServerDeps): {
   app.use(createWorkspacesRouter({ registry, jwtSecret: config.jwtSecret }));
   app.use(createXDraftsRouter(db, workspaceId || 'local'));
   app.use(createXReplyDraftsRouter(db, workspaceId || 'local'));
+  initCdpTraceDb(db, workspaceId || 'local');
+  app.use(createCdpTraceEventsRouter(db, workspaceId || 'local'));
   app.use(createContentQueueRouter(db));
   app.use(createXDmDraftsRouter(db));
   app.use(createPulseRouter(rawDb, startTime, config.dataDir));

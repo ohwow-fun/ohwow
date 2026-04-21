@@ -62,6 +62,7 @@ import {
   type ClaimHandle,
 } from './browser-claims.js';
 import { withProfileLock } from './profile-mutex.js';
+import { insertCdpTraceEvent } from './cdp-trace-store.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -647,6 +648,7 @@ export async function findReusableTabForHost(opts: {
         { cdp: true, action: 'reuse:hit', profile: profileDir, contextId: match.browserContextId, targetId: match.targetId, owner, url: match.url },
         '[chrome-profile-router] reusing existing tab',
       );
+      insertCdpTraceEvent({ action: 'reuse:hit', profile: profileDir, targetId: match.targetId, owner, url: match.url, contextId: match.browserContextId });
       const closeBrowser = (): void => {
         try { browser?.close(); } catch { /* ignore */ }
       };
@@ -689,6 +691,7 @@ export async function closeTabById(
   // Release any claim for this target regardless of owner — the tab is
   // about to disappear, so keeping the claim around is meaningless.
   logger.debug({ cdp: true, action: 'tab:close', targetId }, '[chrome-profile-router] closing tab');
+  insertCdpTraceEvent({ action: 'tab:close', targetId });
   releaseTarget(targetId);
   let browser: RawCdpBrowser | null = null;
   try {
@@ -835,6 +838,7 @@ export async function ensureTargetDestroyedSubscription(
         { cdp: true, action: 'tab:destroyed', targetId: targetId.slice(0, 8), released },
         '[chrome-profile-router] tab destroyed externally; released claim(s)',
       );
+      insertCdpTraceEvent({ action: 'tab:destroyed', targetId: targetId.slice(0, 8), released });
     }
     // released === 0 is the normal case (human closed a non-agent tab).
     // Intentionally silent to keep log volume sane.
