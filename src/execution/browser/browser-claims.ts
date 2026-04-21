@@ -30,6 +30,7 @@
  */
 
 import { logger } from '../../lib/logger.js';
+import { insertCdpTraceEvent } from './cdp-trace-store.js';
 
 export interface ClaimKey {
   /** Chrome profile directory name, e.g. 'Default' or 'Profile 1'. Namespaces the claim so two profiles can't collide on a shared targetId. */
@@ -78,6 +79,7 @@ export function claimTarget(key: ClaimKey, owner: string): ClaimHandle | null {
   if (!existing) {
     claims.set(k, { owner, claimedAt });
     logger.info({ cdp: true, action: 'claim', profile: key.profileDir, targetId: key.targetId, owner }, '[browser-claims] tab claimed');
+    insertCdpTraceEvent({ action: 'claim', profile: key.profileDir, targetId: key.targetId, owner });
   }
   return {
     owner,
@@ -89,6 +91,7 @@ export function claimTarget(key: ClaimKey, owner: string): ClaimHandle | null {
       if (current && current.owner === owner) {
         claims.delete(k);
         logger.info({ cdp: true, action: 'release', profile: key.profileDir, targetId: key.targetId, owner }, '[browser-claims] tab released');
+        insertCdpTraceEvent({ action: 'release', profile: key.profileDir, targetId: key.targetId, owner });
       }
     },
   };
@@ -124,6 +127,7 @@ export function releaseAllForOwner(owner: string): number {
       const targetId = sep >= 0 ? k.slice(sep + 2) : k;
       claims.delete(k);
       logger.info({ cdp: true, action: 'release', profile: profileDir, targetId, owner }, '[browser-claims] tab released (releaseAllForOwner)');
+      insertCdpTraceEvent({ action: 'release', profile: profileDir, targetId, owner });
       n++;
     }
   }
@@ -142,6 +146,7 @@ export function releaseTarget(targetId: string): number {
     if (k.endsWith(suffix)) {
       claims.delete(k);
       logger.info({ cdp: true, action: 'release', targetId }, '[browser-claims] tab released (releaseTarget)');
+      insertCdpTraceEvent({ action: 'release', targetId });
       n++;
     }
   }
@@ -174,6 +179,7 @@ export function releaseByTargetId(targetId: string): number {
     if (k.endsWith(suffix)) {
       claims.delete(k);
       logger.info({ cdp: true, action: 'release', targetId }, '[browser-claims] tab released (releaseByTargetId)');
+      insertCdpTraceEvent({ action: 'release', targetId });
       n++;
     }
   }

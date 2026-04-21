@@ -32,6 +32,7 @@
 
 import WebSocket from 'ws';
 import { logger } from '../../lib/logger.js';
+import { insertCdpTraceEvent } from './cdp-trace-store.js';
 
 export interface CdpTargetInfo {
   targetId: string;
@@ -140,6 +141,7 @@ export class RawCdpBrowser {
 
   async attachToPage(targetId: string): Promise<RawCdpPage> {
     logger.debug({ cdp: true, action: 'tab:attach', targetId }, '[raw-cdp] attaching to page');
+    insertCdpTraceEvent({ action: 'tab:attach', targetId });
     const r = await this.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
     const page = new RawCdpPage(this, r.sessionId, targetId);
     // Enable the subset of domains this driver needs.
@@ -235,6 +237,7 @@ export class RawCdpPage {
 
   async goto(url: string): Promise<void> {
     logger.debug({ cdp: true, action: 'navigate', targetId: this.targetId, url }, '[raw-cdp] navigating');
+    insertCdpTraceEvent({ action: 'navigate', targetId: this.targetId, url });
     await this.send('Page.navigate', { url });
     await this.waitForLoad();
   }

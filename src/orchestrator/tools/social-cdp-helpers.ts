@@ -22,6 +22,7 @@ import {
   hasAnyClaimForTarget,
 } from '../../execution/browser/browser-claims.js';
 import { logger } from '../../lib/logger.js';
+import { insertCdpTraceEvent } from '../../execution/browser/cdp-trace-store.js';
 
 /**
  * Tag a tab as agent-owned at the DOM level. Sets window.name and
@@ -137,6 +138,7 @@ export async function getCdpPageForPlatform(opts: {
             { cdp: true, action: 'tab:open', ctx: expectedContextId.slice(0, 8), targetId: newTargetId.slice(0, 8), ownershipMode },
             `[${logTag}] opened new tab in target profile context`,
           );
+          insertCdpTraceEvent({ action: 'tab:open', targetId: newTargetId.slice(0, 8), ownershipMode, ctx: expectedContextId.slice(0, 8) });
           const page = await browser.attachToPage(newTargetId);
           await page.installUnloadEscapes();
           await tagTabAsOwned(page);
@@ -206,6 +208,7 @@ export async function getCdpPageForPlatform(opts: {
             { cdp: true, action: 'tab:open', targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length },
             `[${logTag}] opened new owned tab (no-context fallback)`,
           );
+          insertCdpTraceEvent({ action: 'tab:open', targetId: newTargetId.slice(0, 8), ownershipMode, contextsTried: uniqueCtxIds.length });
           const page = await browser.attachToPage(newTargetId);
           await page.installUnloadEscapes();
           await tagTabAsOwned(page);
@@ -315,6 +318,7 @@ export async function warmupBrowse(page: RawCdpPage): Promise<void> {
 export async function captureScreenshot(page: RawCdpPage): Promise<string | undefined> {
   try {
     logger.debug({ cdp: true, action: 'screenshot', targetId: page.targetId }, '[social-cdp] capturing screenshot');
+    insertCdpTraceEvent({ action: 'screenshot', targetId: page.targetId });
     return await page.screenshotJpeg(70);
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err }, '[social-cdp] screenshot failed');
@@ -460,6 +464,7 @@ export async function typeIntoRichTextbox(
   text: string,
 ): Promise<TypeTextResult> {
   logger.debug({ cdp: true, action: 'type', len: text.length }, '[social-cdp] typeIntoRichTextbox');
+  insertCdpTraceEvent({ action: 'type', len: text.length });
   const expected = text.length;
   const minAccept = Math.max(5, Math.floor(expected * 0.5));
 
