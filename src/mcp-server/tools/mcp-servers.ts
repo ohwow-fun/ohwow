@@ -45,7 +45,7 @@ export function registerMcpServerTools(server: McpServer, client: DaemonApiClien
   // ─── ohwow_add_mcp_server ────────────────────────────────────────
   server.tool(
     'ohwow_add_mcp_server',
-    '[MCP] Register a third-party MCP server in the current workspace. Its tools become available to all agents (and the orchestrator) on the next turn. Credentials in `headers` or `env` are SENSITIVE — they stay on the local daemon, never transit through the LLM, and are never returned by list/inspect calls. Use for hooking external platforms (Stripe, GitHub, Notion, custom internal MCPs) into an ohwow workspace.',
+    '[MCP] Register a third-party MCP server in the current workspace. Its tools become available to all agents (and the orchestrator) on the next turn. Credentials in `headers` or `env` are SENSITIVE — they stay on the local process, never transit through the LLM, and are never returned by list/inspect calls. Use for hooking external platforms (Stripe, GitHub, Notion, custom internal MCPs) into an ohwow workspace.',
     {
       name: z.string().describe(NAME_DESCRIPTION),
       transport: z
@@ -78,7 +78,7 @@ export function registerMcpServerTools(server: McpServer, client: DaemonApiClien
       enabled: z
         .boolean()
         .optional()
-        .describe('Whether the server should be connected on daemon startup. Default: true.'),
+        .describe('Whether the server should be connected on process startup. Default: true.'),
     },
     async ({ name, transport, url, command, args, headers, env, description, enabled }) => {
       try {
@@ -112,7 +112,7 @@ export function registerMcpServerTools(server: McpServer, client: DaemonApiClien
                 {
                   ok: true,
                   server: result.server,
-                  note: 'Server registered. Credentials stored on-daemon and redacted from this response. Call ohwow_test_mcp_server to verify connectivity and list exposed tools.',
+                  note: 'Server registered. Credentials stored on the process and redacted from this response. Call ohwow_test_mcp_server to verify connectivity and list exposed tools.',
                 },
                 null,
                 2,

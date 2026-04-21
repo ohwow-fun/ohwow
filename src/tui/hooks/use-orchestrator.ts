@@ -185,7 +185,7 @@ export function useOrchestrator(
     abortRef.current = controller;
 
     if (!daemonPort) {
-      setError('Still connecting to daemon...');
+      setError('Still connecting to process...');
       setIsStreaming(false);
       return;
     }
@@ -208,7 +208,7 @@ export function useOrchestrator(
 
       if (!resp.ok) {
         const body = await resp.text();
-        let msg = "Couldn't reach the daemon. Try restarting.";
+        let msg = "Couldn't reach the process. Try restarting.";
         try {
           const parsed = JSON.parse(body) as { error?: string };
           if (parsed.error) msg = parsed.error;
@@ -434,9 +434,9 @@ export function useOrchestrator(
         }
         return;
       }
-      const rawMsg = err instanceof Error ? err.message : "Couldn't reach the daemon. Try restarting.";
+      const rawMsg = err instanceof Error ? err.message : "Couldn't reach the process. Try restarting.";
       const msg = rawMsg === 'fetch failed' || rawMsg.includes('ECONNREFUSED')
-        ? "Couldn't reach the daemon. It may still be starting. Try again in a moment."
+        ? "Couldn't reach the process. It may still be starting. Try again in a moment."
         : rawMsg;
       setError(msg);
       setMessages((prev) => [

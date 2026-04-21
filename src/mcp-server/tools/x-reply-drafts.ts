@@ -53,7 +53,7 @@ function jsonResponse(payload: unknown) {
 export function registerXReplyDraftTools(server: McpServer, client: DaemonApiClient): void {
   server.tool(
     'ohwow_list_x_reply_drafts',
-    "[Reply pipeline] List candidate X/Threads reply drafts the daemon has queued from the pain-finder pipeline. Each draft contains the target post (reply_to_url + author + text + engagement), the drafted reply body, alternates, the classifier verdict (class, pain_domain, severity, sellerish), and a score. Modes: 'direct' (1:1 reply to a real operator, genuine_pain or solo_service_provider class) and 'viral' (broadcast reply into a crowded ICP-packed thread). Rows are 'pending' until you approve or reject; once approved, the reply dispatcher picks them up on its next tick (~5 min).",
+    "[Reply pipeline] List candidate X/Threads reply drafts the process has queued from the pain-finder pipeline. Each draft contains the target post (reply_to_url + author + text + engagement), the drafted reply body, alternates, the classifier verdict (class, pain_domain, severity, sellerish), and a score. Modes: 'direct' (1:1 reply to a real operator, genuine_pain or solo_service_provider class) and 'viral' (broadcast reply into a crowded ICP-packed thread). Rows are 'pending' until you approve or reject; once approved, the reply dispatcher picks them up on its next tick (~5 min).",
     {
       platform: z
         .enum(['x', 'threads'])

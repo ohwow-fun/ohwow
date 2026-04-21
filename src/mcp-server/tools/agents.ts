@@ -77,7 +77,7 @@ export function registerAgentManagementTools(
   // ─── ohwow_create_agent ──────────────────────────────────────────
   server.tool(
     'ohwow_create_agent',
-    '[Agents] Create a new agent in the current workspace. Writes directly to the agents table via the local daemon. Use this instead of ohwow_chat for agent creation — the orchestrator has no typed create primitive and will loop on ambient-state inspection if asked to create an agent via chat.',
+    '[Agents] Create a new agent in the current workspace. Writes directly to the agents table via the local process. Use this instead of ohwow_chat for agent creation — the orchestrator has no typed create primitive and will loop on ambient-state inspection if asked to create an agent via chat.',
     {
       name: z.string().describe(NAME_DESCRIPTION),
       displayName: z
@@ -284,7 +284,7 @@ export function registerAgentManagementTools(
   // ─── ohwow_grant_agent_path ──────────────────────────────────────
   server.tool(
     'ohwow_grant_agent_path',
-    '[Agents] Grant an agent permission to read/write files under a local directory. Writes a row to agent_file_access_paths that the FileAccessGuard reads on every task run, so the agent\'s filesystem tools (local_read_file, local_write_file, run_bash, etc.) will accept paths inside the granted directory. Without this, a narrowly-scoped agent hits "path outside allowed directories" and the task either fails the hallucination gate or routes to needs_approval. The daemon validates that the path exists, is a directory, lives inside the user\'s home, and isn\'t a sensitive subdirectory like .ssh or .gnupg. Identify the agent by `name` or `id`.',
+    '[Agents] Grant an agent permission to read/write files under a local directory. Writes a row to agent_file_access_paths that the FileAccessGuard reads on every task run, so the agent\'s filesystem tools (local_read_file, local_write_file, run_bash, etc.) will accept paths inside the granted directory. Without this, a narrowly-scoped agent hits "path outside allowed directories" and the task either fails the hallucination gate or routes to needs_approval. The process validates that the path exists, is a directory, lives inside the user\'s home, and isn\'t a sensitive subdirectory like .ssh or .gnupg. Identify the agent by `name` or `id`.',
     {
       name: z.string().optional().describe('Workspace-unique agent name (provide this OR `id`).'),
       id: z.string().optional().describe('Agent UUID, or the literal string "__orchestrator__" to grant paths to the orchestrator itself (provide this OR `name`).'),

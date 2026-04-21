@@ -45,7 +45,7 @@ npm install -g ohwow
 ohwow start
 ```
 
-The onboarding wizard runs on first start and takes about five minutes. After that the daemon runs in the background and the terminal dashboard is available any time via `ohwow`.
+The onboarding wizard runs on first start and takes about five minutes. After that the process runs in the background and the terminal dashboard is available any time via `ohwow`.
 
 To contribute, read [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, DCO requirements, and the PR process. Good starting points are tests for existing modules and bug fixes in `src/browser/`.
 

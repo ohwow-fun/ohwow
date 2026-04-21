@@ -118,7 +118,7 @@ export function registerAutonomyStatusTools(
           state: snap,
           note:
             !snap.flag_on
-              ? 'Conductor is dark-launched. Set OHWOW_AUTONOMY_CONDUCTOR=1 in the daemon env and restart to enable. Use ohwow_autonomy_dry_run first to see what would be picked.'
+              ? 'Conductor is dark-launched. Set OHWOW_AUTONOMY_CONDUCTOR=1 in the process env and restart to enable. Use ohwow_autonomy_dry_run first to see what would be picked.'
               : snap.open_arcs.length === 0
                 ? 'Conductor enabled; no arc currently open.'
                 : `Arc ${snap.open_arcs[0].arc_id} in flight (${snap.open_arcs[0].elapsed_minutes}m elapsed; ${snap.open_arcs[0].phases_remaining} phases left in budget).`,

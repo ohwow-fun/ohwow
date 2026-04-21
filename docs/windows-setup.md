@@ -28,11 +28,11 @@ All commands work the same as on macOS and Linux:
 
 ```
 ohwow              # Start TUI
-ohwow --daemon     # Start daemon in foreground
-ohwow stop         # Stop the daemon
-ohwow status       # Check daemon status
-ohwow logs         # Tail daemon logs (uses PowerShell Get-Content)
-ohwow restart      # Restart the daemon
+ohwow --process     # Start process in foreground
+ohwow stop         # Stop the process
+ohwow status       # Check process status
+ohwow logs         # Tail process logs (uses PowerShell Get-Content)
+ohwow restart      # Restart the process
 ```
 
 ## Shell Execution

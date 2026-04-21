@@ -51,7 +51,7 @@ export class DaemonApiClient {
         tokenPath = legacyToken;
       } else {
         throw new Error(
-          `OHWOW daemon is not running for workspace "${active.name}". ` +
+          `OHWOW process is not running for workspace "${active.name}". ` +
             `Start it with: ohwow workspace start ${active.name}`,
         );
       }
@@ -60,7 +60,7 @@ export class DaemonApiClient {
     const token = readFileSync(tokenPath, 'utf-8').trim();
     if (!token) {
       throw new Error(
-        `Couldn't read daemon token for workspace "${active.name}". Try: ohwow workspace restart ${active.name}`,
+        `Couldn't read process token for workspace "${active.name}". Try: ohwow workspace restart ${active.name}`,
       );
     }
 
@@ -70,7 +70,7 @@ export class DaemonApiClient {
       await client.get('/health');
     } catch {
       throw new Error(
-        `OHWOW daemon for workspace "${active.name}" is not reachable on port ${port}. ` +
+        `OHWOW process for workspace "${active.name}" is not reachable on port ${port}. ` +
           `Start it with: ohwow workspace start ${active.name}`,
       );
     }
@@ -111,7 +111,7 @@ export class DaemonApiClient {
 
     const newToken = readFileSync(newTokenPath, 'utf-8').trim();
     if (!newToken) {
-      throw new Error(`Empty daemon token for workspace "${workspaceName}"`);
+      throw new Error(`Empty process token for workspace "${workspaceName}"`);
     }
 
     const newBaseUrl = `http://127.0.0.1:${port}`;
@@ -185,7 +185,7 @@ export class DaemonApiClient {
       headers: this.authHeaders(),
     });
     if (!res.ok) {
-      throw new Error(`ohwow daemon error on GET ${path}: ${res.status}. Check daemon with: ohwow logs`);
+      throw new Error(`ohwow process error on GET ${path}: ${res.status}. Check with: ohwow logs`);
     }
     return res.json();
   }
@@ -200,7 +200,7 @@ export class DaemonApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`ohwow daemon error on POST ${path}: ${res.status}. Check daemon with: ohwow logs`);
+      throw new Error(`ohwow process error on POST ${path}: ${res.status}. Check with: ohwow logs`);
     }
     return res.json();
   }
@@ -211,7 +211,7 @@ export class DaemonApiClient {
       headers: this.authHeaders(),
     });
     if (!res.ok) {
-      throw new Error(`ohwow daemon error on DELETE ${path}: ${res.status}. Check daemon with: ohwow logs`);
+      throw new Error(`ohwow process error on DELETE ${path}: ${res.status}. Check with: ohwow logs`);
     }
     return res.json();
   }
@@ -226,7 +226,7 @@ export class DaemonApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`ohwow daemon error on PATCH ${path}: ${res.status}. Check daemon with: ohwow logs`);
+      throw new Error(`ohwow process error on PATCH ${path}: ${res.status}. Check with: ohwow logs`);
     }
     return res.json();
   }

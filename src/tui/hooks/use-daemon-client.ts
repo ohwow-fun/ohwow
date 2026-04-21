@@ -209,7 +209,7 @@ export function useDaemonClient(port: number, sessionToken: string, dataDir: str
 
         const attempt = reconnectAttemptRef.current;
         if (attempt >= MAX_RECONNECT_ATTEMPTS) {
-          setState(s => ({ ...s, error: 'Lost connection to daemon. Restart ohwow to reconnect.' }));
+          setState(s => ({ ...s, error: 'Lost connection to the process. Restart ohwow to reconnect.' }));
           return;
         }
 
@@ -281,7 +281,7 @@ export function useDaemonClient(port: number, sessionToken: string, dataDir: str
           setState(s => ({
             ...s,
             connecting: false,
-            error: err instanceof Error ? err.message : 'Could not connect to daemon',
+            error: err instanceof Error ? err.message : 'Could not connect to the process',
           }));
         }
       }

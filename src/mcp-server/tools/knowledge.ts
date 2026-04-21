@@ -39,7 +39,7 @@ export function registerKnowledgeTools(server: McpServer, client: DaemonApiClien
   // callers that want to embed or analyse the full corpus in one call.
   server.tool(
     'ohwow_list_knowledge',
-    '[Knowledge] List documents in the knowledge base. Returns id, title, type, status, chunk count, and created_at by default. Hits the daemon directly over HTTP (~50ms), no orchestrator round-trip. Set `include_bodies=true` to also get the compiled text for every document — useful for embedding benchmarks and RAG evals. Be aware: body payload scales with doc size; use `limit` to cap the batch when bodies are requested.',
+    '[Knowledge] List documents in the knowledge base. Returns id, title, type, status, chunk count, and created_at by default. Hits the process directly over HTTP (~50ms), no orchestrator round-trip. Set `include_bodies=true` to also get the compiled text for every document — useful for embedding benchmarks and RAG evals. Be aware: body payload scales with doc size; use `limit` to cap the batch when bodies are requested.',
     {
       include_bodies: z
         .boolean()
@@ -87,7 +87,7 @@ export function registerKnowledgeTools(server: McpServer, client: DaemonApiClien
   // ohwow_get_knowledge — Direct HTTP. Single document by id, always with body.
   server.tool(
     'ohwow_get_knowledge',
-    "[Knowledge] Fetch a single knowledge base document by id, including the compiled body text. Returns metadata (title, filename, fileType, fileSize, tokens, chunk_count, contentHash, status, sourceUrl, createdAt, processedAt) plus `body` (the full compiled text). Returns an error result when the id doesn't match an active document — use ohwow_list_knowledge to discover ids. Hits the daemon directly over HTTP (~50ms).",
+    "[Knowledge] Fetch a single knowledge base document by id, including the compiled body text. Returns metadata (title, filename, fileType, fileSize, tokens, chunk_count, contentHash, status, sourceUrl, createdAt, processedAt) plus `body` (the full compiled text). Returns an error result when the id doesn't match an active document — use ohwow_list_knowledge to discover ids. Hits the process directly over HTTP (~50ms).",
     {
       id: z.string().describe('Document id from ohwow_list_knowledge.'),
     },
