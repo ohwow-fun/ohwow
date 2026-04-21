@@ -46,6 +46,16 @@ the full design and `src/eternal/` for the runtime implementation.
   `eternal_notifications` (migration 149) and emits a structured WARN log.
 - Transport layer (email, SMS, webhook) is intentionally out of scope for now.
 
+**Operator config** (`src/eternal/load-spec.ts`)
+
+- `loadEternalSpec(dataDir)` reads `eternal.config.json` from the workspace
+  data directory, merges operator-configured thresholds and escalation rules
+  over `DEFAULT_ETERNAL_SPEC`, and falls back gracefully when the file is
+  absent or malformed.
+- Loaded once at daemon boot in `src/daemon/scheduling.ts` (inactivity watcher)
+  and `src/daemon/start.ts` (conductor escalation). Changes take effect on the
+  next daemon restart.
+
 **CLI**
 
 - `ohwow eternal status` — print current mode, last activity, days since active.
@@ -107,9 +117,9 @@ In rough priority order:
    (email via Resend, SMS via Twilio, or webhook) to `notifyTrustee()`.
    The stub row + WARN log is sufficient for audit but not for real alerting.
 
-2. **`eternal.config.json` loading** — `ohwow eternal init` writes the file
-   but nothing reads it yet. The daemon should load it at boot and override
-   `DEFAULT_ETERNAL_SPEC` so operator-configured thresholds take effect.
+2. ~~**`eternal.config.json` loading**~~ — done. `loadEternalSpec()` reads the
+   file at daemon boot and wires operator thresholds into the inactivity
+   watcher and conductor escalation rules.
 
 3. **Escalation map in dashboard** — the cloud dashboard should show the
    operator's current escalation map and let them edit it. Currently the map
