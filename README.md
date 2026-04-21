@@ -4,7 +4,7 @@ Generational wealth starts with systems that can outlast you. Not just the asset
 
 ## What it is
 
-ohwow is a local-first AI runtime. It runs as a persistent daemon on your machine, builds a SQLite record of your context, and orchestrates an agent workforce around your actual goals.
+Ohwow orchestrates an AI agents workforce around your actual goals. It runs as a persistent daemon on your machine, builds a SQLite record of your context, and stays local by default.
 
 It doesn't run in the cloud by default. Your data, your models, your business logic live on your hardware. Cloud sync and a web dashboard exist and are additive. The system is whole without them.
 
