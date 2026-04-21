@@ -288,11 +288,15 @@ export async function startDaemon(): Promise<DaemonHandle> {
   // consolidation; the file mirror needs the on-disk slug, so resolve
   // it separately from the active-workspace pointer / env.
   const activeWorkspace = resolveActiveWorkspace();
+  const { loadEternalSpec } = await import('../eternal/load-spec.js');
+  const activeLayout = workspaceLayoutFor(activeWorkspace.name);
+  const eternalSpec = loadEternalSpec(activeLayout.dataDir);
   const conductorHandle = wireConductor({
     db: ctx.db,
     workspace_id: ctx.workspaceId,
     workspace_slug: activeWorkspace.name,
     modelRouter: ctx.modelRouter,
+    eternalSpec,
   });
   if (conductorHandle) ctx.bus.once('shutdown', () => conductorHandle.stop());
 
