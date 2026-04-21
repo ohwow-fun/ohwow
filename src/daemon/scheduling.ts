@@ -33,6 +33,8 @@ import { join } from 'node:path';
 import { resolveActiveWorkspace } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { syncAllTables } from '../sync/cloud-sync-job.js';
+import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
+import { DEFAULT_ETERNAL_SPEC } from '../eternal/defaults.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -621,6 +623,20 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
       }, syncIntervalMs).unref();
       logger.debug(`[daemon] cloud sync scheduled (${syncIntervalMs / 60_000}m interval)`);
     }
+  }
+
+  // Eternal Systems: hourly inactivity check — transitions conservative/estate
+  // modes automatically when the operator goes dark beyond protocol thresholds.
+  {
+    const INACTIVITY_CHECK_MS = 60 * 60_000; // 1 hour
+    const runInactivityCheck = () => {
+      checkAndMaybeUpdate(db, DEFAULT_ETERNAL_SPEC).catch((err) => {
+        logger.warn({ err }, '[daemon] eternal.inactivity_check.failed');
+      });
+    };
+    runInactivityCheck();
+    setInterval(runInactivityCheck, INACTIVITY_CHECK_MS).unref();
+    logger.debug('[daemon] eternal inactivity watcher scheduled (1h interval)');
   }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };
