@@ -23,6 +23,12 @@ Running in under 5 minutes. A setup wizard connects to [Ollama](https://ollama.c
 
 ---
 
+## Built for permanence
+
+ohwow was designed as the operating system for a digital life that keeps running — not just while you're at the keyboard, but when you're busy, when you're away, when you're gone. The [Eternal Systems framework](docs/eternal-systems.md) is the philosophy behind why ohwow is built the way it is: local-first so no vendor can take it away, open-source so it can be restarted by anyone who finds it, and architecturally autonomous so your agents carry your values even when you're not there to guide them.
+
+---
+
 ## Introducing Vibe Working
 
 Vibe coding changed how we build software. You describe what you want, AI writes the code.
