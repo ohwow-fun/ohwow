@@ -190,6 +190,18 @@ const KNOWN_CLOUD_SCHEMAS: Record<string, readonly string[]> = {
     'rejected_at',
     'applied_at',
   ],
+  cdp_trace_events: [
+    'id',
+    'workspace_id',
+    'ts',
+    'action',
+    'profile',
+    'target_id',
+    'owner',
+    'url',
+    'metadata_json',
+    'created_at',
+  ],
 };
 
 describe('SYNC_REGISTRY ↔ cloud schema agreement', () => {
