@@ -863,6 +863,9 @@ if (subcommand === 'logs') {
 } else if (subcommand === 'showcase') {
   const { runShowcaseCli } = await import('./cli/showcase.js');
   await runShowcaseCli(process.argv.slice(3));
+} else if (subcommand === 'eternal') {
+  const { runEternalCli } = await import('./cli/eternal.js');
+  await runEternalCli(process.argv.slice(3));
 } else if (subcommand === 'revenue') {
   const { runRevenueCli } = await import('./cli/revenue.js');
   await runRevenueCli(process.argv.slice(3));
@@ -891,6 +894,7 @@ if (subcommand === 'logs') {
   console.log('  ohwow logs              Tail daemon logs');
   console.log('  ohwow restart           Restart the daemon');
   console.log('  ohwow improve           Run self-improvement cycle');
+  console.log('  ohwow eternal <status|conservative|normal>  Eternal Systems mode');
   console.log('  ohwow revenue <add|list>    Record or inspect revenue entries');
   console.log('  ohwow x-throttle-status     Show X search throttle state (add --json for machine output)');
   console.log('  ohwow video <render|cache>  Render a VideoSpec JSON to MP4');

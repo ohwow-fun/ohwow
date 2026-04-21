@@ -31,6 +31,7 @@ import {
   type Picker,
   type PickerOutput,
 } from './director.js';
+import { getEternalState } from '../eternal/index.js';
 import type { LlmMeter } from './executors/llm-executor.js';
 import {
   listAnsweredUnresolvedFounderInbox,
@@ -461,6 +462,26 @@ export async function conductorTick(
 ): Promise<ConductorTickResult> {
   if (!isConductorEnabled()) {
     return { ran: false, reason: 'flag-off' };
+  }
+
+  // Eternal Systems: skip the tick when the operator is in conservative or
+  // estate mode. Conservative mode suppresses autonomous action so decisions
+  // surface to a human trustee instead.
+  try {
+    const eternalState = await getEternalState(deps.db);
+    if (eternalState.mode === 'conservative' || eternalState.mode === 'estate') {
+      logger.info(
+        { workspace_id: deps.workspace_id, eternal_mode: eternalState.mode },
+        'conductor.tick.skipped.conservative-mode',
+      );
+      return { ran: false, reason: 'conservative-mode' };
+    }
+  } catch (err) {
+    logger.warn(
+      { workspace_id: deps.workspace_id, err: (err as Error).message },
+      'conductor.eternal_state.read.failed',
+    );
+    // Non-fatal: proceed with the tick when eternal state can't be read.
   }
 
   try {

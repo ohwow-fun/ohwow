@@ -119,6 +119,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '143-phase-trios.sql', expectedTables: ['phase_trios', 'phase_rounds'] },
   { migrationFile: '144-director-arcs.sql', expectedTables: ['director_arcs', 'director_phase_reports', 'founder_inbox'] },
   { migrationFile: '147-cdp-trace-events.sql', expectedTables: ['cdp_trace_events'] },
+  { migrationFile: '148-eternal-state.sql', expectedTables: ['eternal_state'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —
