@@ -172,39 +172,11 @@ export function App() {
     return 'onboarding'; // Returning: will be overridden by model check
   });
 
-  // For returning users, check if the model is available and skip onboarding
+  // For returning users, go straight to dashboard (model check deferred to Settings — TRIO-10)
   useEffect(() => {
     if (initialCheck !== 'checking' || !config || !existingState) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        if (config.modelSource === 'cloud') {
-          if (config.anthropicApiKey || config.anthropicOAuthToken) {
-            if (!cancelled) { setInitialCheck('ready'); setView('dashboard'); }
-            return;
-          }
-        } else {
-          const res = await fetch(`${config.ollamaUrl}/api/tags`, {
-            signal: AbortSignal.timeout(2000),
-          });
-          if (res.ok) {
-            const data = await res.json() as { models?: Array<{ name: string }> };
-            const modelBase = (config.orchestratorModel || config.ollamaModel).split(':')[0];
-            const hasModel = (data.models || []).some((m: { name: string }) => m.name.startsWith(modelBase));
-            if (hasModel) {
-              if (!cancelled) { setInitialCheck('ready'); setView('dashboard'); }
-              return;
-            }
-          }
-        }
-      } catch {
-        // Probe failed, show onboarding
-      }
-      if (!cancelled) { setInitialCheck('needs_model'); setView('onboarding'); }
-    })();
-
-    return () => { cancelled = true; };
+    setInitialCheck('ready');
+    setView('dashboard');
   }, [initialCheck, config, existingState]);
 
   // Track whether the user just completed onboarding this session (for welcome flow)

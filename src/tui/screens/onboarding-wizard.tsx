@@ -1,9 +1,10 @@
 /**
  * Unified Onboarding Wizard
- * 8-step flow: Splash → Tier Choice → Model → Business Info → Founder Stage →
- * Agent Discovery → Agent Selection → Ready.
- * Connected path: Splash → Tier Choice → Model → Agent Selection → Ready
+ * 7-step flow: Splash → Tier Choice → Business Info → Agent Discovery →
+ * Agent Selection → Integration Setup → Ready.
+ * Connected path: Splash → Tier Choice → Agent Selection → Ready
  * (business info + founder stage + agent discovery are skipped, data comes from cloud).
+ * Model selection is deferred to Settings (TRIO-10).
  * Replaces both setup-wizard.tsx and agent-setup-wizard.tsx.
  */
 
@@ -12,11 +13,9 @@ import { Box, Text, useInput, useApp } from 'ink';
 import type { RuntimeConfig } from '../../config.js';
 import { updateConfigFile, tryLoadConfig, DEFAULT_CLOUD_URL, resolveActiveWorkspace, portForWorkspace } from '../../config.js';
 import { OnboardingService } from '../../lib/onboarding-service.js';
-import type { OnboardingStatus } from '../../lib/onboarding-service.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { OllamaModelInfo } from '../../lib/ollama-models.js';
-import { isModelInstalled, MODEL_CATALOG } from '../../lib/ollama-models.js';
-import { loadModel, listRunningModels, listInstalledModels } from '../../lib/ollama-installer.js';
+import { MODEL_CATALOG } from '../../lib/ollama-models.js';
 import { type AgentPreset } from '../data/agent-presets.js';
 import {
   getPresetsForBusinessType,
@@ -37,7 +36,6 @@ import { openPath } from '../../lib/platform-utils.js';
 import type { ModelSource } from '../../config.js';
 import { validateAnthropicApiKey } from '../../lib/anthropic-auth.js';
 import { SplashStep } from './onboarding/SplashStep.js';
-import { ModelStep } from './onboarding/ModelStep.js';
 import { CloudAuthStep } from './onboarding/CloudAuthStep.js';
 import { FirstMomentStep } from './onboarding/FirstMomentStep.js';
 import { AgentDiscoveryStep } from './onboarding/AgentDiscoveryStep.js';
@@ -70,37 +68,25 @@ interface OnboardingWizardProps {
   cloudUrl?: string;
 }
 
-type Step = 'splash' | 'tier_choice' | 'model' | 'cloud_auth' | 'downloading' | 'first_moment' | 'agent_discovery' | 'agent_selection' | 'integration_setup' | 'ready';
+type Step = 'splash' | 'tier_choice' | 'cloud_auth' | 'first_moment' | 'agent_discovery' | 'agent_selection' | 'integration_setup' | 'ready';
 
 const STEP_NUMBERS: Record<Step, number> = {
   splash: 1,
   tier_choice: 2,
-  model: 3,
   cloud_auth: 3,
-  downloading: 3,
-  first_moment: 4,
-  agent_discovery: 5,
-  agent_selection: 6,
-  integration_setup: 7,
-  ready: 8,
+  first_moment: 3,
+  agent_discovery: 4,
+  agent_selection: 5,
+  integration_setup: 6,
+  ready: 7,
 };
 
-/** Step numbering for returning users (splash → model → complete) */
-const RETURNING_STEP_NUMBERS: Partial<Record<Step, number>> = {
-  splash: 1,
-  model: 2,
-  cloud_auth: 2,
-  downloading: 2,
-};
-
-/** Step numbering for connected path (splash → tier choice → model → agents → ready) */
+/** Step numbering for connected path (splash → tier choice → agents → ready) */
 const CONNECTED_STEP_NUMBERS: Partial<Record<Step, number>> = {
   splash: 1,
   tier_choice: 2,
-  model: 3,
-  downloading: 3,
-  agent_selection: 4,
-  ready: 5,
+  agent_selection: 3,
+  ready: 4,
 };
 
 
@@ -117,14 +103,15 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     }
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Model state
-  const [status, setStatus] = useState<OnboardingStatus | null>(null);
-  const [selectedModel, setSelectedModel] = useState<OllamaModelInfo | null>(null);
-  const [showAlternatives, setShowAlternatives] = useState(false);
-  const [downloadPercent, setDownloadPercent] = useState(0);
-  const [downloadMessage, setDownloadMessage] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  // Auto-select model from env on mount (model step removed; selection deferred to Settings)
+  const [selectedModel] = useState<OllamaModelInfo | null>(() => {
+    // If ANTHROPIC_API_KEY is set, prefer a cloud model entry from the catalog
+    // (full selection deferred to Settings — TRIO-10).
+    // For now we just pick the lightest catalog model as a sensible default.
+    return MODEL_CATALOG.length > 0
+      ? [...MODEL_CATALOG].sort((a, b) => a.sizeGB - b.sizeGB)[0]
+      : null;
+  });
 
   // First moment state (replaces BusinessInfo + FounderStage)
   const [businessName, setBusinessName] = useState('');
@@ -138,7 +125,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   const founderFocus = '';
 
   // Agent discovery state
-  const [modelAvailable, setModelAvailable] = useState(false);
+  const [modelAvailable] = useState(false);
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatStreaming, setChatStreaming] = useState(false);
@@ -161,16 +148,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   const [integrationValue, setIntegrationValue] = useState('');
   const [integrationSkipped, setIntegrationSkipped] = useState<Set<string>>(new Set());
 
-  // Installed models matched to catalog entries
-  const [installedCatalogModels, setInstalledCatalogModels] = useState<OllamaModelInfo[]>([]);
-
-  // Readiness mode navigation + load state
-  const [readinessIdx, setReadinessIdx] = useState(0);
-  const [readinessLoading, setReadinessLoading] = useState<string | null>(null);
-  const [readinessPulling, setReadinessPulling] = useState(false);
-
-  // Cloud/local model source state
-  const [modelSource, setModelSource] = useState<ModelSource>(() => {
+  // Model source — read from config; can be updated in Settings (TRIO-10)
+  const [modelSource] = useState<ModelSource>(() => {
     const configPath = configDir ? `${configDir}/config.json` : undefined;
     const existing = tryLoadConfig(configPath);
     return existing?.modelSource || 'local';
@@ -186,16 +165,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     const configPath = configDir ? `${configDir}/config.json` : undefined;
     const existing = tryLoadConfig(configPath);
     return existing?.openRouterApiKey || '';
-  })();
-  const configCloudProvider = (() => {
-    const configPath = configDir ? `${configDir}/config.json` : undefined;
-    const existing = tryLoadConfig(configPath);
-    return existing?.cloudProvider || 'anthropic';
-  })();
-  const configCloudModel = (() => {
-    const configPath = configDir ? `${configDir}/config.json` : undefined;
-    const existing = tryLoadConfig(configPath);
-    return existing?.cloudModel || existing?.openRouterModel || 'claude-haiku-4-5-20251001';
   })();
   const [cloudAuthValidating, setCloudAuthValidating] = useState(false);
   const [cloudAuthError, setCloudAuthError] = useState('');
@@ -246,125 +215,15 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     }
   }, [step, isConnected, existingState]);
 
-  // Initialize device detection when moving to model step
-  useEffect(() => {
-    if (step !== 'model' || status) return;
-    (async () => {
-      try {
-        const s = await service.initialize();
-        setStatus(s);
-
-        // Match installed models to catalog entries
-        const installedCatalog = s.installedModels.length > 0
-          ? MODEL_CATALOG.filter(m => isModelInstalled(m.tag, s.installedModels))
-          : [];
-        setInstalledCatalogModels(installedCatalog);
-
-        if (installedCatalog.length > 0) {
-          // Auto-select best installed model: prefer the recommendation if installed, else largest installed catalog model
-          const recommendedInstalled = installedCatalog.find(m => m.tag === s.recommendation?.tag);
-          const bestInstalled = recommendedInstalled || [...installedCatalog].sort((a, b) => b.sizeGB - a.sizeGB)[0];
-          setSelectedModel(bestInstalled);
-        } else {
-          setSelectedModel(s.recommendation);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not detect hardware');
-      }
-    })();
-  }, [step, status]);
-
-  // Periodically refresh installed/running models while on the model step
-  useEffect(() => {
-    if (step !== 'model') return;
-    const interval = setInterval(async () => {
-      try {
-        const installed = await listInstalledModels();
-        const running = await listRunningModels();
-        setStatus(prev => prev ? { ...prev, installedModels: installed, runningModels: running } : prev);
-        const catalogMatches = installed.length > 0
-          ? MODEL_CATALOG.filter(m => isModelInstalled(m.tag, installed))
-          : [];
-        setInstalledCatalogModels(catalogMatches);
-      } catch { /* ignore refresh errors */ }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [step]);
-
-  // Handle download step
-  useEffect(() => {
-    if (step !== 'downloading' || busy || !selectedModel) return;
-    setBusy(true);
-    setDownloadPercent(0);
-    setDownloadMessage('Setting things up...');
-
-    (async () => {
-      try {
-        for await (const progress of service.ensureOllama()) {
-          setDownloadMessage(progress.message);
-          if (progress.error) { setError(progress.error); setBusy(false); return; }
-        }
-
-        setDownloadMessage('Starting download...');
-        for await (const progress of service.downloadModel(selectedModel.tag)) {
-          setDownloadMessage(progress.message);
-          if (progress.percent !== undefined) setDownloadPercent(progress.percent);
-          if (progress.error) { setError(progress.error); setBusy(false); return; }
-        }
-
-        setDownloadPercent(100);
-        setDownloadMessage('Download complete');
-        setBusy(false);
-        setModelAvailable(true);
-        if (readinessPulling) {
-          // Return to model step after pull completes in readiness mode
-          setReadinessPulling(false);
-          setShowAlternatives(false);
-          setTimeout(() => setStep('model'), 500);
-        } else {
-          setTimeout(() => setStep(existingState ? 'ready' : isConnected ? 'agent_selection' : 'first_moment'), 500);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Download failed');
-        setBusy(false);
-      }
-    })();
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // When entering agent discovery, check model availability and load presets
+  // When entering agent discovery, load presets and pre-select recommended agents
   useEffect(() => {
     if (step !== 'agent_discovery') return;
     const presets = getPresetsForBusinessType(businessType || 'saas_startup');
     setAllPresets(presets);
 
-    // Check model availability
-    if (selectedModel) {
-      (async () => {
-        try {
-          const ollamaUrl = 'http://localhost:11434';
-          const res = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
-          if (res.ok) {
-            const data = await res.json() as { models: Array<{ name: string }> };
-            const modelBase = selectedModel.tag.split(':')[0];
-            const hasModel = data.models?.some((m: { name: string }) => m.name.startsWith(modelBase)) ?? false;
-            setModelAvailable(hasModel);
-
-            // If model available and no messages yet, start with a greeting
-            if (hasModel && chatMessages.length === 0) {
-              sendAIMessage([]);
-            }
-          }
-        } catch {
-          setModelAvailable(false);
-        }
-      })();
-    }
-
-    // Pre-check recommended agents for selection
-    if (!modelAvailable) {
-      const recommended = getStaticRecommendations(businessType || 'saas_startup');
-      setSelectedAgentIds(new Set(recommended.map(a => a.id)));
-    }
+    // Model not yet configured — always use static recommendations
+    const recommended = getStaticRecommendations(businessType || 'saas_startup');
+    setSelectedAgentIds(new Set(recommended.map(a => a.id)));
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When entering agent selection, set up presets
@@ -528,19 +387,17 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     if (key.escape) {
       if (step === 'splash') { exit(); return; }
       if (existingState) {
-        // Returning user: only splash and model steps exist (tier_choice reached on validation failure)
+        // Returning user: only splash step; tier_choice reached on validation failure
         if (step === 'tier_choice') { setSplashError(''); setSplashErrorKind(''); setStep('splash'); return; }
-        if (step === 'model') { setStep('splash'); return; }
       } else if (isConnected) {
-        // Connected user: skip business/founder/discovery steps on back nav too
+        // Connected user: splash → tier_choice → agent_selection → ready
         if (step === 'tier_choice') { setStep('splash'); return; }
-        if (step === 'model') { setStep('tier_choice'); return; }
-        if (step === 'agent_selection') { setStep('model'); return; }
+        if (step === 'agent_selection') { setStep('tier_choice'); return; }
         if (step === 'ready') { setStep('agent_selection'); return; }
       } else {
+        // Free user: splash → tier_choice → first_moment → agent_discovery → agent_selection → …
         if (step === 'tier_choice') { setStep('splash'); return; }
-        if (step === 'model') { setStep('tier_choice'); return; }
-        if (step === 'first_moment') { setStep('model'); return; }
+        if (step === 'first_moment') { setStep('tier_choice'); return; }
         if (step === 'agent_discovery') { setStep('first_moment'); return; }
         if (step === 'agent_selection') { setStep('agent_discovery'); return; }
         if (step === 'integration_setup') { setStep('agent_selection'); return; }
@@ -578,7 +435,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
       }
       if (key.return && !splashValidating) {
         if (welcomeBack) {
-          setStep('model');  // already validated, skip key entry
+          // Already validated: complete immediately, skip all onboarding steps
+          completeReturningUser();
         } else {
           setStep('tier_choice');  // go to key entry
         }
@@ -599,7 +457,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
               setLicenseResult(result);
               setBusinessName(result.businessContext.businessName);
               setLicenseValidating(false);
-              setStep('model');
+              // Model step removed — go straight to agents (connected) or business info (free)
+              setStep('agent_selection');
             })
             .catch((err) => {
               const msg = err instanceof Error ? err.message : 'Could not validate key';
@@ -615,115 +474,12 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
       }
     }
 
-    // ── Model ──
-    if (step === 'model' && !busy) {
-      // Cycle model source with 'c' key: local → cloud → claude-code → local
-      if (input === 'c') {
-        setModelSource(prev => prev === 'local' ? 'cloud' : prev === 'cloud' ? 'claude-code' : 'local');
-        return;
-      }
-
-      if (existingState?.modelName) {
-        // Readiness mode
-        if (modelSource === 'claude-code') {
-          // Claude Code readiness: Enter to continue (no auth needed)
-          if (key.return) completeReturningUser();
-        } else if (modelSource === 'cloud') {
-          // Cloud readiness: Enter to continue (skip model list navigation)
-          if (key.return) {
-            if (anthropicKey || openRouterKey) {
-              completeReturningUser();
-            } else {
-              setCloudAuthMode('choose');
-              setStep('cloud_auth');
-            }
-          }
-        } else {
-          // Local readiness: navigate, load, or continue
-          const catalogBases = new Set(installedCatalogModels.map(m => m.tag.split(':')[0]));
-          const extras = (status?.installedModels || []).filter(t => !catalogBases.has(t.split(':')[0]));
-          const totalModels = installedCatalogModels.length + extras.length;
-
-          if (input === 'j' || key.downArrow) {
-            setReadinessIdx(i => Math.min(i + 1, totalModels - 1));
-          }
-          if (input === 'k' || key.upArrow) {
-            setReadinessIdx(i => Math.max(i - 1, 0));
-          }
-          if (input === 'l' && !readinessLoading && totalModels > 0) {
-            const tag = readinessIdx < installedCatalogModels.length
-              ? installedCatalogModels[readinessIdx].tag
-              : extras[readinessIdx - installedCatalogModels.length];
-            const tagBase = tag.split(':')[0];
-            const tagVariant = tag.split(':')[1] || '';
-            const alreadyRunning = (status?.runningModels || []).some(r => {
-              const rBase = r.split(':')[0];
-              const rVariant = r.split(':')[1] || '';
-              return rBase === tagBase && (tagVariant === '' || rVariant === tagVariant);
-            });
-            if (!alreadyRunning && tag) {
-              setReadinessLoading(tag);
-              loadModel(tag)
-                .then(() => listRunningModels())
-                .then(running => {
-                  if (status) {
-                    setStatus({ ...status, runningModels: running });
-                  }
-                })
-                .catch(() => { /* ignore load errors */ })
-                .finally(() => setReadinessLoading(null));
-            }
-          }
-          if (input === 'a' || input === 'p') setShowAlternatives(!showAlternatives);
-          if (key.return && !showAlternatives) completeReturningUser();
-        }
-      } else {
-        // New user model step
-        if (modelSource === 'claude-code') {
-          // Claude Code mode: Enter → proceed immediately (no auth needed)
-          if (key.return) {
-            const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
-            setStep(nextAfterModel);
-          }
-        } else if (modelSource === 'cloud') {
-          // Cloud mode: Enter → show auth if not authenticated, else proceed
-          if (key.return) {
-            if (anthropicKey || openRouterKey) {
-              const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
-              setStep(nextAfterModel);
-            } else {
-              setCloudAuthMode('choose');
-              setStep('cloud_auth');
-            }
-          }
-        } else {
-          // Local mode: existing Ollama flow
-          const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
-          if (key.return && selectedModel) {
-            if (status?.installedModels.length && isModelInstalled(selectedModel.tag, status.installedModels)) {
-              setModelAvailable(true);
-              setStep(nextAfterModel);
-            } else {
-              setStep('downloading');
-            }
-          }
-          if (input === 'a') setShowAlternatives(!showAlternatives);
-          if (input === 's') {
-            setSelectedModel(null);
-            setModelAvailable(false);
-            setStep(nextAfterModel);
-          }
-        }
-      }
-    }
-
     // ── Cloud Auth ──
     if (step === 'cloud_auth') {
       if (key.escape) {
-
         setCloudAuthMode('choose');
         setCloudAuthError('');
-        setStep('model');
+        setStep('tier_choice');
         return;
       }
 
@@ -746,12 +502,11 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
                 setCloudAuthMode('authenticated');
                 // Auto-proceed after a brief pause
                 setTimeout(() => {
-          
                   if (existingState) {
                     completeReturningUser();
                   } else {
-                    const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
-                    setStep(nextAfterModel);
+                    const nextAfterCloud = isConnected ? 'agent_selection' : 'first_moment';
+                    setStep(nextAfterCloud);
                   }
                 }, 500);
               } else {
@@ -770,12 +525,11 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         }
       } else if (cloudAuthMode === 'authenticated') {
         if (key.return) {
-  
           if (existingState) {
             completeReturningUser();
           } else {
-            const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
-            setStep(nextAfterModel);
+            const nextAfterCloud = isConnected ? 'agent_selection' : 'first_moment';
+            setStep(nextAfterCloud);
           }
         }
       }
@@ -1138,12 +892,10 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  const stepNum = existingState
-    ? RETURNING_STEP_NUMBERS[step] ?? STEP_NUMBERS[step]
-    : isConnected
-      ? CONNECTED_STEP_NUMBERS[step] ?? STEP_NUMBERS[step]
-      : STEP_NUMBERS[step];
-  const totalSteps = existingState ? 2 : isConnected ? 5 : 8;
+  const stepNum = isConnected
+    ? CONNECTED_STEP_NUMBERS[step] ?? STEP_NUMBERS[step]
+    : STEP_NUMBERS[step];
+  const totalSteps = isConnected ? 4 : 7;
   const recommendedAgents = allPresets.filter(p => discoveredAgentIds.includes(p.id));
 
   return (
@@ -1153,10 +905,10 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         <Box marginBottom={1}>
           <Text bold color="cyan">
             {step === 'tier_choice' ? 'Setup' :
-             step === 'model' || step === 'downloading' || step === 'cloud_auth' ? (existingState ? 'Your orchestrator model' : 'Model Setup') :
+             step === 'cloud_auth' ? 'Cloud Auth' :
              step === 'first_moment' ? 'Your Business' :
              step === 'agent_discovery' ? 'Agent Discovery' :
-             step === 'agent_selection' ? (existingState ? 'Your Agents' : 'Choose Agents') :
+             step === 'agent_selection' ? 'Choose Agents' :
              step === 'integration_setup' ? 'Integrations' :
              'Ready'}
           </Text>
@@ -1190,44 +942,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           licenseKey={licenseKey}
           validating={licenseValidating}
           error={licenseError}
-        />
-      )}
-
-      {(step === 'model' || step === 'downloading') && (
-        <ModelStep
-          status={status}
-          selectedModel={selectedModel}
-          showAlternatives={showAlternatives}
-          downloadPercent={downloadPercent}
-          downloadMessage={downloadMessage}
-          downloading={step === 'downloading'}
-          error={error}
-          installedCatalogModels={installedCatalogModels}
-          runningModels={status?.runningModels}
-          allInstalledModels={status?.installedModels}
-          onSelectAlternative={(item) => {
-            const alternatives = status?.alternatives || [];
-            const model = alternatives.find(m => m.tag === item.value);
-            if (model) {
-              setSelectedModel(model);
-              setShowAlternatives(false);
-              // In readiness mode, immediately start pulling if not installed
-              if (existingState?.modelName && status && !isModelInstalled(model.tag, status.installedModels)) {
-                setReadinessPulling(true);
-                setStep('downloading');
-              }
-            }
-          }}
-          readinessMode={existingState?.modelName ? {
-            modelName: existingState.modelName,
-            stats: { requests: existingState.totalRequests, tokens: existingState.totalTokens },
-          } : undefined}
-          readinessSelectedIdx={readinessIdx}
-          readinessLoading={readinessLoading}
-          modelSource={modelSource}
-          cloudAuthStatus={(anthropicKey || openRouterKey) ? 'authenticated' : 'none'}
-          cloudModel={configCloudModel}
-          cloudProvider={configCloudProvider}
         />
       )}
 
