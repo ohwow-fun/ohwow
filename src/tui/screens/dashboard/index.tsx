@@ -71,6 +71,7 @@ import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
 
 import { SectionNav } from '../../components/section-nav.js';
+import type { TeamSubTab, WorkSubTab } from '../../components/section-nav.js';
 import { GridMenuPanel } from './grid-menu.js';
 import { ChatPanel } from './chat-panel.js';
 import { ModelPicker } from './model-picker.js';
@@ -130,6 +131,10 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
 
   // 4-section nav state
   const [activeSection, setActiveSection] = useState<Section>(Section.Today);
+
+  // Sub-tab state for Team and Work sections
+  const [teamSubTab, setTeamSubTab] = useState<TeamSubTab>('agents');
+  const [workSubTab, setWorkSubTab] = useState<WorkSubTab>('tasks');
 
   // Focus zone state
   const [focusZone, setFocusZone] = useState<FocusZone>('chat');
@@ -635,8 +640,22 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     // ==================
     if (!orchestrator.isStreaming && !inputValue && !showSlash) {
       if (input === '1') { setActiveSection(Section.Today); goHome(); return; }
-      if (input === '2') { setActiveSection(Section.Team); openScreen(Screen.Agents); return; }
-      if (input === '3') { setActiveSection(Section.Work); openScreen(Screen.Tasks); return; }
+      if (input === '2') {
+        setActiveSection(Section.Team);
+        // Route to the current teamSubTab's screen
+        if (teamSubTab === 'contacts') { openScreen(Screen.Contacts); }
+        else if (teamSubTab === 'people') { openScreen(Screen.People); }
+        else { openScreen(Screen.Agents); }
+        return;
+      }
+      if (input === '3') {
+        setActiveSection(Section.Work);
+        // Route to the current workSubTab's screen
+        if (workSubTab === 'activity') { openScreen(Screen.Activity); }
+        else if (workSubTab === 'automations') { openScreen(Screen.Automations); }
+        else { openScreen(Screen.Tasks); }
+        return;
+      }
       if (input === '4') { setActiveSection(Section.Settings); openScreen(Screen.Settings); return; }
     }
 
@@ -786,6 +805,50 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
         return;
       }
 
+      // ==================
+      // TEAM section sub-tabs (key 2 screens)
+      // ==================
+      const isTeamScreen = activeSection === Section.Team && !nav.isDetail;
+      if (isTeamScreen) {
+        if (input === 'a' && nav.screen !== Screen.Agents) {
+          setTeamSubTab('agents');
+          nav.goToTab(Screen.Agents);
+          return;
+        }
+        if (input === 'c' && nav.screen !== Screen.Contacts) {
+          setTeamSubTab('contacts');
+          nav.goToTab(Screen.Contacts);
+          return;
+        }
+        if (input === 'p' && nav.screen !== Screen.People) {
+          setTeamSubTab('people');
+          nav.goToTab(Screen.People);
+          return;
+        }
+      }
+
+      // ==================
+      // WORK section sub-tabs (key 3 screens)
+      // ==================
+      const isWorkScreen = activeSection === Section.Work && !nav.isDetail;
+      if (isWorkScreen) {
+        if (input === 't' && nav.screen !== Screen.Tasks) {
+          setWorkSubTab('tasks');
+          nav.goToTab(Screen.Tasks);
+          return;
+        }
+        if (input === 'v' && nav.screen !== Screen.Activity) {
+          setWorkSubTab('activity');
+          nav.goToTab(Screen.Activity);
+          return;
+        }
+        if (input === 'x' && nav.screen !== Screen.Automations) {
+          setWorkSubTab('automations');
+          nav.goToTab(Screen.Automations);
+          return;
+        }
+      }
+
       // Quit
       if (input === 'q') {
         setShowQuitConfirm(true);
@@ -798,8 +861,8 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
         return;
       }
 
-      // New agent shortcut
-      if (input === 'c' && !nav.isDetail) {
+      // New agent shortcut — use 'n' on Agents screen (consistent with tasks 'n' for new)
+      if (input === 'n' && !nav.isDetail && nav.screen === Screen.Agents) {
         nav.goTo(Screen.AgentCreate);
         return;
       }
@@ -857,14 +920,20 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }
   }, [nav.screen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync active section when screen changes via slash commands or orchestrator signals
+  // Sync active section (and sub-tabs) when screen changes via slash commands or orchestrator signals
   useEffect(() => {
     if (nav.screen === Screen.Chat) {
       setActiveSection(Section.Today);
     } else if (nav.screen === Screen.Agents || nav.screen === Screen.Contacts || nav.screen === Screen.People || nav.screen === Screen.A2AConnections || nav.screen === Screen.A2ASetup) {
       setActiveSection(Section.Team);
+      if (nav.screen === Screen.Contacts) setTeamSubTab('contacts');
+      else if (nav.screen === Screen.People) setTeamSubTab('people');
+      else if (nav.screen === Screen.Agents) setTeamSubTab('agents');
     } else if (nav.screen === Screen.Tasks || nav.screen === Screen.Activity || nav.screen === Screen.Approvals || nav.screen === Screen.Sessions || nav.screen === Screen.Automations || nav.screen === Screen.AutomationDetail || nav.screen === Screen.AutomationCreate || nav.screen === Screen.TaskDispatch || nav.screen === Screen.AgentCreate) {
       setActiveSection(Section.Work);
+      if (nav.screen === Screen.Activity) setWorkSubTab('activity');
+      else if (nav.screen === Screen.Automations || nav.screen === Screen.AutomationDetail || nav.screen === Screen.AutomationCreate) setWorkSubTab('automations');
+      else if (nav.screen === Screen.Tasks || nav.screen === Screen.TaskDispatch) setWorkSubTab('tasks');
     } else if (nav.screen === Screen.Settings || nav.screen === Screen.LocalModelSetup || nav.screen === Screen.TunnelSetup || nav.screen === Screen.LicenseKeySetup || nav.screen === Screen.GhlWebhook || nav.screen === Screen.ModelManager || nav.screen === Screen.McpServers || nav.screen === Screen.McpServerSetup || nav.screen === Screen.WhatsApp || nav.screen === Screen.WhatsAppSetup || nav.screen === Screen.Notifications || nav.screen === Screen.Peers || nav.screen === Screen.Device) {
       setActiveSection(Section.Settings);
     }
@@ -1268,7 +1337,30 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }
 
     if (nav.screen === Screen.Agents) {
-      hints.push({ key: 'c', label: 'new agent' });
+      hints.push({ key: 'n', label: 'new agent' });
+      hints.push({ key: 'c', label: 'contacts' });
+      hints.push({ key: 'p', label: 'people' });
+    }
+
+    if (nav.screen === Screen.Contacts) {
+      hints.push({ key: 'a', label: 'agents' });
+      hints.push({ key: 'p', label: 'people' });
+    }
+
+    if (nav.screen === Screen.People) {
+      hints.push({ key: 'a', label: 'agents' });
+      hints.push({ key: 'c', label: 'contacts' });
+    }
+
+    if (nav.screen === Screen.Tasks) {
+      hints.push({ key: 'v', label: 'activity' });
+      hints.push({ key: 'x', label: 'automations' });
+    }
+
+    if (nav.screen === Screen.Activity || nav.screen === Screen.Automations) {
+      hints.push({ key: 't', label: 'tasks' });
+      if (nav.screen === Screen.Activity) hints.push({ key: 'x', label: 'automations' });
+      if (nav.screen === Screen.Automations) hints.push({ key: 'v', label: 'activity' });
     }
 
     if (nav.screen === Screen.Approvals) {
@@ -1578,7 +1670,11 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
             {renderScreen()}
           </Box>
           <KeyHints hints={getKeyHints()} />
-          <SectionNav activeSection={activeSection} />
+          <SectionNav
+            activeSection={activeSection}
+            teamSubTab={activeSection === Section.Team ? teamSubTab : undefined}
+            workSubTab={activeSection === Section.Work ? workSubTab : undefined}
+          />
         </>
       )}
       {showQuitConfirm && (

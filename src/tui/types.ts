@@ -67,10 +67,7 @@ export const TAB_SCREENS = [
   Screen.Dashboard,
   Screen.Agents,
   Screen.Tasks,
-  Screen.Contacts,
   Screen.Approvals,
-  Screen.Activity,
-  Screen.Automations,
   Screen.Settings,
 ] as const;
 
@@ -79,18 +76,12 @@ export const GRID_SCREENS = [
   Screen.Dashboard,
   Screen.Agents,
   Screen.Tasks,
-  Screen.Contacts,
-  Screen.Activity,
   Screen.Settings,
 ] as const;
 
-/** Returns grid screens. Automations always included. */
+/** Returns grid screens. */
 export function getGridScreens(_tier?: RuntimeTier): Screen[] {
-  const base = [...GRID_SCREENS] as Screen[];
-  // Insert Automations before Settings
-  const settingsIdx = base.indexOf(Screen.Settings);
-  base.splice(settingsIdx, 0, Screen.Automations);
-  return base;
+  return [...GRID_SCREENS] as Screen[];
 }
 
 /** Returns all tab screens. */
