@@ -15,7 +15,8 @@ import { Screen, Section, getGridScreens } from '../../types.js';
 import { useRuntime } from '../../hooks/use-runtime.js';
 import { useNavigation } from '../../hooks/use-navigation.js';
 import { Header } from '../../components/header.js';
-import { KeyHints } from '../../components/key-hints.js';
+import { StatusBar } from '../../components/key-hints.js';
+import type { KeyHint } from '../../components/key-hints.js';
 import { GRID_COLS } from '../../components/grid-menu.js';
 import { getFilteredCommands } from '../../components/slash-command-menu.js';
 import type { SlashCommand } from '../../components/slash-command-menu.js';
@@ -657,6 +658,13 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
         return;
       }
       if (input === '4') { setActiveSection(Section.Settings); openScreen(Screen.Settings); return; }
+
+      // Global 'd' — dispatch a task from anywhere (TRIO-10 will implement the overlay)
+      if (input === 'd') {
+        setActiveSection(Section.Work);
+        openScreen(Screen.TaskDispatch);
+        return;
+      }
     }
 
     // ==================
@@ -852,6 +860,14 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       // Quit
       if (input === 'q') {
         setShowQuitConfirm(true);
+        return;
+      }
+
+      // '?' opens command palette from screen zone too
+      if (input === '?') {
+        setShowPalette(true);
+        setPaletteFilter('');
+        setPaletteIdx(0);
         return;
       }
 
@@ -1296,18 +1312,40 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }
   };
 
-  // Key hints based on current focus zone
-  const getKeyHints = () => {
-    if (isHome && focusZone === 'chat') {
-      const hints = [
-        { key: 'Enter', label: 'send' },
-        { key: '?', label: 'shortcuts' },
-        { key: '\u2193', label: 'menu' },
-      ];
-      if (orchestrator.isStreaming) {
-        hints.unshift({ key: 'Esc', label: 'stop' });
+  // Derive section label for the persistent status bar
+  const getSectionLabel = (): string => {
+    switch (activeSection) {
+      case Section.Today: return 'TODAY';
+      case Section.Team: return 'TEAM';
+      case Section.Work: return 'WORK';
+      case Section.Settings: return 'SETTINGS';
+      default: return 'TODAY';
+    }
+  };
+
+  // Derive optional subsection label (only shown in non-home screens)
+  const getSubsectionLabel = (): string | undefined => {
+    if (!isHome) {
+      if (activeSection === Section.Team) {
+        if (teamSubTab === 'contacts') return 'Contacts';
+        if (teamSubTab === 'people') return 'People';
+        return 'Agents';
       }
-      hints.push({ key: 'Ctrl+N', label: 'new' });
+      if (activeSection === Section.Work) {
+        if (workSubTab === 'activity') return 'Activity';
+        if (workSubTab === 'automations') return 'Automations';
+        return 'Tasks';
+      }
+    }
+    return undefined;
+  };
+
+  // Context-specific extra hints appended to the universal status bar
+  const getExtraHints = (): KeyHint[] => {
+    if (isHome && focusZone === 'chat') {
+      const hints: KeyHint[] = [];
+      if (orchestrator.isStreaming) hints.push({ key: 'Esc', label: 'stop stream' });
+      hints.push({ key: 'Ctrl+N', label: 'new chat' });
       hints.push({ key: 'Ctrl+O', label: 'model' });
       return hints;
     }
@@ -1315,25 +1353,17 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     if (isHome && focusZone === 'grid') {
       return [
         { key: 'Arrows', label: 'navigate' },
-        { key: 'Enter', label: 'open' },
-        { key: 'Esc', label: 'chat' },
-        { key: '1-' + gridScreens.length, label: 'quick' },
+        { key: '1-' + gridScreens.length, label: 'quick open' },
       ];
     }
 
-    // Screen focus zone
-    const hints: Array<{ key: string; label: string }> = [];
-
-    if (nav.isDetail) {
-      hints.push({ key: 'Esc', label: 'back' });
-    } else {
-      hints.push({ key: 'Esc', label: 'chat' });
-    }
-
-    hints.push({ key: 'j/k', label: 'nav' });
+    // Screen zone context extras
+    const hints: KeyHint[] = [];
 
     if (nav.screen === Screen.Tasks) {
       hints.push({ key: 'n', label: 'new task' });
+      hints.push({ key: 'v', label: 'activity' });
+      hints.push({ key: 'x', label: 'automations' });
     }
 
     if (nav.screen === Screen.Agents) {
@@ -1352,15 +1382,14 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       hints.push({ key: 'c', label: 'contacts' });
     }
 
-    if (nav.screen === Screen.Tasks) {
-      hints.push({ key: 'v', label: 'activity' });
+    if (nav.screen === Screen.Activity) {
+      hints.push({ key: 't', label: 'tasks' });
       hints.push({ key: 'x', label: 'automations' });
     }
 
-    if (nav.screen === Screen.Activity || nav.screen === Screen.Automations) {
+    if (nav.screen === Screen.Automations) {
       hints.push({ key: 't', label: 'tasks' });
-      if (nav.screen === Screen.Activity) hints.push({ key: 'x', label: 'automations' });
-      if (nav.screen === Screen.Automations) hints.push({ key: 'v', label: 'activity' });
+      hints.push({ key: 'v', label: 'activity' });
     }
 
     if (nav.screen === Screen.Approvals) {
@@ -1368,14 +1397,11 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       hints.push({ key: 'r', label: 'reject' });
     }
 
-    if (nav.screen === Screen.Settings || nav.screen === Screen.Automations) {
-      if (subTabFocused) {
-        hints.push({ key: '\u2190/\u2192', label: 'sub-tabs' });
-        hints.push({ key: '\u2191', label: 'main tabs' });
-      } else {
-        hints.push({ key: '\u2190/\u2192', label: 'main tabs' });
-        hints.push({ key: '\u2193', label: 'sub-tabs' });
-      }
+    if (nav.screen === Screen.Settings) {
+      hints.push({ key: 'm', label: 'models' });
+      hints.push({ key: 'v', label: 'voicebox' });
+      hints.push({ key: 'u', label: 'tunnel' });
+      if (!isConnected) hints.push({ key: 'l', label: 'cloud' });
     }
 
     if (nav.screen === Screen.Dashboard) {
@@ -1383,18 +1409,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       hints.push({ key: 'o', label: 'local AI' });
     }
 
-    if (nav.screen === Screen.Settings) {
-      hints.push({ key: 'm', label: 'models' });
-      hints.push({ key: 'o', label: 'local AI' });
-      hints.push({ key: 'v', label: 'voicebox' });
-      hints.push({ key: 'u', label: 'tunnel' });
-      if (!isConnected) hints.push({ key: 'l', label: 'connect to cloud' });
-      hints.push({ key: 'a', label: 'A2A' });
-      hints.push({ key: 'p', label: 'WhatsApp' });
-    }
-
     hints.push({ key: 'q', label: 'quit' });
-
     return hints;
   };
 
@@ -1661,6 +1676,10 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
         /* Today state board — 3-zone layout */
         <>
           <TodayBoard agents={agents.list} db={runtime.db} />
+          <StatusBar
+            section={getSectionLabel()}
+            extraHints={getExtraHints()}
+          />
           <SectionNav activeSection={activeSection} />
         </>
       ) : (
@@ -1669,7 +1688,11 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
             {renderScreen()}
           </Box>
-          <KeyHints hints={getKeyHints()} />
+          <StatusBar
+            section={getSectionLabel()}
+            subsection={getSubsectionLabel()}
+            extraHints={getExtraHints()}
+          />
           <SectionNav
             activeSection={activeSection}
             teamSubTab={activeSection === Section.Team ? teamSubTab : undefined}
