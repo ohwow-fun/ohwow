@@ -4,8 +4,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    testTimeout: 60_000, // AI calls can be slow
+    testTimeout: 60_000,
     hookTimeout: 30_000,
+    pool: 'forks',
+    poolOptions: {
+      forks: { maxForks: 4 },
+    },
     env: { DOTENV_CONFIG_PATH: './.env.local' },
     setupFiles: ['dotenv/config'],
     coverage: {
