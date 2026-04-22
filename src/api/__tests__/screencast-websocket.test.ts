@@ -99,7 +99,7 @@ import { attachScreencastWebSocket } from '../screencast-websocket.js';
 // Harness
 // ---------------------------------------------------------------------------
 
-const LOCAL_TOKEN = 'local-session-token-for-tests';
+const LOCAL_TOKEN = 'test-session';
 
 interface Harness {
   server: Server;

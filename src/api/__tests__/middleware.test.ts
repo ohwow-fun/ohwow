@@ -7,8 +7,8 @@ import type { WorkspaceDbPool } from '../../db/workspace-db-pool.js';
 import type { WorkspaceRegistry } from '../../daemon/workspace-registry.js';
 import type { WorkspaceContext } from '../../daemon/workspace-context.js';
 
-const JWT_SECRET = 'test-jwt-secret-key-for-testing-only';
-const LOCAL_SESSION = 'local-session-token-abc';
+const JWT_SECRET = 'test-secret';
+const LOCAL_SESSION = 'test-session';
 
 function mockReqResNext(headers: Record<string, string | undefined> = {}, url = '/api/tasks') {
   const req = {
