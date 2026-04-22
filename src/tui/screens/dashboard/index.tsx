@@ -1912,6 +1912,15 @@ interface PendingApproval {
   deferred_action: { type: string; params: Record<string, unknown>; provider: string } | null;
 }
 
+interface FeedEntry {
+  id: string;
+  agentId: string;
+  agentName: string;
+  status: string;
+  title: string;
+  updatedAt: string;
+}
+
 interface TodayBoardProps {
   agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown>; created_at?: string }>;
   db: DatabaseAdapter | null;
@@ -1963,6 +1972,36 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
     const timer = setInterval(fetch, 5000);
     return () => clearInterval(timer);
   }, [db]);
+
+  // Fetch completed/failed task feed — last 8, newest first, polls every 10 s
+  const [feed, setFeed] = useState<FeedEntry[]>([]);
+  useEffect(() => {
+    if (!db) return;
+    const fetchFeed = async () => {
+      const { data } = await db
+        .from<{ id: string; agent_id: string; title: string; status: string; updated_at: string }>('agent_workforce_tasks')
+        .select('id, agent_id, title, status, updated_at')
+        .in('status', ['completed', 'failed', 'approved', 'rejected'])
+        .order('updated_at', { ascending: false })
+        .limit(8);
+      if (data) {
+        setFeed(data.map(t => {
+          const agent = agents.find(a => a.id === t.agent_id);
+          return {
+            id: t.id,
+            agentId: t.agent_id,
+            agentName: agent?.name ?? 'Unknown',
+            status: t.status,
+            title: t.title,
+            updatedAt: t.updated_at,
+          };
+        }));
+      }
+    };
+    fetchFeed();
+    const feedTimer = setInterval(fetchFeed, 10000);
+    return () => clearInterval(feedTimer);
+  }, [db, agents]);
 
   const applyApprovalAction = useCallback(async (approval: PendingApproval, action: 'approve' | 'reject', reason?: string) => {
     if (!db) return;
@@ -2205,6 +2244,41 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
             </Box>
           )}
         </Box>
+      </Box>
+
+      {/* NEURAL FEED — last 8 completed/failed events */}
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={C.slate}
+        paddingX={1}
+        marginTop={1}
+      >
+        <Text bold color={C.slate}>◈ NEURAL FEED</Text>
+        {feed.length === 0 ? (
+          <Text dimColor>◎ No activity yet. Agents are standing by.</Text>
+        ) : (
+          feed.map(entry => {
+            const dt = new Date(entry.updatedAt);
+            const hh = String(dt.getHours()).padStart(2, '0');
+            const mm = String(dt.getMinutes()).padStart(2, '0');
+            const timeStr = `${hh}:${mm}`;
+            const isSuccess = entry.status === 'completed' || entry.status === 'approved';
+            const glyph = isSuccess ? '✓' : '✗';
+            const glyphColor = isSuccess ? C.green : C.red;
+            const nameDisplay = entry.agentName.length > 18 ? entry.agentName.slice(0, 15) + '...' : entry.agentName;
+            const titleDisplay = entry.title.length > 35 ? entry.title.slice(0, 32) + '...' : entry.title;
+            return (
+              <Box key={entry.id} flexDirection="row" gap={1}>
+                <Text dimColor>{timeStr}</Text>
+                <Text color={C.cyan}>{'◈'}</Text>
+                <Text bold>{nameDisplay.padEnd(18)}</Text>
+                <Text color={glyphColor}>{glyph}</Text>
+                <Text dimColor>{titleDisplay}</Text>
+              </Box>
+            );
+          })
+        )}
       </Box>
 
       {/* BOTTOM STRIP: Dispatch rail */}
