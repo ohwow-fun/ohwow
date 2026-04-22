@@ -67,6 +67,7 @@
     "lint": "eslint src/ --ignore-pattern 'src/web/'",
     "test": "vitest run",
     "test:watch": "vitest",
+    "tui-journey": "tsx scripts/tui-journey.tsx",
     "check-env": "tsx scripts/check-env.ts",
     "probe-loop-health": "tsx scripts/probe-loop-health.ts",
     "regen:migration-registry": "node scripts/regen-migration-schema-registry.mjs",
