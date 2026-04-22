@@ -208,7 +208,7 @@ Check the box when QA completes and passes.
 - Test criterion: tui-journey renders Today with left/center/bottom zones;
   no grid rendered; agent list visible without navigating
 
-**TRIO-06** `[ ]` — Wire approvals into Today attention queue
+**TRIO-06** `[x]` — Wire approvals into Today attention queue
 - Approvals appear in the top section of the center attention queue column,
   highlighted red, sorted by age (oldest first)
 - Pressing `a` on a highlighted approval immediately approves it
@@ -304,7 +304,7 @@ Check the box when QA completes and passes.
 | TRIO-03 | Remove ModelStep from onboarding | done | b005231 |
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | done | d2cb19a |
 | TRIO-05 | Build Today state board shell | done | b410401 |
-| TRIO-06 | Wire approvals into Today | pending | — |
+| TRIO-06 | Wire approvals into Today | done | 2091af7 |
 | TRIO-07 | 4-section nav (replace tab + grid) | pending | — |
 | TRIO-08 | Merge Contacts + People; Activity → Work | pending | — |
 | TRIO-09 | Universal keyboard grammar + status bar | pending | — |

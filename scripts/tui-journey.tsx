@@ -355,18 +355,18 @@ show('Agent Card — Error agent', 'Components',
   <AgentCard name="Ops Agent" role="Operations Manager" status="error" taskCount={5} costDollars="0.40" isSelected={false} />
 );
 
-// ─── Journey 5: Today state board (TRIO-05) ─────────────────────────────
+// ─── Journey 5: Today state board (TRIO-06) ─────────────────────────────
 
 console.log('\n\n' + '═'.repeat(COLS));
-console.log('  JOURNEY 5  ›  Today State Board  (TRIO-05 shell)');
+console.log('  JOURNEY 5  ›  Today State Board  (TRIO-06 attention queue)');
 console.log('═'.repeat(COLS));
 
-show('Today Board — 4 agents (idle/working/error)', 'Dashboard › Today',
-  <TodayBoard agents={MOCK_AGENTS} />
+show('Today Board — 4 agents, no db (empty attention queue)', 'Dashboard › Today',
+  <TodayBoard agents={MOCK_AGENTS} db={null} />
 );
 
-show('Today Board — Empty (no agents yet)', 'Dashboard › Today',
-  <TodayBoard agents={[]} />
+show('Today Board — Empty agents, no db', 'Dashboard › Today',
+  <TodayBoard agents={[]} db={null} />
 );
 
 // ─── Footer ──────────────────────────────────────────────────────────────
