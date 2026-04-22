@@ -36,6 +36,7 @@ export function loadEternalSpec(dataDir: string): EternalSpec {
       ...(raw.inactivityProtocol ?? {}),
     },
     escalationMap: raw.escalationMap ?? DEFAULT_ETERNAL_SPEC.escalationMap,
+    contactSlaDays: raw.contactSlaDays ?? DEFAULT_ETERNAL_SPEC.contactSlaDays,
   };
 }
 

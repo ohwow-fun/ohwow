@@ -36,6 +36,7 @@ import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
 import { loadEternalSpec } from '../eternal/load-spec.js';
 import { resolveTrusteeNotifier } from '../eternal/trustee-email.js';
+import { checkContactSLAs } from '../eternal/index.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -654,6 +655,20 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
       setInterval(runInactivityCheck, INACTIVITY_CHECK_MS).unref();
       logger.debug('[daemon] eternal inactivity watcher scheduled (1h interval, no email)');
     });
+  }
+
+  // Eternal Systems: contact SLA watcher — surfaces at-risk relationships.
+  {
+    const CONTACT_SLA_CHECK_MS = 4 * 60 * 60_000; // 4 hours
+    const contactSlaSpec = loadEternalSpec(deps.dataDir);
+    const runContactSlaCheck = () => {
+      checkContactSLAs(db, workspaceId, contactSlaSpec).catch((err) => {
+        logger.warn({ err }, '[daemon] eternal.contact_sla_check.failed');
+      });
+    };
+    runContactSlaCheck();
+    setInterval(runContactSlaCheck, CONTACT_SLA_CHECK_MS).unref();
+    logger.debug('[daemon] eternal contact SLA watcher scheduled (4h interval)');
   }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };

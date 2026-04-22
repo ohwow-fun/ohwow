@@ -36,4 +36,10 @@ export const DEFAULT_ETERNAL_SPEC: EternalSpec = {
       requiresTrustee: true,
     },
   ],
+  contactSlaDays: {
+    customer: 30,
+    partner: 14,
+    lead: 21,
+    other: 60,
+  },
 };

@@ -40,3 +40,5 @@ export { notifyTrustee } from './notifications.js';
 
 export { createTrusteeNotifier, resolveTrusteeNotifier } from './trustee-email.js';
 export type { TrusteeNotifier } from './trustee-email.js';
+
+export { checkContactSLAs, slaThresholdForType } from './contact-sla-watcher.js';

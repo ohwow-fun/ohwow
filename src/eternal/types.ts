@@ -42,6 +42,12 @@ export interface EternalSpec {
   escalationMap: EscalationRule[];
   /** Trustee contact for mode transition delivery. Configurable via eternal.config.json. */
   trustee?: TrusteeContact;
+  /**
+   * SLA thresholds in days by contact_type. When a contact has had no
+   * activity for longer than its threshold, the SLA watcher writes a
+   * founder_inbox alert. Omitting a type means that type is not monitored.
+   */
+  contactSlaDays?: Record<string, number>;
 }
 
 export interface EternalState {
