@@ -149,7 +149,7 @@ Check the box when QA completes and passes.
 
 ### Phase 1: Onboarding collapse
 
-**TRIO-01** `[ ]` — Remove ExperienceChoiceStep gate
+**TRIO-01** `[x]` — Remove ExperienceChoiceStep gate
 - Delete `ExperienceChoiceStep.tsx` and the `experience_choice` view branch
   in `app.tsx`
 - The web onboarding is a separate product; don't expose the choice in TUI
@@ -299,7 +299,7 @@ Check the box when QA completes and passes.
 
 | TRIO | Description | Status | SHA |
 |------|-------------|--------|-----|
-| TRIO-01 | Remove ExperienceChoiceStep | pending | — |
+| TRIO-01 | Remove ExperienceChoiceStep | done | 7870792 |
 | TRIO-02 | Merge BusinessInfo + FounderStage | pending | — |
 | TRIO-03 | Remove ModelStep from onboarding | pending | — |
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | pending | — |
