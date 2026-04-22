@@ -645,7 +645,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createPermissionRequestsRouter(db, engine));
   app.use(createFailingTriggersRouter(db));
   app.use(createFounderInboxRouter(db));
-  app.use(createAutonomyStatusRouter(db));
+  app.use(createAutonomyStatusRouter(db, config.dataDir));
   app.use(createFindingsRouter(db));
   // Gap 13: per-workspace daily cap knob for the autonomous LLM loop.
   // GET returns the current limit + today's spend + source hint.

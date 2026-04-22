@@ -9,7 +9,7 @@
  * Only the fields present in the file override the defaults — missing fields
  * keep their default values so partial configs are always safe.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { logger } from '../lib/logger.js';
 import { DEFAULT_ETERNAL_SPEC } from './defaults.js';
@@ -37,4 +37,24 @@ export function loadEternalSpec(dataDir: string): EternalSpec {
     },
     escalationMap: raw.escalationMap ?? DEFAULT_ETERNAL_SPEC.escalationMap,
   };
+}
+
+/**
+ * Persist a partial spec update to eternal.config.json.
+ * Merges over the current file content (not defaults) so unrelated
+ * fields are not clobbered.
+ */
+export function saveEternalSpec(dataDir: string, patch: Partial<EternalSpec>): void {
+  const configPath = join(dataDir, 'eternal.config.json');
+  let existing: Partial<EternalSpec> = {};
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf-8')) as Partial<EternalSpec>;
+    } catch {
+      // Start fresh if file is corrupt
+    }
+  }
+  const merged = { ...existing, ...patch };
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
 }
