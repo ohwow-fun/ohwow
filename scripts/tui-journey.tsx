@@ -23,6 +23,7 @@ import { ReadyStep } from '../src/tui/screens/onboarding/ReadyStep.js';
 // Main screens
 import { AgentsList } from '../src/tui/screens/agents-list.js';
 import { TasksList } from '../src/tui/screens/tasks-list.js';
+import { TodayBoard } from '../src/tui/screens/dashboard/index.js';
 
 // Components
 import { KeyHints } from '../src/tui/components/key-hints.js';
@@ -352,6 +353,20 @@ show('Agent Card — Working agent (selected)', 'Components',
 
 show('Agent Card — Error agent', 'Components',
   <AgentCard name="Ops Agent" role="Operations Manager" status="error" taskCount={5} costDollars="0.40" isSelected={false} />
+);
+
+// ─── Journey 5: Today state board (TRIO-05) ─────────────────────────────
+
+console.log('\n\n' + '═'.repeat(COLS));
+console.log('  JOURNEY 5  ›  Today State Board  (TRIO-05 shell)');
+console.log('═'.repeat(COLS));
+
+show('Today Board — 4 agents (idle/working/error)', 'Dashboard › Today',
+  <TodayBoard agents={MOCK_AGENTS} />
+);
+
+show('Today Board — Empty (no agents yet)', 'Dashboard › Today',
+  <TodayBoard agents={[]} />
 );
 
 // ─── Footer ──────────────────────────────────────────────────────────────

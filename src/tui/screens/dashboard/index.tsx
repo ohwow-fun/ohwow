@@ -1763,7 +1763,7 @@ interface TodayBoardProps {
   agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown> }>;
 }
 
-function TodayBoard({ agents }: TodayBoardProps) {
+export function TodayBoard({ agents }: TodayBoardProps) {
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
       {/* Main row: left (agent roster) + center (attention queue) */}
