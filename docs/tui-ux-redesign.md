@@ -159,7 +159,7 @@ Check the box when QA completes and passes.
 - Test criterion: `npm run tui-journey` shows no ExperienceChoice screen;
   first-run route goes directly to SplashStep
 
-**TRIO-02** `[ ]` — Merge BusinessInfo + FounderStage → one screen
+**TRIO-02** `[x]` — Merge BusinessInfo + FounderStage → one screen
 - Replace two-step sequence with a single `FirstMomentStep.tsx`
 - Fields: business name (text), first task (text)
 - No business type selector, no founder path enum, no description field
@@ -300,7 +300,7 @@ Check the box when QA completes and passes.
 | TRIO | Description | Status | SHA |
 |------|-------------|--------|-----|
 | TRIO-01 | Remove ExperienceChoiceStep | done | 7870792 |
-| TRIO-02 | Merge BusinessInfo + FounderStage | pending | — |
+| TRIO-02 | Merge BusinessInfo + FounderStage | done | 2a676a2 |
 | TRIO-03 | Remove ModelStep from onboarding | pending | — |
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | pending | — |
 | TRIO-05 | Build Today state board shell | pending | — |
