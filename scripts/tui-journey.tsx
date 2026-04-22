@@ -26,7 +26,7 @@ import { TasksList } from '../src/tui/screens/tasks-list.js';
 import { TodayBoard } from '../src/tui/screens/dashboard/index.js';
 
 // Components
-import { KeyHints } from '../src/tui/components/key-hints.js';
+import { StatusBar } from '../src/tui/components/key-hints.js';
 import { AgentCard } from '../src/tui/components/agent-card.js';
 import { SectionNav } from '../src/tui/components/section-nav.js';
 import { Section } from '../src/tui/types.js';
@@ -336,14 +336,16 @@ console.log('\n\n' + '═'.repeat(COLS));
 console.log('  JOURNEY 4  ›  Component Gallery  (individual UI atoms)');
 console.log('═'.repeat(COLS));
 
-show('Key Hints — Navigation hints', 'Components',
-  <KeyHints hints={[
-    { key: '↑↓', label: 'Navigate' },
-    { key: 'Enter', label: 'Select' },
-    { key: 'Esc', label: 'Back' },
-    { key: 'c', label: 'Create' },
-    { key: 'Ctrl+K', label: 'Command palette' },
-  ]} />
+show('Status Bar — Today (home)', 'Components',
+  <StatusBar section="TODAY" />
+);
+
+show('Status Bar — Team > Agents', 'Components',
+  <StatusBar section="TEAM" subsection="Agents" extraHints={[{ key: 'n', label: 'new agent' }, { key: 'c', label: 'contacts' }]} />
+);
+
+show('Status Bar — Work > Tasks', 'Components',
+  <StatusBar section="WORK" subsection="Tasks" extraHints={[{ key: 'n', label: 'new task' }, { key: 'v', label: 'activity' }]} />
 );
 
 show('Agent Card — Idle agent', 'Components',
