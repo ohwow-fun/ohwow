@@ -69,6 +69,7 @@ import { McpServerWizard } from '../mcp-server-wizard.js';
 import { MediaGallery } from '../media-gallery.js';
 import { ConfirmDialog } from '../../components/confirm-dialog.js';
 import { DispatchOverlay } from '../../components/dispatch-overlay.js';
+import { AgentBioCard } from '../../components/agent-bio-card.js';
 import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
@@ -1964,7 +1965,7 @@ interface FeedEntry {
 }
 
 interface TodayBoardProps {
-  agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown>; created_at?: string }>;
+  agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown>; created_at?: string; description?: string | null }>;
   db: DatabaseAdapter | null;
   /** When true, agents created within the last 60 s are shown as "setting up…" */
   justOnboarded?: boolean;
@@ -1975,6 +1976,9 @@ const BRAILLE_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] 
 export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [rosterIdx, setRosterIdx] = useState(0);
+  const [showBioCard, setShowBioCard] = useState(false);
+  const bioAgent = agents[rosterIdx] ?? null;
   const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
   const [rejectInput, setRejectInput] = useState<string | null>(null);
   const [flashState, setFlashState] = useState<{ id: string; type: 'approve' | 'reject' } | null>(null);
@@ -2120,6 +2124,22 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
       return;
     }
 
+    // Bio card navigation — handled before approval guard
+    if (showBioCard) return;
+
+    if (input === 'j' || key.downArrow) {
+      setRosterIdx(prev => Math.min(prev + 1, agents.length - 1));
+      return;
+    }
+    if (input === 'k' || key.upArrow) {
+      setRosterIdx(prev => Math.max(prev - 1, 0));
+      return;
+    }
+    if (input === 'i' || key.return) {
+      if (bioAgent) setShowBioCard(true);
+      return;
+    }
+
     if (approvals.length === 0) return;
 
     // Tab toggles focus into/out of the approvals list
@@ -2191,6 +2211,8 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
 
               const sparkline = sparklineForAgent(sparkTasks, agent.id, new Date());
 
+              const cursor = <Text color={C.cyan}>{rosterIdx === index ? '▶' : ' '}</Text>;
+
               if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
                 // Animated braille spinner — each agent has a phase offset so they don't sync
                 const frame = BRAILLE_FRAMES[(brailleTick + index * 3) % 8];
@@ -2199,6 +2221,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                   : 'working';
                 return (
                   <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    {cursor}
                     <Text color={C.green}>{frame} </Text>
                     <Box flexDirection="column">
                       <Text bold>{agent.name}</Text>
@@ -2212,6 +2235,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                 const dimFlicker = (flickerTick + index) % 2 === 1;
                 return (
                   <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    {cursor}
                     <Text color={C.red} dimColor={dimFlicker}>{'✗'} </Text>
                     <Box flexDirection="column">
                       <Text bold>{agent.name}</Text>
@@ -2223,6 +2247,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
               } else if (isNew) {
                 return (
                   <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    {cursor}
                     <Text color={C.cyan}>{'◌'} </Text>
                     <Box flexDirection="column">
                       <Text bold>{agent.name}</Text>
@@ -2237,6 +2262,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                 const dimBreath = phase === 0 || phase === 1;
                 return (
                   <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    {cursor}
                     <Text color={C.idle} dimColor={dimBreath}>{'●'} </Text>
                     <Box flexDirection="column">
                       <Text bold>{agent.name}</Text>
@@ -2387,8 +2413,11 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
         paddingX={1}
         marginTop={1}
       >
-        <Text dimColor>d · dispatch</Text>
+        <Text dimColor>d · dispatch  i · info  j/k · nav</Text>
       </Box>
+      {showBioCard && bioAgent && (
+        <AgentBioCard agent={bioAgent} sparkTasks={sparkTasks} onClose={() => setShowBioCard(false)} />
+      )}
     </Box>
   );
 }
