@@ -67,6 +67,7 @@ import { McpServers } from '../mcp-servers.js';
 import { McpServerWizard } from '../mcp-server-wizard.js';
 import { MediaGallery } from '../media-gallery.js';
 import { ConfirmDialog } from '../../components/confirm-dialog.js';
+import { DispatchOverlay } from '../../components/dispatch-overlay.js';
 import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
@@ -164,6 +165,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
   const [elicitationFieldIdx, setElicitationFieldIdx] = useState(0);
 
   const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [showDispatch, setShowDispatch] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [subTabFocused, setSubTabFocused] = useState(true);
@@ -603,6 +605,9 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       return;
     }
 
+    // Dispatch overlay intercepts all input when open
+    if (showDispatch) return;
+
     // Model picker handles its own input via its useInput hook
     if (showModelPicker) return;
     if (showWorkspacePicker) return;
@@ -659,10 +664,9 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       }
       if (input === '4') { setActiveSection(Section.Settings); openScreen(Screen.Settings); return; }
 
-      // Global 'd' — dispatch a task from anywhere (TRIO-10 will implement the overlay)
+      // Global 'd' — floating dispatch overlay (TRIO-10)
       if (input === 'd') {
-        setActiveSection(Section.Work);
-        openScreen(Screen.TaskDispatch);
+        setShowDispatch(true);
         return;
       }
     }
@@ -1705,6 +1709,14 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
           message="Quit the runtime?"
           onConfirm={() => handleQuitConfirm(true)}
           onCancel={() => handleQuitConfirm(false)}
+        />
+      )}
+      {showDispatch && (
+        <DispatchOverlay
+          agents={agents.list}
+          db={runtime.db}
+          workspaceId={runtime.workspaceId}
+          onClose={() => setShowDispatch(false)}
         />
       )}
     </Box>

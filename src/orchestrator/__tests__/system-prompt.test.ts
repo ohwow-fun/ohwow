@@ -206,6 +206,17 @@ describe('buildLocalSystemPrompt', () => {
     const prompt = buildLocalSystemPrompt(baseArgs({ agents: [] }));
     expect(prompt).toContain('No agents created yet');
   });
+
+  it('includes values corpus section when valuesCorpus is provided', () => {
+    const prompt = buildLocalSystemPrompt(baseArgs({ valuesCorpus: 'Never compromise on user privacy.' }));
+    expect(prompt).toContain('Your Values & Principles');
+    expect(prompt).toContain('Never compromise on user privacy.');
+  });
+
+  it('omits values section when valuesCorpus is not set', () => {
+    const prompt = buildLocalSystemPrompt(baseArgs());
+    expect(prompt).not.toContain('Your Values & Principles');
+  });
 });
 
 describe('buildLocalPlatformAddendum', () => {
@@ -266,6 +277,36 @@ describe('buildLocalSystemPrompt edge cases', () => {
   it('contains no unresolved template variables', () => {
     const prompt = buildLocalSystemPrompt(baseArgs());
     expect(prompt).not.toMatch(/\{\{[^}]+\}\}/);
+  });
+});
+
+describe('valuesCorpus injection', () => {
+  it('buildDynamicContext includes values section when valuesCorpus is provided', () => {
+    const ctx = buildDynamicContext(baseArgs({ valuesCorpus: 'Integrity above all else.' }));
+    expect(ctx).toContain('## Your Values & Principles');
+    expect(ctx).toContain('Integrity above all else.');
+  });
+
+  it('buildDynamicContext omits values section when valuesCorpus is not set', () => {
+    const ctx = buildDynamicContext(baseArgs());
+    expect(ctx).not.toContain('## Your Values & Principles');
+  });
+
+  it('values section appears after memory section in output', () => {
+    const ctx = buildDynamicContext(baseArgs({
+      orchestratorMemory: 'Remembered fact.',
+      valuesCorpus: 'Core value here.',
+    }));
+    const memIdx = ctx.indexOf('## Your Memory');
+    const valIdx = ctx.indexOf('## Your Values & Principles');
+    expect(memIdx).toBeGreaterThan(-1);
+    expect(valIdx).toBeGreaterThan(memIdx);
+  });
+
+  it('injects values corpus verbatim without truncation', () => {
+    const longCorpus = 'A'.repeat(5000);
+    const ctx = buildDynamicContext(baseArgs({ valuesCorpus: longCorpus }));
+    expect(ctx).toContain(longCorpus);
   });
 });
 
