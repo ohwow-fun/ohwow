@@ -180,7 +180,7 @@ Check the box when QA completes and passes.
 - Test criterion: tui-journey shows no model download screen in onboarding path;
   returning user path goes direct to dashboard without model check
 
-**TRIO-04** `[ ]` — Remove AgentDiscovery + AgentSelection from onboarding
+**TRIO-04** `[x]` d2cb19a — Remove AgentDiscovery + AgentSelection from onboarding
 - Delete AgentDiscoveryStep and AgentSelectionStep from onboarding wizard
 - On first run, create a single general-purpose agent named after the business
   (e.g., "Acme Agent") with the first task queued to it
@@ -302,7 +302,7 @@ Check the box when QA completes and passes.
 | TRIO-01 | Remove ExperienceChoiceStep | done | 7870792 |
 | TRIO-02 | Merge BusinessInfo + FounderStage | done | 2a676a2 |
 | TRIO-03 | Remove ModelStep from onboarding | done | b005231 |
-| TRIO-04 | Remove AgentDiscovery + AgentSelection | pending | — |
+| TRIO-04 | Remove AgentDiscovery + AgentSelection | done | d2cb19a |
 | TRIO-05 | Build Today state board shell | pending | — |
 | TRIO-06 | Wire approvals into Today | pending | — |
 | TRIO-07 | 4-section nav (replace tab + grid) | pending | — |
