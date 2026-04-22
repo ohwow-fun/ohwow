@@ -1,15 +1,15 @@
 /**
  * TUI Root Component
- * First-run: shows experience choice (terminal vs web), then onboarding.
+ * First-run: goes directly to onboarding wizard.
  * Returning users: abbreviated flow or skip to dashboard.
  * Initializes DB early to check workspace/agent state for smart routing.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Box, Text, useInput } from 'ink';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Box, Text } from 'ink';
 import { join } from 'path';
 import { homedir } from 'os';
-import { tryLoadConfig, isFirstRun, DEFAULT_PORT } from '../config.js';
+import { tryLoadConfig, isFirstRun } from '../config.js';
 import type { RuntimeConfig } from '../config.js';
 import { initDatabase } from '../db/init.js';
 import { createSqliteAdapter } from '../db/sqlite-adapter.js';
@@ -19,12 +19,8 @@ import type Database from 'better-sqlite3';
 import { OnboardingWizard } from './screens/onboarding-wizard.js';
 import type { ExistingWorkspaceState } from './screens/onboarding-wizard.js';
 import { Dashboard } from './screens/dashboard.js';
-import { ExperienceChoiceStep } from './screens/onboarding/ExperienceChoiceStep.js';
-import { WebOnboardingWaiter } from './screens/onboarding/WebOnboardingWaiter.js';
-import { startOnboardingServer, type OnboardingServerHandle } from '../api/onboarding-server.js';
-import { openPath } from '../lib/platform-utils.js';
 
-type AppView = 'experience_choice' | 'onboarding' | 'web_onboarding' | 'dashboard';
+type AppView = 'onboarding' | 'dashboard';
 
 interface DbState {
   rawDb: Database.Database;
@@ -172,15 +168,9 @@ export function App() {
   const firstRun = !existingState;
 
   const [view, setView] = useState<AppView>(() => {
-    if (firstRun) return 'experience_choice'; // First run: show choice gate
+    if (firstRun) return 'onboarding'; // First run: go directly to onboarding
     return 'onboarding'; // Returning: will be overridden by model check
   });
-
-  // Experience choice state
-  const [choiceIndex, setChoiceIndex] = useState(0);
-
-  // Web onboarding server handle
-  const [webServer, setWebServer] = useState<OnboardingServerHandle | null>(null);
 
   // For returning users, check if the model is available and skip onboarding
   useEffect(() => {
@@ -228,11 +218,6 @@ export function App() {
   });
 
   const handleOnboardingComplete = (newConfig: RuntimeConfig) => {
-    // Shut down the onboarding server if it was running
-    if (webServer) {
-      webServer.shutdown();
-      setWebServer(null);
-    }
     setConfig(newConfig);
     setNeedsOnboarding(false);
     setJustOnboarded(true);
@@ -252,79 +237,12 @@ export function App() {
     setView('onboarding');
   };
 
-  // Handle experience choice: start web onboarding server and open browser
-  const handleChooseWeb = useCallback(async () => {
-    const port = config?.port || DEFAULT_PORT;
-    try {
-      const handle = await startOnboardingServer(dbState.db, dbState.rawDb, port);
-      setWebServer(handle);
-      setView('web_onboarding');
-      // Open the browser
-      const url = `http://localhost:${port}/ui/onboarding`;
-      try { openPath(url); } catch {
-        // Browser didn't open automatically; URL is shown in the waiter
-      }
-    } catch {
-      // Port in use or other error; fall back to terminal onboarding
-      setView('onboarding');
-    }
-  }, [config, dbState.db, dbState.rawDb]);
-
-  const handleWebOnboardingComplete = useCallback(() => {
-    // Reload config that was saved by the web onboarding
-    const loaded = tryLoadConfig();
-    if (loaded) {
-      handleOnboardingComplete(loaded);
-    } else {
-      // Config wasn't saved yet; keep waiting or fall back
-      setView('onboarding');
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleWebOnboardingCancel = useCallback(() => {
-    if (webServer) {
-      webServer.shutdown();
-      setWebServer(null);
-    }
-    setView('onboarding');
-  }, [webServer]);
-
-  // Cleanup web server on unmount
-  useEffect(() => {
-    return () => { webServer?.shutdown(); };
-  }, [webServer]);
-
   // Show brief loading while checking model availability for returning users
   if (initialCheck === 'checking') {
     return (
       <Box padding={1}>
         <Text color="gray">Checking model availability...</Text>
       </Box>
-    );
-  }
-
-  // Experience choice gate (first-run only)
-  if (view === 'experience_choice') {
-    return (
-      <ExperienceChoice
-        choiceIndex={choiceIndex}
-        onChangeIndex={setChoiceIndex}
-        onChooseTerminal={() => setView('onboarding')}
-        onChooseWeb={handleChooseWeb}
-        onSkip={handleSkip}
-      />
-    );
-  }
-
-  // Web onboarding waiter
-  if (view === 'web_onboarding' && webServer) {
-    return (
-      <WebOnboardingWaiter
-        port={webServer.port}
-        sessionToken={webServer.sessionToken}
-        onComplete={handleWebOnboardingComplete}
-        onCancel={handleWebOnboardingCancel}
-      />
     );
   }
 
@@ -361,38 +279,4 @@ export function App() {
       onConfigChange={setConfig}
     />
   );
-}
-
-/** Wrapper for ExperienceChoiceStep that handles keyboard input */
-function ExperienceChoice({
-  choiceIndex,
-  onChangeIndex,
-  onChooseTerminal,
-  onChooseWeb,
-  onSkip,
-}: {
-  choiceIndex: number;
-  onChangeIndex: (i: number) => void;
-  onChooseTerminal: () => void;
-  onChooseWeb: () => void;
-  onSkip: () => void;
-}) {
-  useInput((input, key) => {
-    if (key.upArrow) {
-      onChangeIndex(0);
-    } else if (key.downArrow) {
-      onChangeIndex(1);
-    } else if (key.return) {
-      if (choiceIndex === 0) onChooseTerminal();
-      else onChooseWeb();
-    } else if (input === '1') {
-      onChooseTerminal();
-    } else if (input === '2') {
-      onChooseWeb();
-    } else if (input === 's') {
-      onSkip();
-    }
-  });
-
-  return <ExperienceChoiceStep selectedIndex={choiceIndex} />;
 }
