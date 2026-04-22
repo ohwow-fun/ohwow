@@ -1538,73 +1538,8 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       )}
 
       {isHome ? (
-        /* Chat home layout */
-        <>
-        <ChatPanel
-          orchestrator={orchestrator}
-          inputValue={inputValue}
-          onInputChange={(v) => {
-            setInputValue(v);
-            if (v.startsWith('/')) setSlashIdx(0);
-          }}
-          onInputSubmit={(text) => {
-            if (text.startsWith('/')) return; // slash commands handled by useInput
-            orchestrator.sendMessage(text);
-            setInputValue('');
-          }}
-          focusZone={focusZone}
-          showPlan={showPlan}
-          renaming={renaming}
-          renameValue={renameValue}
-          onRenameChange={setRenameValue}
-          onRenameSubmit={() => {
-            orchestrator.renameSession(renameValue);
-            setRenaming(false);
-            setRenameValue('');
-          }}
-          showSlash={showSlash}
-          slashCommands={slashCommands}
-          slashIdx={slashIdx}
-          agents={chatAgents}
-          welcomeLoading={welcomeLoading}
-          daemonInitializing={runtime.initializing}
-          modelPickerNode={showModelPicker ? (
-            <ModelPicker
-              port={config.port}
-              sessionToken={runtime.sessionToken}
-              currentModel={orchestrator.currentModel}
-              anthropicApiKey={config.anthropicApiKey}
-              anthropicOAuthToken={config.anthropicOAuthToken}
-              openRouterApiKey={config.openRouterApiKey}
-              cloudModel={config.cloudModel}
-              modelSource={config.modelSource}
-              cloudProvider={config.cloudProvider}
-              onSelect={handleModelSelect}
-              onClose={() => setShowModelPicker(false)}
-              onApiKeySet={handleApiKeySet}
-              onOpenRouterKeySet={(key) => {
-                updateConfigFile({ openRouterApiKey: key });
-                onConfigChange?.({ ...config, openRouterApiKey: key });
-              }}
-              isActive={showModelPicker}
-            />
-          ) : null}
-        />
-        {showPalette && (
-          <ShortcutPalette
-            commands={filteredPaletteCommands}
-            selectedIndex={paletteIdx}
-            filter={paletteFilter}
-          />
-        )}
-        <GridMenuPanel
-          gridScreens={gridScreens}
-          focused={focusZone === 'grid'}
-          gridIndex={gridIndex}
-          onSelect={(screen) => openScreen(screen)}
-          keyHints={getKeyHints()}
-        />
-        </>
+        /* Today state board — 3-zone layout */
+        <TodayBoard agents={agents.list} />
       ) : (
         /* Full-screen view */
         <>
@@ -1818,4 +1753,93 @@ function getTimeAgo(dateStr: string): string {
   if (diffHr < 24) return `${diffHr}h ago`;
   const diffDays = Math.floor(diffHr / 24);
   return `${diffDays}d ago`;
+}
+
+// ============================================================================
+// TODAY STATE BOARD — 3-zone layout (TRIO-05)
+// ============================================================================
+
+interface TodayBoardProps {
+  agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown> }>;
+}
+
+function TodayBoard({ agents }: TodayBoardProps) {
+  return (
+    <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
+      {/* Main row: left (agent roster) + center (attention queue) */}
+      <Box flexDirection="row" flexGrow={1}>
+        {/* LEFT COLUMN ~40%: Agent roster */}
+        <Box
+          flexDirection="column"
+          width="40%"
+          borderStyle="single"
+          borderColor="cyan"
+          paddingX={1}
+          paddingY={0}
+          marginRight={1}
+        >
+          <Text bold color="cyan">AGENTS</Text>
+          {agents.length === 0 ? (
+            <Text dimColor>No agents yet.</Text>
+          ) : (
+            agents.map((agent) => {
+              let indicator = '●';
+              let indicatorColor: string = 'gray';
+              let activityLine = 'idle';
+
+              if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
+                indicator = '◉';
+                indicatorColor = 'green';
+                activityLine = typeof agent.stats?.currentTask === 'string'
+                  ? agent.stats.currentTask
+                  : 'working';
+              } else if (agent.status === 'error') {
+                indicator = '✗';
+                indicatorColor = 'red';
+                activityLine = 'error';
+              } else {
+                indicator = '●';
+                indicatorColor = 'gray';
+                activityLine = 'idle';
+              }
+
+              return (
+                <Box key={agent.id} flexDirection="row" marginTop={0}>
+                  <Text color={indicatorColor}>{indicator} </Text>
+                  <Box flexDirection="column">
+                    <Text bold>{agent.name}</Text>
+                    <Text dimColor>{activityLine}</Text>
+                  </Box>
+                </Box>
+              );
+            })
+          )}
+        </Box>
+
+        {/* CENTER COLUMN ~45%: Attention queue placeholder */}
+        <Box
+          flexDirection="column"
+          flexGrow={1}
+          borderStyle="single"
+          borderColor="yellow"
+          paddingX={1}
+          paddingY={0}
+        >
+          <Text bold color="yellow">ATTENTION</Text>
+          <Text dimColor>(wired in TRIO-06)</Text>
+        </Box>
+      </Box>
+
+      {/* BOTTOM STRIP: Dispatch rail */}
+      <Box
+        flexDirection="row"
+        borderStyle="single"
+        borderColor="gray"
+        paddingX={1}
+        marginTop={1}
+      >
+        <Text dimColor>d · dispatch</Text>
+      </Box>
+    </Box>
+  );
 }
