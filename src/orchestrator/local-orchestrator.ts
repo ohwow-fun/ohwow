@@ -56,6 +56,7 @@ import {
   buildFullPrompt,
   type PromptBuilderDeps,
 } from './prompt-builder.js';
+import { loadEternalSpec } from '../eternal/load-spec.js';
 import {
   type BrowserState,
   type DesktopState,
@@ -372,6 +373,7 @@ export class LocalOrchestrator {
       workingDirectory: this.workingDirectory,
       channels: this.channels,
       hasOrchestratorFileAccess: () => this.hasOrchestratorFileAccess(),
+      eternalSpec: loadEternalSpec(this.dataDir),
     };
   }
 

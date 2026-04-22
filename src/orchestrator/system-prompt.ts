@@ -87,6 +87,8 @@ export interface BuildLocalSystemPromptArgs {
     staleBranchWarning?: string;
     recentCommits?: string[];
   };
+  /** Operator values corpus text — injected when the operator has configured one. */
+  valuesCorpus?: string;
   /** Whether LSP code intelligence tools are available */
   hasLspTools?: boolean;
   /** Whether meeting listener tools are available (macOS only) */
@@ -633,6 +635,10 @@ export function buildDynamicContext(args: BuildLocalSystemPromptArgs): string {
     ? `\n## Your Memory\nThings you've learned about this user from past conversations:\n${orchestratorMemory}`
     : '';
 
+  const valuesSection = args.valuesCorpus
+    ? `\n## Your Values & Principles\n${args.valuesCorpus}`
+    : '';
+
   const ragSection = ragContext
     ? `\n## Relevant Knowledge\n${ragContext}`
     : '';
@@ -879,6 +885,7 @@ macOS screen recording permission is required on first use. Notes sync to the cl
 ${pulseSection}
 ${businessCtx}
 ${memorySection}
+${valuesSection}
 ${ragSection}
 ${projectInstructionsSection}
 ${principlesSection}

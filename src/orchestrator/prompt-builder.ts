@@ -6,6 +6,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { readValuesCorpus } from '../eternal/values-reader.js';
 import type { IntentSection } from './tool-definitions.js';
 import { buildStaticInstructionsForIntent, buildCompactStaticInstructionsForIntent, buildMicroStaticInstructions, buildDynamicContext, buildCompactDynamicContext, buildMicroDynamicContext, buildOnboardingAddendum, type BuildLocalSystemPromptArgs } from './system-prompt.js';
 import { MODEL_CATALOG } from '../lib/ollama-models.js';
@@ -29,6 +30,7 @@ export interface PromptBuilderDeps {
   workingDirectory: string;
   channels: ChannelRegistry;
   hasOrchestratorFileAccess: () => Promise<boolean>;
+  eternalSpec?: import('../eternal/types.js').EternalSpec;
 }
 
 export async function buildTargetedPrompt(
@@ -248,6 +250,8 @@ export async function buildTargetedPrompt(
   // serves only to keep the BuildLocalSystemPromptArgs interface
   // compatible until it's removed in a follow-up.
 
+  const valuesCorpus = deps.eternalSpec ? (readValuesCorpus(deps.eternalSpec) ?? undefined) : undefined;
+
   const args: BuildLocalSystemPromptArgs = {
     agents: need('agents') ? agents : [],
     business: need('business') ? business : null,
@@ -307,6 +311,7 @@ export async function buildTargetedPrompt(
       try { return detectProjectStack(deps.workingDirectory) ?? undefined; }
       catch { return undefined; }
     })(),
+    valuesCorpus,
   };
 
   // Fire-and-forget: increment times_applied for principles injected into the prompt
