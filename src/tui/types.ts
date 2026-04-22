@@ -112,6 +112,14 @@ export const TAB_LABELS: Record<string, string> = {
   [Screen.People]: 'People',
 };
 
+/** The 4 primary navigation sections visible at all times */
+export enum Section {
+  Today = 'today',
+  Team = 'team',
+  Work = 'work',
+  Settings = 'settings',
+}
+
 /** Events emitted by the runtime engine for TUI consumption */
 export interface RuntimeEvents {
   // Task lifecycle

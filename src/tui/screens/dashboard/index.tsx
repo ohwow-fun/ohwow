@@ -11,7 +11,7 @@ import type { RuntimeConfig } from '../../../config.js';
 import { updateConfigFile, resolveActiveWorkspace } from '../../../config.js';
 import type { DatabaseAdapter } from '../../../db/adapter-types.js';
 import type Database from 'better-sqlite3';
-import { Screen, getGridScreens } from '../../types.js';
+import { Screen, Section, getGridScreens } from '../../types.js';
 import { useRuntime } from '../../hooks/use-runtime.js';
 import { useNavigation } from '../../hooks/use-navigation.js';
 import { Header } from '../../components/header.js';
@@ -70,6 +70,7 @@ import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
 
+import { SectionNav } from '../../components/section-nav.js';
 import { GridMenuPanel } from './grid-menu.js';
 import { ChatPanel } from './chat-panel.js';
 import { ModelPicker } from './model-picker.js';
@@ -126,6 +127,9 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       `You're still focused on "${workspaceName}". Type /workspace to switch.`,
     );
   }, [workspaceName, orchestrator]));
+
+  // 4-section nav state
+  const [activeSection, setActiveSection] = useState<Section>(Section.Today);
 
   // Focus zone state
   const [focusZone, setFocusZone] = useState<FocusZone>('chat');
@@ -626,6 +630,17 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }
 
     // ==================
+    // SECTION nav: 1-4 keys switch sections from anywhere
+    // (skipped when typing in chat input or slash command open)
+    // ==================
+    if (!orchestrator.isStreaming && !inputValue && !showSlash) {
+      if (input === '1') { setActiveSection(Section.Today); goHome(); return; }
+      if (input === '2') { setActiveSection(Section.Team); openScreen(Screen.Agents); return; }
+      if (input === '3') { setActiveSection(Section.Work); openScreen(Screen.Tasks); return; }
+      if (input === '4') { setActiveSection(Section.Settings); openScreen(Screen.Settings); return; }
+    }
+
+    // ==================
     // CHAT focus zone
     // ==================
     if (isHome && focusZone === 'chat') {
@@ -839,6 +854,19 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
     }
     if (nav.screen === Screen.Chat && focusZone === 'screen') {
       setFocusZone('chat');
+    }
+  }, [nav.screen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync active section when screen changes via slash commands or orchestrator signals
+  useEffect(() => {
+    if (nav.screen === Screen.Chat) {
+      setActiveSection(Section.Today);
+    } else if (nav.screen === Screen.Agents || nav.screen === Screen.Contacts || nav.screen === Screen.People || nav.screen === Screen.A2AConnections || nav.screen === Screen.A2ASetup) {
+      setActiveSection(Section.Team);
+    } else if (nav.screen === Screen.Tasks || nav.screen === Screen.Activity || nav.screen === Screen.Approvals || nav.screen === Screen.Sessions || nav.screen === Screen.Automations || nav.screen === Screen.AutomationDetail || nav.screen === Screen.AutomationCreate || nav.screen === Screen.TaskDispatch || nav.screen === Screen.AgentCreate) {
+      setActiveSection(Section.Work);
+    } else if (nav.screen === Screen.Settings || nav.screen === Screen.LocalModelSetup || nav.screen === Screen.TunnelSetup || nav.screen === Screen.LicenseKeySetup || nav.screen === Screen.GhlWebhook || nav.screen === Screen.ModelManager || nav.screen === Screen.McpServers || nav.screen === Screen.McpServerSetup || nav.screen === Screen.WhatsApp || nav.screen === Screen.WhatsAppSetup || nav.screen === Screen.Notifications || nav.screen === Screen.Peers || nav.screen === Screen.Device) {
+      setActiveSection(Section.Settings);
     }
   }, [nav.screen]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1539,7 +1567,10 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
 
       {isHome ? (
         /* Today state board — 3-zone layout */
-        <TodayBoard agents={agents.list} db={runtime.db} />
+        <>
+          <TodayBoard agents={agents.list} db={runtime.db} />
+          <SectionNav activeSection={activeSection} />
+        </>
       ) : (
         /* Full-screen view */
         <>
@@ -1547,6 +1578,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
             {renderScreen()}
           </Box>
           <KeyHints hints={getKeyHints()} />
+          <SectionNav activeSection={activeSection} />
         </>
       )}
       {showQuitConfirm && (
