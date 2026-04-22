@@ -19,6 +19,8 @@ import type Database from 'better-sqlite3';
 import { OnboardingWizard } from './screens/onboarding-wizard.js';
 import type { ExistingWorkspaceState } from './screens/onboarding-wizard.js';
 import { Dashboard } from './screens/dashboard.js';
+import { BootSplash } from './components/boot-splash.js';
+import { VERSION } from '../version.js';
 
 type AppView = 'onboarding' | 'dashboard';
 
@@ -179,6 +181,10 @@ export function App() {
     setView('dashboard');
   }, [initialCheck, config, existingState]);
 
+  // Boot splash: shown once for returning users before the dashboard loads.
+  // For first-run (onboarding), skip it immediately.
+  const [bootDone, setBootDone] = useState(() => firstRun);
+
   // Track whether the user just completed onboarding this session (for welcome flow)
   const [justOnboarded, setJustOnboarded] = useState(false);
 
@@ -238,6 +244,10 @@ export function App() {
         existingState={existingState}
       />
     );
+  }
+
+  if (!bootDone) {
+    return <BootSplash onDone={() => setBootDone(true)} version={VERSION} />;
   }
 
   return (
