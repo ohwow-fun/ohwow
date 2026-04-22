@@ -72,6 +72,7 @@ import { DispatchOverlay } from '../../components/dispatch-overlay.js';
 import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
+import { C } from '../../theme.js';
 
 import { SectionNav } from '../../components/section-nav.js';
 import type { TeamSubTab, WorkSubTab } from '../../components/section-nav.js';
@@ -1501,15 +1502,15 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
           <Box
             flexDirection="column"
             borderStyle="double"
-            borderColor="yellow"
+            borderColor={C.amber}
             paddingX={3}
             paddingY={1}
             width={dialogWidth}
           >
-            <Text bold color="yellow">Media Generation Cost</Text>
+            <Text bold color={C.amber}>Media Generation Cost</Text>
             <Box marginTop={1} flexDirection="column">
-              <Text>Tool: <Text color="cyan">{toolName}</Text></Text>
-              <Text>Cost: <Text color="yellow" bold>{estimatedCredits} credits</Text></Text>
+              <Text>Tool: <Text color={C.cyan}>{toolName}</Text></Text>
+              <Text>Cost: <Text color={C.amber} bold>{estimatedCredits} credits</Text></Text>
               <Text dimColor>{description}</Text>
             </Box>
             <Box marginTop={1}>
@@ -1544,15 +1545,15 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
           <Box
             flexDirection="column"
             borderStyle="double"
-            borderColor="yellow"
+            borderColor={C.amber}
             paddingX={3}
             paddingY={1}
             width={dialogWidth}
           >
-            <Text bold color="yellow">Permission Required</Text>
+            <Text bold color={C.amber}>Permission Required</Text>
             <Box marginTop={1} flexDirection="column">
               <Text>The AI wants to access:</Text>
-              <Text color="cyan">{requestedPath}</Text>
+              <Text color={C.cyan}>{requestedPath}</Text>
             </Box>
             <Box marginTop={1}>
               <Text color="green" bold>[y] Allow    </Text>
@@ -1585,12 +1586,12 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
           <Box
             flexDirection="column"
             borderStyle="double"
-            borderColor="cyan"
+            borderColor={C.cyan}
             paddingX={3}
             paddingY={1}
             width={dialogWidth}
           >
-            <Text bold color="cyan">Input Needed</Text>
+            <Text bold color={C.cyan}>Input Needed</Text>
             <Box marginTop={1} flexDirection="column">
               <Text dimColor>{activeElicitation.serverName} is asking for more info:</Text>
               {activeElicitation.message ? <Text>{activeElicitation.message}</Text> : null}
@@ -2045,15 +2046,18 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
           flexDirection="column"
           width={stacked ? '100%' : '40%'}
           borderStyle="single"
-          borderColor="cyan"
+          borderColor={C.cyan}
           paddingX={1}
           paddingY={0}
           marginRight={stacked ? 0 : 1}
           marginBottom={stacked ? 1 : 0}
         >
-          <Text bold color="cyan">AGENTS</Text>
+          <Text bold color={C.cyan}>══╡ OPERATIVES ╞══</Text>
           {agents.length === 0 ? (
-            <Text dimColor>No agents yet.</Text>
+            <Box flexDirection="column">
+              <Text color={C.slate}>◌ YOUR TEAM AWAITS</Text>
+              <Text dimColor>Run /agents to deploy your first operative.</Text>
+            </Box>
           ) : (
             agents.map((agent) => {
               let indicator = '●';
@@ -2067,21 +2071,21 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
 
               if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
                 indicator = '◉';
-                indicatorColor = 'green';
+                indicatorColor = C.green;
                 activityLine = typeof agent.stats?.currentTask === 'string'
                   ? agent.stats.currentTask
                   : 'working';
               } else if (agent.status === 'error') {
                 indicator = '✗';
-                indicatorColor = 'red';
+                indicatorColor = C.red;
                 activityLine = 'error';
               } else if (isNew) {
                 indicator = '◌';
-                indicatorColor = 'cyan';
+                indicatorColor = C.cyan;
                 activityLine = 'setting up…';
               } else {
                 indicator = '●';
-                indicatorColor = 'gray';
+                indicatorColor = C.idle;
                 activityLine = 'idle';
               }
 
@@ -2103,28 +2107,28 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
           flexDirection="column"
           flexGrow={1}
           borderStyle="single"
-          borderColor={focusedOnApprovals ? 'red' : 'yellow'}
+          borderColor={focusedOnApprovals ? C.red : C.amber}
           paddingX={1}
           paddingY={0}
         >
-          <Text bold color="yellow">ATTENTION</Text>
+          <Text bold color={C.amber}>══╡ COMMAND QUEUE ╞══</Text>
 
           {/* APPROVALS section */}
           <Box flexDirection="column" marginTop={0}>
-            <Text bold color="red">{'🔴'} APPROVALS{approvals.length > 0 ? ` (${approvals.length})` : ''}</Text>
+            <Text bold color={C.red}>{'🔴'} ▐ DECISIONS ▌{approvals.length > 0 ? ` (${approvals.length})` : ''}</Text>
             {approvals.length === 0 ? (
-              <Text dimColor>No pending approvals.</Text>
+              <Text dimColor>◎ All decisions made.</Text>
             ) : (
               approvals.map((approval, idx) => {
                 const isSelected = focusedOnApprovals && idx === clampedIdx;
                 const age = getTimeAgo(approval.created_at);
                 return (
                   <Box key={approval.id} flexDirection="row">
-                    <Text color={isSelected ? 'white' : 'red'} bold={isSelected}>
+                    <Text color={isSelected ? 'white' : C.red} bold={isSelected}>
                       {isSelected ? '▶ ' : '  '}
                     </Text>
                     <Box flexDirection="column">
-                      <Text color="red" bold={isSelected} inverse={isSelected}>
+                      <Text color={C.red} bold={isSelected} inverse={isSelected}>
                         {approval.title.length > approvalTitleMax ? approval.title.slice(0, approvalTitleMax - 3) + '...' : approval.title}
                       </Text>
                       <Text dimColor>{age}</Text>
@@ -2149,12 +2153,12 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
 
           {/* ERRORS section placeholder */}
           <Box flexDirection="column" marginTop={1}>
-            <Text bold color="yellow">{'🟡'} ERRORS</Text>
+            <Text bold color={C.amber}>{'🟡'} ▐ ALERTS ▌</Text>
             {agents.filter(a => a.status === 'error').length === 0 ? (
-              <Text dimColor>All agents healthy.</Text>
+              <Text dimColor>◈ Systems nominal.</Text>
             ) : (
               agents.filter(a => a.status === 'error').map(a => (
-                <Text key={a.id} color="yellow">{a.name}: error</Text>
+                <Text key={a.id} color={C.amber}>{a.name}: error</Text>
               ))
             )}
           </Box>

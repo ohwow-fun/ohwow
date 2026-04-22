@@ -10,6 +10,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { useTerminalSize } from '../hooks/use-terminal-size.js';
+import { C } from '../theme.js';
 
 export interface KeyHint {
   key: string;
@@ -26,11 +27,11 @@ export function KeyHints({ hints }: KeyHintsProps) {
   if (hints.length === 0) return null;
 
   return (
-    <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box borderStyle="single" borderColor={C.slate} paddingX={1}>
       {hints.map((hint, i) => (
         <Box key={i} marginRight={2}>
-          <Text bold color="yellow">{hint.key}</Text>
-          <Text color="gray">:{hint.label}</Text>
+          <Text bold color={C.amber}>{hint.key}</Text>
+          <Text color={C.dim}>:{hint.label}</Text>
         </Box>
       ))}
     </Box>
@@ -62,7 +63,7 @@ export function StatusBar({ section, subsection, extraHints, hideDispatch }: Sta
   return (
     <Box
       borderStyle="single"
-      borderColor="gray"
+      borderColor={C.slate}
       paddingX={1}
       flexDirection="row"
       flexWrap="wrap"
@@ -70,43 +71,43 @@ export function StatusBar({ section, subsection, extraHints, hideDispatch }: Sta
       {/* Section badge */}
       <Box marginRight={2}>
         <Text bold color="white">[</Text>
-        <Text bold color="cyan">{sectionLabel}</Text>
+        <Text bold color={C.cyan}>{sectionLabel}</Text>
         <Text bold color="white">]</Text>
       </Box>
 
       {/* Universal hints — trim on narrow */}
       {!compact && (
         <Box marginRight={2}>
-          <Text bold color="yellow">j/k</Text>
-          <Text color="gray">:nav</Text>
+          <Text bold color={C.amber}>j/k</Text>
+          <Text color={C.dim}>:nav</Text>
         </Box>
       )}
       <Box marginRight={2}>
-        <Text bold color="yellow">Enter</Text>
-        <Text color="gray">:open</Text>
+        <Text bold color={C.amber}>Enter</Text>
+        <Text color={C.dim}>:open</Text>
       </Box>
       <Box marginRight={2}>
-        <Text bold color="yellow">Esc</Text>
-        <Text color="gray">:back</Text>
+        <Text bold color={C.amber}>Esc</Text>
+        <Text color={C.dim}>:back</Text>
       </Box>
       {!hideDispatch && (
         <Box marginRight={2}>
-          <Text bold color="yellow">d</Text>
-          <Text color="gray">:dispatch</Text>
+          <Text bold color={C.amber}>d</Text>
+          <Text color={C.dim}>:dispatch</Text>
         </Box>
       )}
       {!compact && (
         <Box marginRight={2}>
-          <Text bold color="yellow">?</Text>
-          <Text color="gray">:help</Text>
+          <Text bold color={C.amber}>?</Text>
+          <Text color={C.dim}>:help</Text>
         </Box>
       )}
 
       {/* Context-specific extras — only on wide terminals */}
       {!narrow && extraHints && extraHints.map((hint, i) => (
         <Box key={i} marginRight={2}>
-          <Text bold color="yellow">{hint.key}</Text>
-          <Text color="gray">:{hint.label}</Text>
+          <Text bold color={C.amber}>{hint.key}</Text>
+          <Text color={C.dim}>:{hint.label}</Text>
         </Box>
       ))}
     </Box>

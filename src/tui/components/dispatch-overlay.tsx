@@ -10,6 +10,7 @@ import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import { getEventBus } from '../hooks/use-event-bus.js';
+import { C } from '../theme.js';
 
 interface Agent {
   id: string;
@@ -140,7 +141,7 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
     }
     const query = agentValue.replace(/^@/, '').trim().toLowerCase();
     const match = agents.find(a => a.name.toLowerCase().includes(query));
-    return match ? `→ ${match.name}` : 'no match';
+    return match ? `→ ${match.name}` : '◌ no match';
   })();
 
   return (
@@ -154,14 +155,14 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor="cyan"
+        borderColor={C.cyan}
         paddingX={2}
         paddingY={1}
         width={52}
       >
         {status === 'idle' && (
           <>
-            <Text bold color="cyan">Dispatch Task</Text>
+            <Text bold color={C.cyan}>◈ DISPATCH MISSION</Text>
             <Box marginTop={1} flexDirection="column">
               <Box>
                 <Text color={focusedField === 'task' ? 'white' : 'gray'}>Task:  </Text>
@@ -204,7 +205,10 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
         )}
 
         {status === 'done' && (
-          <Text color="green" bold>Dispatched: {confirmedTitle}</Text>
+          <Box flexDirection="column">
+            <Text color={C.mint} bold>◈ MISSION DISPATCHED</Text>
+            <Text dimColor>→ {confirmedTitle}</Text>
+          </Box>
         )}
 
         {status === 'error' && (

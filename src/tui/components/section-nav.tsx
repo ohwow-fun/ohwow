@@ -9,6 +9,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { Section } from '../types.js';
+import { C } from '../theme.js';
 
 const SECTIONS: Array<{ key: string; label: string; section: Section }> = [
   { key: '1', label: 'Today', section: Section.Today },
@@ -49,7 +50,7 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
         <Box
           flexDirection="row"
           borderStyle="single"
-          borderColor="cyan"
+          borderColor={C.cyan}
           paddingX={1}
           marginTop={0}
         >
@@ -59,11 +60,11 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
             return (
               <Box key={s.tab} marginRight={i < TEAM_SUBTABS.length - 1 ? 2 : 0}>
                 <Text
-                  color={isActive ? 'cyan' : 'gray'}
+                  color={isActive ? C.cyan : C.slate}
                   bold={isActive}
                   inverse={isActive}
                 >
-                  [{s.key}] {s.label}
+                  [{s.key}] {isActive ? `▐ ${s.label} ▌` : s.label}
                 </Text>
               </Box>
             );
@@ -76,7 +77,7 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
         <Box
           flexDirection="row"
           borderStyle="single"
-          borderColor="green"
+          borderColor={C.cyan}
           paddingX={1}
           marginTop={0}
         >
@@ -86,11 +87,11 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
             return (
               <Box key={s.tab} marginRight={i < WORK_SUBTABS.length - 1 ? 2 : 0}>
                 <Text
-                  color={isActive ? 'green' : 'gray'}
+                  color={isActive ? C.cyan : C.slate}
                   bold={isActive}
                   inverse={isActive}
                 >
-                  [{s.key}] {s.label}
+                  [{s.key}] {isActive ? `▐ ${s.label} ▌` : s.label}
                 </Text>
               </Box>
             );
@@ -102,7 +103,7 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
       <Box
         flexDirection="row"
         borderStyle="single"
-        borderColor="gray"
+        borderColor={C.slate}
         paddingX={1}
         marginTop={0}
       >
@@ -111,11 +112,11 @@ export function SectionNav({ activeSection, teamSubTab, workSubTab }: SectionNav
           return (
             <Box key={s.section} marginRight={i < SECTIONS.length - 1 ? 2 : 0}>
               <Text
-                color={isActive ? 'white' : 'gray'}
+                color={isActive ? C.cyan : C.slate}
                 bold={isActive}
                 inverse={isActive}
               >
-                [{s.key}] {s.label}
+                [{s.key}] {isActive ? `▌${s.label}▐` : s.label}
               </Text>
             </Box>
           );
