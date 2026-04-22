@@ -71,13 +71,25 @@ export interface FamilyScanResult {
   arxiv_error: string | null;
 }
 
+/** Compact per-family summary stored in evidence (no full API payloads). */
+export interface FamilyScanSummary {
+  family: ModelFamily;
+  new_models: number;
+  new_papers: number;
+  ingested: number;
+  top_model_ids: string[];
+  top_paper_ids: string[];
+  hf_error: string | null;
+  arxiv_error: string | null;
+}
+
 export interface ModelReleaseEvidence extends Record<string, unknown> {
   window_hours: number;
   families_checked: number;
   total_new_models: number;
   total_new_papers: number;
   total_ingested: number;
-  families: FamilyScanResult[];
+  families: FamilyScanSummary[];
   scanned_at: string;
 }
 
@@ -140,13 +152,26 @@ export class ModelReleaseMonitorExperiment implements Experiment {
       0,
     );
 
+    const familySummaries: FamilyScanSummary[] = families.map((f) => ({
+      family: f.family,
+      new_models: f.new_hf_models.length,
+      new_papers: f.new_papers.length,
+      ingested:
+        f.hf_ingested.filter((x) => x.inserted).length +
+        f.paper_ingested.filter((x) => x.inserted).length,
+      top_model_ids: f.new_hf_models.slice(0, 3).map((m) => m.id),
+      top_paper_ids: f.new_papers.slice(0, 2).map((p) => p.id),
+      hf_error: f.hf_error,
+      arxiv_error: f.arxiv_error,
+    }));
+
     const evidence: ModelReleaseEvidence = {
       window_hours: WINDOW_HOURS,
       families_checked: TRACKED_FAMILIES.length,
       total_new_models: totalNewModels,
       total_new_papers: totalNewPapers,
       total_ingested: totalIngested,
-      families,
+      families: familySummaries,
       scanned_at: scannedAt,
     };
 
@@ -270,7 +295,7 @@ export class ModelReleaseMonitorExperiment implements Experiment {
     if (verdict !== 'warning') return null;
     const ev = result.evidence as ModelReleaseEvidence;
     const topModels = ev.families
-      .flatMap((f) => f.new_hf_models.map((m) => m.id))
+      .flatMap((f) => f.top_model_ids)
       .slice(0, 10);
     return {
       description: `Ingested ${ev.total_ingested} new model release(s) into knowledge base`,

@@ -151,17 +151,27 @@ export class AdaptiveSchedulerExperiment implements Experiment {
       }
     }
 
+    const stretchedCount = adjustments.filter((a) => a.rule === 'pass_streak_stretch').length;
+    const pulledInCount = adjustments.filter((a) => a.rule === 'failure_pull_in').length;
+
+    // Keep only the 20 largest-delta adjustments in evidence to avoid
+    // serialising 100+ schedule objects on every run.
+    const topAdjustments = adjustments
+      .slice()
+      .sort((a, b) => Math.abs(b.delta_ms) - Math.abs(a.delta_ms))
+      .slice(0, 20);
+
     const evidence: AdaptiveSchedulerEvidence = {
       inspected_count: peers.length,
       adjusted_count: adjustments.length,
-      stretched_count: adjustments.filter((a) => a.rule === 'pass_streak_stretch').length,
-      pulled_in_count: adjustments.filter((a) => a.rule === 'failure_pull_in').length,
-      adjustments,
+      stretched_count: stretchedCount,
+      pulled_in_count: pulledInCount,
+      adjustments: topAdjustments,
     };
 
     const summary = adjustments.length === 0
       ? `inspected ${peers.length} peer experiment(s), no adjustments needed`
-      : `adjusted ${adjustments.length} of ${peers.length} peer experiment(s): ${evidence.stretched_count} stretched, ${evidence.pulled_in_count} pulled in`;
+      : `adjusted ${adjustments.length} of ${peers.length} peer experiment(s): ${stretchedCount} stretched, ${pulledInCount} pulled in`;
 
     return {
       subject: null,

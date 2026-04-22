@@ -830,6 +830,12 @@ export class ExperimentRunner implements ExperimentScheduler {
           interventionApplied: intervention,
           ranAt: new Date(started).toISOString(),
           durationMs: this.now() - started,
+        }, {
+          // Widen the dedup window to at least 2× the probe's own cadence
+          // so slow probes (e.g. hourly fuzz experiments) always supersede
+          // their previous run. The 10-minute default only covers probes
+          // running faster than 5 min.
+          supersedeWindowMs: Math.max(10 * 60 * 1000, exp.cadence.everyMs * 2),
         });
       } catch (err) {
         // Swallow store failures — we already logged the experiment

@@ -328,6 +328,42 @@ export async function pruneOldSuperseded(
 }
 
 /**
+ * Hard-delete `self_findings` rows whose status is 'active' AND whose
+ * `ran_at` is older than the cutoff. This is the companion to
+ * pruneOldSuperseded: supersession only covers rows that were caught
+ * within the dedup window; rows whose summaries change every run (e.g.
+ * experiment-author picking a different proposal each tick) or whose
+ * cadence is longer than the 10-minute window accumulate as 'active'
+ * forever without this path.
+ *
+ * Safety: the longest known reader window is patch-author at 7d. Use
+ * a cutoff of at least 7d to avoid evicting rows that active readers
+ * might still need. Fail-soft: any DB error returns 0.
+ */
+export async function pruneOldActive(
+  db: DatabaseAdapter,
+  cutoffIso: string,
+): Promise<number> {
+  try {
+    const { data } = await db
+      .from<{ id: string }>('self_findings')
+      .select('id')
+      .eq('status', 'active')
+      .lt('ran_at', cutoffIso);
+    const ids = (data ?? []) as Array<{ id: string }>;
+    if (ids.length === 0) return 0;
+    await db
+      .from('self_findings')
+      .delete()
+      .eq('status', 'active')
+      .lt('ran_at', cutoffIso);
+    return ids.length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * General-purpose finding list query. Backs the REST endpoint and MCP
  * tool. Defaults to active findings sorted newest first with a cap of
  * 50 rows so an operator hitting the endpoint without filters doesn't

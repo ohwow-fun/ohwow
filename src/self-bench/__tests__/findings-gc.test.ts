@@ -187,7 +187,8 @@ describe('FindingsGcExperiment', () => {
     expect(ev.killed).toBe(false);
     expect(ev.deleted_findings).toBe(1);
     expect(ev.deleted_validations).toBe(1);
-    expect(result.summary).toContain('pruned 1 superseded finding(s) + 1 closed validation(s)');
+    expect(result.summary).toContain('pruned 1 superseded');
+    expect(result.summary).toContain('1 closed validation(s)');
     expect(exp.judge(result, [])).toBe('pass');
   });
 
@@ -243,7 +244,7 @@ describe('FindingsGcExperiment', () => {
       now: () => Date.parse('2026-04-16T20:00:00Z'),
     });
     const result = await exp.probe(buildCtx(env));
-    expect(result.summary).toMatch(/^nothing to prune \(findings older than .+, validations older than .+\)/);
+    expect(result.summary).toMatch(/^nothing to prune \(superseded older than .+, active older than .+\)/);
     expect(exp.judge(result, [])).toBe('pass');
   });
 });

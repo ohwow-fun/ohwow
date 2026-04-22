@@ -167,8 +167,8 @@ describe('ModelReleaseMonitorExperiment.probe — new releases', () => {
     const ev = result.evidence as ModelReleaseEvidence;
     const mistralResult = ev.families.find((f) => f.family === 'mistral');
     expect(mistralResult).toBeDefined();
-    expect(mistralResult!.hf_ingested).toHaveLength(1);
-    expect(mistralResult!.hf_ingested[0].id).toBe('mistralai/Mistral-7B-v0.3');
+    expect(mistralResult!.ingested).toBe(1);
+    expect(mistralResult!.top_model_ids).toContain('mistralai/Mistral-7B-v0.3');
   });
 });
 
@@ -215,10 +215,11 @@ describe('ModelReleaseMonitorExperiment.judge', () => {
   ): Parameters<typeof exp.judge>[0] {
     const families = _internal.TRACKED_FAMILIES.map((family) => ({
       family,
-      new_hf_models: [],
-      new_papers: [],
-      hf_ingested: [],
-      paper_ingested: [],
+      new_models: totalNewModels,
+      new_papers: totalNewPapers,
+      ingested: 0,
+      top_model_ids: [] as string[],
+      top_paper_ids: [] as string[],
       hf_error: allHfFailed ? 'error' : null,
       arxiv_error: allArxivFailed ? 'error' : null,
     }));
@@ -297,10 +298,11 @@ describe('ModelReleaseMonitorExperiment.intervene', () => {
         total_ingested: 1,
         families: [{
           family: 'qwen',
-          new_hf_models: [makeHfModel('Qwen/Qwen3-7B')],
-          new_papers: [],
-          hf_ingested: [{ id: 'Qwen/Qwen3-7B', inserted: true }],
-          paper_ingested: [],
+          new_models: 1,
+          new_papers: 0,
+          ingested: 1,
+          top_model_ids: ['Qwen/Qwen3-7B'],
+          top_paper_ids: [],
           hf_error: null,
           arxiv_error: null,
         }],
