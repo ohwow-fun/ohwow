@@ -73,7 +73,7 @@ export function ReadyStep({ businessName, selectedModel, agentCount, healthSumma
 
   return (
     <Box flexDirection="column">
-      <Text bold color="green">You&apos;re all set.</Text>
+      <Text bold color="green">Your team is getting started.</Text>
 
       <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor="green" paddingX={2} paddingY={1}>
         {businessName && (

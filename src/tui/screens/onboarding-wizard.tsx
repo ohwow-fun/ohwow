@@ -1,9 +1,8 @@
 /**
  * Unified Onboarding Wizard
- * 7-step flow: Splash → Tier Choice → Business Info → Agent Discovery →
- * Agent Selection → Integration Setup → Ready.
- * Connected path: Splash → Tier Choice → Agent Selection → Ready
- * (business info + founder stage + agent discovery are skipped, data comes from cloud).
+ * 4-step flow: Splash → Tier Choice → First Moment → Ready.
+ * Auto-creates one general-purpose agent named after the business on first run.
+ * Specialised agents are created post-onboarding from the TEAM screen.
  * Model selection is deferred to Settings (TRIO-10).
  * Replaces both setup-wizard.tsx and agent-setup-wizard.tsx.
  */
@@ -16,20 +15,11 @@ import { OnboardingService } from '../../lib/onboarding-service.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { OllamaModelInfo } from '../../lib/ollama-models.js';
 import { MODEL_CATALOG } from '../../lib/ollama-models.js';
-import { type AgentPreset } from '../data/agent-presets.js';
 import {
-  getPresetsForBusinessType,
-  getStaticRecommendations,
-  parseAgentRecommendations,
-  buildAgentDiscoveryPrompt,
-  presetToAgent,
   saveWorkspaceData,
   createAgentsFromPresets,
-  collectRequiredMcpServers,
-  configureMcpServersForAgents,
   type AgentToCreate,
 } from '../../lib/onboarding-logic.js';
-import { MCP_SERVER_CATALOG } from '../../mcp/catalog.js';
 import { validateLicenseKey, LicenseValidationError, type LicenseValidationResult, type LicenseErrorKind } from '../../control-plane/validate-license.js';
 import { openPath } from '../../lib/platform-utils.js';
 
@@ -38,12 +28,9 @@ import { validateAnthropicApiKey } from '../../lib/anthropic-auth.js';
 import { SplashStep } from './onboarding/SplashStep.js';
 import { CloudAuthStep } from './onboarding/CloudAuthStep.js';
 import { FirstMomentStep } from './onboarding/FirstMomentStep.js';
-import { AgentDiscoveryStep } from './onboarding/AgentDiscoveryStep.js';
-import { AgentSelectionStep } from './onboarding/AgentSelectionStep.js';
 import type { AgentHealthInfo } from './onboarding/AgentSelectionStep.js';
 import { ReadyStep } from './onboarding/ReadyStep.js';
 import { TierChoiceStep } from './onboarding/TierChoiceStep.js';
-import { IntegrationSetupStep, type IntegrationInput } from './onboarding/IntegrationSetupStep.js';
 
 export interface ExistingWorkspaceState {
   businessName: string;
@@ -68,24 +55,13 @@ interface OnboardingWizardProps {
   cloudUrl?: string;
 }
 
-type Step = 'splash' | 'tier_choice' | 'cloud_auth' | 'first_moment' | 'agent_discovery' | 'agent_selection' | 'integration_setup' | 'ready';
+type Step = 'splash' | 'tier_choice' | 'cloud_auth' | 'first_moment' | 'ready';
 
 const STEP_NUMBERS: Record<Step, number> = {
   splash: 1,
   tier_choice: 2,
   cloud_auth: 3,
   first_moment: 3,
-  agent_discovery: 4,
-  agent_selection: 5,
-  integration_setup: 6,
-  ready: 7,
-};
-
-/** Step numbering for connected path (splash → tier choice → agents → ready) */
-const CONNECTED_STEP_NUMBERS: Partial<Record<Step, number>> = {
-  splash: 1,
-  tier_choice: 2,
-  agent_selection: 3,
   ready: 4,
 };
 
@@ -124,29 +100,10 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   const founderPath = '';
   const founderFocus = '';
 
-  // Agent discovery state
-  const [modelAvailable] = useState(false);
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatStreaming, setChatStreaming] = useState(false);
-  const [discoveredAgentIds, setDiscoveredAgentIds] = useState<string[]>([]);
-
-  // Agent selection state
-  const [allPresets, setAllPresets] = useState<AgentPreset[]>([]);
-  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(new Set());
-  const [selectionCursor, setSelectionCursor] = useState(0);
-
-  // Connected local agents (when cloud provides none but DB has agents)
-  const [connectedLocalAgents, setConnectedLocalAgents] = useState<AgentHealthInfo[] | null>(null);
-  // Connected empty state (no cloud agents, no local agents)
-  const [connectedNoAgents, setConnectedNoAgents] = useState(false);
-
-  // Integration setup state
-  const [integrationInputs, setIntegrationInputs] = useState<IntegrationInput[]>([]);
-  const [integrationIndex, setIntegrationIndex] = useState(0);
-  const [integrationEnvIndex, setIntegrationEnvIndex] = useState(0);
-  const [integrationValue, setIntegrationValue] = useState('');
-  const [integrationSkipped, setIntegrationSkipped] = useState<Set<string>>(new Set());
+  // (Agent discovery/selection/integration steps removed in TRIO-04.
+  //  Auto-agent creation happens in completeOnboarding().)
+  // Connected local agents retained for returning-user display in ReadyStep
+  const [connectedLocalAgents] = useState<AgentHealthInfo[] | null>(null);
 
   // Model source — read from config; can be updated in Settings (TRIO-10)
   const [modelSource] = useState<ModelSource>(() => {
@@ -207,180 +164,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
       });
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-skip steps for connected users (business data comes from cloud)
-  useEffect(() => {
-    if (!isConnected || existingState) return;
-    if (step === 'first_moment' || step === 'agent_discovery') {
-      setStep('agent_selection');
-    }
-  }, [step, isConnected, existingState]);
-
-  // When entering agent discovery, load presets and pre-select recommended agents
-  useEffect(() => {
-    if (step !== 'agent_discovery') return;
-    const presets = getPresetsForBusinessType(businessType || 'saas_startup');
-    setAllPresets(presets);
-
-    // Model not yet configured — always use static recommendations
-    const recommended = getStaticRecommendations(businessType || 'saas_startup');
-    setSelectedAgentIds(new Set(recommended.map(a => a.id)));
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // When entering agent selection, set up presets
-  useEffect(() => {
-    if (step !== 'agent_selection') return;
-
-    // Connected path: use cloud agents or fall back to local DB agents
-    if (isConnected && licenseResult) {
-      if (licenseResult.agents.length > 0) {
-        // Cloud agents exist — convert to AgentPreset[] for display
-        const cloudPresets: AgentPreset[] = licenseResult.agents.map(a => ({
-          id: a.id,
-          name: a.name,
-          role: a.role,
-          description: a.description || '',
-          systemPrompt: a.systemPrompt,
-          tools: a.config.web_search_enabled ? ['web_research'] : [],
-          recommended: true,
-        }));
-        setAllPresets(cloudPresets);
-        setSelectedAgentIds(new Set(cloudPresets.map(a => a.id)));
-        setConnectedLocalAgents(null);
-        setConnectedNoAgents(false);
-      } else if (db) {
-        // No cloud agents — check local DB for existing agents
-        (async () => {
-          try {
-            // Resolve the workspace row id positionally. The seed is 'local'
-            // until cloud consolidation rewrites it to the workspace UUID, so
-            // hardcoding 'local' hides agents on cloud-connected workspaces.
-            const wsResult = await db.from<{ id: string }>('agent_workforce_workspaces')
-              .select('id')
-              .limit(1)
-              .maybeSingle();
-            const wsId = wsResult.data?.id;
-            if (!wsId) {
-              setConnectedLocalAgents(null);
-              setConnectedNoAgents(true);
-              return;
-            }
-            const result = await db.from('agent_workforce_agents')
-              .select('id, name, role, description, status, stats')
-              .eq('workspace_id', wsId);
-            const rows = (result.data || []) as Array<{
-              id: string; name: string; role: string;
-              description: string; status: string; stats: string;
-            }>;
-            if (rows.length > 0) {
-              const healthInfo: AgentHealthInfo[] = rows.map(r => {
-                let taskCount = 0;
-                let costCents = 0;
-                try {
-                  const s = typeof r.stats === 'string' ? JSON.parse(r.stats) : r.stats;
-                  taskCount = s?.task_count || 0;
-                  costCents = s?.total_cost_cents || 0;
-                } catch { /* ignore */ }
-                return {
-                  name: r.name,
-                  role: r.role,
-                  status: (r.status === 'working' ? 'working' : r.status === 'error' ? 'error' : 'idle') as AgentHealthInfo['status'],
-                  taskCount,
-                  costCents,
-                };
-              });
-              setConnectedLocalAgents(healthInfo);
-              setConnectedNoAgents(false);
-            } else {
-              setConnectedLocalAgents(null);
-              setConnectedNoAgents(true);
-            }
-          } catch {
-            setConnectedLocalAgents(null);
-            setConnectedNoAgents(true);
-          }
-        })();
-      } else {
-        setConnectedLocalAgents(null);
-        setConnectedNoAgents(true);
-      }
-      setSelectionCursor(0);
-      return;
-    }
-
-    // Free tier: existing logic unchanged
-    const presets = getPresetsForBusinessType(businessType || 'saas_startup');
-    setAllPresets(presets);
-
-    // Pre-select based on discovery
-    if (discoveredAgentIds.length > 0) {
-      setSelectedAgentIds(new Set(discoveredAgentIds.filter(id => presets.some(p => p.id === id))));
-    } else if (selectedAgentIds.size === 0) {
-      const recommended = getStaticRecommendations(businessType || 'saas_startup');
-      setSelectedAgentIds(new Set(recommended.map(a => a.id)));
-    }
-    setSelectionCursor(0);
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── AI Chat ────────────────────────────────────────────────────────────
-
-  const sendAIMessage = async (history: Array<{ role: 'user' | 'assistant'; content: string }>) => {
-    setChatStreaming(true);
-    try {
-      const presets = getPresetsForBusinessType(businessType || 'saas_startup');
-      const systemPrompt = buildAgentDiscoveryPrompt(
-        businessType || 'saas_startup',
-        founderPath || 'exploring',
-        founderFocus || '',
-        presets,
-      );
-
-      const ollamaUrl = 'http://localhost:11434';
-      const ollamaModel = selectedModel?.tag || 'qwen3:4b';
-
-      const ollamaMessages = [
-        { role: 'system', content: systemPrompt },
-        ...history.map(m => ({ role: m.role, content: m.content })),
-      ];
-
-      const response = await fetch(`${ollamaUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: ollamaModel,
-          messages: ollamaMessages,
-          max_tokens: 1024,
-          temperature: 0.7,
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(60000),
-      });
-
-      if (!response.ok) throw new Error('Model not responding');
-
-      const data = await response.json() as {
-        choices: Array<{ message: { content: string } }>;
-      };
-
-      const content = data.choices?.[0]?.message?.content || 'I can help you pick the right agents. What are your biggest priorities right now?';
-
-      setChatMessages(prev => [...prev, { role: 'assistant', content }]);
-
-      // Try to parse agent recommendations from the response
-      const agentIds = parseAgentRecommendations(content);
-      if (agentIds.length > 0) {
-        setDiscoveredAgentIds(agentIds);
-        setSelectedAgentIds(new Set(agentIds.filter(id => presets.some(p => p.id === id))));
-      }
-    } catch {
-      setChatMessages(prev => [...prev, {
-        role: 'assistant',
-        content: 'I ran into an issue connecting to the model. You can pick your agents manually on the next screen.',
-      }]);
-    } finally {
-      setChatStreaming(false);
-    }
-  };
-
   // ── Input Handling ─────────────────────────────────────────────────────
 
   useInput((input, key) => {
@@ -390,22 +173,14 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         // Returning user: only splash step; tier_choice reached on validation failure
         if (step === 'tier_choice') { setSplashError(''); setSplashErrorKind(''); setStep('splash'); return; }
       } else if (isConnected) {
-        // Connected user: splash → tier_choice → agent_selection → ready
+        // Connected user: splash → tier_choice → ready
         if (step === 'tier_choice') { setStep('splash'); return; }
-        if (step === 'agent_selection') { setStep('tier_choice'); return; }
-        if (step === 'ready') { setStep('agent_selection'); return; }
+        if (step === 'ready') { setStep('tier_choice'); return; }
       } else {
-        // Free user: splash → tier_choice → first_moment → agent_discovery → agent_selection → …
+        // Free user: splash → tier_choice → first_moment → ready
         if (step === 'tier_choice') { setStep('splash'); return; }
         if (step === 'first_moment') { setStep('tier_choice'); return; }
-        if (step === 'agent_discovery') { setStep('first_moment'); return; }
-        if (step === 'agent_selection') { setStep('agent_discovery'); return; }
-        if (step === 'integration_setup') { setStep('agent_selection'); return; }
-        if (step === 'ready') {
-          // Go back to integration_setup if we had integrations, else agent_selection
-          if (integrationInputs.length > 0) { setStep('integration_setup'); return; }
-          setStep('agent_selection'); return;
-        }
+        if (step === 'ready') { setStep('first_moment'); return; }
       }
     }
 
@@ -457,8 +232,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
               setLicenseResult(result);
               setBusinessName(result.businessContext.businessName);
               setLicenseValidating(false);
-              // Model step removed — go straight to agents (connected) or business info (free)
-              setStep('agent_selection');
+              // Go straight to ready for connected users (business data comes from cloud)
+              setStep('ready');
             })
             .catch((err) => {
               const msg = err instanceof Error ? err.message : 'Could not validate key';
@@ -505,7 +280,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
                   if (existingState) {
                     completeReturningUser();
                   } else {
-                    const nextAfterCloud = isConnected ? 'agent_selection' : 'first_moment';
+                    const nextAfterCloud = isConnected ? 'ready' : 'first_moment';
                     setStep(nextAfterCloud);
                   }
                 }, 500);
@@ -528,7 +303,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           if (existingState) {
             completeReturningUser();
           } else {
-            const nextAfterCloud = isConnected ? 'agent_selection' : 'first_moment';
+            const nextAfterCloud = isConnected ? 'ready' : 'first_moment';
             setStep(nextAfterCloud);
           }
         }
@@ -547,152 +322,12 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         }
       } else if (firstMomentField === 'firstTask') {
         if (key.return) {
-          setStep('agent_discovery');
+          setStep('ready');
         } else if (key.backspace || key.delete) {
           setFirstTask(prev => prev.slice(0, -1));
         } else if (input && !key.ctrl && !key.meta) {
           setFirstTask(prev => prev + input);
         }
-      }
-    }
-
-    // ── Agent Discovery ──
-    if (step === 'agent_discovery') {
-      if (!modelAvailable) {
-        // No model: just press enter to continue
-        if (key.return) setStep('agent_selection');
-      } else {
-        if (key.tab) {
-          // Skip chat and go to selection
-          setStep('agent_selection');
-        } else if (key.return && !chatStreaming) {
-          if (chatMessages.length >= 4 || discoveredAgentIds.length > 0) {
-            // Enough chat or already got recommendations
-            setStep('agent_selection');
-          } else if (chatInput.trim()) {
-            // Send message
-            const userMsg = { role: 'user' as const, content: chatInput.trim() };
-            const newHistory = [...chatMessages, userMsg];
-            setChatMessages(newHistory);
-            setChatInput('');
-            sendAIMessage(newHistory);
-          }
-        } else if (!chatStreaming && input && !key.ctrl && !key.meta && !key.tab) {
-          if (key.backspace || key.delete) {
-            setChatInput(prev => prev.slice(0, -1));
-          } else {
-            setChatInput(prev => prev + input);
-          }
-        }
-      }
-    }
-
-    // ── Agent Selection ──
-    if (step === 'agent_selection') {
-      if (existingState) {
-        // Readiness mode: Enter to continue
-        if (key.return) setStep('ready');
-      } else if (isConnected && (connectedLocalAgents !== null || connectedNoAgents)) {
-        // Connected readonly/empty: Enter to continue
-        if (key.return) setStep('ready');
-      } else {
-        if (input === 'j' || key.downArrow) {
-          setSelectionCursor(i => Math.min(i + 1, allPresets.length - 1));
-        }
-        if (input === 'k' || key.upArrow) {
-          setSelectionCursor(i => Math.max(i - 1, 0));
-        }
-        if (input === ' ') {
-          const agentId = allPresets[selectionCursor]?.id;
-          if (agentId) {
-            setSelectedAgentIds(prev => {
-              const next = new Set(prev);
-              if (next.has(agentId)) next.delete(agentId);
-              else next.add(agentId);
-              return next;
-            });
-          }
-        }
-        if (key.return && selectedAgentIds.size > 0) {
-          // Check if selected agents need MCP integrations
-          const selected = allPresets.filter(p => selectedAgentIds.has(p.id));
-          const requiredMcp = collectRequiredMcpServers(selected);
-          if (requiredMcp.length > 0) {
-            // Set up integration inputs
-            const inputs: IntegrationInput[] = requiredMcp
-              .map(id => MCP_SERVER_CATALOG.find(s => s.id === id))
-              .filter((s): s is NonNullable<typeof s> => !!s)
-              .map(server => ({ server, envValues: {} }));
-            setIntegrationInputs(inputs);
-            setIntegrationIndex(0);
-            setIntegrationEnvIndex(0);
-            setIntegrationValue('');
-            setIntegrationSkipped(new Set());
-            setStep('integration_setup');
-          } else {
-            setStep('ready');
-          }
-        }
-      }
-    }
-
-    // ── Integration Setup ──
-    if (step === 'integration_setup') {
-      const current = integrationInputs[integrationIndex];
-      if (!current) {
-        if (key.return) setStep('ready');
-        return;
-      }
-
-      const currentEnvVar = current.server.envVarsRequired[integrationEnvIndex];
-
-      if (input === 's' && !integrationSkipped.has(current.server.id)) {
-        // Skip this integration
-        setIntegrationSkipped(prev => new Set([...prev, current.server.id]));
-        if (integrationIndex < integrationInputs.length - 1) {
-          setIntegrationIndex(i => i + 1);
-          setIntegrationEnvIndex(0);
-          setIntegrationValue('');
-        } else {
-          setStep('ready');
-        }
-        return;
-      }
-
-      if (key.return && integrationValue.trim() && currentEnvVar) {
-        // Save this env value
-        setIntegrationInputs(prev => {
-          const next = [...prev];
-          next[integrationIndex] = {
-            ...next[integrationIndex],
-            envValues: { ...next[integrationIndex].envValues, [currentEnvVar.key]: integrationValue.trim() },
-          };
-          return next;
-        });
-        setIntegrationValue('');
-
-        // Move to next env var or next integration
-        if (integrationEnvIndex < current.server.envVarsRequired.length - 1) {
-          setIntegrationEnvIndex(i => i + 1);
-        } else if (integrationIndex < integrationInputs.length - 1) {
-          setIntegrationIndex(i => i + 1);
-          setIntegrationEnvIndex(0);
-        } else {
-          setStep('ready');
-        }
-      } else if (key.return && !currentEnvVar) {
-        // No more env vars for this integration
-        if (integrationIndex < integrationInputs.length - 1) {
-          setIntegrationIndex(i => i + 1);
-          setIntegrationEnvIndex(0);
-          setIntegrationValue('');
-        } else {
-          setStep('ready');
-        }
-      } else if (key.backspace || key.delete) {
-        setIntegrationValue(prev => prev.slice(0, -1));
-      } else if (input && !key.ctrl && !key.meta) {
-        setIntegrationValue(prev => prev + input);
       }
     }
 
@@ -808,10 +443,17 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   };
 
   const completeOnboarding = () => {
-    // Build the agents to create
-    const selectedPresets = allPresets.filter(p => selectedAgentIds.has(p.id));
-    const agents: AgentToCreate[] = selectedPresets
-      .map(p => presetToAgent(p, p.department));
+    // Auto-create one general-purpose agent named after the business.
+    // Specialised agents are added post-onboarding from the TEAM screen.
+    const agentName = businessName ? `${businessName} Agent` : 'My Agent';
+    const autoAgent: AgentToCreate = {
+      id: 'auto-agent-01',
+      name: agentName,
+      role: 'General',
+      description: `General-purpose agent for ${businessName || 'your business'}`,
+      systemPrompt: `You are ${agentName}, a general-purpose AI assistant. Your first task: ${firstTask || 'help the team be more productive'}.`,
+      tools: [],
+    };
 
     const modelTag = selectedModel?.tag || 'qwen3:4b';
 
@@ -826,25 +468,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
             founderPath,
             founderFocus: firstTask,
           });
-          await createAgentsFromPresets(db, agents, 'local', modelTag, selectedPresets);
-
-          // Configure MCP servers if integration tokens were provided
-          if (integrationInputs.length > 0) {
-            const configuredInputs = integrationInputs.filter(
-              inp => !integrationSkipped.has(inp.server.id) && Object.keys(inp.envValues).length > 0,
-            );
-            if (configuredInputs.length > 0) {
-              const allEnvValues: Record<string, string> = {};
-              for (const inp of configuredInputs) {
-                Object.assign(allEnvValues, inp.envValues);
-              }
-              await configureMcpServersForAgents(
-                db,
-                configuredInputs.map(inp => inp.server.id),
-                allEnvValues,
-              );
-            }
-          }
+          await createAgentsFromPresets(db, [autoAgent], 'local', modelTag);
 
           // Update config file
           updateConfigFile({
@@ -877,7 +501,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           businessDescription,
           founderPath,
           founderFocus: firstTask,
-          agents,
+          agents: [autoAgent],
         }),
       }).then(async (res) => {
         if (!res.ok) throw new Error('API call failed');
@@ -892,11 +516,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  const stepNum = isConnected
-    ? CONNECTED_STEP_NUMBERS[step] ?? STEP_NUMBERS[step]
-    : STEP_NUMBERS[step];
-  const totalSteps = isConnected ? 4 : 7;
-  const recommendedAgents = allPresets.filter(p => discoveredAgentIds.includes(p.id));
+  const stepNum = STEP_NUMBERS[step];
+  const totalSteps = 4;
 
   return (
     <Box flexDirection="column" padding={1}>
@@ -907,9 +528,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
             {step === 'tier_choice' ? 'Setup' :
              step === 'cloud_auth' ? 'Cloud Auth' :
              step === 'first_moment' ? 'Your Business' :
-             step === 'agent_discovery' ? 'Agent Discovery' :
-             step === 'agent_selection' ? 'Choose Agents' :
-             step === 'integration_setup' ? 'Integrations' :
              'Ready'}
           </Text>
           <Text color="gray"> | Step {stepNum} of {totalSteps}</Text>
@@ -963,43 +581,11 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         />
       )}
 
-      {step === 'agent_discovery' && (
-        <AgentDiscoveryStep
-          modelAvailable={modelAvailable}
-          chatMessages={chatMessages}
-          chatInput={chatInput}
-          chatStreaming={chatStreaming}
-          recommendedAgents={recommendedAgents}
-          presets={allPresets}
-        />
-      )}
-
-      {step === 'agent_selection' && (
-        <AgentSelectionStep
-          presets={allPresets}
-          selectedIds={selectedAgentIds}
-          cursorIndex={selectionCursor}
-          readonlyMode={!!existingState || (isConnected && connectedLocalAgents !== null)}
-          agentHealth={existingState?.agents || (isConnected ? connectedLocalAgents ?? undefined : undefined)}
-          emptyState={isConnected && connectedNoAgents}
-        />
-      )}
-
-      {step === 'integration_setup' && (
-        <IntegrationSetupStep
-          integrations={integrationInputs}
-          currentIndex={integrationIndex}
-          currentEnvIndex={integrationEnvIndex}
-          currentValue={integrationValue}
-          skippedIds={integrationSkipped}
-        />
-      )}
-
       {step === 'ready' && (
         <ReadyStep
           businessName={existingState?.businessName || businessName}
           selectedModel={selectedModel}
-          agentCount={existingState?.agents.length || connectedLocalAgents?.length || selectedAgentIds.size}
+          agentCount={existingState?.agents.length || connectedLocalAgents?.length || 1}
           healthSummary={existingState ? {
             totalTasks: existingState.totalTasks,
             totalCostCents: existingState.totalCostCents,
