@@ -1539,7 +1539,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
 
       {isHome ? (
         /* Today state board — 3-zone layout */
-        <TodayBoard agents={agents.list} />
+        <TodayBoard agents={agents.list} db={runtime.db} />
       ) : (
         /* Full-screen view */
         <>
@@ -1756,14 +1756,139 @@ function getTimeAgo(dateStr: string): string {
 }
 
 // ============================================================================
-// TODAY STATE BOARD — 3-zone layout (TRIO-05)
+// TODAY STATE BOARD — 3-zone layout (TRIO-05 shell, TRIO-06 attention queue)
 // ============================================================================
+
+interface PendingApproval {
+  id: string;
+  workspace_id: string;
+  agent_id: string;
+  title: string;
+  created_at: string;
+  deferred_action: { type: string; params: Record<string, unknown>; provider: string } | null;
+}
 
 interface TodayBoardProps {
   agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown> }>;
+  db: DatabaseAdapter | null;
 }
 
-export function TodayBoard({ agents }: TodayBoardProps) {
+export function TodayBoard({ agents, db }: TodayBoardProps) {
+  const [approvals, setApprovals] = useState<PendingApproval[]>([]);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
+  const [rejectInput, setRejectInput] = useState<string | null>(null);
+
+  // Fetch pending approvals — sorted oldest first
+  useEffect(() => {
+    if (!db) return;
+    const fetch = async () => {
+      const { data } = await db
+        .from<{ id: string; workspace_id: string; agent_id: string; title: string; created_at: string; deferred_action?: string | null }>('agent_workforce_tasks')
+        .select('id, workspace_id, agent_id, title, created_at, deferred_action')
+        .eq('status', 'needs_approval')
+        .order('created_at', { ascending: true });
+      if (data) {
+        setApprovals(data.map(t => ({
+          id: t.id,
+          workspace_id: t.workspace_id,
+          agent_id: t.agent_id,
+          title: t.title,
+          created_at: t.created_at,
+          deferred_action: t.deferred_action
+            ? (typeof t.deferred_action === 'string'
+              ? JSON.parse(t.deferred_action) as PendingApproval['deferred_action']
+              : t.deferred_action as PendingApproval['deferred_action'])
+            : null,
+        })));
+      }
+    };
+    fetch();
+    const timer = setInterval(fetch, 5000);
+    return () => clearInterval(timer);
+  }, [db]);
+
+  const applyApprovalAction = useCallback(async (approval: PendingApproval, action: 'approve' | 'reject', reason?: string) => {
+    if (!db) return;
+    const now = new Date().toISOString();
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    await db.from('agent_workforce_tasks').update({
+      status: newStatus,
+      updated_at: now,
+      ...(action === 'approve' ? { approved_at: now, approved_by: 'runtime' } : {}),
+      ...(action === 'reject' && reason ? { rejection_reason: reason } : {}),
+    }).eq('id', approval.id);
+
+    const { getEventBus } = await import('../../hooks/use-event-bus.js');
+    getEventBus().emit('task:completed', {
+      taskId: approval.id,
+      agentId: approval.agent_id,
+      status: newStatus,
+      tokensUsed: 0,
+      costCents: 0,
+    });
+
+    setApprovals(prev => prev.filter(a => a.id !== approval.id));
+    setSelectedIdx(prev => Math.max(0, prev - 1));
+  }, [db]);
+
+  useInput((input, key) => {
+    // Reject reason input mode
+    if (rejectInput !== null) {
+      if (key.return) {
+        const approval = approvals[selectedIdx];
+        if (approval) {
+          applyApprovalAction(approval, 'reject', rejectInput || undefined);
+        }
+        setRejectInput(null);
+        return;
+      }
+      if (key.escape) {
+        setRejectInput(null);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setRejectInput(prev => (prev ?? '').slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setRejectInput(prev => (prev ?? '') + input);
+      }
+      return;
+    }
+
+    if (approvals.length === 0) return;
+
+    // Tab toggles focus into/out of the approvals list
+    if (input === '\t' || key.tab) {
+      setFocusedOnApprovals(f => !f);
+      return;
+    }
+
+    if (!focusedOnApprovals) return;
+
+    if (input === 'j' || key.downArrow) {
+      setSelectedIdx(i => Math.min(i + 1, approvals.length - 1));
+      return;
+    }
+    if (input === 'k' || key.upArrow) {
+      setSelectedIdx(i => Math.max(i - 1, 0));
+      return;
+    }
+    if (input === 'a') {
+      const approval = approvals[selectedIdx];
+      if (approval) applyApprovalAction(approval, 'approve');
+      return;
+    }
+    if (input === 'r') {
+      setRejectInput('');
+      return;
+    }
+  });
+
+  // Clamp selectedIdx when approvals shrink
+  const clampedIdx = Math.min(selectedIdx, Math.max(0, approvals.length - 1));
+
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
       {/* Main row: left (agent roster) + center (attention queue) */}
@@ -1816,17 +1941,82 @@ export function TodayBoard({ agents }: TodayBoardProps) {
           )}
         </Box>
 
-        {/* CENTER COLUMN ~45%: Attention queue placeholder */}
+        {/* CENTER COLUMN ~45%: Attention queue */}
         <Box
           flexDirection="column"
           flexGrow={1}
           borderStyle="single"
-          borderColor="yellow"
+          borderColor={focusedOnApprovals ? 'red' : 'yellow'}
           paddingX={1}
           paddingY={0}
         >
           <Text bold color="yellow">ATTENTION</Text>
-          <Text dimColor>(wired in TRIO-06)</Text>
+
+          {/* APPROVALS section */}
+          <Box flexDirection="column" marginTop={0}>
+            <Text bold color="red">{'🔴'} APPROVALS{approvals.length > 0 ? ` (${approvals.length})` : ''}</Text>
+            {approvals.length === 0 ? (
+              <Text dimColor>No pending approvals.</Text>
+            ) : (
+              approvals.map((approval, idx) => {
+                const isSelected = focusedOnApprovals && idx === clampedIdx;
+                const age = getTimeAgo(approval.created_at);
+                return (
+                  <Box key={approval.id} flexDirection="row">
+                    <Text color={isSelected ? 'white' : 'red'} bold={isSelected}>
+                      {isSelected ? '▶ ' : '  '}
+                    </Text>
+                    <Box flexDirection="column">
+                      <Text color="red" bold={isSelected} inverse={isSelected}>
+                        {approval.title.length > 40 ? approval.title.slice(0, 37) + '...' : approval.title}
+                      </Text>
+                      <Text dimColor>{age}</Text>
+                    </Box>
+                  </Box>
+                );
+              })
+            )}
+          </Box>
+
+          {/* Reject reason inline input */}
+          {rejectInput !== null && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color="red" bold>Rejection reason:</Text>
+              <Box>
+                <Text color="white">{rejectInput}</Text>
+                <Text color="gray">{'_'}</Text>
+              </Box>
+              <Text dimColor>Enter: confirm  Esc: cancel</Text>
+            </Box>
+          )}
+
+          {/* ERRORS section placeholder */}
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="yellow">{'🟡'} ERRORS</Text>
+            {agents.filter(a => a.status === 'error').length === 0 ? (
+              <Text dimColor>All agents healthy.</Text>
+            ) : (
+              agents.filter(a => a.status === 'error').map(a => (
+                <Text key={a.id} color="yellow">{a.name}: error</Text>
+              ))
+            )}
+          </Box>
+
+          {/* Key hints when focused */}
+          {focusedOnApprovals && approvals.length > 0 && rejectInput === null && (
+            <Box marginTop={1}>
+              <Text dimColor>j/k nav  </Text>
+              <Text color="green" bold>a</Text>
+              <Text dimColor>:approve  </Text>
+              <Text color="red" bold>r</Text>
+              <Text dimColor>:reject  Tab:unfocus</Text>
+            </Box>
+          )}
+          {!focusedOnApprovals && approvals.length > 0 && (
+            <Box marginTop={1}>
+              <Text dimColor>Tab to focus approvals</Text>
+            </Box>
+          )}
         </Box>
       </Box>
 
