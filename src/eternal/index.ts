@@ -11,6 +11,7 @@ export type {
   EternalState,
   EscalationRule,
   InactivityProtocol,
+  TrusteeContact,
 } from './types.js';
 
 export { DEFAULT_ETERNAL_SPEC } from './defaults.js';
@@ -36,3 +37,6 @@ export {
 } from './escalation.js';
 
 export { notifyTrustee } from './notifications.js';
+
+export { createTrusteeNotifier, resolveTrusteeNotifier } from './trustee-email.js';
+export type { TrusteeNotifier } from './trustee-email.js';

@@ -35,6 +35,7 @@ import { logger } from '../lib/logger.js';
 import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
 import { loadEternalSpec } from '../eternal/load-spec.js';
+import { resolveTrusteeNotifier } from '../eternal/trustee-email.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -632,14 +633,27 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
   {
     const INACTIVITY_CHECK_MS = 60 * 60_000; // 1 hour
     const eternalSpec = loadEternalSpec(deps.dataDir);
-    const runInactivityCheck = () => {
-      checkAndMaybeUpdate(db, eternalSpec).catch((err) => {
-        logger.warn({ err }, '[daemon] eternal.inactivity_check.failed');
-      });
-    };
-    runInactivityCheck();
-    setInterval(runInactivityCheck, INACTIVITY_CHECK_MS).unref();
-    logger.debug('[daemon] eternal inactivity watcher scheduled (1h interval)');
+    resolveTrusteeNotifier(db, eternalSpec).then((trusteeNotifier) => {
+      const runInactivityCheck = () => {
+        checkAndMaybeUpdate(db, eternalSpec, trusteeNotifier).catch((err) => {
+          logger.warn({ err }, '[daemon] eternal.inactivity_check.failed');
+        });
+      };
+      runInactivityCheck();
+      setInterval(runInactivityCheck, INACTIVITY_CHECK_MS).unref();
+      logger.debug('[daemon] eternal inactivity watcher scheduled (1h interval)');
+    }).catch((err) => {
+      logger.warn({ err }, '[daemon] eternal.trustee_notifier.resolve.failed');
+      // Still run the watcher without email delivery
+      const runInactivityCheck = () => {
+        checkAndMaybeUpdate(db, eternalSpec).catch((err2) => {
+          logger.warn({ err: err2 }, '[daemon] eternal.inactivity_check.failed');
+        });
+      };
+      runInactivityCheck();
+      setInterval(runInactivityCheck, INACTIVITY_CHECK_MS).unref();
+      logger.debug('[daemon] eternal inactivity watcher scheduled (1h interval, no email)');
+    });
   }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };

@@ -6,11 +6,13 @@
  * crossed. Designed to be called at the start of each conductor tick so
  * mode transitions happen before any autonomous work proceeds.
  */
+import { randomUUID } from 'node:crypto';
 import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { EternalMode, EternalSpec } from './types.js';
 import { getEternalState, setEternalMode } from './state.js';
 import { notifyTrustee } from './notifications.js';
+import type { TrusteeNotifier } from './trustee-email.js';
 
 const MS_PER_DAY = 86_400_000;
 
@@ -41,6 +43,7 @@ export function modeForElapsedDays(
 export async function checkAndMaybeUpdate(
   db: DatabaseAdapter,
   spec: EternalSpec,
+  trusteeNotifier?: TrusteeNotifier,
 ): Promise<EternalMode> {
   const state = await getEternalState(db);
 
@@ -79,7 +82,13 @@ export async function checkAndMaybeUpdate(
 
   // Notify trustee whenever the mode moves to conservative or estate.
   if (targetMode === 'conservative' || targetMode === 'estate') {
-    await notifyTrustee(db, targetMode, reason);
+    const notificationId = randomUUID();
+    await notifyTrustee(db, targetMode, reason, notificationId);
+    if (trusteeNotifier) {
+      trusteeNotifier(db, notificationId, targetMode, reason).catch((err) =>
+        logger.warn({ err }, 'eternal.trustee_notifier.failed'),
+      );
+    }
   }
 
   return targetMode;

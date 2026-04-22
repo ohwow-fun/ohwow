@@ -42,6 +42,14 @@ async function runInit(configDir: string): Promise<void> {
   ).trim();
   const estateAfterDays = estateRaw ? parseInt(estateRaw, 10) : 90;
 
+  const trusteeEmail = (
+    await ask('Trustee email address (leave blank to skip): ')
+  ).trim();
+
+  const trusteeWebhook = (
+    await ask('Trustee webhook URL (leave blank to skip): ')
+  ).trim();
+
   rl.close();
 
   const spec = {
@@ -51,6 +59,10 @@ async function runInit(configDir: string): Promise<void> {
       trusteePingAfterDays: Number.isNaN(conservativeAfterDays) ? 7 : conservativeAfterDays,
       estateAfterDays: Number.isNaN(estateAfterDays) ? 90 : estateAfterDays,
     },
+    ...(trusteeEmail ? { trustee: {
+      emailAddress: trusteeEmail,
+      ...(trusteeWebhook ? { webhookUrl: trusteeWebhook } : {}),
+    } } : {}),
   };
 
   mkdirSync(configDir, { recursive: true });
@@ -60,6 +72,9 @@ async function runInit(configDir: string): Promise<void> {
   console.log(`\nSaved to ${outPath}`);
   console.log(`Conservative mode after ${spec.inactivityProtocol.conservativeAfterDays} days of inactivity.`);
   console.log(`Estate mode after ${spec.inactivityProtocol.estateAfterDays} days of inactivity.`);
+  if (trusteeEmail) {
+    console.log(`Trustee email: ${trusteeEmail}`);
+  }
 }
 
 export async function runEternalCli(args: string[]): Promise<void> {

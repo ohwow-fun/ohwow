@@ -26,6 +26,13 @@ export interface EscalationRule {
   requiresTrustee: boolean;
 }
 
+export interface TrusteeContact {
+  /** Email address to notify on mode transitions. */
+  emailAddress: string;
+  /** Optional webhook URL to POST on mode transitions. */
+  webhookUrl?: string;
+}
+
 export interface EternalSpec {
   /** Path to an on-disk values corpus file (alternative to inline). */
   valuesCorpusPath?: string;
@@ -33,6 +40,8 @@ export interface EternalSpec {
   valuesCorpusInline?: string;
   inactivityProtocol: InactivityProtocol;
   escalationMap: EscalationRule[];
+  /** Trustee contact for mode transition delivery. Configurable via eternal.config.json. */
+  trustee?: TrusteeContact;
 }
 
 export interface EternalState {

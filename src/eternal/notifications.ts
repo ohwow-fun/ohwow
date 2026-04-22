@@ -23,23 +23,27 @@ interface EternalNotificationRow {
  * Notify the configured trustee about an eternal mode transition.
  * Persists the notification to eternal_notifications for audit and future
  * transport delivery. Non-fatal: errors are logged but never thrown.
+ *
+ * Returns the notification id so callers can pass it to the email/webhook
+ * transport layer without a second DB lookup.
  */
 export async function notifyTrustee(
   db: DatabaseAdapter,
   mode: EternalMode,
   reason: string,
-): Promise<void> {
-  const id = randomUUID();
+  id?: string,
+): Promise<string> {
+  const notificationId = id ?? randomUUID();
   const created_at = new Date().toISOString();
 
   logger.warn(
-    { eternal_mode: mode, reason, notification_id: id },
+    { eternal_mode: mode, reason, notification_id: notificationId },
     'eternal.trustee_notification',
   );
 
   try {
     await db.from<EternalNotificationRow>('eternal_notifications').insert({
-      id,
+      id: notificationId,
       created_at,
       mode,
       reason,
@@ -47,8 +51,10 @@ export async function notifyTrustee(
     });
   } catch (err) {
     logger.warn(
-      { err, notification_id: id },
+      { err, notification_id: notificationId },
       'eternal.trustee_notification.persist.failed',
     );
   }
+
+  return notificationId;
 }
