@@ -282,7 +282,7 @@ Check the box when QA completes and passes.
 
 ### Phase 5: Post-onboarding landing
 
-**TRIO-11** `[ ]` — Post-onboarding: land on Today with first agent live
+**TRIO-11** `[x]` — Post-onboarding: land on Today with first agent live (SHA: 1f9fd5c)
 - After `handleOnboardingComplete`, navigate to Today (not blank chat)
 - Today shows the newly-created agent with status "setting up…" or the
   first task already queued in the attention queue
@@ -309,7 +309,7 @@ Check the box when QA completes and passes.
 | TRIO-08 | Merge Contacts + People; Activity → Work | done | 908aa47 |
 | TRIO-09 | Universal keyboard grammar + status bar | done | 3332272 |
 | TRIO-10 | Universal dispatch overlay (d key) | done | 4429770 |
-| TRIO-11 | Post-onboarding Today landing | pending | — |
+| TRIO-11 | Post-onboarding Today landing | done | 1f9fd5c |
 
 ---
 
