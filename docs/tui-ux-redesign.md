@@ -170,7 +170,7 @@ Check the box when QA completes and passes.
 - Test criterion: `npm run tui-journey` shows one input screen with two fields;
   no business type list; no founder path list
 
-**TRIO-03** `[ ]` — Remove ModelStep from onboarding; defer model selection
+**TRIO-03** `[x]` — Remove ModelStep from onboarding; defer model selection
 - Delete ModelStep from onboarding wizard sequence
 - On first run, if Anthropic API key exists in env → use claude-haiku
 - If no key → queue tasks and show "model offline" in state board attention queue
@@ -301,7 +301,7 @@ Check the box when QA completes and passes.
 |------|-------------|--------|-----|
 | TRIO-01 | Remove ExperienceChoiceStep | done | 7870792 |
 | TRIO-02 | Merge BusinessInfo + FounderStage | done | 2a676a2 |
-| TRIO-03 | Remove ModelStep from onboarding | pending | — |
+| TRIO-03 | Remove ModelStep from onboarding | done | b005231 |
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | pending | — |
 | TRIO-05 | Build Today state board shell | pending | — |
 | TRIO-06 | Wire approvals into Today | pending | — |
