@@ -42,3 +42,5 @@ export { createTrusteeNotifier, resolveTrusteeNotifier } from './trustee-email.j
 export type { TrusteeNotifier } from './trustee-email.js';
 
 export { checkContactSLAs, slaThresholdForType } from './contact-sla-watcher.js';
+
+export { checkRevenueLeak } from './revenue-leak-watcher.js';

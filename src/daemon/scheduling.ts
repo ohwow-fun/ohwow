@@ -36,7 +36,7 @@ import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
 import { loadEternalSpec } from '../eternal/load-spec.js';
 import { resolveTrusteeNotifier } from '../eternal/trustee-email.js';
-import { checkContactSLAs } from '../eternal/index.js';
+import { checkContactSLAs, checkRevenueLeak } from '../eternal/index.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -669,6 +669,19 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
     runContactSlaCheck();
     setInterval(runContactSlaCheck, CONTACT_SLA_CHECK_MS).unref();
     logger.debug('[daemon] eternal contact SLA watcher scheduled (4h interval)');
+  }
+
+  // Eternal Systems: revenue leak watcher — detects unattributed payment events.
+  {
+    const REVENUE_LEAK_CHECK_MS = 24 * 60 * 60_000; // 24 hours
+    const runRevenueLeak = () => {
+      checkRevenueLeak(db, workspaceId).catch((err) => {
+        logger.warn({ err }, '[daemon] eternal.revenue_leak_check.failed');
+      });
+    };
+    runRevenueLeak();
+    setInterval(runRevenueLeak, REVENUE_LEAK_CHECK_MS).unref();
+    logger.debug('[daemon] eternal revenue leak watcher scheduled (24h interval)');
   }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };
