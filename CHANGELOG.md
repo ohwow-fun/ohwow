@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.10.0] — 2026-04-22
+
+### Added
+
+- **TUI redesign**: Onboarding collapsed from 10 steps to 2 questions (`FirstMomentStep` — business name + first task). `ExperienceChoiceStep`, `ModelStep`, `AgentDiscoveryStep`, `AgentSelectionStep`, and `IntegrationSetupStep` removed from the onboarding flow.
+- **TUI redesign**: `Today` state board replaces the dashboard grid as the home screen. Three zones: agent roster (live status), attention queue (approvals surface red, `a`/`r` to act), dispatch rail.
+- **TUI redesign**: 4-section navigation — Today (1), Team (2), Work (3), Settings (4). Number keys switch sections from anywhere.
+- **TUI redesign**: Contacts and People consolidated under Team; Activity and Automations consolidated under Work.
+- **TUI redesign**: Universal keyboard grammar — `j`/`k` navigate all lists, `Escape` is back-only, `?` opens context help. Persistent status bar on every screen shows current section and available keys.
+- **TUI redesign**: Floating dispatch overlay on `d` from any screen — type a task, optional `@agent`, `Enter` queues it without leaving the current view.
+- **TUI redesign**: Post-onboarding landing on Today with the first agent in the roster; `needsOnboarding` banner removed.
+- **Eternal system**: `EternalSpec` runtime module with inactivity watcher, conservative mode, and values corpus.
+- **Eternal system**: Trustee escalation — `requiresTrusteeApproval` wired into conductor; email/webhook delivery for trustee notifications.
+- **Eternal system**: `ohwow eternal init` wizard to configure spec, trustee contact, and values corpus.
+- **Eternal system**: `GET /api/eternal/state` and `GET`/`PUT /api/eternal/config` runtime endpoints.
+- **Eternal system**: `eternal.config.json` loaded at daemon boot; inactivity watcher scheduled hourly.
+- **Eternal system**: Layer 2 revenue leak watcher — detects unattributed payment events.
+- **Eternal system**: Layer 2 infrastructure bill tracker — migration 150, route, and watcher.
+- **Eternal system**: Layer 4 contact SLA watcher — surfaces at-risk relationships.
+- **Eternal system**: `recordActivity` wired into API middleware and CLI for activity tracking.
+- **Eternal system**: Values corpus injected into orchestrator system prompt.
+- **Video**: HeyGen avatar provider and `ohwow video avatar` command.
+- **Video**: Higgsfield text-to-video provider.
+- **Video**: Standardized provider metadata — Seedance, Kling v2, Runway, and credit tier definitions.
+- **Browser/CDP**: `cdp_trace_events` SQLite table (migration 147) with structured trace logs across all browser/tab/action lifecycle points. `ohwow_list_cdp_events` MCP verb.
+- **Self-bench**: `ModelInductionProbeExperiment` — closes the discovery → self-test loop; inducted models auto-promote to `runtime_config` pool.
+- **Self-bench**: `ModelReleaseMonitorExperiment` — 12h model release tracking.
+- **Sync**: `self_findings` registered in `SYNC_REGISTRY` for cloud sync.
+- **Dev**: TUI journey simulator (`npm run tui-journey`) for visual QA of screen transitions.
+
+### Fixed
+
+- **Browser**: Reuse existing CDP tab in deliverable and tool executors; eliminated stale-Chrome singleton with `killStaleDebugChrome`.
+- **Browser**: Normalize `claimTarget.profileDir` to filesystem path in composer helpers.
+- **Autonomy**: Use OpenRouter model ID format (`anthropic/claude-haiku-4.5`) for default planning model.
+- **Voice**: Allow product mention in `buyer_intent` reply prompts.
+- **Daemon**: Apply per-workspace license key for secondary workspaces.
+- **Dependencies**: Patch 5 Dependabot vulnerabilities via npm overrides.
+
 ## [0.9.0] — 2026-04-16
 
 ### Added
