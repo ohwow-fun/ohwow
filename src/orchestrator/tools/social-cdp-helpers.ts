@@ -314,6 +314,31 @@ export async function warmupBrowse(page: RawCdpPage): Promise<void> {
   } catch { /* best effort */ }
 }
 
+/**
+ * Scroll the page organically — variable distance and timing per round,
+ * with occasional hesitation pauses to mimic real reading behavior.
+ */
+export async function organicScroll(page: RawCdpPage, rounds = 3): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    const fraction = 0.45 + Math.random() * 0.45;
+    await page.evaluate(`window.scrollBy(0, Math.round(window.innerHeight * ${fraction}))`);
+    await jitteredWait(900, 0.5);
+    if (Math.random() < 0.35) await jitteredWait(700, 0.5);
+  }
+}
+
+/**
+ * Human-style session warmup: land on Threads home, scroll the feed for
+ * a natural reading interval, then return. Always call this before
+ * navigating to a search or post URL so the session looks organic.
+ */
+export async function landingPageWarmup(page: RawCdpPage): Promise<void> {
+  await page.goto('https://www.threads.com/');
+  await jitteredWait(HYDRATION_WAIT_MS, 0.3);
+  await organicScroll(page, 2 + Math.floor(Math.random() * 2));
+  await jitteredWait(1200 + Math.random() * 800, 0.3);
+}
+
 /** JPEG screenshot (base64), quality 70. Returns undefined on failure. */
 export async function captureScreenshot(page: RawCdpPage): Promise<string | undefined> {
   try {

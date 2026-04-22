@@ -27,7 +27,10 @@ import { getRuntimeConfig } from '../self-bench/runtime-config.js';
 import {
   scanThreadsPostsViaBrowser,
   fetchThreadsPostFullText,
+  getThreadsSessionPage,
 } from '../orchestrator/tools/threads-reply.js';
+import type { RawCdpPage } from '../execution/browser/raw-cdp.js';
+import { organicScroll, landingPageWarmup, jitteredWait } from '../orchestrator/tools/social-cdp-helpers.js';
 import {
   pickReplyTargets,
   threadToCandidate,
@@ -247,157 +250,195 @@ export class ThreadsReplyScheduler {
       '[threads-reply-scheduler] tick entering scan phase',
     );
 
-    const pool = await this.scanPool(queries);
-    if (pool.length === 0) {
-      logger.info('[threads-reply-scheduler] pool empty; skipping tick');
+    // Open ONE session tab for the entire tick — avoids the 3+ tab open/close
+    // cycle per post that triggers bot-detection heuristics.
+    const sessionHandle = await getThreadsSessionPage();
+    if (!sessionHandle) {
+      logger.warn('[threads-reply-scheduler] no threads.com CDP page available; skipping tick');
       return;
     }
+    const { page: sessionPage, created: sessionCreated } = sessionHandle;
 
-    const draftedUrls = await this.loadDraftedUrls();
-    const freshPool = pool.filter((t) => !draftedUrls.has(t.candidate.url));
-    if (freshPool.length === 0) {
-      logger.info('[threads-reply-scheduler] all pool URLs already have drafts');
-      return;
-    }
+    try {
+      // Warmup: land on Threads home and scroll the feed before going straight
+      // to search — a cold jump to /search?q=... is a strong bot signal.
+      await landingPageWarmup(sessionPage);
 
-    const perQuerySurvivors: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery }> = [];
-    for (const q of queries) {
-      const qPool = freshPool.filter((t) => t.query.q === q.q).map((t) => t.candidate);
-      if (qPool.length === 0) continue;
-      const sel = pickReplyTargets({
-        candidates: qPool,
-        filters: filtersFor(q),
-        topicKeywords: [],
-        topN: 100,
+      const pool = await this.scanPool(queries, sessionPage);
+      if (pool.length === 0) {
+        logger.info('[threads-reply-scheduler] pool empty; skipping tick');
+        return;
+      }
+
+      const draftedUrls = await this.loadDraftedUrls();
+      const freshPool = pool.filter((t) => !draftedUrls.has(t.candidate.url));
+      if (freshPool.length === 0) {
+        logger.info('[threads-reply-scheduler] all pool URLs already have drafts');
+        return;
+      }
+
+      const perQuerySurvivors: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery }> = [];
+      for (const q of queries) {
+        const qPool = freshPool.filter((t) => t.query.q === q.q).map((t) => t.candidate);
+        if (qPool.length === 0) continue;
+        const sel = pickReplyTargets({
+          candidates: qPool,
+          filters: filtersFor(q),
+          topicKeywords: [],
+          topN: 100,
+        });
+        for (const s of sel.accepted) {
+          perQuerySurvivors.push({ candidate: s.candidate, score: s.score, query: q });
+        }
+      }
+      if (perQuerySurvivors.length === 0) {
+        logger.info('[threads-reply-scheduler] no posts survived per-query filters');
+        return;
+      }
+
+      const seenAuthors = new Set<string>();
+      perQuerySurvivors.sort((a, b) => b.score - a.score);
+      const crossDedup = perQuerySurvivors.filter((s) => {
+        const key = (s.candidate.authorHandle || 'unknown').toLowerCase();
+        if (seenAuthors.has(key)) return false;
+        seenAuthors.add(key);
+        return true;
       });
-      for (const s of sel.accepted) {
-        perQuerySurvivors.push({ candidate: s.candidate, score: s.score, query: q });
-      }
-    }
-    if (perQuerySurvivors.length === 0) {
-      logger.info('[threads-reply-scheduler] no posts survived per-query filters');
-      return;
-    }
-
-    const seenAuthors = new Set<string>();
-    perQuerySurvivors.sort((a, b) => b.score - a.score);
-    const crossDedup = perQuerySurvivors.filter((s) => {
-      const key = (s.candidate.authorHandle || 'unknown').toLowerCase();
-      if (seenAuthors.has(key)) return false;
-      seenAuthors.add(key);
-      return true;
-    });
-    logger.info(
-      { perQuery: perQuerySurvivors.length, dedupd: crossDedup.length },
-      '[threads-reply-scheduler] survivors after cross-author dedup',
-    );
-
-    const classifyBudget = Math.min(crossDedup.length, topN * 3);
-    const toClassify = crossDedup.slice(0, classifyBudget);
-    const verdicts = await classifyReplyTargetsBatch(
-      { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
-      toClassify.map((s) => s.candidate),
-      CLASSIFIER_CONCURRENCY,
-    );
-
-    const keepers: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery; verdict: ReplyClassifierVerdict }> = [];
-    for (let i = 0; i < toClassify.length; i++) {
-      if (isKeeper(verdicts[i])) {
-        keepers.push({ ...toClassify[i], verdict: verdicts[i] });
-      }
-    }
-    keepers.sort((a, b) => b.score - a.score);
-
-    logger.info(
-      { classified: toClassify.length, keepers: keepers.length },
-      '[threads-reply-scheduler] classifier results',
-    );
-    if (keepers.length === 0) return;
-
-    const toDraft = keepers.slice(0, topN);
-    let inserted = 0;
-    for (const k of toDraft) {
-      const existing = await findReplyDraftByUrl(this.db, this.workspaceId, k.candidate.url);
-      if (existing) continue;
-
-      // Enrich with full Threads post text — search snippets are truncated.
-      const full = await fetchThreadsPostFullText(k.candidate.url).catch(() => null);
-      const enrichedCandidate: ReplyCandidate = full && full.length > (k.candidate.text?.length ?? 0)
-        ? { ...k.candidate, text: full }
-        : k.candidate;
-
-      // Pick drafter mode from classifier verdict (Threads is direct-only
-      // today; viral-piggyback is deferred until Threads exposes a top-sort
-      // tab). buyer_intent → ohwow-naming drafter; adjacent_prospect →
-      // praise drafter; else the default observational drafter.
-      const drafterMode = drafterModeForClass('direct', k.verdict.class);
-      const gen = await generateReplyCopy(
-        { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
-        { target: enrichedCandidate, platform: 'threads', mode: drafterMode },
+      logger.info(
+        { perQuery: perQuerySurvivors.length, dedupd: crossDedup.length },
+        '[threads-reply-scheduler] survivors after cross-author dedup',
       );
-      if (!gen.ok) {
-        logger.warn({ err: gen.error, url: k.candidate.url }, '[threads-reply-scheduler] generator failed');
-        continue;
-      }
-      if (gen.draft === 'SKIP') {
-        logger.info(
-          { url: k.candidate.url, rationale: gen.rationale },
-          '[threads-reply-scheduler] candidate skipped by generator',
-        );
-        continue;
-      }
 
-      // Belt-and-suspenders voice gate: fix cosmetic violations first, then
-      // reject any draft that still fails the gate. generateReplyCopy runs
-      // voiceCheck internally but this catches drifts introduced by later
-      // enrichment or alternate-selection paths before the row lands in DB.
-      const fixedDraft = autoFixCosmetic(gen.draft!);
-      const gateResult = voiceCheck(fixedDraft, { platform: 'threads', useCase: 'reply' });
-      if (!gateResult.ok) {
-        logger.warn(
-          { url: k.candidate.url, reasons: gateResult.reasons },
-          '[threads-reply-scheduler] draft failed voice gate; skipping insert',
-        );
-        continue;
-      }
+      const classifyBudget = Math.min(crossDedup.length, topN * 3);
+      const toClassify = crossDedup.slice(0, classifyBudget);
+      const verdicts = await classifyReplyTargetsBatch(
+        { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
+        toClassify.map((s) => s.candidate),
+        CLASSIFIER_CONCURRENCY,
+      );
 
-      const row = await insertReplyDraft(this.db, {
-        workspaceId: this.workspaceId,
-        platform: 'threads',
-        replyToUrl: k.candidate.url,
-        replyToAuthor: k.candidate.authorHandle,
-        replyToText: enrichedCandidate.text,
-        replyToLikes: k.candidate.likes,
-        replyToReplies: k.candidate.replies,
-        mode: 'direct',
-        body: fixedDraft,
-        alternates: gen.alternates,
-        verdict: k.verdict,
-        score: k.score,
-        initialStatus: approvalRequired ? 'pending' : 'auto_applied',
-      });
-      if (row) {
-        inserted++;
-        logger.info(
-          { id: row.id, url: k.candidate.url, score: k.score, approvalRequired },
-          '[threads-reply-scheduler] draft inserted',
-        );
+      const keepers: Array<{ candidate: ReplyCandidate; score: number; query: ThreadsReplyQuery; verdict: ReplyClassifierVerdict }> = [];
+      for (let i = 0; i < toClassify.length; i++) {
+        if (isKeeper(verdicts[i])) {
+          keepers.push({ ...toClassify[i], verdict: verdicts[i] });
+        }
       }
+      keepers.sort((a, b) => b.score - a.score);
+
+      logger.info(
+        { classified: toClassify.length, keepers: keepers.length },
+        '[threads-reply-scheduler] classifier results',
+      );
+      if (keepers.length === 0) return;
+
+      const toDraft = keepers.slice(0, topN);
+      let inserted = 0;
+      for (const k of toDraft) {
+        const existing = await findReplyDraftByUrl(this.db, this.workspaceId, k.candidate.url);
+        if (existing) continue;
+
+        // Enrich with full Threads post text — search snippets are truncated.
+        // Use the shared session tab so we don't open a fresh tab per post.
+        const full = await fetchThreadsPostFullText(k.candidate.url, { page: sessionPage }).catch(() => null);
+        const enrichedCandidate: ReplyCandidate = full && full.length > (k.candidate.text?.length ?? 0)
+          ? { ...k.candidate, text: full }
+          : k.candidate;
+
+        // After reading the post detail, return to home to look organic before
+        // the next fetch. Best-effort — don't abort the loop on nav failure.
+        try {
+          await sessionPage.goto('https://www.threads.com/');
+          await jitteredWait(1500 + Math.random() * 1000, 0.3);
+          await organicScroll(sessionPage, 1 + Math.floor(Math.random() * 2));
+        } catch { /* best effort */ }
+
+        // Pick drafter mode from classifier verdict (Threads is direct-only
+        // today; viral-piggyback is deferred until Threads exposes a top-sort
+        // tab). buyer_intent → ohwow-naming drafter; adjacent_prospect →
+        // praise drafter; else the default observational drafter.
+        const drafterMode = drafterModeForClass('direct', k.verdict.class);
+        const gen = await generateReplyCopy(
+          { db: this.db, engine: this.engine, workspaceId: this.workspaceId },
+          { target: enrichedCandidate, platform: 'threads', mode: drafterMode },
+        );
+        if (!gen.ok) {
+          logger.warn({ err: gen.error, url: k.candidate.url }, '[threads-reply-scheduler] generator failed');
+          continue;
+        }
+        if (gen.draft === 'SKIP') {
+          logger.info(
+            { url: k.candidate.url, rationale: gen.rationale },
+            '[threads-reply-scheduler] candidate skipped by generator',
+          );
+          continue;
+        }
+
+        // Belt-and-suspenders voice gate: fix cosmetic violations first, then
+        // reject any draft that still fails the gate. generateReplyCopy runs
+        // voiceCheck internally but this catches drifts introduced by later
+        // enrichment or alternate-selection paths before the row lands in DB.
+        const fixedDraft = autoFixCosmetic(gen.draft!);
+        const gateResult = voiceCheck(fixedDraft, { platform: 'threads', useCase: 'reply' });
+        if (!gateResult.ok) {
+          logger.warn(
+            { url: k.candidate.url, reasons: gateResult.reasons },
+            '[threads-reply-scheduler] draft failed voice gate; skipping insert',
+          );
+          continue;
+        }
+
+        const row = await insertReplyDraft(this.db, {
+          workspaceId: this.workspaceId,
+          platform: 'threads',
+          replyToUrl: k.candidate.url,
+          replyToAuthor: k.candidate.authorHandle,
+          replyToText: enrichedCandidate.text,
+          replyToLikes: k.candidate.likes,
+          replyToReplies: k.candidate.replies,
+          mode: 'direct',
+          body: fixedDraft,
+          alternates: gen.alternates,
+          verdict: k.verdict,
+          score: k.score,
+          initialStatus: approvalRequired ? 'pending' : 'auto_applied',
+        });
+        if (row) {
+          inserted++;
+          logger.info(
+            { id: row.id, url: k.candidate.url, score: k.score, approvalRequired },
+            '[threads-reply-scheduler] draft inserted',
+          );
+        }
+      }
+      logger.info({ inserted, drafted: toDraft.length }, '[threads-reply-scheduler] tick complete');
+    } finally {
+      if (sessionCreated) await sessionPage.closeAndCleanup(); else sessionPage.close();
     }
-    logger.info({ inserted, drafted: toDraft.length }, '[threads-reply-scheduler] tick complete');
   }
 
   // ---- helpers ----
 
-  private async scanPool(queries: ThreadsReplyQuery[]): Promise<TaggedCandidate[]> {
+  private async scanPool(queries: ThreadsReplyQuery[], sharedPage?: RawCdpPage): Promise<TaggedCandidate[]> {
     const pool: TaggedCandidate[] = [];
     const seen = new Set<string>();
-    for (const q of queries) {
+    for (let qi = 0; qi < queries.length; qi++) {
+      const q = queries[qi];
+      // Between queries: navigate home and scroll organically to break up
+      // back-to-back search requests (a clear bot signature). Skip on the
+      // first query — the caller already did a landingPageWarmup.
+      if (qi > 0 && sharedPage) {
+        try {
+          await sharedPage.goto('https://www.threads.com/');
+          await jitteredWait(1500 + Math.random() * 1000, 0.35);
+          await organicScroll(sharedPage, 1 + Math.floor(Math.random() * 2));
+        } catch { /* best effort */ }
+      }
       try {
         const res = await scanThreadsPostsViaBrowser({
           source: `search:${q.q}`,
           limit: SCAN_LIMIT_PER_QUERY,
           scrollRounds: SCAN_SCROLL_ROUNDS,
+          sharedPage,
         });
         for (const p of res.posts.map(threadToCandidate)) {
           if (seen.has(p.id)) continue;

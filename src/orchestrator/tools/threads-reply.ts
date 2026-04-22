@@ -37,6 +37,8 @@ import {
   wait,
   jitteredWait,
   warmupBrowse,
+  organicScroll,
+  landingPageWarmup,
   HYDRATION_WAIT_MS,
   type CdpPageHandle,
 } from './social-cdp-helpers.js';
@@ -122,6 +124,8 @@ export interface ScanThreadsInput {
   scrollRounds?: number;
   /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
   profileDir?: string;
+  /** When provided, use this page instead of opening a new one. Caller owns lifecycle. */
+  sharedPage?: RawCdpPage;
 }
 
 export interface ScannedThread {
@@ -167,6 +171,8 @@ export interface ReplyThreadsInput {
   workspaceId?: string;
   /** Filesystem profile directory — see x-posting ComposeTweetInput.profileDir. */
   profileDir?: string;
+  /** When provided, use this page for the operation and do not close it. Caller owns lifecycle. */
+  sharedPage?: RawCdpPage;
 }
 
 export interface ReplyThreadsResult {
@@ -200,6 +206,17 @@ async function getThreadsCdpPage(expectedContextId?: string, profileDir?: string
     ownershipMode: 'ours',
     profileDir,
   });
+}
+
+/**
+ * Open (or reuse) the Threads CDP page. Caller is responsible for closing.
+ * Exported so the scheduler can open one shared session tab for an entire tick.
+ */
+export async function getThreadsSessionPage(
+  expectedBrowserContextId?: string,
+  profileDir?: string,
+): Promise<CdpPageHandle | null> {
+  return getThreadsCdpPage(expectedBrowserContextId, profileDir);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,18 +266,22 @@ export function resolveThreadsSourceUrl(source: string): string {
  */
 export async function fetchThreadsPostFullText(
   url: string,
-  expectedBrowserContextId?: string,
+  opts?: { page?: RawCdpPage; expectedBrowserContextId?: string },
 ): Promise<string | null> {
   const m = url.match(/\/post\/([^/?#]+)/);
   if (!m) return null;
   const postId = m[1];
 
-  const handle = await getThreadsCdpPage(expectedBrowserContextId);
-  if (!handle) return null;
-  const { page, created } = handle;
+  // If a shared page is provided, use it directly without opening/closing a tab.
+  const ownedHandle = opts?.page ? null : await getThreadsCdpPage(opts?.expectedBrowserContextId);
+  const page = opts?.page ?? ownedHandle?.page;
+  if (!page) return null;
+  const created = ownedHandle?.created ?? false;
   try {
     await page.goto(url);
     await jitteredWait(HYDRATION_WAIT_MS, 0.3);
+    // Reading pause — let the post fully render before extracting
+    await jitteredWait(1400, 0.35);
 
     const text = await page.evaluate<string | null>(`(() => {
       const postId = ${JSON.stringify(postId)};
@@ -296,9 +317,13 @@ export async function fetchThreadsPostFullText(
       return null;
     })()`).catch(() => null);
 
+    await jitteredWait(700, 0.35);
     return text;
   } finally {
-    if (created) await page.closeAndCleanup(); else page.close();
+    // Only close the tab when we own it (no sharedPage was provided).
+    if (!opts?.page) {
+      if (created) await page.closeAndCleanup(); else page.close();
+    }
   }
 }
 
@@ -358,8 +383,12 @@ export async function scanThreadsPostsViaBrowser(
     }
   }
 
-  const handle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
-  if (!handle) {
+  // If a shared page is provided, use it directly; otherwise open a new tab.
+  const ownedHandle = input.sharedPage
+    ? null
+    : await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
+  const page = input.sharedPage ?? ownedHandle?.page;
+  if (!page) {
     return {
       success: false,
       message: 'Could not attach to Chrome CDP at :9222 — no threads.com tab open, or debug Chrome is down.',
@@ -369,8 +398,19 @@ export async function scanThreadsPostsViaBrowser(
     };
   }
 
-  const { page, created } = handle;
+  const created = ownedHandle?.created ?? false;
   try {
+    // Humanization: visit Threads home first if the tab isn't already on a
+    // Threads page (other than search/login) — makes the session look organic.
+    const currentPageUrl = await page.url().catch(() => '');
+    const alreadyBrowsing = isThreadsUrl(currentPageUrl)
+      && !currentPageUrl.includes('/login')
+      && !currentPageUrl.includes('/search')
+      && currentPageUrl !== THREADS_HOME;
+    if (!alreadyBrowsing && resolvedUrl !== THREADS_HOME) {
+      await landingPageWarmup(page);
+    }
+
     await page.goto(resolvedUrl);
     await jitteredWait(HYDRATION_WAIT_MS, 0.3);
     const currentUrl = await page.url();
@@ -554,7 +594,10 @@ export async function scanThreadsPostsViaBrowser(
       currentUrl: await page.url().catch(() => undefined),
     };
   } finally {
-    if (created) await page.closeAndCleanup(); else page.close();
+    // Only close the tab when we own it (no sharedPage was provided).
+    if (!input.sharedPage) {
+      if (created) await page.closeAndCleanup(); else page.close();
+    }
   }
 }
 
@@ -609,16 +652,32 @@ export async function composeThreadsReplyViaBrowser(
     }
   }
 
-  const handle = await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
-  if (!handle) {
+  const ownedHandle = input.sharedPage
+    ? null
+    : await getThreadsCdpPage(input.expectedBrowserContextId, input.profileDir);
+  const page = input.sharedPage ?? ownedHandle?.page;
+  if (!page) {
     return {
       success: false,
       message: 'Could not attach to Chrome CDP at :9222 — no threads.com tab open, or debug Chrome is down.',
     };
   }
 
-  const { page, created } = handle;
+  const created = ownedHandle?.created ?? false;
   try {
+    // Humanization: visit Threads home first when the tab is cold or not
+    // already browsing organically — mirrors scanThreadsPostsViaBrowser.
+    // The dispatcher calls this without sharedPage so it always owns the
+    // tab; without warmup it cold-navigates directly to the post URL,
+    // which Threads flags as bot behaviour.
+    const preUrl = await page.url().catch(() => '');
+    const alreadyBrowsing = isThreadsUrl(preUrl)
+      && !preUrl.includes('/login')
+      && !preUrl.includes('/search')
+      && preUrl !== THREADS_HOME;
+    if (!alreadyBrowsing) {
+      await landingPageWarmup(page);
+    }
     await page.goto(normalized);
     await jitteredWait(HYDRATION_WAIT_MS, 0.3);
     const currentUrl = await page.url();
@@ -851,7 +910,11 @@ export async function composeThreadsReplyViaBrowser(
       currentUrl: await page.url(),
     };
   } finally {
-    if (created) await page.closeAndCleanup(); else page.close();
+    // Only close the tab when we own it (no sharedPage was provided).
+    if (!input.sharedPage) {
+      if (created) await page.closeAndCleanup(); else page.close();
+    }
+    // if sharedPage was provided: caller owns the tab lifecycle — do nothing
   }
 }
 
