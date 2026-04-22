@@ -9,6 +9,7 @@
 
 import React from 'react';
 import { Box, Text } from 'ink';
+import { useTerminalSize } from '../hooks/use-terminal-size.js';
 
 export interface KeyHint {
   key: string;
@@ -50,6 +51,10 @@ export interface StatusBarProps {
 }
 
 export function StatusBar({ section, subsection, extraHints, hideDispatch }: StatusBarProps) {
+  const cols = useTerminalSize();
+  const narrow = cols < 90;
+  const compact = cols < 70;
+
   const sectionLabel = subsection
     ? `${section} › ${subsection}`
     : section;
@@ -60,7 +65,7 @@ export function StatusBar({ section, subsection, extraHints, hideDispatch }: Sta
       borderColor="gray"
       paddingX={1}
       flexDirection="row"
-      flexWrap="nowrap"
+      flexWrap="wrap"
     >
       {/* Section badge */}
       <Box marginRight={2}>
@@ -69,11 +74,13 @@ export function StatusBar({ section, subsection, extraHints, hideDispatch }: Sta
         <Text bold color="white">]</Text>
       </Box>
 
-      {/* Universal hints */}
-      <Box marginRight={2}>
-        <Text bold color="yellow">j/k</Text>
-        <Text color="gray">:nav</Text>
-      </Box>
+      {/* Universal hints — trim on narrow */}
+      {!compact && (
+        <Box marginRight={2}>
+          <Text bold color="yellow">j/k</Text>
+          <Text color="gray">:nav</Text>
+        </Box>
+      )}
       <Box marginRight={2}>
         <Text bold color="yellow">Enter</Text>
         <Text color="gray">:open</Text>
@@ -88,13 +95,15 @@ export function StatusBar({ section, subsection, extraHints, hideDispatch }: Sta
           <Text color="gray">:dispatch</Text>
         </Box>
       )}
-      <Box marginRight={2}>
-        <Text bold color="yellow">?</Text>
-        <Text color="gray">:help</Text>
-      </Box>
+      {!compact && (
+        <Box marginRight={2}>
+          <Text bold color="yellow">?</Text>
+          <Text color="gray">:help</Text>
+        </Box>
+      )}
 
-      {/* Context-specific extras */}
-      {extraHints && extraHints.map((hint, i) => (
+      {/* Context-specific extras — only on wide terminals */}
+      {!narrow && extraHints && extraHints.map((hint, i) => (
         <Box key={i} marginRight={2}>
           <Text bold color="yellow">{hint.key}</Text>
           <Text color="gray">:{hint.label}</Text>

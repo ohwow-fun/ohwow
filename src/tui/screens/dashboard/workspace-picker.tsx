@@ -10,6 +10,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { useTerminalSize } from '../../hooks/use-terminal-size.js';
 import {
   resolveActiveWorkspace,
   listWorkspaces,
@@ -43,6 +44,8 @@ export function WorkspacePicker({ onSelect, onClose, isActive }: WorkspacePicker
   const [rows, setRows] = useState<WorkspaceRow[]>([]);
   const [idx, setIdx] = useState(0);
   const [loading, setLoading] = useState(true);
+  const termCols = useTerminalSize();
+  const pickerWidth = Math.min(72, termCols - 4);
 
   const currentName = useMemo(() => resolveActiveWorkspace().name, []);
 
@@ -130,7 +133,7 @@ export function WorkspacePicker({ onSelect, onClose, isActive }: WorkspacePicker
         borderColor="magenta"
         paddingX={2}
         paddingY={1}
-        width={72}
+        width={pickerWidth}
       >
         <Box marginBottom={1}>
           <Text bold color="magenta">Switch workspace</Text>

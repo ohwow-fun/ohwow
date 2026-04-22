@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import type { WhatsAppConnectionStatus } from '../../whatsapp/types.js';
+import { useTerminalSize } from '../hooks/use-terminal-size.js';
 
 interface HeaderProps {
   version: string;
@@ -23,6 +24,7 @@ interface HeaderProps {
 
 export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt, initializing, workspaceName }: HeaderProps) {
   const [clock, setClock] = useState(() => ({ time: formatTime(), now: Date.now() }));
+  const cols = useTerminalSize();
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -37,24 +39,26 @@ export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPi
     : (daemonUptime || 0);
 
   const isConnected = tier !== 'free';
+  const narrow = cols < 90;    // hide PID / port / uptime
+  const compact = cols < 75;   // also hide workspace name
 
   return (
     <Box borderStyle="single" borderColor="cyan" paddingX={1} justifyContent="space-between">
       <Box>
         <Text bold color="cyan">OHWOW v{version}</Text>
-        {workspaceName && (
+        {workspaceName && !compact && (
           <>
             <Text color="gray">  │  </Text>
             <Text bold color="magenta">⌂ {workspaceName}</Text>
           </>
         )}
-        {daemonPid && (
+        {daemonPid && !narrow && (
           <Text color="gray">  │  PID {daemonPid}</Text>
         )}
-        {daemonPort && (
+        {daemonPort && !narrow && (
           <Text color="gray">  :{daemonPort}</Text>
         )}
-        {liveUptime > 0 && (
+        {liveUptime > 0 && !narrow && (
           <Text color="gray">  Up {formatUptime(liveUptime)}</Text>
         )}
       </Box>
@@ -66,11 +70,11 @@ export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPi
         ) : (
           <Text color="green">● Local</Text>
         )}
-        {whatsappStatus === 'connected' && (
-          <Text color="green">  ● WhatsApp</Text>
+        {whatsappStatus === 'connected' && !narrow && (
+          <Text color="green">  ● WA</Text>
         )}
-        {whatsappStatus === 'qr_pending' && (
-          <Text color="yellow">  ◌ WhatsApp QR</Text>
+        {whatsappStatus === 'qr_pending' && !narrow && (
+          <Text color="yellow">  ◌ WA QR</Text>
         )}
         <Text color="gray">  {clock.time}</Text>
       </Box>

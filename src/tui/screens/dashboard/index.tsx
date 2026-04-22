@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
+import { useTerminalSize } from '../../hooks/use-terminal-size.js';
 import type { RuntimeConfig } from '../../../config.js';
 import { updateConfigFile, resolveActiveWorkspace } from '../../../config.js';
 import type { DatabaseAdapter } from '../../../db/adapter-types.js';
@@ -105,6 +106,8 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
   // The TUI process is bound to whichever workspace was active at boot.
   // Read it once — it can't change mid-process, switching requires re-launch.
   const workspaceName = useMemo(() => resolveActiveWorkspace().name, []);
+  const terminalCols = useTerminalSize();
+  const dialogWidth = Math.min(56, terminalCols - 6);
   const runtime = useRuntime({ config, db, rawDb });
   const nav = useNavigation();
   const agents = useAgents(runtime.db, runtime.workspaceId);
@@ -1501,7 +1504,7 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
             borderColor="yellow"
             paddingX={3}
             paddingY={1}
-            width={60}
+            width={dialogWidth}
           >
             <Text bold color="yellow">Media Generation Cost</Text>
             <Box marginTop={1} flexDirection="column">
@@ -1544,7 +1547,7 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
             borderColor="yellow"
             paddingX={3}
             paddingY={1}
-            width={60}
+            width={dialogWidth}
           >
             <Text bold color="yellow">Permission Required</Text>
             <Box marginTop={1} flexDirection="column">
@@ -1585,7 +1588,7 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
             borderColor="cyan"
             paddingX={3}
             paddingY={1}
-            width={60}
+            width={dialogWidth}
           >
             <Text bold color="cyan">Input Needed</Text>
             <Box marginTop={1} flexDirection="column">
@@ -1919,6 +1922,9 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
   const [rejectInput, setRejectInput] = useState<string | null>(null);
+  const cols = useTerminalSize();
+  const stacked = cols < 90;
+  const approvalTitleMax = stacked ? Math.max(20, cols - 20) : 40;
 
   // Fetch pending approvals — sorted oldest first
   useEffect(() => {
@@ -2032,17 +2038,18 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
 
   return (
     <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
-      {/* Main row: left (agent roster) + center (attention queue) */}
-      <Box flexDirection="row" flexGrow={1}>
-        {/* LEFT COLUMN ~40%: Agent roster */}
+      {/* Main row: side-by-side on wide terminals, stacked on narrow */}
+      <Box flexDirection={stacked ? 'column' : 'row'} flexGrow={1}>
+        {/* AGENTS column — 40% wide or full-width when stacked */}
         <Box
           flexDirection="column"
-          width="40%"
+          width={stacked ? '100%' : '40%'}
           borderStyle="single"
           borderColor="cyan"
           paddingX={1}
           paddingY={0}
-          marginRight={1}
+          marginRight={stacked ? 0 : 1}
+          marginBottom={stacked ? 1 : 0}
         >
           <Text bold color="cyan">AGENTS</Text>
           {agents.length === 0 ? (
@@ -2118,7 +2125,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                     </Text>
                     <Box flexDirection="column">
                       <Text color="red" bold={isSelected} inverse={isSelected}>
-                        {approval.title.length > 40 ? approval.title.slice(0, 37) + '...' : approval.title}
+                        {approval.title.length > approvalTitleMax ? approval.title.slice(0, approvalTitleMax - 3) + '...' : approval.title}
                       </Text>
                       <Text dimColor>{age}</Text>
                     </Box>
