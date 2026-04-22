@@ -99,7 +99,7 @@ import { attachScreencastWebSocket } from '../screencast-websocket.js';
 // Harness
 // ---------------------------------------------------------------------------
 
-const LOCAL_SESSION = 'local-session-token-for-tests';
+const LOCAL_TOKEN = 'local-session-token-for-tests';
 
 interface Harness {
   server: Server;
@@ -109,7 +109,7 @@ interface Harness {
 
 async function startHarness(): Promise<Harness> {
   const server = createServer();
-  attachScreencastWebSocket({ server, sessionToken: LOCAL_SESSION });
+  attachScreencastWebSocket({ server, sessionToken: LOCAL_TOKEN });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const addr = server.address() as AddressInfo;
   return { server, url: `ws://127.0.0.1:${addr.port}/ws/screencast`, port: addr.port };
@@ -194,7 +194,8 @@ describe('/ws/screencast', () => {
       const ws = openClient(harness.url);
       await waitForOpen(ws);
 
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       const ok = await nextMessage(ws);
       expect(ok).toEqual({ type: 'authenticated' });
 
@@ -208,7 +209,8 @@ describe('/ws/screencast', () => {
       const ws = openClient(harness.url);
       await waitForOpen(ws);
 
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws); // authenticated
 
       ws.send(JSON.stringify({ type: 'subscribe' }));
@@ -230,7 +232,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
 
       ws.send(JSON.stringify({ type: 'subscribe' }));
@@ -261,7 +264,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
 
       ws.send(JSON.stringify({ type: 'subscribe', targetId: 'explicit-target' }));
@@ -281,7 +285,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws); // authenticated
       ws.send(JSON.stringify({ type: 'subscribe' }));
       await nextMessage(ws); // status active
@@ -315,7 +320,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
       ws.send(JSON.stringify({ type: 'subscribe' }));
       await nextMessage(ws); // status active
@@ -343,7 +349,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
       ws.send(JSON.stringify({ type: 'subscribe' }));
       await nextMessage(ws); // status active
@@ -365,7 +372,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
       ws.send(JSON.stringify({ type: 'subscribe' }));
       await nextMessage(ws); // status active
@@ -397,7 +405,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
       ws.send(JSON.stringify({ type: 'subscribe' }));
       await nextMessage(ws);
@@ -428,7 +437,8 @@ describe('/ws/screencast', () => {
 
       const ws = openClient(harness.url);
       await waitForOpen(ws);
-      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_SESSION }));
+      ws.send(JSON.stringify({ type: 'auth', token: LOCAL_TOKEN }));
+
       await nextMessage(ws);
       ws.send(JSON.stringify({ type: 'subscribe' }));
 
