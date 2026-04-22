@@ -28,6 +28,8 @@ import { TodayBoard } from '../src/tui/screens/dashboard/index.js';
 // Components
 import { KeyHints } from '../src/tui/components/key-hints.js';
 import { AgentCard } from '../src/tui/components/agent-card.js';
+import { SectionNav } from '../src/tui/components/section-nav.js';
+import { Section } from '../src/tui/types.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -367,6 +369,28 @@ show('Today Board — 4 agents, no db (empty attention queue)', 'Dashboard › T
 
 show('Today Board — Empty agents, no db', 'Dashboard › Today',
   <TodayBoard agents={[]} db={null} />
+);
+
+// ─── Journey 6: 4-section nav bar (TRIO-07) ─────────────────────────────
+
+console.log('\n\n' + '═'.repeat(COLS));
+console.log('  JOURNEY 6  ›  4-Section Nav Bar  (TRIO-07)');
+console.log('═'.repeat(COLS));
+
+show('SectionNav — Today active (home)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Today} />
+);
+
+show('SectionNav — Team active (Agents)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Team} />
+);
+
+show('SectionNav — Work active (Tasks)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Work} />
+);
+
+show('SectionNav — Settings active', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Settings} />
 );
 
 // ─── Footer ──────────────────────────────────────────────────────────────

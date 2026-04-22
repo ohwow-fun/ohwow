@@ -305,7 +305,7 @@ Check the box when QA completes and passes.
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | done | d2cb19a |
 | TRIO-05 | Build Today state board shell | done | b410401 |
 | TRIO-06 | Wire approvals into Today | done | 2091af7 |
-| TRIO-07 | 4-section nav (replace tab + grid) | pending | — |
+| TRIO-07 | 4-section nav (replace tab + grid) | done | 5551565 |
 | TRIO-08 | Merge Contacts + People; Activity → Work | pending | — |
 | TRIO-09 | Universal keyboard grammar + status bar | pending | — |
 | TRIO-10 | Universal dispatch overlay (d key) | pending | — |
