@@ -58,6 +58,7 @@ import { createPermissionRequestsRouter } from './routes/permission-requests.js'
 import { createFailingTriggersRouter } from './routes/failing-triggers.js';
 import { createFounderInboxRouter } from './routes/founder-inbox.js';
 import { createAutonomyStatusRouter } from './routes/autonomy-status.js';
+import { createInfraBillsRouter } from './routes/infra-bills.js';
 import { createBudgetConfigRouter } from './routes/budget-config.js';
 import { createFindingsRouter } from './routes/findings.js';
 import { createXDraftsRouter } from './routes/x-drafts.js';
@@ -646,6 +647,7 @@ export function createServer(deps: ServerDeps): {
   app.use(createFailingTriggersRouter(db));
   app.use(createFounderInboxRouter(db));
   app.use(createAutonomyStatusRouter(db, config.dataDir));
+  app.use(createInfraBillsRouter(db));
   app.use(createFindingsRouter(db));
   // Gap 13: per-workspace daily cap knob for the autonomous LLM loop.
   // GET returns the current limit + today's spend + source hint.

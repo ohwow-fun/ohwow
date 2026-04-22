@@ -121,6 +121,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '147-cdp-trace-events.sql', expectedTables: ['cdp_trace_events'] },
   { migrationFile: '148-eternal-state.sql', expectedTables: ['eternal_state'] },
   { migrationFile: '149-eternal-notifications.sql', expectedTables: ['eternal_notifications'] },
+  { migrationFile: '150-infrastructure-bills.sql', expectedTables: ['infrastructure_bills'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —

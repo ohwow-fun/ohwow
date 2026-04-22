@@ -36,7 +36,7 @@ import { syncAllTables } from '../sync/cloud-sync-job.js';
 import { checkAndMaybeUpdate } from '../eternal/inactivity-watcher.js';
 import { loadEternalSpec } from '../eternal/load-spec.js';
 import { resolveTrusteeNotifier } from '../eternal/trustee-email.js';
-import { checkContactSLAs, checkRevenueLeak } from '../eternal/index.js';
+import { checkContactSLAs, checkRevenueLeak, checkInfraBills } from '../eternal/index.js';
 import { registerExperiments } from './experiments.js';
 import {
   seedXIntelAutomation,
@@ -682,6 +682,19 @@ export async function initializeWorkspaceScheduling(deps: WorkspaceSchedulingDep
     runRevenueLeak();
     setInterval(runRevenueLeak, REVENUE_LEAK_CHECK_MS).unref();
     logger.debug('[daemon] eternal revenue leak watcher scheduled (24h interval)');
+  }
+
+  // Eternal Systems: infra bill watcher — confirms infrastructure costs are tracked.
+  {
+    const INFRA_BILL_CHECK_MS = 7 * 24 * 60 * 60_000; // weekly
+    const runInfraBillCheck = () => {
+      checkInfraBills(db, workspaceId).catch((err) => {
+        logger.warn({ err }, '[daemon] eternal.infra_bill_check.failed');
+      });
+    };
+    runInfraBillCheck();
+    setInterval(runInfraBillCheck, INFRA_BILL_CHECK_MS).unref();
+    logger.debug('[daemon] eternal infra bill watcher scheduled (7d interval)');
   }
 
   return { scheduler, proactiveEngine, connectorSyncScheduler };
