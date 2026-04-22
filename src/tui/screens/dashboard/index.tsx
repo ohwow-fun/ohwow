@@ -100,7 +100,7 @@ interface DashboardProps {
   onConfigChange?: (config: RuntimeConfig) => void;
 }
 
-export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, onStartOnboarding, onConfigChange }: DashboardProps) {
+export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: DashboardProps) {
   const { exit } = useApp();
   // The TUI process is bound to whichever workspace was active at boot.
   // Read it once — it can't change mid-process, switching requires re-launch.
@@ -982,8 +982,6 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
             ollamaConnected={runtime.ollamaConnected}
             modelReady={runtime.modelReady}
             sessionToken={runtime.sessionToken}
-            needsOnboarding={needsOnboarding}
-            onStartOnboarding={onStartOnboarding}
             models={ollamaModels}
           />
         );
@@ -1679,7 +1677,7 @@ export function Dashboard({ config, db, rawDb, needsOnboarding, justOnboarded, o
       {isHome ? (
         /* Today state board — 3-zone layout */
         <>
-          <TodayBoard agents={agents.list} db={runtime.db} />
+          <TodayBoard agents={agents.list} db={runtime.db} justOnboarded={justOnboarded} />
           <StatusBar
             section={getSectionLabel()}
             extraHints={getExtraHints()}
@@ -1737,37 +1735,15 @@ interface DashboardOverviewProps {
   ollamaConnected?: boolean;
   modelReady?: boolean;
   sessionToken: string;
-  needsOnboarding?: boolean;
-  onStartOnboarding?: () => void;
   models?: OllamaModelSummary[];
 }
 
-function DashboardOverview({ health, agents, tasks, port, ollamaConnected, modelReady, sessionToken, needsOnboarding, onStartOnboarding, models }: DashboardOverviewProps) {
+function DashboardOverview({ health, agents, tasks, port, ollamaConnected, modelReady, sessionToken, models }: DashboardOverviewProps) {
   const showModelBanner = !modelReady;
-
-  useInput((input, key) => {
-    if (needsOnboarding && onStartOnboarding && key.return) {
-      onStartOnboarding();
-    }
-  });
 
   return (
     <Box flexDirection="column">
-      {needsOnboarding && (
-        <Box
-          borderStyle="round"
-          borderColor="yellow"
-          paddingX={2}
-          marginBottom={1}
-        >
-          <Text color="yellow" bold>Set up your business and team to get started. </Text>
-          <Text color="gray">
-            Press <Text bold color="white">Enter</Text> to start.
-          </Text>
-        </Box>
-      )}
-
-      {showModelBanner && !needsOnboarding && (
+      {showModelBanner && (
         <Box
           borderStyle="round"
           borderColor="yellow"
@@ -1932,11 +1908,13 @@ interface PendingApproval {
 }
 
 interface TodayBoardProps {
-  agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown> }>;
+  agents: Array<{ id: string; name: string; role: string; status: string; stats: Record<string, unknown>; created_at?: string }>;
   db: DatabaseAdapter | null;
+  /** When true, agents created within the last 60 s are shown as "setting up…" */
+  justOnboarded?: boolean;
 }
 
-export function TodayBoard({ agents, db }: TodayBoardProps) {
+export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
@@ -2075,6 +2053,11 @@ export function TodayBoard({ agents, db }: TodayBoardProps) {
               let indicatorColor: string = 'gray';
               let activityLine = 'idle';
 
+              // Show "setting up…" for agents created in the last 60 s after onboarding
+              const isNew = justOnboarded && agent.created_at
+                ? (Date.now() - new Date(agent.created_at).getTime()) < 60_000
+                : false;
+
               if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
                 indicator = '◉';
                 indicatorColor = 'green';
@@ -2085,6 +2068,10 @@ export function TodayBoard({ agents, db }: TodayBoardProps) {
                 indicator = '✗';
                 indicatorColor = 'red';
                 activityLine = 'error';
+              } else if (isNew) {
+                indicator = '◌';
+                indicatorColor = 'cyan';
+                activityLine = 'setting up…';
               } else {
                 indicator = '●';
                 indicatorColor = 'gray';
