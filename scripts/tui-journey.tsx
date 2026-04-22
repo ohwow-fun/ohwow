@@ -30,6 +30,7 @@ import { KeyHints } from '../src/tui/components/key-hints.js';
 import { AgentCard } from '../src/tui/components/agent-card.js';
 import { SectionNav } from '../src/tui/components/section-nav.js';
 import { Section } from '../src/tui/types.js';
+import type { TeamSubTab, WorkSubTab } from '../src/tui/components/section-nav.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -382,11 +383,27 @@ show('SectionNav — Today active (home)', 'Dashboard › Nav',
 );
 
 show('SectionNav — Team active (Agents)', 'Dashboard › Nav',
-  <SectionNav activeSection={Section.Team} />
+  <SectionNav activeSection={Section.Team} teamSubTab={'agents' as TeamSubTab} />
+);
+
+show('SectionNav — Team active (Contacts)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Team} teamSubTab={'contacts' as TeamSubTab} />
+);
+
+show('SectionNav — Team active (People)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Team} teamSubTab={'people' as TeamSubTab} />
 );
 
 show('SectionNav — Work active (Tasks)', 'Dashboard › Nav',
-  <SectionNav activeSection={Section.Work} />
+  <SectionNav activeSection={Section.Work} workSubTab={'tasks' as WorkSubTab} />
+);
+
+show('SectionNav — Work active (Activity)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Work} workSubTab={'activity' as WorkSubTab} />
+);
+
+show('SectionNav — Work active (Automations)', 'Dashboard › Nav',
+  <SectionNav activeSection={Section.Work} workSubTab={'automations' as WorkSubTab} />
 );
 
 show('SectionNav — Settings active', 'Dashboard › Nav',

@@ -240,7 +240,7 @@ Check the box when QA completes and passes.
 - Test criterion: tui-journey shows 4-section nav bar; pressing 1-4 switches
   sections without going through the grid
 
-**TRIO-08** `[ ]` — Merge Contacts + People → Team; Activity → Work
+**TRIO-08** `[x]` — Merge Contacts + People → Team; Activity → Work (SHA: 908aa47)
 - `Contacts` and `People` both appear under TEAM as subsections
 - `Activity` merges into WORK as a "history" view alongside Tasks
 - `Automations` moves from tab to WORK section
@@ -306,7 +306,7 @@ Check the box when QA completes and passes.
 | TRIO-05 | Build Today state board shell | done | b410401 |
 | TRIO-06 | Wire approvals into Today | done | 2091af7 |
 | TRIO-07 | 4-section nav (replace tab + grid) | done | 5551565 |
-| TRIO-08 | Merge Contacts + People; Activity → Work | pending | — |
+| TRIO-08 | Merge Contacts + People; Activity → Work | done | 908aa47 |
 | TRIO-09 | Universal keyboard grammar + status bar | pending | — |
 | TRIO-10 | Universal dispatch overlay (d key) | pending | — |
 | TRIO-11 | Post-onboarding Today landing | pending | — |
