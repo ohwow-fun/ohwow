@@ -138,7 +138,7 @@ export function ActivityLog({ db }: ActivityLogProps) {
           items={filtered}
           emptyMessage={typeFilter !== 'all' || dateFilter !== 'all'
             ? 'No matching activity. Press f/d to change filters.'
-            : 'No activity yet.'
+            : '◌ No activity yet. Your operatives will log their work here.'
           }
           renderItem={(activity, _, isSelected) => (
             <ActivityEntry

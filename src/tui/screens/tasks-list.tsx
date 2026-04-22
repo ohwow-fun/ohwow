@@ -160,7 +160,7 @@ export function TasksList({ tasks, agents, onSelect }: TasksListProps) {
           onSelect={(task) => onSelect(task.id)}
           emptyMessage={statusFilter !== 'all'
             ? `No ${statusFilter.replace('_', ' ')} tasks. Press f to change filter.`
-            : "No tasks yet. Dispatch a task with 'n' or wait for cloud commands."
+            : "◌ No tasks yet. Press n to dispatch your first."
           }
           renderItem={(task, _, isSelected) => (
             <TaskRow
