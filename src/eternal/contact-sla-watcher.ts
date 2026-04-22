@@ -28,7 +28,9 @@ interface EventRow {
 
 interface InboxRow {
   id: string;
-  context: string;
+  // parseJsonColumns in the SQLite adapter auto-parses any {…} string, so
+  // context arrives as an object even though it is stored as a JSON string.
+  context: string | Record<string, unknown>;
   blocker: string;
   status: string;
 }
@@ -102,7 +104,11 @@ export async function checkContactSLAs(
   const alertedContactIds = new Set<string>();
   for (const item of inboxItems) {
     try {
-      const ctx = JSON.parse(item.context) as { contactId?: string };
+      // The SQLite adapter's parseJsonColumns auto-parses {…} strings into
+      // objects, so context may arrive already parsed. Handle both forms.
+      const ctx = (
+        typeof item.context === 'string' ? JSON.parse(item.context) : item.context
+      ) as { contactId?: string };
       if (ctx.contactId) alertedContactIds.add(ctx.contactId);
     } catch {
       // Malformed context — skip

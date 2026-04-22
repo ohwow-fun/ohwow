@@ -288,6 +288,43 @@ describe('checkContactSLAs', () => {
     expect(writeFounderQuestion).not.toHaveBeenCalled();
   });
 
+  it('skips contacts whose open alert context was auto-parsed to an object by the DB adapter', async () => {
+    // The SQLite adapter's parseJsonColumns turns any {…} JSON string into an
+    // object before returning it. The old code did JSON.parse(item.context)
+    // which would call JSON.parse("[object Object]") → SyntaxError → swallowed
+    // → dedup silently failed. Verify the fix handles the pre-parsed form.
+    const db = buildMockDb({
+      agent_workforce_contacts: [
+        {
+          id: 'c-self',
+          name: 'Founder',
+          contact_type: 'lead',
+          created_at: isoAgo(DAYS(60)),
+        },
+      ],
+      agent_workforce_contact_events: [
+        {
+          contact_id: 'c-self',
+          occurred_at: isoAgo(DAYS(30)), // 30 days, exceeds 21-day lead SLA
+          created_at: isoAgo(DAYS(30)),
+        },
+      ],
+      founder_inbox: [
+        {
+          id: 'inbox-obj',
+          blocker: 'relationship-decay',
+          status: 'open',
+          // Simulates what parseJsonColumns does: context arrives as an object,
+          // NOT as a JSON string.
+          context: { contactId: 'c-self', contactName: 'Founder', contactType: 'lead' },
+        },
+      ],
+    });
+    const result = await checkContactSLAs(db, WORKSPACE_ID, makeSpec());
+    expect(result).toBe(0);
+    expect(writeFounderQuestion).not.toHaveBeenCalled();
+  });
+
   it('returns the count of alerts written across multiple contacts', async () => {
     const db = buildMockDb({
       agent_workforce_contacts: [
