@@ -89,7 +89,7 @@ export async function runEternalCli(args: string[]): Promise<void> {
 
   const { initDatabase } = await import('../db/init.js');
   const { createSqliteAdapter } = await import('../db/sqlite-adapter.js');
-  const { getEternalState, setEternalMode } = await import('../eternal/index.js');
+  const { getEternalState, setEternalMode, recordActivity } = await import('../eternal/index.js');
 
   const rawDb = initDatabase(config.dbPath);
   const db = createSqliteAdapter(rawDb);
@@ -117,6 +117,7 @@ export async function runEternalCli(args: string[]): Promise<void> {
 
   if (sub === 'conservative') {
     await setEternalMode(db, 'conservative', 'manual: operator CLI');
+    await recordActivity(db);
     console.log('Eternal mode set to conservative. The conductor will skip autonomous ticks.');
     console.log('Run "ohwow eternal normal" to restore.');
     process.exit(0);
@@ -124,6 +125,7 @@ export async function runEternalCli(args: string[]): Promise<void> {
 
   if (sub === 'normal') {
     await setEternalMode(db, 'normal', 'manual: operator CLI');
+    await recordActivity(db);
     console.log('Eternal mode restored to normal.');
     process.exit(0);
   }

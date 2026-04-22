@@ -9,6 +9,8 @@ import type { DatabaseAdapter } from '../db/adapter-types.js';
 import { verifyDaemonToken } from '../daemon/token-codec.js';
 import type { WorkspaceDbPool } from '../db/workspace-db-pool.js';
 import type { WorkspaceRegistry } from '../daemon/workspace-registry.js';
+import { logger } from '../lib/logger.js';
+import { recordActivity } from '../eternal/index.js';
 
 /**
  * Create auth middleware that validates content tokens, local session tokens,
@@ -104,6 +106,11 @@ export function createAuthMiddleware(
     if (localSessionToken && token === localSessionToken) {
       req.workspaceId = getLocalWorkspaceId();
       req.userId = 'local';
+      if (db) {
+        recordActivity(db).catch((err) =>
+          logger.warn({ err }, 'eternal.record_activity.failed'),
+        );
+      }
       next();
       return;
     }
@@ -120,6 +127,11 @@ export function createAuthMiddleware(
           req.userId = 'local';
           if (registry?.has(payload.workspaceName)) {
             req.workspaceCtx = registry.get(payload.workspaceName);
+          }
+          if (db) {
+            recordActivity(db).catch((err) =>
+              logger.warn({ err }, 'eternal.record_activity.failed'),
+            );
           }
           next();
           return;
@@ -146,6 +158,11 @@ export function createAuthMiddleware(
       req.workspaceId = payload.workspaceId as string;
       req.userId = payload.userId as string;
 
+      if (db) {
+        recordActivity(db).catch((err) =>
+          logger.warn({ err }, 'eternal.record_activity.failed'),
+        );
+      }
       next();
     } catch {
       res.status(401).json({ error: 'Invalid or expired token' });
