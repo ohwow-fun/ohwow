@@ -1935,12 +1935,14 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
   const [rejectInput, setRejectInput] = useState<string | null>(null);
+  const [flashState, setFlashState] = useState<{ id: string; type: 'approve' | 'reject' } | null>(null);
   const cols = useTerminalSize();
 
   // Animation ticks — separate intervals for each animation type
   const brailleTick = useAnimationTick(120);   // ~8fps braille spinner
   const flickerTick = useAnimationTick(500);   // error flicker cadence
   const breatheTick = useAnimationTick(1000);  // idle breathing cadence
+  const alertTick = useAnimationTick(800);     // approval urgency pulse
   const stacked = cols < 90;
   const approvalTitleMax = stacked ? Math.max(20, cols - 20) : 40;
 
@@ -2072,10 +2074,19 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
     }
     if (input === 'a') {
       const approval = approvals[selectedIdx];
-      if (approval) applyApprovalAction(approval, 'approve');
+      if (approval) {
+        setFlashState({ id: approval.id, type: 'approve' });
+        setTimeout(() => setFlashState(null), 400);
+        applyApprovalAction(approval, 'approve');
+      }
       return;
     }
     if (input === 'r') {
+      const approval = approvals[selectedIdx];
+      if (approval) {
+        setFlashState({ id: approval.id, type: 'reject' });
+        setTimeout(() => setFlashState(null), 400);
+      }
       setRejectInput('');
       return;
     }
@@ -2172,7 +2183,13 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
           flexDirection="column"
           flexGrow={1}
           borderStyle="single"
-          borderColor={focusedOnApprovals ? C.red : C.amber}
+          borderColor={
+            focusedOnApprovals
+              ? C.red
+              : approvals.length > 0
+                ? (alertTick % 2 === 0 ? C.amber : C.red)
+                : C.slate
+          }
           paddingX={1}
           paddingY={0}
         >
@@ -2180,20 +2197,29 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
 
           {/* APPROVALS section */}
           <Box flexDirection="column" marginTop={0}>
-            <Text bold color={C.red}>{'🔴'} ▐ DECISIONS ▌{approvals.length > 0 ? ` (${approvals.length})` : ''}</Text>
+            <Box flexDirection="row">
+              <Text bold color={C.red}>{'🔴'} ▐ DECISIONS ▌</Text>
+              {approvals.length > 0 && (
+                <Text bold color={C.amber}>{` (${approvals.length})`}</Text>
+              )}
+            </Box>
             {approvals.length === 0 ? (
               <Text dimColor>◎ All decisions made.</Text>
             ) : (
               approvals.map((approval, idx) => {
                 const isSelected = focusedOnApprovals && idx === clampedIdx;
                 const age = getTimeAgo(approval.created_at);
+                const isFlashing = flashState?.id === approval.id;
+                const flashColor = isFlashing
+                  ? (flashState?.type === 'approve' ? C.mint : C.red)
+                  : C.red;
                 return (
                   <Box key={approval.id} flexDirection="row">
                     <Text color={isSelected ? 'white' : C.red} bold={isSelected}>
                       {isSelected ? '▶ ' : '  '}
                     </Text>
                     <Box flexDirection="column">
-                      <Text color={C.red} bold={isSelected} inverse={isSelected}>
+                      <Text color={flashColor} bold={isSelected || isFlashing} inverse={isSelected || isFlashing}>
                         {approval.title.length > approvalTitleMax ? approval.title.slice(0, approvalTitleMax - 3) + '...' : approval.title}
                       </Text>
                       <Text dimColor>{age}</Text>
