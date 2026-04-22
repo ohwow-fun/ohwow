@@ -267,7 +267,7 @@ Check the box when QA completes and passes.
 - Test criterion: tui-journey renders status bar on every screen;
   Escape handler audit passes (no Escape-clears-input patterns remain)
 
-**TRIO-10** `[ ]` — Universal dispatch from anywhere (`d` key)
+**TRIO-10** `[x]` — Universal dispatch from anywhere (`d` key)
 - Pressing `d` from any screen opens a floating dispatch overlay:
   `Dispatch: [____________] @agent (optional)`
 - Pressing Enter queues the task and closes the overlay
@@ -308,7 +308,7 @@ Check the box when QA completes and passes.
 | TRIO-07 | 4-section nav (replace tab + grid) | done | 5551565 |
 | TRIO-08 | Merge Contacts + People; Activity → Work | done | 908aa47 |
 | TRIO-09 | Universal keyboard grammar + status bar | done | 3332272 |
-| TRIO-10 | Universal dispatch overlay (d key) | pending | — |
+| TRIO-10 | Universal dispatch overlay (d key) | done | 4429770 |
 | TRIO-11 | Post-onboarding Today landing | pending | — |
 
 ---
