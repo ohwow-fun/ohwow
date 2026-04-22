@@ -17,9 +17,8 @@ import type { DatabaseAdapter } from '../../db/adapter-types.js';
 import type { OllamaModelInfo } from '../../lib/ollama-models.js';
 import { isModelInstalled, MODEL_CATALOG } from '../../lib/ollama-models.js';
 import { loadModel, listRunningModels, listInstalledModels } from '../../lib/ollama-installer.js';
-import { BUSINESS_TYPES, type AgentPreset } from '../data/agent-presets.js';
+import { type AgentPreset } from '../data/agent-presets.js';
 import {
-  FOUNDER_PATHS,
   getPresetsForBusinessType,
   getStaticRecommendations,
   parseAgentRecommendations,
@@ -40,8 +39,7 @@ import { validateAnthropicApiKey } from '../../lib/anthropic-auth.js';
 import { SplashStep } from './onboarding/SplashStep.js';
 import { ModelStep } from './onboarding/ModelStep.js';
 import { CloudAuthStep } from './onboarding/CloudAuthStep.js';
-import { BusinessInfoStep } from './onboarding/BusinessInfoStep.js';
-import { FounderStageStep } from './onboarding/FounderStageStep.js';
+import { FirstMomentStep } from './onboarding/FirstMomentStep.js';
 import { AgentDiscoveryStep } from './onboarding/AgentDiscoveryStep.js';
 import { AgentSelectionStep } from './onboarding/AgentSelectionStep.js';
 import type { AgentHealthInfo } from './onboarding/AgentSelectionStep.js';
@@ -72,7 +70,7 @@ interface OnboardingWizardProps {
   cloudUrl?: string;
 }
 
-type Step = 'splash' | 'tier_choice' | 'model' | 'cloud_auth' | 'downloading' | 'business_info' | 'founder_stage' | 'agent_discovery' | 'agent_selection' | 'integration_setup' | 'ready';
+type Step = 'splash' | 'tier_choice' | 'model' | 'cloud_auth' | 'downloading' | 'first_moment' | 'agent_discovery' | 'agent_selection' | 'integration_setup' | 'ready';
 
 const STEP_NUMBERS: Record<Step, number> = {
   splash: 1,
@@ -80,12 +78,11 @@ const STEP_NUMBERS: Record<Step, number> = {
   model: 3,
   cloud_auth: 3,
   downloading: 3,
-  business_info: 4,
-  founder_stage: 5,
-  agent_discovery: 6,
-  agent_selection: 7,
-  integration_setup: 8,
-  ready: 9,
+  first_moment: 4,
+  agent_discovery: 5,
+  agent_selection: 6,
+  integration_setup: 7,
+  ready: 8,
 };
 
 /** Step numbering for returning users (splash → model → complete) */
@@ -129,18 +126,16 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  // Business info state
+  // First moment state (replaces BusinessInfo + FounderStage)
   const [businessName, setBusinessName] = useState('');
-  const [businessType, setBusinessType] = useState('');
-  const [businessDescription, setBusinessDescription] = useState('');
-  const [businessField, setBusinessField] = useState<'name' | 'type' | 'description'>('name');
-  const [businessTypeIndex, setBusinessTypeIndex] = useState(0);
+  const [firstTask, setFirstTask] = useState('');
+  const [firstMomentField, setFirstMomentField] = useState<'businessName' | 'firstTask'>('businessName');
 
-  // Founder stage state
-  const [founderPath, setFounderPath] = useState('');
-  const [founderFocus, setFounderFocus] = useState('');
-  const [founderField, setFounderField] = useState<'path' | 'focus'>('path');
-  const [founderPathIndex, setFounderPathIndex] = useState(0);
+  // Kept for downstream compatibility (agent discovery, completeOnboarding, saveWorkspaceData)
+  const businessType = 'saas_startup';
+  const businessDescription = '';
+  const founderPath = '';
+  const founderFocus = '';
 
   // Agent discovery state
   const [modelAvailable, setModelAvailable] = useState(false);
@@ -231,8 +226,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
       .then((result) => {
         setLicenseResult(result);
         setBusinessName(result.businessContext.businessName);
-        setBusinessType(result.businessContext.businessType);
-        setBusinessDescription(result.businessContext.businessDescription || '');
         setWelcomeBack({ businessName: result.businessContext.businessName });
       })
       .catch((err) => {
@@ -248,7 +241,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
   // Auto-skip steps for connected users (business data comes from cloud)
   useEffect(() => {
     if (!isConnected || existingState) return;
-    if (step === 'business_info' || step === 'founder_stage' || step === 'agent_discovery') {
+    if (step === 'first_moment' || step === 'agent_discovery') {
       setStep('agent_selection');
     }
   }, [step, isConnected, existingState]);
@@ -329,7 +322,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           setShowAlternatives(false);
           setTimeout(() => setStep('model'), 500);
         } else {
-          setTimeout(() => setStep(existingState ? 'ready' : isConnected ? 'agent_selection' : 'business_info'), 500);
+          setTimeout(() => setStep(existingState ? 'ready' : isConnected ? 'agent_selection' : 'first_moment'), 500);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Download failed');
@@ -547,9 +540,8 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
       } else {
         if (step === 'tier_choice') { setStep('splash'); return; }
         if (step === 'model') { setStep('tier_choice'); return; }
-        if (step === 'business_info') { setStep('model'); return; }
-        if (step === 'founder_stage') { setStep('business_info'); return; }
-        if (step === 'agent_discovery') { setStep('founder_stage'); return; }
+        if (step === 'first_moment') { setStep('model'); return; }
+        if (step === 'agent_discovery') { setStep('first_moment'); return; }
         if (step === 'agent_selection') { setStep('agent_discovery'); return; }
         if (step === 'integration_setup') { setStep('agent_selection'); return; }
         if (step === 'ready') {
@@ -606,8 +598,6 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
             .then((result) => {
               setLicenseResult(result);
               setBusinessName(result.businessContext.businessName);
-              setBusinessType(result.businessContext.businessType);
-              setBusinessDescription(result.businessContext.businessDescription || '');
               setLicenseValidating(false);
               setStep('model');
             })
@@ -692,14 +682,14 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         if (modelSource === 'claude-code') {
           // Claude Code mode: Enter → proceed immediately (no auth needed)
           if (key.return) {
-            const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+            const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
             setStep(nextAfterModel);
           }
         } else if (modelSource === 'cloud') {
           // Cloud mode: Enter → show auth if not authenticated, else proceed
           if (key.return) {
             if (anthropicKey || openRouterKey) {
-              const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+              const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
               setStep(nextAfterModel);
             } else {
               setCloudAuthMode('choose');
@@ -708,7 +698,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           }
         } else {
           // Local mode: existing Ollama flow
-          const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+          const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
           if (key.return && selectedModel) {
             if (status?.installedModels.length && isModelInstalled(selectedModel.tag, status.installedModels)) {
               setModelAvailable(true);
@@ -760,7 +750,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
                   if (existingState) {
                     completeReturningUser();
                   } else {
-                    const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+                    const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
                     setStep(nextAfterModel);
                   }
                 }, 500);
@@ -784,66 +774,30 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           if (existingState) {
             completeReturningUser();
           } else {
-            const nextAfterModel = isConnected ? 'agent_selection' : 'business_info';
+            const nextAfterModel = isConnected ? 'agent_selection' : 'first_moment';
             setStep(nextAfterModel);
           }
         }
       }
     }
 
-    // ── Business Info ──
-    if (step === 'business_info') {
-      if (businessField === 'name') {
+    // ── First Moment ──
+    if (step === 'first_moment') {
+      if (firstMomentField === 'businessName') {
         if (key.return) {
-          setBusinessField('type');
+          setFirstMomentField('firstTask');
         } else if (key.backspace || key.delete) {
           setBusinessName(prev => prev.slice(0, -1));
         } else if (input && !key.ctrl && !key.meta) {
           setBusinessName(prev => prev + input);
         }
-      } else if (businessField === 'type') {
-        if (input === 'j' || key.downArrow) {
-          setBusinessTypeIndex(i => Math.min(i + 1, BUSINESS_TYPES.length - 1));
-        }
-        if (input === 'k' || key.upArrow) {
-          setBusinessTypeIndex(i => Math.max(i - 1, 0));
-        }
-        if (key.return) {
-          setBusinessType(BUSINESS_TYPES[businessTypeIndex].id);
-          setBusinessField('description');
-        }
-      } else if (businessField === 'description') {
-        if (key.return) {
-          setStep('founder_stage');
-          setFounderField('path');
-        } else if (key.backspace || key.delete) {
-          setBusinessDescription(prev => prev.slice(0, -1));
-        } else if (input && !key.ctrl && !key.meta) {
-          setBusinessDescription(prev => prev + input);
-        }
-      }
-    }
-
-    // ── Founder Stage ──
-    if (step === 'founder_stage') {
-      if (founderField === 'path') {
-        if (input === 'j' || key.downArrow) {
-          setFounderPathIndex(i => Math.min(i + 1, FOUNDER_PATHS.length - 1));
-        }
-        if (input === 'k' || key.upArrow) {
-          setFounderPathIndex(i => Math.max(i - 1, 0));
-        }
-        if (key.return) {
-          setFounderPath(FOUNDER_PATHS[founderPathIndex].id);
-          setFounderField('focus');
-        }
-      } else if (founderField === 'focus') {
+      } else if (firstMomentField === 'firstTask') {
         if (key.return) {
           setStep('agent_discovery');
         } else if (key.backspace || key.delete) {
-          setFounderFocus(prev => prev.slice(0, -1));
+          setFirstTask(prev => prev.slice(0, -1));
         } else if (input && !key.ctrl && !key.meta) {
-          setFounderFocus(prev => prev + input);
+          setFirstTask(prev => prev + input);
         }
       }
     }
@@ -1116,7 +1070,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
             businessType,
             businessDescription,
             founderPath,
-            founderFocus,
+            founderFocus: firstTask,
           });
           await createAgentsFromPresets(db, agents, 'local', modelTag, selectedPresets);
 
@@ -1168,7 +1122,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           businessType,
           businessDescription,
           founderPath,
-          founderFocus,
+          founderFocus: firstTask,
           agents,
         }),
       }).then(async (res) => {
@@ -1189,7 +1143,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
     : isConnected
       ? CONNECTED_STEP_NUMBERS[step] ?? STEP_NUMBERS[step]
       : STEP_NUMBERS[step];
-  const totalSteps = existingState ? 2 : isConnected ? 5 : 9;
+  const totalSteps = existingState ? 2 : isConnected ? 5 : 8;
   const recommendedAgents = allPresets.filter(p => discoveredAgentIds.includes(p.id));
 
   return (
@@ -1200,8 +1154,7 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
           <Text bold color="cyan">
             {step === 'tier_choice' ? 'Setup' :
              step === 'model' || step === 'downloading' || step === 'cloud_auth' ? (existingState ? 'Your orchestrator model' : 'Model Setup') :
-             step === 'business_info' ? 'Business Info' :
-             step === 'founder_stage' ? 'Your Journey' :
+             step === 'first_moment' ? 'Your Business' :
              step === 'agent_discovery' ? 'Agent Discovery' :
              step === 'agent_selection' ? (existingState ? 'Your Agents' : 'Choose Agents') :
              step === 'integration_setup' ? 'Integrations' :
@@ -1288,24 +1241,11 @@ export function OnboardingWizard({ onComplete, onSkip, db, configDir, existingSt
         />
       )}
 
-      {step === 'business_info' && (
-        <BusinessInfoStep
+      {step === 'first_moment' && (
+        <FirstMomentStep
           businessName={businessName}
-          businessType={businessType}
-          businessDescription={businessDescription}
-          activeField={businessField}
-          typeIndex={businessTypeIndex}
-          onChangeName={setBusinessName}
-          onChangeDescription={setBusinessDescription}
-        />
-      )}
-
-      {step === 'founder_stage' && (
-        <FounderStageStep
-          founderPath={founderPath}
-          founderFocus={founderFocus}
-          activeField={founderField}
-          pathIndex={founderPathIndex}
+          firstTask={firstTask}
+          activeField={firstMomentField}
         />
       )}
 

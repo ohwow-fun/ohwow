@@ -15,8 +15,7 @@ import { render } from 'ink-testing-library';
 // Onboarding steps
 import { SplashStep } from '../src/tui/screens/onboarding/SplashStep.js';
 import { TierChoiceStep } from '../src/tui/screens/onboarding/TierChoiceStep.js';
-import { BusinessInfoStep } from '../src/tui/screens/onboarding/BusinessInfoStep.js';
-import { FounderStageStep } from '../src/tui/screens/onboarding/FounderStageStep.js';
+import { FirstMomentStep } from '../src/tui/screens/onboarding/FirstMomentStep.js';
 import { AgentDiscoveryStep } from '../src/tui/screens/onboarding/AgentDiscoveryStep.js';
 import { AgentSelectionStep } from '../src/tui/screens/onboarding/AgentSelectionStep.js';
 import { ReadyStep } from '../src/tui/screens/onboarding/ReadyStep.js';
@@ -159,57 +158,27 @@ show('Tier Choice — Invalid key error', 'Onboarding',
   <TierChoiceStep licenseKey="OWW-BADKEY" validating={false} error="That key isn't valid. Double-check and try again." />
 );
 
-show('Business Info — Name field active', 'Onboarding',
-  <BusinessInfoStep
+show('First Moment — Business name field active', 'Onboarding',
+  <FirstMomentStep
     businessName=""
-    businessType=""
-    businessDescription=""
-    activeField="name"
-    typeIndex={0}
-    onChangeName={() => {}}
-    onChangeDescription={() => {}}
+    firstTask=""
+    activeField="businessName"
   />
 );
 
-show('Business Info — Type field active', 'Onboarding',
-  <BusinessInfoStep
+show('First Moment — First task field active (name entered)', 'Onboarding',
+  <FirstMomentStep
     businessName="Acme Corp"
-    businessType="saas_startup"
-    businessDescription=""
-    activeField="type"
-    typeIndex={2}
-    onChangeName={() => {}}
-    onChangeDescription={() => {}}
+    firstTask=""
+    activeField="firstTask"
   />
 );
 
-show('Business Info — Description field active (all filled)', 'Onboarding',
-  <BusinessInfoStep
+show('First Moment — Both fields filled', 'Onboarding',
+  <FirstMomentStep
     businessName="Acme Corp"
-    businessType="saas_startup"
-    businessDescription="We help small businesses automate their marketing workflows."
-    activeField="description"
-    typeIndex={2}
-    onChangeName={() => {}}
-    onChangeDescription={() => {}}
-  />
-);
-
-show('Founder Stage — Stage selection active', 'Onboarding',
-  <FounderStageStep
-    founderPath=""
-    founderFocus=""
-    activeField="path"
-    pathIndex={1}
-  />
-);
-
-show('Founder Stage — Focus field active (stage set)', 'Onboarding',
-  <FounderStageStep
-    founderPath="growth"
-    founderFocus="Getting my first 100 paying customers"
-    activeField="focus"
-    pathIndex={1}
+    firstTask="Research my top 10 competitors and summarise their pricing"
+    activeField="firstTask"
   />
 );
 
