@@ -8,6 +8,7 @@ import { Box, Text } from 'ink';
 import type { WhatsAppConnectionStatus } from '../../whatsapp/types.js';
 import { useTerminalSize } from '../hooks/use-terminal-size.js';
 import { C } from '../theme.js';
+import { useAnimationTick } from '../hooks/use-animation-frame.js';
 
 interface HeaderProps {
   version: string;
@@ -26,6 +27,8 @@ interface HeaderProps {
 export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPid, daemonUptime, daemonPort, daemonConnectedAt, initializing, workspaceName }: HeaderProps) {
   const [clock, setClock] = useState(() => ({ time: formatTime(), now: Date.now() }));
   const cols = useTerminalSize();
+  // Gentle 3s pulse on the cloud indicator — only animates when fully connected
+  const pulseTick = useAnimationTick(1500);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -65,11 +68,15 @@ export function Header({ version, cloudConnected, tier, whatsappStatus, daemonPi
       </Box>
       <Box>
         {isConnected ? (
-          <Text color={initializing ? C.amber : cloudConnected ? C.green : C.red}>
-            {initializing ? '◌' : cloudConnected ? '●' : '○'} {initializing ? 'Starting...' : cloudConnected ? 'Cloud' : 'Offline'}
-          </Text>
+          cloudConnected && !initializing ? (
+            <Text color={C.green} dimColor={pulseTick % 2 === 1}>{'●'} Cloud</Text>
+          ) : (
+            <Text color={initializing ? C.amber : C.red}>
+              {initializing ? '◌' : '○'} {initializing ? 'Starting...' : 'Offline'}
+            </Text>
+          )
         ) : (
-          <Text color={C.green}>● Local</Text>
+          <Text color={C.green}>{'●'} Local</Text>
         )}
         {whatsappStatus === 'connected' && !narrow && (
           <Text color={C.green}>  ● WA</Text>

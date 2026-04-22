@@ -73,6 +73,7 @@ import type { OllamaModelSummary } from '../../../lib/ollama-monitor-types.js';
 import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
 import { C } from '../../theme.js';
+import { useAnimationTick } from '../../hooks/use-animation-frame.js';
 
 import { SectionNav } from '../../components/section-nav.js';
 import type { TeamSubTab, WorkSubTab } from '../../components/section-nav.js';
@@ -1918,12 +1919,19 @@ interface TodayBoardProps {
   justOnboarded?: boolean;
 }
 
+const BRAILLE_FRAMES = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'] as const;
+
 export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [focusedOnApprovals, setFocusedOnApprovals] = useState(false);
   const [rejectInput, setRejectInput] = useState<string | null>(null);
   const cols = useTerminalSize();
+
+  // Animation ticks — separate intervals for each animation type
+  const brailleTick = useAnimationTick(120);   // ~8fps braille spinner
+  const flickerTick = useAnimationTick(500);   // error flicker cadence
+  const breatheTick = useAnimationTick(1000);  // idle breathing cadence
   const stacked = cols < 90;
   const approvalTitleMax = stacked ? Math.max(20, cols - 20) : 40;
 
@@ -2059,45 +2067,63 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
               <Text dimColor>Run /agents to deploy your first operative.</Text>
             </Box>
           ) : (
-            agents.map((agent) => {
-              let indicator = '●';
-              let indicatorColor: string = 'gray';
-              let activityLine = 'idle';
-
+            agents.map((agent, index) => {
               // Show "setting up…" for agents created in the last 60 s after onboarding
               const isNew = justOnboarded && agent.created_at
                 ? (Date.now() - new Date(agent.created_at).getTime()) < 60_000
                 : false;
 
               if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
-                indicator = '◉';
-                indicatorColor = C.green;
-                activityLine = typeof agent.stats?.currentTask === 'string'
+                // Animated braille spinner — each agent has a phase offset so they don't sync
+                const frame = BRAILLE_FRAMES[(brailleTick + index * 3) % 8];
+                const activityLine = typeof agent.stats?.currentTask === 'string'
                   ? agent.stats.currentTask
                   : 'working';
-              } else if (agent.status === 'error') {
-                indicator = '✗';
-                indicatorColor = C.red;
-                activityLine = 'error';
-              } else if (isNew) {
-                indicator = '◌';
-                indicatorColor = C.cyan;
-                activityLine = 'setting up…';
-              } else {
-                indicator = '●';
-                indicatorColor = C.idle;
-                activityLine = 'idle';
-              }
-
-              return (
-                <Box key={agent.id} flexDirection="row" marginTop={0}>
-                  <Text color={indicatorColor}>{indicator} </Text>
-                  <Box flexDirection="column">
-                    <Text bold>{agent.name}</Text>
-                    <Text dimColor>{activityLine}</Text>
+                return (
+                  <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    <Text color={C.green}>{frame} </Text>
+                    <Box flexDirection="column">
+                      <Text bold>{agent.name}</Text>
+                      <Text dimColor>{activityLine}</Text>
+                    </Box>
                   </Box>
-                </Box>
-              );
+                );
+              } else if (agent.status === 'error') {
+                // Flicker between full and dim on 500ms cadence
+                const dimFlicker = (flickerTick + index) % 2 === 1;
+                return (
+                  <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    <Text color={C.red} dimColor={dimFlicker}>{'✗'} </Text>
+                    <Box flexDirection="column">
+                      <Text bold>{agent.name}</Text>
+                      <Text dimColor>error</Text>
+                    </Box>
+                  </Box>
+                );
+              } else if (isNew) {
+                return (
+                  <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    <Text color={C.cyan}>{'◌'} </Text>
+                    <Box flexDirection="column">
+                      <Text bold>{agent.name}</Text>
+                      <Text dimColor>setting up…</Text>
+                    </Box>
+                  </Box>
+                );
+              } else {
+                // Idle breathing — dim for 2 ticks, bright for 2 ticks, per-agent offset
+                const phase = (breatheTick + index) % 4;
+                const dimBreath = phase === 0 || phase === 1;
+                return (
+                  <Box key={agent.id} flexDirection="row" marginTop={0}>
+                    <Text color={C.idle} dimColor={dimBreath}>{'●'} </Text>
+                    <Box flexDirection="column">
+                      <Text bold>{agent.name}</Text>
+                      <Text dimColor>idle</Text>
+                    </Box>
+                  </Box>
+                );
+              }
             })
           )}
         </Box>
