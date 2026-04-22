@@ -190,6 +190,10 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
   const [waNotification, setWaNotification] = useState<string | null>(null);
   const [creditWarning, setCreditWarning] = useState<string | null>(null);
 
+  // Section transition flash (primary nav 1/2/3/4)
+  const [sectionFlash, setSectionFlash] = useState(false);
+  const sectionFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Completion banner for task lifecycle events
   const { banner } = useBanner();
 
@@ -656,8 +660,16 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
     // (skipped when typing in chat input or slash command open)
     // ==================
     if (!orchestrator.isStreaming && !inputValue && !showSlash) {
-      if (input === '1') { setActiveSection(Section.Today); goHome(); return; }
+      if (input === '1') {
+        clearTimeout(sectionFlashTimerRef.current ?? undefined);
+        setSectionFlash(true);
+        sectionFlashTimerRef.current = setTimeout(() => setSectionFlash(false), 360);
+        setActiveSection(Section.Today); goHome(); return;
+      }
       if (input === '2') {
+        clearTimeout(sectionFlashTimerRef.current ?? undefined);
+        setSectionFlash(true);
+        sectionFlashTimerRef.current = setTimeout(() => setSectionFlash(false), 360);
         setActiveSection(Section.Team);
         // Route to the current teamSubTab's screen
         if (teamSubTab === 'contacts') { openScreen(Screen.Contacts); }
@@ -666,6 +678,9 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
         return;
       }
       if (input === '3') {
+        clearTimeout(sectionFlashTimerRef.current ?? undefined);
+        setSectionFlash(true);
+        sectionFlashTimerRef.current = setTimeout(() => setSectionFlash(false), 360);
         setActiveSection(Section.Work);
         // Route to the current workSubTab's screen
         if (workSubTab === 'activity') { openScreen(Screen.Activity); }
@@ -673,7 +688,12 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
         else { openScreen(Screen.Tasks); }
         return;
       }
-      if (input === '4') { setActiveSection(Section.Settings); openScreen(Screen.Settings); return; }
+      if (input === '4') {
+        clearTimeout(sectionFlashTimerRef.current ?? undefined);
+        setSectionFlash(true);
+        sectionFlashTimerRef.current = setTimeout(() => setSectionFlash(false), 360);
+        setActiveSection(Section.Settings); openScreen(Screen.Settings); return;
+      }
 
       // Global 'd' — floating dispatch overlay (TRIO-10)
       if (input === 'd') {
@@ -1688,7 +1708,14 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
       {isHome ? (
         /* Today state board — 3-zone layout */
         <>
-          <TodayBoard agents={agents.list} db={runtime.db} justOnboarded={justOnboarded} />
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            borderStyle={sectionFlash ? 'round' : undefined}
+            borderColor={sectionFlash ? C.mint : undefined}
+          >
+            <TodayBoard agents={agents.list} db={runtime.db} justOnboarded={justOnboarded} />
+          </Box>
           {banner && <CompletionBanner banner={banner} />}
           <StatusBar
             section={getSectionLabel()}
@@ -1699,7 +1726,14 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
       ) : (
         /* Full-screen view */
         <>
-          <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            paddingX={1}
+            marginTop={1}
+            borderStyle={sectionFlash ? 'round' : undefined}
+            borderColor={sectionFlash ? C.mint : undefined}
+          >
             {renderScreen()}
           </Box>
           {banner && <CompletionBanner banner={banner} />}

@@ -113,6 +113,7 @@ export function ChatMessages({ orchestrator, maxVisible = 15, showPlan = true, a
             <ChatMessage
               key={item.index}
               message={orchestrator.messages[item.index]}
+              isLatest={item.index === orchestrator.messages.length - 1 && !orchestrator.isStreaming}
             />
           );
         }

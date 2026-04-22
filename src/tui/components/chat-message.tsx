@@ -9,6 +9,7 @@ import Spinner from 'ink-spinner';
 import type { ChatMessage as ChatMessageType, TurnStep } from '../hooks/use-orchestrator.js';
 import { AutomationProposal } from './automation-proposal.js';
 import { ToolResultView, CODE_TOOL_NAMES } from './tool-result-view.js';
+import { useTypewriter } from '../hooks/use-typewriter.js';
 
 /** Basic markdown-to-terminal formatting */
 function formatContent(content: string): string {
@@ -154,10 +155,13 @@ function StepsView({ steps, elapsedMs, tokensSoFar }: StepsViewProps) {
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  isLatest?: boolean;
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, isLatest }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const displayText = formatContent(message.content);
+  const revealedText = useTypewriter(displayText, isLatest === true && message.role === 'assistant', 40);
 
   if (isUser) {
     return (
@@ -175,7 +179,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
       {message.steps ? (
         <StepsView steps={message.steps} />
       ) : (
-        <Text wrap="wrap">{formatContent(message.content)}</Text>
+        <Text wrap="wrap">{revealedText}</Text>
       )}
     </Box>
   );
