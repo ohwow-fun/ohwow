@@ -74,6 +74,7 @@ import { useOllamaModels } from '../../hooks/use-ollama-models.js';
 import { useWorkspacePointerWatch } from '../../hooks/use-workspace-pointer-watch.js';
 import { C } from '../../theme.js';
 import { useAnimationTick } from '../../hooks/use-animation-frame.js';
+import { sparklineForAgent } from '../../utils/sparkline.js';
 
 import { SectionNav } from '../../components/section-nav.js';
 import type { TeamSubTab, WorkSubTab } from '../../components/section-nav.js';
@@ -2012,6 +2013,30 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
     return () => clearInterval(feedTimer);
   }, [db, agents]);
 
+  // Fetch task activity for braille sparklines — last 8h, polls every 30s
+  const [sparkTasks, setSparkTasks] = useState<Array<{ agent_id: string; created_at: string; completed_at: string | null }>>([]);
+  useEffect(() => {
+    if (!db) return;
+    const fetchSpark = async () => {
+      const eightHoursAgo = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+      const { data } = await db
+        .from<{ id: string; agent_id: string; created_at: string; completed_at: string | null }>('agent_workforce_tasks')
+        .select('id, agent_id, created_at, completed_at')
+        .gte('created_at', eightHoursAgo)
+        .limit(500);
+      if (data) {
+        setSparkTasks(data.map(t => ({
+          agent_id: t.agent_id,
+          created_at: t.created_at,
+          completed_at: t.completed_at ?? null,
+        })));
+      }
+    };
+    fetchSpark();
+    const sparkTimer = setInterval(fetchSpark, 30000);
+    return () => clearInterval(sparkTimer);
+  }, [db]);
+
   const applyApprovalAction = useCallback(async (approval: PendingApproval, action: 'approve' | 'reject', reason?: string) => {
     if (!db) return;
     const now = new Date().toISOString();
@@ -2130,6 +2155,8 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                 ? (Date.now() - new Date(agent.created_at).getTime()) < 60_000
                 : false;
 
+              const sparkline = sparklineForAgent(sparkTasks, agent.id, new Date());
+
               if (agent.status === 'working' || agent.status === 'running' || agent.status === 'busy') {
                 // Animated braille spinner — each agent has a phase offset so they don't sync
                 const frame = BRAILLE_FRAMES[(brailleTick + index * 3) % 8];
@@ -2143,6 +2170,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                       <Text bold>{agent.name}</Text>
                       <Text dimColor>{activityLine}</Text>
                     </Box>
+                    <Text color={C.green}> {sparkline}</Text>
                   </Box>
                 );
               } else if (agent.status === 'error') {
@@ -2155,6 +2183,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                       <Text bold>{agent.name}</Text>
                       <Text dimColor>error</Text>
                     </Box>
+                    <Text color={C.red}> {sparkline}</Text>
                   </Box>
                 );
               } else if (isNew) {
@@ -2165,6 +2194,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                       <Text bold>{agent.name}</Text>
                       <Text dimColor>setting up…</Text>
                     </Box>
+                    <Text dimColor> {sparkline}</Text>
                   </Box>
                 );
               } else {
@@ -2178,6 +2208,7 @@ export function TodayBoard({ agents, db, justOnboarded }: TodayBoardProps) {
                       <Text bold>{agent.name}</Text>
                       <Text dimColor>idle</Text>
                     </Box>
+                    <Text dimColor> {sparkline}</Text>
                   </Box>
                 );
               }
