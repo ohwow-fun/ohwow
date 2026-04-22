@@ -5,7 +5,7 @@
  * Tab moves between fields, Enter queues the task, Escape dismisses.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
@@ -27,6 +27,9 @@ interface DispatchOverlayProps {
 
 type OverlayField = 'task' | 'agent';
 type OverlayStatus = 'idle' | 'dispatching' | 'done' | 'error';
+type BurstState = 'flash0' | 'flash1' | 'done';
+
+const DISPATCH_TITLE = '◈ DISPATCH MISSION';
 
 export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOverlayProps) {
   const [taskValue, setTaskValue] = useState('');
@@ -35,6 +38,32 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
   const [status, setStatus] = useState<OverlayStatus>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [confirmedTitle, setConfirmedTitle] = useState('');
+
+  // Title reveal animation: number of chars shown so far
+  const [titleVisible, setTitleVisible] = useState(0);
+
+  // Burst flash state when dispatch succeeds
+  const [burstState, setBurstState] = useState<BurstState>('done');
+
+  // Ref to avoid stale-closure issues in reveal interval
+  const titleRevealRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Start title reveal on mount
+  useEffect(() => {
+    setTitleVisible(0);
+    titleRevealRef.current = setInterval(() => {
+      setTitleVisible(prev => {
+        if (prev >= DISPATCH_TITLE.length) {
+          if (titleRevealRef.current) clearInterval(titleRevealRef.current);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 40);
+    return () => {
+      if (titleRevealRef.current) clearInterval(titleRevealRef.current);
+    };
+  }, []);
 
   // Auto-close after successful dispatch
   useEffect(() => {
@@ -103,7 +132,14 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
       getEventBus().emit('task:started', { taskId, agentId: agent.id, title });
 
       setConfirmedTitle(title);
-      setStatus('done');
+
+      // Trigger burst flash sequence before marking done
+      setBurstState('flash0');
+      setTimeout(() => setBurstState('flash1'), 150);
+      setTimeout(() => {
+        setBurstState('done');
+        setStatus('done');
+      }, 300);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Couldn't dispatch task.");
       setStatus('error');
@@ -144,6 +180,18 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
     return match ? `→ ${match.name}` : '◌ no match';
   })();
 
+  // Determine border color based on burst state
+  const borderColor = burstState === 'flash0'
+    ? C.mint
+    : burstState === 'flash1'
+      ? C.green
+      : C.cyan;
+
+  // Title with typed-reveal
+  const titleFullyRevealed = titleVisible >= DISPATCH_TITLE.length;
+  const titleText = DISPATCH_TITLE.slice(0, titleVisible);
+  const titleCursor = titleFullyRevealed ? '' : '▌';
+
   return (
     <Box
       position="absolute"
@@ -152,62 +200,70 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
       justifyContent="center"
       width="100%"
     >
+      {/* Dim surround — top decorative bar */}
+      <Text color={C.slate} dimColor>{'─'.repeat(52)}</Text>
+
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor={C.cyan}
+        borderColor={borderColor}
         paddingX={2}
         paddingY={1}
         width={52}
       >
-        {status === 'idle' && (
+        {(status === 'idle' || status === 'dispatching') && (
           <>
-            <Text bold color={C.cyan}>◈ DISPATCH MISSION</Text>
-            <Box marginTop={1} flexDirection="column">
-              <Box>
-                <Text color={focusedField === 'task' ? 'white' : 'gray'}>Task:  </Text>
-                {focusedField === 'task' ? (
-                  <TextInput
-                    value={taskValue}
-                    onChange={setTaskValue}
-                    onSubmit={() => void dispatch()}
-                    placeholder="describe what to do..."
-                    focus
-                  />
-                ) : (
-                  <Text dimColor>{taskValue || 'describe what to do...'}</Text>
-                )}
+            <Text bold color={C.cyan}>{titleText}{titleCursor}</Text>
+            {status === 'idle' && (
+              <Box marginTop={1} flexDirection="column">
+                <Box>
+                  <Text color={focusedField === 'task' ? 'white' : 'gray'}>Task:  </Text>
+                  {focusedField === 'task' ? (
+                    <TextInput
+                      value={taskValue}
+                      onChange={setTaskValue}
+                      onSubmit={() => void dispatch()}
+                      placeholder="describe what to do..."
+                      focus
+                    />
+                  ) : (
+                    <Text dimColor>{taskValue || 'describe what to do...'}</Text>
+                  )}
+                </Box>
+                <Box marginTop={1}>
+                  <Text color={focusedField === 'agent' ? 'white' : 'gray'}>Agent: </Text>
+                  {focusedField === 'agent' ? (
+                    <TextInput
+                      value={agentValue}
+                      onChange={setAgentValue}
+                      onSubmit={() => void dispatch()}
+                      placeholder="@agent (optional)"
+                      focus
+                    />
+                  ) : (
+                    <Text dimColor>{agentValue || '@agent (optional)'}</Text>
+                  )}
+                  <Text dimColor>  {agentHint}</Text>
+                </Box>
               </Box>
+            )}
+            {status === 'dispatching' && (
               <Box marginTop={1}>
-                <Text color={focusedField === 'agent' ? 'white' : 'gray'}>Agent: </Text>
-                {focusedField === 'agent' ? (
-                  <TextInput
-                    value={agentValue}
-                    onChange={setAgentValue}
-                    onSubmit={() => void dispatch()}
-                    placeholder="@agent (optional)"
-                    focus
-                  />
-                ) : (
-                  <Text dimColor>{agentValue || '@agent (optional)'}</Text>
-                )}
-                <Text dimColor>  {agentHint}</Text>
+                <Text color="yellow">Dispatching...</Text>
               </Box>
-            </Box>
-            <Box marginTop={1}>
-              <Text dimColor>Tab switch   Enter dispatch   Esc dismiss</Text>
-            </Box>
+            )}
+            {status === 'idle' && (
+              <Box marginTop={1}>
+                <Text dimColor>Tab switch   Enter dispatch   Esc dismiss</Text>
+              </Box>
+            )}
           </>
-        )}
-
-        {status === 'dispatching' && (
-          <Text color="yellow">Dispatching...</Text>
         )}
 
         {status === 'done' && (
           <Box flexDirection="column">
-            <Text color={C.mint} bold>◈ MISSION DISPATCHED</Text>
-            <Text dimColor>→ {confirmedTitle}</Text>
+            <Text color={C.green} bold>◈ MISSION DISPATCHED</Text>
+            <Text color={C.green} dimColor>→ {confirmedTitle}</Text>
           </Box>
         )}
 
@@ -219,6 +275,9 @@ export function DispatchOverlay({ agents, db, workspaceId, onClose }: DispatchOv
           </>
         )}
       </Box>
+
+      {/* Dim surround — bottom decorative bar */}
+      <Text color={C.slate} dimColor>{'─'.repeat(52)}</Text>
     </Box>
   );
 }
