@@ -112,6 +112,16 @@ function readDaemonError(dataDir: string): string | null {
   }
 }
 
+/** Read the workspace ID directly from the local SQLite DB (positional, no 'local' hardcode). */
+function readWorkspaceIdFromDb(rawDb: Database.Database): string {
+  try {
+    const row = rawDb.prepare('SELECT id FROM agent_workforce_workspaces LIMIT 1').get() as { id: string } | undefined;
+    return row?.id ?? 'local';
+  } catch {
+    return 'local';
+  }
+}
+
 export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
   const [state, setState] = useState<{
     cloudConnected: boolean;
@@ -130,7 +140,7 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
     daemonConnectedAt: number | null;
   }>({
     cloudConnected: false,
-    workspaceId: 'local',
+    workspaceId: readWorkspaceIdFromDb(rawDb),
     ollamaConnected: false,
     ollamaModel: config.ollamaModel || 'qwen3:4b',
     orchestratorModel: config.orchestratorModel || '',
@@ -282,7 +292,7 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
           setState(s => ({
             ...s,
             initializing: false,
-            error: `Couldn't start the process. ${reason}`,
+            error: `Couldn't connect. Retrying... (${reason})`,
           }));
           return;
         }
@@ -293,13 +303,13 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
         setState(s => ({
           ...s,
           initializing: false,
-          error: `Couldn't start the process. ${reason}`,
+          error: `Couldn't connect. Retrying... (${reason})`,
         }));
       } catch (err) {
         setState(s => ({
           ...s,
           initializing: false,
-          error: err instanceof Error ? err.message : 'Couldn\'t start up. Try restarting.',
+          error: `Couldn't connect. Retrying... (${err instanceof Error ? err.message : 'unknown error'})`,
         }));
       }
     };
@@ -367,15 +377,14 @@ export function useRuntime({ config, db, rawDb }: RuntimeDeps): RuntimeState {
     // No-op — daemon owns all services. WS cleanup handled by registerShutdown.
   };
 
-  // Poll status until cloudConnected becomes true (control plane may take a few seconds)
+  // Poll status until cloudConnected becomes true — keep retrying indefinitely so
+  // errors clear automatically when the daemon recovers (no 30s cap).
   useEffect(() => {
     if (state.cloudConnected || state.initializing) return;
     const interval = setInterval(() => {
       refreshStatus().catch(() => {});
     }, 3000);
-    // Stop polling after 30s
-    const timeout = setTimeout(() => clearInterval(interval), 30_000);
-    return () => { clearInterval(interval); clearTimeout(timeout); };
+    return () => clearInterval(interval);
   }, [state.cloudConnected, state.initializing, refreshStatus]);
 
   return {
