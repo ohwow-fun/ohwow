@@ -13,7 +13,6 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 
 // Onboarding steps
-import { ExperienceChoiceStep } from '../src/tui/screens/onboarding/ExperienceChoiceStep.js';
 import { SplashStep } from '../src/tui/screens/onboarding/SplashStep.js';
 import { TierChoiceStep } from '../src/tui/screens/onboarding/TierChoiceStep.js';
 import { BusinessInfoStep } from '../src/tui/screens/onboarding/BusinessInfoStep.js';
@@ -127,14 +126,6 @@ const MOCK_SELECTED_MODEL = {
 console.log('\n\n' + '═'.repeat(COLS));
 console.log('  JOURNEY 1  ›  First-time Onboarding  (new user, no config)');
 console.log('═'.repeat(COLS));
-
-show('Experience Choice — Terminal selected', 'Onboarding',
-  <ExperienceChoiceStep selectedIndex={0} />
-);
-
-show('Experience Choice — Web selected', 'Onboarding',
-  <ExperienceChoiceStep selectedIndex={1} />
-);
 
 show('Splash — First run', 'Onboarding',
   <SplashStep />
