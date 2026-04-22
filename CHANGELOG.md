@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.10.2] — 2026-04-22
+
+### Added
+
+- **TUI cinematics**: cinematic boot splash before dashboard loads
+- **TUI cinematics**: living animations — idle breathe, working braille spinner, error flicker, cloud pulse
+- **TUI cinematics**: section transition flash + typewriter chat reveal
+- **TUI cinematics**: dispatch overlay cinematics — typed title reveal, dim surround, burst flash on send
+- **TUI cinematics**: cinematic completion banners — slide-in notification for task complete/error/approval
+- **TUI cinematics**: approval command queue — pulsing border, approve/reject flash, amber count badge
+- **TUI**: agent bio cards — dossier overlay with typewriter reveal on 'i' key
+- **TUI**: braille sparklines per agent — 8-char activity bar for last 8h in TodayBoard roster
+- **TUI**: live NEURAL FEED activity panel in TodayBoard
+- **TUI**: true-color hex palette + ornamental typography + narrative empty states
+- **TUI**: responsive layout via `useTerminalSize` hook
+
+### Fixed
+
+- fix(threads): humanize browser session to avoid bot detection
+- fix(tests): cap vitest fork pool to 4 workers to prevent runaway parallelism
+
+### Changed
+
+- Narrative empty states for activity log and tasks list
+
 ## [0.10.1] — 2026-04-22
 
 ### Fixed
