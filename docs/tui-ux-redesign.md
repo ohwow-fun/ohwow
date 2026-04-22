@@ -255,7 +255,7 @@ Check the box when QA completes and passes.
 
 ### Phase 4: Keyboard grammar
 
-**TRIO-09** `[ ]` — Implement universal keyboard grammar + status bar
+**TRIO-09** `[x]` — Implement universal keyboard grammar + status bar (SHA: 3332272)
 - Every screen registers its available keys in a central registry
 - A status bar at the bottom of every view renders:
   `[TODAY] j/k:nav  Enter:open  Esc:back  d:dispatch  ?:help`
@@ -307,7 +307,7 @@ Check the box when QA completes and passes.
 | TRIO-06 | Wire approvals into Today | done | 2091af7 |
 | TRIO-07 | 4-section nav (replace tab + grid) | done | 5551565 |
 | TRIO-08 | Merge Contacts + People; Activity → Work | done | 908aa47 |
-| TRIO-09 | Universal keyboard grammar + status bar | pending | — |
+| TRIO-09 | Universal keyboard grammar + status bar | done | 3332272 |
 | TRIO-10 | Universal dispatch overlay (d key) | pending | — |
 | TRIO-11 | Post-onboarding Today landing | pending | — |
 
