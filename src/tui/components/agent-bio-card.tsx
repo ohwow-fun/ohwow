@@ -23,6 +23,29 @@ interface AgentBioCardProps {
   onClose: () => void;
 }
 
+/**
+ * Build the RECENT activity summary for the last 3 hourly buckets (3h, 2h, 1h ago).
+ * Exported for unit-testing; component calls this inline.
+ */
+export function buildRecentText(
+  agentId: string,
+  sparkTasks: Array<{ agent_id: string; created_at: string; completed_at: string | null }>,
+  now: Date = new Date(),
+): string {
+  return [5, 6, 7].map(slot => {
+    const slotStart = new Date(now.getTime() - (8 - slot) * 60 * 60 * 1000);
+    const slotEnd = new Date(slotStart.getTime() + 60 * 60 * 1000);
+    const count = sparkTasks.filter(
+      t =>
+        t.agent_id === agentId &&
+        new Date(t.created_at) >= slotStart &&
+        new Date(t.created_at) < slotEnd,
+    ).length;
+    const hoursAgo = 8 - slot - 1;
+    return `${count} task${count !== 1 ? 's' : ''} (${hoursAgo}h ago)`;
+  }).join(' → ');
+}
+
 export function AgentBioCard({ agent, sparkTasks, onClose }: AgentBioCardProps) {
   const headerTyped = useTypewriter('◈ DOSSIER: ' + agent.name, true, 35);
 
@@ -31,18 +54,7 @@ export function AgentBioCard({ agent, sparkTasks, onClose }: AgentBioCardProps) 
 
   const currentTask = (agent.stats as Record<string, unknown> | undefined)?.currentTask as string | undefined;
 
-  const recentText = [5, 6, 7].map(slot => {
-    const slotStart = new Date(Date.now() - (8 - slot) * 60 * 60 * 1000);
-    const slotEnd = new Date(slotStart.getTime() + 60 * 60 * 1000);
-    const count = sparkTasks.filter(
-      t =>
-        t.agent_id === agent.id &&
-        new Date(t.created_at) >= slotStart &&
-        new Date(t.created_at) < slotEnd,
-    ).length;
-    const hoursAgo = 8 - slot - 1;
-    return `${count} task${count !== 1 ? 's' : ''} (${hoursAgo}h ago)`;
-  }).join(' → ');
+  const recentText = buildRecentText(agent.id, sparkTasks);
 
   useInput((_, key) => {
     if (key.escape) onClose();
