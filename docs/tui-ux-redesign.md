@@ -196,7 +196,7 @@ Check the box when QA completes and passes.
 
 ### Phase 2: Today state board
 
-**TRIO-05** `[ ]` — Build Today state board shell
+**TRIO-05** `[x]` — Build Today state board shell (b410401)
 - Replace the Dashboard screen (`src/tui/screens/dashboard/`) with a `Today`
   screen that has three zones in a single layout (no focus zones, no grid menu):
   - Left column (~40%): agent roster with live status + current activity line
@@ -303,7 +303,7 @@ Check the box when QA completes and passes.
 | TRIO-02 | Merge BusinessInfo + FounderStage | done | 2a676a2 |
 | TRIO-03 | Remove ModelStep from onboarding | done | b005231 |
 | TRIO-04 | Remove AgentDiscovery + AgentSelection | done | d2cb19a |
-| TRIO-05 | Build Today state board shell | pending | — |
+| TRIO-05 | Build Today state board shell | done | b410401 |
 | TRIO-06 | Wire approvals into Today | pending | — |
 | TRIO-07 | 4-section nav (replace tab + grid) | pending | — |
 | TRIO-08 | Merge Contacts + People; Activity → Work | pending | — |
