@@ -77,6 +77,8 @@ import { useAnimationTick } from '../../hooks/use-animation-frame.js';
 
 import { SectionNav } from '../../components/section-nav.js';
 import type { TeamSubTab, WorkSubTab } from '../../components/section-nav.js';
+import { useBanner } from '../../hooks/use-completion-banner.js';
+import { CompletionBanner } from '../../components/completion-banner.js';
 import { GridMenuPanel } from './grid-menu.js';
 import { ChatPanel } from './chat-panel.js';
 import { ModelPicker } from './model-picker.js';
@@ -186,6 +188,9 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
   const [mcpAgentId, setMcpAgentId] = useState<string | null>(null);
   const [waNotification, setWaNotification] = useState<string | null>(null);
   const [creditWarning, setCreditWarning] = useState<string | null>(null);
+
+  // Completion banner for task lifecycle events
+  const { banner } = useBanner();
 
   // Subscribe to credit exhaustion events
   const creditExhaustedEvent = useEvent('credits:exhausted');
@@ -1683,6 +1688,7 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
         /* Today state board — 3-zone layout */
         <>
           <TodayBoard agents={agents.list} db={runtime.db} justOnboarded={justOnboarded} />
+          {banner && <CompletionBanner banner={banner} />}
           <StatusBar
             section={getSectionLabel()}
             extraHints={getExtraHints()}
@@ -1695,6 +1701,7 @@ export function Dashboard({ config, db, rawDb, justOnboarded, onConfigChange }: 
           <Box flexDirection="column" flexGrow={1} paddingX={1} marginTop={1}>
             {renderScreen()}
           </Box>
+          {banner && <CompletionBanner banner={banner} />}
           <StatusBar
             section={getSectionLabel()}
             subsection={getSubsectionLabel()}
