@@ -24,7 +24,7 @@ import {
   makeOpenAiProvider,
   type SceneBrief,
 } from '../execution/skills/video_workspace_author.js';
-import type { VideoClipProviderName } from '../media/video-clip-provider.js';
+import type { VideoClipProviderName, VideoProviderCreditTier } from '../media/video-clip-provider.js';
 import { generateClip } from '../media/video-clip-router.js';
 import { LyriaOpenRouterBridge } from '../media/lyria-openrouter-bridge.js';
 import { generateAvatarVideo } from '../media/video-clip-providers/heygen-adapter.js';
@@ -32,11 +32,15 @@ import { generateAvatarVideo } from '../media/video-clip-providers/heygen-adapte
 const CLIP_PROVIDER_NAMES: ReadonlySet<VideoClipProviderName> = new Set([
   'openrouter-veo',
   'fal',
+  'fal-kling',
+  'fal-runway',
   'replicate',
   'custom-http',
   'higgsfield',
   'heygen',
 ]);
+
+const CREDIT_TIERS: ReadonlySet<string> = new Set(['draft', 'standard', 'premium']);
 
 function parseFlags(args: string[]): {
   positional: string[];
@@ -212,7 +216,7 @@ async function cmdClip(args: string[]): Promise<void> {
   const { positional, flags } = parseFlags(args);
   const prompt = positional[0];
   if (!prompt) {
-    console.error('Usage: ohwow video clip "<prompt>" [--duration=<s>] [--aspect=<a>] [--provider=<p>] [--seed=<n>] [--max-cost=<cents>] [--dry-run]');
+    console.error('Usage: ohwow video clip "<prompt>" [--duration=<s>] [--aspect=<a>] [--provider=<p>] [--seed=<n>] [--max-cost=<cents>] [--credit-tier=draft|standard|premium] [--dry-run]');
     process.exit(1);
   }
   const durationSeconds = typeof flags.duration === 'string' ? Number(flags.duration) : 5;
@@ -226,21 +230,27 @@ async function cmdClip(args: string[]): Promise<void> {
   const provider = typeof flags.provider === 'string' ? (flags.provider as VideoClipProviderName) : undefined;
   const maxCostCents = typeof flags['max-cost'] === 'string' ? Number(flags['max-cost']) : undefined;
   const dryRun = flags['dry-run'] === true;
+  const creditTierRaw = typeof flags['credit-tier'] === 'string' ? flags['credit-tier'] : undefined;
 
   if (provider && !CLIP_PROVIDER_NAMES.has(provider)) {
     console.error(`Unknown --provider "${provider}". Available: ${Array.from(CLIP_PROVIDER_NAMES).join(', ')}`);
     process.exit(1);
   }
+  if (creditTierRaw && !CREDIT_TIERS.has(creditTierRaw)) {
+    console.error(`Unknown --credit-tier "${creditTierRaw}". Use: draft, standard, premium.`);
+    process.exit(1);
+  }
+  const maxCreditTier = creditTierRaw as VideoProviderCreditTier | undefined;
 
   const result = await generateClip(
     { prompt, durationSeconds, aspectRatio, seed },
-    { forceProvider: provider, maxCostCents, dryRun },
+    { forceProvider: provider, maxCostCents, maxCreditTier, dryRun },
   );
 
   if (result.skipped === 'dry-run') {
     console.log(`[dry-run] would pick: ${result.chosen ?? '(none)'}`);
     for (const p of result.preview) {
-      console.log(`  ${p.name.padEnd(16)}priority=${p.priority}  estCost=${p.estimatedCostCents}¢`);
+      console.log(`  ${p.name.padEnd(16)}priority=${p.priority}  tier=${p.meta.creditTier.padEnd(8)}  estCost=${p.estimatedCostCents}¢`);
     }
     return;
   }

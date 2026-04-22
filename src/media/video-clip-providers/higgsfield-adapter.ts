@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getOrCreate } from '../asset-cache.js';
 import { logger } from '../../lib/logger.js';
-import type { VideoClipProvider } from '../video-clip-provider.js';
+import type { VideoClipProvider, VideoProviderMeta } from '../video-clip-provider.js';
 
 function loadCreds(): { apiKey: string } {
   const envKey = process.env.HIGGSFIELD_API_KEY?.trim();
@@ -55,8 +55,21 @@ async function pollUntilComplete(generationId: string, apiKey: string): Promise<
   throw new Error('Higgsfield generation timed out after 5 minutes');
 }
 
+const HIGGSFIELD_META: VideoProviderMeta = {
+  id: 'higgsfield',
+  name: 'Higgsfield AI',
+  creditTier: 'premium',
+  quality: 'high',
+  speed: 'slow',
+  maxDuration: 10,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['text-to-video', 'image-to-video'],
+  priority: 22,
+};
+
 export const higgsfieldProvider: VideoClipProvider = {
   name: 'higgsfield',
+  meta: HIGGSFIELD_META,
   priority: 22,
   async isAvailable() {
     return Boolean(loadCreds().apiKey);

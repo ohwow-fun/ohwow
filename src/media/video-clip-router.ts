@@ -2,13 +2,16 @@
  * Video-clip router.
  *
  * Probes configured providers (via env vars) and picks one per request
- * honoring cost caps and explicit preferences. Mirrors media-router.ts
- * but for the content-addressed VideoClipProvider interface.
+ * honoring cost caps, credit tier limits, and explicit preferences.
+ * Mirrors media-router.ts but for the content-addressed VideoClipProvider
+ * interface.
  */
 import { logger } from '../lib/logger.js';
 import { genericHttpProvider } from './video-clip-providers/generic-http-adapter.js';
 import { openrouterVeoProvider } from './video-clip-providers/openrouter-veo.js';
 import { falProvider } from './video-clip-providers/fal-adapter.js';
+import { falKlingProvider } from './video-clip-providers/fal-kling.js';
+import { falRunwayProvider } from './video-clip-providers/fal-runway.js';
 import { replicateProvider } from './video-clip-providers/replicate-adapter.js';
 import { higgsfieldProvider } from './video-clip-providers/higgsfield-adapter.js';
 import { heygenProvider } from './video-clip-providers/heygen-adapter.js';
@@ -18,13 +21,22 @@ import type {
   VideoClipProviderName,
   VideoClipRequest,
   VideoClipResult,
+  VideoProviderCreditTier,
 } from './video-clip-provider.js';
+
+const TIER_ORDER: Record<VideoProviderCreditTier, number> = {
+  draft: 0,
+  standard: 1,
+  premium: 2,
+};
 
 export interface RouterOptions {
   /** If set, only this provider will be used. */
   forceProvider?: VideoClipProviderName;
   /** Skip any provider whose estimated cost exceeds this cap. */
   maxCostCents?: number;
+  /** Only use providers at this credit tier or cheaper. */
+  maxCreditTier?: VideoProviderCreditTier;
   /** If true, return a stubbed result describing what would run — no API call. */
   dryRun?: boolean;
   /** Extra providers to consider (tests, custom in-process stubs). */
@@ -34,7 +46,9 @@ export interface RouterOptions {
 const BUILT_IN: VideoClipProvider[] = [
   genericHttpProvider,
   falProvider,
+  falKlingProvider,
   higgsfieldProvider,
+  falRunwayProvider,
   replicateProvider,
   openrouterVeoProvider,
   heygenProvider,
@@ -57,13 +71,22 @@ export async function pickProvider(
   const candidates = await listAvailableProviders(opts.extraProviders);
   if (candidates.length === 0) return null;
 
-  const filtered = opts.forceProvider
+  let filtered = opts.forceProvider
     ? candidates.filter(p => p.name === opts.forceProvider)
     : candidates;
 
   if (filtered.length === 0) {
     logger.warn(`[video-clip/router] requested provider "${opts.forceProvider}" not available`);
     return null;
+  }
+
+  if (opts.maxCreditTier != null) {
+    const maxLevel = TIER_ORDER[opts.maxCreditTier];
+    filtered = filtered.filter(p => TIER_ORDER[p.meta.creditTier] <= maxLevel);
+    if (filtered.length === 0) {
+      logger.warn(`[video-clip/router] no providers within credit tier "${opts.maxCreditTier}"`);
+      return null;
+    }
   }
 
   const sorted = filtered.slice().sort((a, b) => {
@@ -92,6 +115,7 @@ export async function previewRoute(
     name: p.name,
     priority: p.priority,
     estimatedCostCents: p.estimateCostCents(req),
+    meta: p.meta,
   }));
 }
 

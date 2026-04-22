@@ -6,14 +6,27 @@ import { readFile, unlink } from 'node:fs/promises';
 import { getOrCreate } from '../asset-cache.js';
 import { LyriaOpenRouterBridge } from '../lyria-openrouter-bridge.js';
 import { logger } from '../../lib/logger.js';
-import type { VideoClipProvider } from '../video-clip-provider.js';
+import type { VideoClipProvider, VideoProviderMeta } from '../video-clip-provider.js';
 
 function readApiKey(): string | null {
   return (process.env.OPENROUTER_API_KEY?.trim() || null);
 }
 
+const OPENROUTER_VEO_META: VideoProviderMeta = {
+  id: 'openrouter-veo',
+  name: 'Google Veo 2 (OpenRouter)',
+  creditTier: 'premium',
+  quality: 'ultra',
+  speed: 'slow',
+  maxDuration: 8,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['text-to-video'],
+  priority: 30,
+};
+
 export const openrouterVeoProvider: VideoClipProvider = {
   name: 'openrouter-veo',
+  meta: OPENROUTER_VEO_META,
   priority: 30,
   async isAvailable() {
     return readApiKey() !== null;

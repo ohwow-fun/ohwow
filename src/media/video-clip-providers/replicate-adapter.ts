@@ -10,7 +10,7 @@
  */
 import { getOrCreate } from '../asset-cache.js';
 import { logger } from '../../lib/logger.js';
-import type { VideoClipProvider } from '../video-clip-provider.js';
+import type { VideoClipProvider, VideoProviderMeta } from '../video-clip-provider.js';
 
 const POLL_INTERVAL_MS = 2_500;
 const MAX_POLLS = 120;
@@ -47,8 +47,21 @@ async function pollPrediction(getUrl: string, token: string): Promise<ReplicateP
   throw new Error('Replicate prediction timed out');
 }
 
+const REPLICATE_META: VideoProviderMeta = {
+  id: 'replicate',
+  name: 'Replicate',
+  creditTier: 'standard',
+  quality: 'medium',
+  speed: 'medium',
+  maxDuration: 10,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['text-to-video', 'image-to-video'],
+  priority: 25,
+};
+
 export const replicateProvider: VideoClipProvider = {
   name: 'replicate',
+  meta: REPLICATE_META,
   priority: 25,
   async isAvailable() {
     return Boolean(

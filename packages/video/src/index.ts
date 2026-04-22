@@ -2,6 +2,7 @@ import { registerRoot } from "remotion";
 import { Root } from "./Root";
 
 export * from "./spec/types";
+export * from "./types/provider";
 export * from "./spec/kinds";
 export {
   compileSceneBeats,

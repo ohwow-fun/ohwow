@@ -15,7 +15,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getOrCreate } from '../asset-cache.js';
 import { logger } from '../../lib/logger.js';
-import type { VideoClipProvider } from '../video-clip-provider.js';
+import type { VideoClipProvider, VideoProviderMeta } from '../video-clip-provider.js';
+import { composeSeedancePrompt } from '../video-clip-provider.js';
 
 const DEFAULT_MODEL = 'fal-ai/luma-dream-machine';
 
@@ -64,8 +65,21 @@ async function pollUntilComplete(statusUrl: string, apiKey: string): Promise<str
   throw new Error('fal.ai job timed out after 5 minutes');
 }
 
+const FAL_META: VideoProviderMeta = {
+  id: 'fal',
+  name: 'fal.ai (Luma Dream Machine)',
+  creditTier: 'premium',
+  quality: 'high',
+  speed: 'medium',
+  maxDuration: 5,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['text-to-video', 'image-to-video'],
+  priority: 20,
+};
+
 export const falProvider: VideoClipProvider = {
   name: 'fal',
+  meta: FAL_META,
   priority: 20,
   async isAvailable() {
     return Boolean(loadFalCreds().apiKey);
@@ -93,6 +107,9 @@ export const falProvider: VideoClipProvider = {
       },
       {
         produce: async () => {
+          const effectivePrompt = req.seedancePrompt && model.includes('seedance')
+            ? composeSeedancePrompt(req.seedancePrompt)
+            : req.prompt;
           logger.info(`[video-clip/fal] submitting to ${model} (${req.durationSeconds}s ${req.aspectRatio})`);
           const submitResp = await fetch(`https://queue.fal.run/${model}`, {
             method: 'POST',
@@ -101,7 +118,7 @@ export const falProvider: VideoClipProvider = {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              prompt: req.prompt,
+              prompt: effectivePrompt,
               aspect_ratio: req.aspectRatio,
               // Seedance/Kling/Hailuo expect bare-number strings; Luma wants "5s".
               // Bare number works across the modern catalog; Luma is the only holdout.

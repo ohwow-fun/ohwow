@@ -32,6 +32,7 @@ import type {
   VideoClipProvider,
   VideoClipRequest,
   VideoClipResult,
+  VideoProviderMeta,
 } from '../video-clip-provider.js';
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -181,8 +182,21 @@ async function callBackend(
   throw new Error(`Unexpected Content-Type "${contentType}" from video backend`);
 }
 
+const GENERIC_HTTP_META: VideoProviderMeta = {
+  id: 'custom-http',
+  name: 'Custom HTTP Provider',
+  creditTier: 'draft',
+  quality: 'medium',
+  speed: 'fast',
+  maxDuration: 30,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['text-to-video'],
+  priority: 10,
+};
+
 export const genericHttpProvider: VideoClipProvider = {
   name: 'custom-http',
+  meta: GENERIC_HTTP_META,
   priority: 10,
   async isAvailable() {
     return readConfig() !== null;

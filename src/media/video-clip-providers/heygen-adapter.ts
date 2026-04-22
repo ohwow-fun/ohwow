@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getOrCreate } from '../asset-cache.js';
 import { logger } from '../../lib/logger.js';
-import type { VideoClipProvider, VideoAspectRatio } from '../video-clip-provider.js';
+import type { VideoClipProvider, VideoAspectRatio, VideoProviderMeta } from '../video-clip-provider.js';
 
 interface HeyGenCreds {
   apiKey: string;
@@ -128,8 +128,21 @@ export async function generateAvatarVideo(req: AvatarVideoRequest): Promise<Avat
   return { buffer, videoId };
 }
 
+const HEYGEN_META: VideoProviderMeta = {
+  id: 'heygen',
+  name: 'HeyGen Avatar',
+  creditTier: 'draft',
+  quality: 'high',
+  speed: 'slow',
+  maxDuration: 60,
+  supportedAspectRatios: ['16:9', '9:16', '1:1'],
+  capabilities: ['avatar'],
+  priority: 35,
+};
+
 export const heygenProvider: VideoClipProvider = {
   name: 'heygen',
+  meta: HEYGEN_META,
   priority: 35,
   async isAvailable() {
     const { apiKey, avatarId } = loadCreds();
