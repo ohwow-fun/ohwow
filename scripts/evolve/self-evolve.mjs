@@ -27,9 +27,12 @@ function resolveApiKey() {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (config.anthropicApiKey) return config.anthropicApiKey;
+      // Return the OpenRouter key so pickNextTask's credential guard passes;
+      // both implementTask and generateSmartTask handle OpenRouter routing internally.
+      if (config.openRouterApiKey) return config.openRouterApiKey;
     } catch {}
   }
-  return null; // implementTask will use OpenRouter fallback
+  return null; // both implementTask and pick-task will use OpenRouter fallback
 }
 
 function resolveCompletedTasks() {

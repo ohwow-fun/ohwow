@@ -32,9 +32,20 @@ export async function pickNextTask({ completedTaskIds, seedTasks, anthropicApiKe
   const nextSeed = seedTasks.find(t => !completedTaskIds.includes(t.taskId));
   if (nextSeed) return nextSeed;
 
-  // 2. Smart pick: call Claude to generate a new task
-  if (!anthropicApiKey) {
-    console.warn('[pick-task] no Anthropic API key — cannot generate smart task');
+  // 2. Smart pick: call Claude to generate a new task.
+  // resolveClientAndModel() handles OpenRouter fallback, so we only bail if
+  // there is truly no credential available anywhere.
+  const hasAnyCreds =
+    anthropicApiKey ||
+    process.env.ANTHROPIC_API_KEY ||
+    (() => {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.ohwow', 'config.json'), 'utf8'));
+        return cfg.openRouterApiKey || cfg.anthropicApiKey;
+      } catch { return false; }
+    })();
+  if (!hasAnyCreds) {
+    console.warn('[pick-task] no API key found anywhere — cannot generate smart task');
     return null;
   }
   return await generateSmartTask({ completedTaskIds, anthropicApiKey, repos });
@@ -173,8 +184,50 @@ async function gatherSmartContext({ repos }) {
 // Smart-pick: call Claude haiku to propose a new task
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve an Anthropic client from the available credentials.
+ * Resolution order (mirrors implement.mjs):
+ *   1. anthropicApiKey arg — direct Anthropic key
+ *   2. ANTHROPIC_API_KEY env var
+ *   3. openRouterApiKey from ~/.ohwow/config.json (via OpenRouter)
+ *   4. anthropicApiKey from ~/.ohwow/config.json
+ *
+ * @returns {{ client: Anthropic, model: string }}
+ */
+function resolveClientAndModel(anthropicApiKey) {
+  if (anthropicApiKey && anthropicApiKey.startsWith('sk-ant-')) {
+    return { client: new Anthropic({ apiKey: anthropicApiKey }), model: 'claude-haiku-4-5' };
+  }
+  if (process.env.ANTHROPIC_API_KEY) {
+    return { client: new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), model: 'claude-haiku-4-5' };
+  }
+  const configPath = path.join(os.homedir(), '.ohwow', 'config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (cfg.openRouterApiKey) {
+        return {
+          client: new Anthropic({
+            apiKey: cfg.openRouterApiKey,
+            baseURL: 'https://openrouter.ai/api',
+            defaultHeaders: {
+              'HTTP-Referer': 'https://ohwow.fun',
+              'X-Title': 'ohwow self-evolution',
+            },
+          }),
+          model: 'anthropic/claude-haiku-4-5',
+        };
+      }
+      if (cfg.anthropicApiKey) {
+        return { client: new Anthropic({ apiKey: cfg.anthropicApiKey }), model: 'claude-haiku-4-5' };
+      }
+    } catch { /* non-fatal */ }
+  }
+  throw new Error('No API key found for smart task picker. Set ANTHROPIC_API_KEY or configure openRouterApiKey in ~/.ohwow/config.json');
+}
+
 async function generateSmartTask({ completedTaskIds, anthropicApiKey, repos }) {
-  const client = new Anthropic({ apiKey: anthropicApiKey });
+  const { client, model } = resolveClientAndModel(anthropicApiKey);
 
   const context = await gatherSmartContext({ repos });
 
@@ -215,7 +268,7 @@ Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
   let text = '';
   try {
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model,
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
