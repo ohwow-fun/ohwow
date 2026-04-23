@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 import type { GlobalWorkspace } from '../brain/global-workspace.js';
 import type { ModelRouter } from '../execution/model-router.js';
+import type { MeshCoordinator } from '../peers/mesh-coordinator.js';
 import type { ContextSnapshot, ThoughtEntry } from './types.js';
 import { getFleetSensingData } from '../lib/device-info.js';
 import { logger } from '../lib/logger.js';
@@ -58,6 +59,7 @@ export class InnerThoughtsLoop {
     private workspace: GlobalWorkspace,
     private modelRouter: ModelRouter,
     private workspaceId: string,
+    private meshCoordinator?: MeshCoordinator,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -272,6 +274,7 @@ export class InnerThoughtsLoop {
       },
       userIdleMs,
       timeOfDay,
+      connectedPeerCount: this.meshCoordinator?.deviceCount ?? 1,
     };
   }
 

@@ -76,6 +76,8 @@ export interface ContextSnapshot {
   userIdleMs: number;
   /** Current time of day context. */
   timeOfDay: 'morning' | 'afternoon' | 'evening' | 'night';
+  /** Number of peer nodes currently in the mesh (including self). 1 = solo operation. */
+  connectedPeerCount: number;
 }
 
 // ============================================================================
