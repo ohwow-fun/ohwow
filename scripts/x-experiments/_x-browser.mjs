@@ -129,6 +129,23 @@ export async function ensureXReady() {
  *
  * See `scripts/x-experiments/_probe-scrape.mjs` for the A/B repro.
  */
+/**
+ * Ensure Chrome is running on the CDP port and return a connected browser.
+ * Spawns Chrome if needed; does NOT open or return a tab.
+ * Use this when you want auto-spawn but need to pick your own tab strategy.
+ */
+export async function ensureBrowser() {
+  const profile = resolveProfile();
+  let ver = await probeCdp(CDP_PORT);
+  if (!ver) {
+    console.log(`[x-browser] no Chrome on :${CDP_PORT}, spawning with profile=${profile}`);
+    await spawnChrome(profile);
+    ver = await probeCdp(CDP_PORT);
+    if (!ver) throw new Error('Chrome spawn failed');
+  }
+  return RawCdpBrowser.connect(`http://localhost:${CDP_PORT}`, 5000);
+}
+
 export async function openFreshXTab(browser) {
   const targets = await browser.getTargets();
   const anchor = targets.find(t => t.type === 'page' && /https:\/\/(x|twitter)\.com/.test(t.url));

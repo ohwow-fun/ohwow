@@ -30,7 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { RawCdpBrowser } from '../../src/execution/browser/raw-cdp.ts';
 import { openProfileWindow } from '../../src/execution/browser/chrome-lifecycle.ts';
-import { openFreshXTab } from './_x-browser.mjs';
+import { openFreshXTab, ensureBrowser } from './_x-browser.mjs';
 import { llm, resolveOhwow, extractJson, ingestKnowledgeFile } from './_ohwow.mjs';
 import {
   scrollAndHarvest,
@@ -145,7 +145,7 @@ const budget = { llmCalls: 0, tokensIn: 0, tokensOut: 0, costCents: 0, uploads: 
 console.log(`[x-intel] workspace=${workspace} date=${today} dry=${DRY}`);
 console.log(`[x-intel] buckets: ${cfg.buckets.map(b => b.id).join(', ')}`);
 
-const browser = await RawCdpBrowser.connect('http://localhost:9222', 5000);
+const browser = await ensureBrowser();
 const page = await ensureTab(browser);
 await page.installUnloadEscapes();
 
