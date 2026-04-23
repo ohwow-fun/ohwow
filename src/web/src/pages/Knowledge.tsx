@@ -14,6 +14,15 @@ import {
   Upload,
   MagnifyingGlass,
 } from '@phosphor-icons/react';
+import { TabShell, type TabDef } from '../components/TabShell';
+import { BriefingsPage } from './Briefings';
+import { PodcastPage } from './Podcast';
+
+const KNOWLEDGE_TABS: TabDef[] = [
+  { slug: 'knowledge', label: 'Knowledge Base' },
+  { slug: 'briefings', label: 'Briefings' },
+  { slug: 'podcast', label: 'Podcast' },
+];
 
 interface KnowledgeDoc {
   id: string;
@@ -25,6 +34,20 @@ interface KnowledgeDoc {
 }
 
 export function KnowledgePage() {
+  return (
+    <TabShell tabs={KNOWLEDGE_TABS} pageId="knowledge">
+      {(tab) => (
+        <div className="flex-1 min-h-0 overflow-auto">
+          {tab === 'knowledge' && <KnowledgeBaseTab />}
+          {tab === 'briefings' && <BriefingsPage />}
+          {tab === 'podcast' && <PodcastPage />}
+        </div>
+      )}
+    </TabShell>
+  );
+}
+
+function KnowledgeBaseTab() {
   const { data: docs, loading, refetch } = useApi<KnowledgeDoc[]>('/api/knowledge');
   const [search, setSearch] = useState('');
   const [showUpload, setShowUpload] = useState(false);
