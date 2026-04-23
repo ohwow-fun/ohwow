@@ -72,110 +72,121 @@ function safeExec(cmd, cwd, timeoutMs = 15_000) {
 }
 
 /**
- * Gather rich context across all repos for the task-picker LLM prompt.
+ * Read workspace CRM/pipeline state via the daemon REST API.
+ * Returns a summary string for the task-picker prompt.
  */
-async function gatherSmartContext({ repos }) {
-  const sections = [];
+async function gatherWorkspaceState() {
+  const tokenPath = path.join(os.homedir(), '.ohwow', 'workspaces', 'default', 'daemon.token');
+  if (!fs.existsSync(tokenPath)) return '(daemon not running — no workspace state)';
 
-  for (const repoPath of repos) {
+  const token = fs.readFileSync(tokenPath, 'utf8').trim();
+  const base = 'http://localhost:7700';
+  const headers = { Authorization: `Bearer ${token}` };
+
+  async function get(endpoint) {
     try {
-      const repoName = path.basename(repoPath);
+      const res = await fetch(`${base}${endpoint}`, { headers, signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch { return null; }
+  }
 
-      // Recent commits (14 days — wider than the old 7-day window)
-      const gitLog = safeExec('git log --oneline --since="14 days ago"', repoPath).slice(0, 800);
+  const lines = [];
 
-      // TODOs and FIXMEs
-      const todos = safeExec(
-        'grep -rn "TODO\\|FIXME" src --include="*.ts" --include="*.tsx" | grep -v node_modules | head -15',
-        repoPath,
-      ).slice(0, 600);
-
-      // Test vs source file ratio
-      const testCount = safeExec(
-        'find src -name "*.test.ts" -o -name "*.test.tsx" | wc -l',
-        repoPath,
-      ).trim();
-      const sourceCount = safeExec(
-        'find src -name "*.ts" -o -name "*.tsx" | grep -v "\\.test\\." | grep -v "node_modules" | wc -l',
-        repoPath,
-      ).trim();
-
-      // Source files that have no corresponding test file (up to 10 samples)
-      const untestedFiles = safeExec(
-        `find src -name "*.ts" ! -name "*.test.ts" ! -name "*.d.ts" | grep -v node_modules | while read f; do
-          base=$(basename "$f" .ts);
-          dir=$(dirname "$f");
-          if ! find src -path "*__tests__*/${base}.test.ts" -o -path "*__tests__*/${base}.test.tsx" 2>/dev/null | grep -q .; then
-            echo "$f";
-          fi;
-        done | head -10`,
-        repoPath,
-        20_000,
-      ).trim();
-
-      // Files untouched for 30+ days (stale code likely lacking coverage)
-      const staleFiles = safeExec(
-        `git log --name-only --format="" --since="30 days ago" -- 'src/**/*.ts' | sort -u > /tmp/_touched.txt 2>/dev/null; ` +
-        `find src -name "*.ts" ! -name "*.test.ts" ! -name "*.d.ts" | grep -v node_modules | while read f; do ` +
-        `grep -qF "$f" /tmp/_touched.txt 2>/dev/null || echo "$f"; done | head -8`,
-        repoPath,
-        20_000,
-      ).trim();
-
-      sections.push(
-        `=== ${repoName} ===\n` +
-        `GIT LOG (14d):\n${gitLog || '(none)'}\n\n` +
-        `TODOs/FIXMEs:\n${todos || '(none)'}\n\n` +
-        `Test files: ${testCount} / Source files: ${sourceCount}\n\n` +
-        `Source files with no test counterpart (sample):\n${untestedFiles || '(all covered or check failed)'}\n\n` +
-        `Source files untouched 30+ days:\n${staleFiles || '(all recently touched or check failed)'}`,
-      );
-    } catch (err) {
-      sections.push(`=== ${path.basename(repoPath)} === (error gathering context: ${err.message})`);
+  // Active deals (pipeline health)
+  const deals = await get('/api/deals?limit=10');
+  if (deals?.data?.length) {
+    lines.push('ACTIVE DEALS (CRM pipeline):');
+    for (const d of deals.data.slice(0, 6)) {
+      const val = d.value_cents ? `$${(d.value_cents / 100).toFixed(0)}` : '?';
+      lines.push(`  [${d.stage_name}] ${d.title} — ${val} — close ${d.expected_close || '?'}`);
+      if (d.notes) lines.push(`    Notes: ${d.notes.slice(0, 120)}`);
     }
   }
 
-  // Evolution history summary
-  const summaryPath = path.join(os.homedir(), '.ohwow', 'evolution-reports', 'SUMMARY.md');
-  if (fs.existsSync(summaryPath)) {
-    const summary = fs.readFileSync(summaryPath, 'utf8').slice(0, 800);
-    sections.push(`=== EVOLUTION HISTORY SUMMARY ===\n${summary}`);
-  }
-
-  // Ledger: last 5 entries (for avoiding exact repeats)
-  const ledgerPath = path.join(os.homedir(), '.ohwow', 'evolution-reports', 'evolution-ledger.jsonl');
-  if (fs.existsSync(ledgerPath)) {
-    const recent = fs.readFileSync(ledgerPath, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .slice(-5)
-      .join('\n');
-    if (recent) sections.push(`=== RECENT LEDGER ENTRIES ===\n${recent}`);
-  }
-
-  // Market intel brief (buyer_intent + competitor_move items, latest day)
+  // Recent market intel buyer signals
   const intelDir = path.join(os.homedir(), '.ohwow', 'workspaces', 'default', 'intel');
   try {
     if (fs.existsSync(intelDir)) {
       const latestDay = fs.readdirSync(intelDir)
-        .filter(d => /^\d{4}-\d{2}-\d{2}/.test(d))
-        .sort()
-        .pop();
+        .filter(d => /^\d{4}-\d{2}-\d{2}/.test(d)).sort().pop();
       if (latestDay) {
         const briefPath = path.join(intelDir, latestDay, 'briefs.json');
         if (fs.existsSync(briefPath)) {
           const briefs = JSON.parse(fs.readFileSync(briefPath, 'utf8'));
-          const intelLines = (Array.isArray(briefs) ? briefs : [])
+          const signals = (Array.isArray(briefs) ? briefs : [])
             .filter(b => b.bucket === 'buyer_intent' || b.bucket === 'competitor_move')
-            .slice(0, 3)
-            .map(b => `[${b.bucket}] ${b.headline}`);
-          if (intelLines.length) {
-            sections.push(`=== MARKET INTEL (${latestDay}) ===\n${intelLines.join('\n')}`);
+            .slice(0, 4);
+          if (signals.length) {
+            lines.push(`\nMARKET INTEL SIGNALS (${latestDay}):`);
+            for (const s of signals) lines.push(`  [${s.bucket}] ${s.headline}`);
           }
         }
       }
     }
   } catch { /* non-fatal */ }
+
+  // Pending agent tasks (what the workspace is trying to do)
+  const tasks = await get('/api/tasks?status=pending&limit=8');
+  if (tasks?.data?.length) {
+    lines.push('\nPENDING WORKSPACE TASKS:');
+    for (const t of tasks.data.slice(0, 5)) {
+      lines.push(`  [${t.priority || 'normal'}] ${t.title}`);
+    }
+  }
+
+  return lines.length ? lines.join('\n') : '(no workspace CRM data available)';
+}
+
+/**
+ * Gather rich context across all repos for the task-picker LLM prompt.
+ */
+async function gatherSmartContext({ repos }) {
+  const sections = [];
+
+  // Workspace business state (money/relations context) — gathered first so it shapes priorities
+  try {
+    const wsState = await gatherWorkspaceState();
+    sections.push(`=== WORKSPACE BUSINESS STATE ===\n${wsState}`);
+  } catch { /* non-fatal */ }
+
+  for (const repoPath of repos) {
+    try {
+      const repoName = path.basename(repoPath);
+
+      // Recent commits (14 days)
+      const gitLog = safeExec('git log --oneline --since="14 days ago"', repoPath).slice(0, 600);
+
+      // TODOs and FIXMEs — focus on money/relations paths
+      const todos = safeExec(
+        'grep -rn "TODO\\|FIXME\\|STUB" src --include="*.ts" --include="*.tsx" | grep -v node_modules | grep -iv "test\\|spec\\|jsdoc\\|comment\\|placeholder" | head -12',
+        repoPath,
+      ).slice(0, 500);
+
+      // Half-built integrations (return stubs, unimplemented methods)
+      const stubs = safeExec(
+        'grep -rn "return \\[\\]\\|return {}\\|return null\\|throw new Error.*not impl\\|TODO.*wire\\|NOT IMPLEMENTED" src --include="*.ts" | grep -v node_modules | grep -v "\\.test\\." | head -10',
+        repoPath,
+      ).slice(0, 400);
+
+      sections.push(
+        `=== ${repoName} ===\n` +
+        `GIT LOG (14d):\n${gitLog || '(none)'}\n\n` +
+        `TODOs/FIXMEs (non-test):\n${todos || '(none)'}\n\n` +
+        `Stubs / half-built (return [], {}, null):\n${stubs || '(none)'}`,
+      );
+    } catch (err) {
+      sections.push(`=== ${path.basename(repoPath)} === (error: ${err.message})`);
+    }
+  }
+
+  // Evolution history — last 5 entries
+  const ledgerPath = path.join(os.homedir(), '.ohwow', 'evolution-reports', 'evolution-ledger.jsonl');
+  if (fs.existsSync(ledgerPath)) {
+    const recent = fs.readFileSync(ledgerPath, 'utf8')
+      .split('\n').filter(Boolean).slice(-5).join('\n');
+    if (recent) sections.push(`=== RECENT EVOLUTION LEDGER ===\n${recent}`);
+  }
 
   return sections.join('\n\n');
 }
@@ -231,32 +242,44 @@ async function generateSmartTask({ completedTaskIds, anthropicApiKey, repos }) {
 
   const context = await gatherSmartContext({ repos });
 
-  const systemPrompt = `You are a senior engineer and product lead on the ohwow AI business OS platform.
-Your job: read the codebase context below and propose ONE high-leverage product task that a Claude Code agent can complete autonomously in a single session.
+  const systemPrompt = `You are the autonomous engineering arm of ohwow — an AI business OS. You read the workspace business state, CRM pipeline, market signals, and codebase to decide what to build next.
 
-PRIORITY ORDER — pick the highest-priority category that has available work:
-1. Features that are half-built (TODOs in working code, stubs that return nothing, commented-out integrations)
-2. Integrations between systems that exist but aren't connected (e.g., market intel exists but nothing reads it)
-3. New API endpoints or routes that are clearly missing (the frontend references them but they don't exist)
-4. Performance or reliability improvements to core paths (concurrency, error handling, retry logic)
-5. Hardcoded values that should be config-driven (model names, URLs, magic numbers in hot paths)
-6. Tests for critical business logic — ONLY if no higher-priority work exists
+PRIORITY FRAMEWORK — always pick the highest tier with available work:
 
-Do NOT pick:
-- JSDoc / documentation-only tasks
-- Renaming things or extracting constants from non-critical code
-- Tasks that only add comments
-- Anything that is purely cosmetic
+TIER 1 — MONEY (highest priority):
+  - Anything that directly enables revenue collection or unblocks a deal from progressing
+  - Payment flows, billing endpoints, invoice generation, pricing pages
+  - Outreach sending (email/SMS/WhatsApp) that is blocked by a missing integration
+  - Conversion-blocking bugs in onboarding, signup, or checkout
+  - Deal automation: auto-advance stages, follow-up triggers, CRM → outreach pipeline
+  - Market intel signals (buyer_intent) → actionable outreach tasks
 
-Rules:
-- The task MUST be VERIFIABLE within 5 minutes using a single shell command
-- Each task MUST include a specific acceptanceCriteria list and a validationCmd
-- No package.json changes
-- No new npm dependencies
-- No external service calls required during validation
-- The targetRepo MUST be one of the repos listed in the context
-- Do NOT repeat any task from the completed list
-- Pick tasks that ship real value to the product
+TIER 2 — RELATIONS (second priority):
+  - Features that strengthen or automate prospect/customer relationships
+  - CRM integrations: contact enrichment, interaction logging, lead scoring
+  - Communication channels: Gmail auth, WhatsApp business, calendar scheduling
+  - Follow-up automation: sequence triggers, reminder scheduling, reply detection
+  - Onboarding flows that are incomplete or returning empty state
+
+TIER 3 — PLUMBING (lowest priority):
+  - Infrastructure that directly unblocks Tier 1 or Tier 2 work
+  - Missing API endpoints that the dashboard calls but don't exist
+  - Half-built features: stubs returning [], {}, or null where real data is expected
+  - Type errors in hot paths (deals, contacts, tasks, outreach routes)
+  - Config-driven model/URL constants replacing hardcoded values
+
+NEVER pick:
+  - JSDoc, comments, or documentation-only tasks
+  - Test files unless they test a Tier 1/2 feature AND no higher-priority work exists
+  - Renaming, refactoring, or extracting constants for non-critical code
+  - Tasks with no path to revenue or relationship impact
+
+TASK SHAPE RULES (critical for the implementing agent):
+  - The description MUST name the EXACT file(s) to change and the EXACT code to write
+  - Do NOT write "Steps: 1. grep... 2. read... 3. understand..." — the agent will loop 20 times and write nothing
+  - DO write "Create file X with this exact content: [code]" or "Edit file X, replace line Y with [code]"
+  - The description should be self-contained: no exploration required before implementing
+  - validationCmd must exit 0 when the task is done correctly
 
 Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
 {
@@ -264,11 +287,11 @@ Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
   "title": "Short imperative title (under 80 chars)",
   "targetRepo": "/absolute/path/to/repo",
   "validationCmd": "npm run typecheck 2>&1 | tail -30",
-  "description": "3-6 sentences: what problem this solves, which files to change, what to implement, and why it matters for the product.",
+  "description": "Concrete implementation instructions with exact file paths and exact code to write. 4-8 sentences.",
   "acceptanceCriteria": ["criterion 1", "criterion 2", "criterion 3"]
 }`;
 
-  const baseUserPrompt = `CONTEXT:\n${context}\n\nCOMPLETED TASK IDs (do not repeat): ${completedTaskIds.join(', ') || '(none)'}\n\nREPO PATHS AVAILABLE: ${repos.join(' | ')}\n\nPick the single highest-value task now.`;
+  const baseUserPrompt = `CONTEXT:\n${context}\n\nCOMPLETED TASK IDs (do not repeat): ${completedTaskIds.join(', ') || '(none)'}\n\nREPO PATHS AVAILABLE: ${repos.join(' | ')}\n\nLook at the workspace business state first. What deals are stuck? What outreach is blocked? What market signals need actioning? Then look at the code to find the shortest path to unblocking revenue or strengthening customer relationships. Pick the single highest-value task now — money > relations > plumbing.`;
 
   const MAX_ATTEMPTS = 3;
   let lastError;

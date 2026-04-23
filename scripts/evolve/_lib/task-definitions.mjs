@@ -318,86 +318,202 @@ After making both edits, run: npm run typecheck 2>&1 | tail -20
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
     validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-src/web/src/hooks/useOnboarding.ts line 529 has:
-  // TODO: In the future, derive integrations from selected agent presets
+TARGET FILE (the ONLY file to edit): src/web/src/hooks/useOnboarding.ts
 
-The agent presets already declare which integrations they need. For example,
-agents that do social media posting need Twitter/X integration; agents that
-read email need Gmail integration; etc.
+DO NOT read any other files. DO NOT explore. Apply this exact change:
 
-Steps:
-1. Read src/tui/data/agent-presets.ts to understand the AgentPreset interface
-   and what integration/tool fields exist on each preset.
-2. Read src/web/src/hooks/useOnboarding.ts around line 529 and the surrounding
-   ~50 lines to understand the current onboarding state and what selectedAgents
-   looks like.
-3. Implement a pure function (can be in the same file or a new utils file):
-     function deriveIntegrationsFromPresets(selectedAgents: string[]): string[]
-   that maps agent preset IDs to the integrations they require. For example:
-   - social/twitter agents → ['twitter']
-   - email agents → ['gmail']
-   - calendar agents → ['gcal']
-   - github agents → ['github']
-4. Replace the TODO comment with a real call to this function, using the
-   currently selected agent IDs from the onboarding state.
+1. Add this pure function BEFORE the \`useOnboarding\` hook definition (before the line "export function useOnboarding"):
 
-The goal is that when a user picks "Social Media Manager" during onboarding,
-the integration step automatically pre-selects Twitter/X instead of showing
-an empty list.
+\`\`\`typescript
+/**
+ * Maps selected agent preset IDs to the MCP integrations they require.
+ * Agents that manage social media need Twitter; email agents need Gmail; etc.
+ */
+function deriveIntegrationsFromPresets(selectedAgentIds: Set<string>): McpIntegration[] {
+  const needed = new Set<string>();
+
+  for (const id of selectedAgentIds) {
+    // Social media agents
+    if (id.includes('social') || id.includes('linkedin') || id.includes('sponsor')) {
+      needed.add('twitter');
+      needed.add('linkedin');
+    }
+    // Email / campaign agents
+    if (id.includes('email') || id.includes('campaign') || id.includes('outreach') || id.includes('follow_up')) {
+      needed.add('gmail');
+    }
+    // Calendar / scheduling agents
+    if (id.includes('schedule') || id.includes('calendar') || id.includes('dispatch') || id.includes('meeting')) {
+      needed.add('gcal');
+    }
+    // GitHub / dev agents
+    if (id.includes('github') || id.includes('code') || id.includes('developer')) {
+      needed.add('github');
+    }
+  }
+
+  const INTEGRATION_DEFS: Record<string, McpIntegration> = {
+    twitter: {
+      id: 'twitter',
+      name: 'Twitter / X',
+      description: 'Post and read tweets for your social media agents',
+      envVarsRequired: [{ key: 'TWITTER_API_KEY', label: 'API Key', secret: true }, { key: 'TWITTER_API_SECRET', label: 'API Secret', secret: true }],
+    },
+    linkedin: {
+      id: 'linkedin',
+      name: 'LinkedIn',
+      description: 'Post updates and manage LinkedIn presence',
+      envVarsRequired: [{ key: 'LINKEDIN_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'LINKEDIN_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    gmail: {
+      id: 'gmail',
+      name: 'Gmail',
+      description: 'Read and send emails on behalf of your agents',
+      envVarsRequired: [{ key: 'GMAIL_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'GMAIL_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    gcal: {
+      id: 'gcal',
+      name: 'Google Calendar',
+      description: 'Read and create calendar events',
+      envVarsRequired: [{ key: 'GCAL_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'GCAL_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    github: {
+      id: 'github',
+      name: 'GitHub',
+      description: 'Read repositories, issues, and pull requests',
+      envVarsRequired: [{ key: 'GITHUB_TOKEN', label: 'Personal Access Token', secret: true }],
+    },
+  };
+
+  return Array.from(needed).map(id => INTEGRATION_DEFS[id]).filter(Boolean);
+}
+\`\`\`
+
+2. Replace these exact lines (around line 528-531):
+\`\`\`
+  const goToIntegrationSetup = useCallback(() => {
+    // TODO: In the future, derive integrations from selected agent presets
+    // For now, show empty (no integrations needed) and auto-advance to ready
+    setState(s => ({ ...s, screen: 'integration_setup' }));
+  }, []);
+\`\`\`
+
+With:
+\`\`\`
+  const goToIntegrationSetup = useCallback(() => {
+    setState(s => ({
+      ...s,
+      screen: 'integration_setup',
+      integrations: deriveIntegrationsFromPresets(s.selectedAgentIds),
+    }));
+  }, []);
+\`\`\`
+
+3. Check if McpEnvVar interface already has a \`secret\` field. If it does not, add it:
+   Find the McpEnvVar interface (should be near McpIntegration around line 83) and add \`secret?: boolean;\` if not present.
+
+That is the complete change. Do not touch any other file.
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npm run typecheck)',
-      'deriveIntegrationsFromPresets function exists and maps preset IDs to integration names',
-      'The TODO comment is removed and replaced with a real call',
-      'At least 3 agent categories are mapped to their required integrations',
+      'deriveIntegrationsFromPresets function exists in useOnboarding.ts',
+      'The TODO comment is removed and goToIntegrationSetup now calls deriveIntegrationsFromPresets',
+      'At least 4 integrations are mapped (twitter, linkedin, gmail, gcal)',
     ],
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 6 — Add real contacts/CRM search to the orchestrator tool catalog
+  // BATCH 6 — Wire real mesh peer count into inner-thoughts context
   // -------------------------------------------------------------------------
   {
-    taskId: 'add-crm-contact-search-tool',
-    title: 'Add search_contacts tool to orchestrator MCP catalog for CRM agent access',
+    taskId: 'wire-mesh-peer-count-inner-thoughts-v2',
+    title: 'Add connectedPeerCount to ContextSnapshot and populate it from MeshCoordinator',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
     validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-The orchestrator MCP catalog at src/mcp/catalog.ts lists tools agents can use.
-Currently agents have no way to search the contacts/CRM database directly.
+TARGET FILES (edit ONLY these two files):
+  1. src/presence/types.ts
+  2. src/presence/inner-thoughts.ts
 
-Your task: add a search_contacts built-in tool that lets agents query the
-contacts table by name, email, company, or tag.
+DO NOT read any other files. DO NOT explore. Apply these exact changes:
 
-Steps:
-1. Read src/mcp/catalog.ts to understand the MCPToolDefinition interface and
-   how existing tools are structured.
-2. Read src/db/ to find the contacts table schema (look for contacts migration
-   or CREATE TABLE contacts).
-3. Add a new tool entry to the catalog:
-   {
-     id: 'search_contacts',
-     name: 'Search Contacts',
-     description: 'Search the CRM contacts database by name, email, company, or tag',
-     category: 'crm',
-     icon: 'Users',
-     envVarsRequired: [],
-     isBuiltIn: true,
-     schema: { ... }  // query: string, limit?: number
-   }
-4. Add the corresponding tool handler in the built-in tool executor
-   (find where other built-in tools are executed — grep for isBuiltIn or
-   built-in in src/orchestrator/ or src/mcp/).
-5. The handler should query the contacts table with a LIKE search on
-   name, email, company columns and return matching rows as JSON.
+=== CHANGE 1: src/presence/types.ts ===
 
-If the contacts table doesn't exist, add a migration file in src/db/migrations/
-following the existing pattern, and create the minimal schema.
+The ContextSnapshot interface currently ends with:
+  /** Current time of day context. */
+  timeOfDay: 'morning' | 'afternoon' | 'evening' | 'night';
+}
+
+Add ONE new field BEFORE the closing brace:
+  /** Number of peer nodes currently in the mesh (including self). 1 = solo operation. */
+  connectedPeerCount: number;
+
+So the interface becomes:
+  /** Current time of day context. */
+  timeOfDay: 'morning' | 'afternoon' | 'evening' | 'night';
+  /** Number of peer nodes currently in the mesh (including self). 1 = solo operation. */
+  connectedPeerCount: number;
+}
+
+=== CHANGE 2: src/presence/inner-thoughts.ts ===
+
+The InnerThoughtsLoop constructor signature is currently:
+  constructor(
+    private db: DatabaseAdapter,
+    private workspace: GlobalWorkspace,
+    private modelRouter: ModelRouter,
+    private workspaceId: string,
+  ) {}
+
+Add an optional meshCoordinator parameter. First add this import at the top of the file
+(after the existing imports):
+  import type { MeshCoordinator } from '../peers/mesh-coordinator.js';
+
+Then change the constructor to:
+  constructor(
+    private db: DatabaseAdapter,
+    private workspace: GlobalWorkspace,
+    private modelRouter: ModelRouter,
+    private workspaceId: string,
+    private meshCoordinator?: MeshCoordinator,
+  ) {}
+
+In gatherContext(), the return statement currently is:
+    return {
+      pendingTasks,
+      recentCompletions,
+      unreadMessages,
+      overnightActivity: {
+        tasksCompleted: overnightCompleted.count ?? 0,
+        tasksStarted: overnightStarted.count ?? 0,
+        errors: overnightFailed.count ?? 0,
+      },
+      userIdleMs,
+      timeOfDay,
+    };
+
+Change it to:
+    return {
+      pendingTasks,
+      recentCompletions,
+      unreadMessages,
+      overnightActivity: {
+        tasksCompleted: overnightCompleted.count ?? 0,
+        tasksStarted: overnightStarted.count ?? 0,
+        errors: overnightFailed.count ?? 0,
+      },
+      userIdleMs,
+      timeOfDay,
+      connectedPeerCount: this.meshCoordinator?.deviceCount ?? 1,
+    };
+
+That is the complete change. Do not touch any other file.
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npm run typecheck)',
-      'search_contacts appears in the MCP catalog with correct schema',
-      'Built-in tool handler queries contacts table with LIKE search',
-      'Tool is categorized as crm and marked isBuiltIn: true',
+      'ContextSnapshot interface in src/presence/types.ts has connectedPeerCount: number',
+      'InnerThoughtsLoop constructor accepts optional meshCoordinator parameter',
+      'gatherContext() populates connectedPeerCount from meshCoordinator.deviceCount',
     ],
   },
 
@@ -447,39 +563,137 @@ reflect "distributed team active" rather than assuming solo operation.
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
     validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-The self-bench system at src/self-bench/ runs experiments comparing model
-configurations. Currently experiment results may only live in memory.
+TARGET: Create TWO new files only. Do not read or modify any existing files.
 
-Steps:
-1. Run: grep -rn "result\|experiment\|persist\|store\|save" src/self-bench/ --include="*.ts" | head -30
-   to understand what exists.
-2. Check if there's a self_bench_results or experiments table in src/db/migrations/.
-3. If no table exists, create src/db/migrations/<next-number>-self-bench-results.ts
-   with CREATE TABLE self_bench_results (
-     id TEXT PRIMARY KEY,
-     experiment_id TEXT NOT NULL,
-     created_at TEXT NOT NULL,
-     config_a TEXT NOT NULL,
-     config_b TEXT NOT NULL,
-     winner TEXT,
-     score_a REAL,
-     score_b REAL,
-     verdict TEXT,
-     raw_json TEXT
-   );
-4. In the self-bench runner (src/self-bench/self-commit.ts or similar),
-   after an experiment completes, insert the result into self_bench_results.
-5. Add a getSelfBenchHistory(limit) function that reads the last N results
-   from the table, for use in prompts and reporting.
+=== FILE 1: src/db/migrations/151-self-bench-results.sql ===
 
-The goal: experiment results survive daemon restarts and can inform future
-experiment design (avoid re-running the same comparison).
+Write exactly this content:
+
+-- Self-bench experiment result log.
+-- Tracks which A/B comparisons the system has run and their outcomes,
+-- so future experiment selection avoids redundant comparisons.
+CREATE TABLE IF NOT EXISTS self_bench_results (
+  id              TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  workspace_id    TEXT NOT NULL,
+  experiment_id   TEXT NOT NULL,
+  config_a        TEXT NOT NULL,
+  config_b        TEXT NOT NULL,
+  winner          TEXT,
+  score_a         REAL,
+  score_b         REAL,
+  verdict         TEXT,
+  raw_json        TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_self_bench_workspace
+  ON self_bench_results(workspace_id, created_at DESC);
+
+
+=== FILE 2: src/self-bench/self-bench-results-store.ts ===
+
+Write exactly this content:
+
+/**
+ * self-bench-results-store — persistence for A/B experiment outcomes.
+ *
+ * Inserts experiment results into self_bench_results so they survive
+ * daemon restarts and inform future experiment selection.
+ */
+
+import { randomUUID } from 'crypto';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+import { logger } from '../lib/logger.js';
+
+export interface SelfBenchResult {
+  experimentId: string;
+  configA: string;
+  configB: string;
+  winner?: string;
+  scoreA?: number;
+  scoreB?: number;
+  verdict?: string;
+  rawJson?: string;
+}
+
+export interface SelfBenchResultRow {
+  id: string;
+  workspace_id: string;
+  experiment_id: string;
+  config_a: string;
+  config_b: string;
+  winner: string | null;
+  score_a: number | null;
+  score_b: number | null;
+  verdict: string | null;
+  raw_json: string | null;
+  created_at: string;
+}
+
+export class SelfBenchResultsStore {
+  constructor(
+    private db: DatabaseAdapter,
+    private workspaceId: string,
+  ) {}
+
+  /** Persist a completed experiment result. */
+  async save(result: SelfBenchResult): Promise<string> {
+    const id = randomUUID();
+    await this.db
+      .from('self_bench_results')
+      .insert({
+        id,
+        workspace_id: this.workspaceId,
+        experiment_id: result.experimentId,
+        config_a: result.configA,
+        config_b: result.configB,
+        winner: result.winner ?? null,
+        score_a: result.scoreA ?? null,
+        score_b: result.scoreB ?? null,
+        verdict: result.verdict ?? null,
+        raw_json: result.rawJson ?? null,
+      });
+    logger.debug(\`[SelfBenchResultsStore] saved result \${id} for experiment \${result.experimentId}\`);
+    return id;
+  }
+
+  /** Retrieve the last N results for this workspace. */
+  async getSelfBenchHistory(limit = 20): Promise<SelfBenchResultRow[]> {
+    const { data, error } = await this.db
+      .from('self_bench_results')
+      .select('*')
+      .eq('workspace_id', this.workspaceId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) {
+      logger.warn(\`[SelfBenchResultsStore] getSelfBenchHistory error: \${error}\`);
+      return [];
+    }
+    return (data ?? []) as SelfBenchResultRow[];
+  }
+
+  /** Check whether a specific A/B pair was already tested recently (24h). */
+  async wasRecentlyTested(configA: string, configB: string, windowHours = 24): Promise<boolean> {
+    const cutoff = new Date(Date.now() - windowHours * 3600 * 1000).toISOString();
+    const { count } = await this.db
+      .from('self_bench_results')
+      .select('id', { count: 'exact', head: true })
+      .eq('workspace_id', this.workspaceId)
+      .eq('config_a', configA)
+      .eq('config_b', configB)
+      .gte('created_at', cutoff);
+    return (count ?? 0) > 0;
+  }
+}
+
+Do not modify any other files.
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npm run typecheck)',
-      'A self_bench_results table migration exists in src/db/migrations/',
-      'Experiment results are inserted into the table after completion',
-      'getSelfBenchHistory() function exists and queries the table',
+      'src/db/migrations/151-self-bench-results.sql exists with CREATE TABLE self_bench_results',
+      'src/self-bench/self-bench-results-store.ts exists with SelfBenchResultsStore class',
+      'getSelfBenchHistory() method exists and queries the table',
+      'wasRecentlyTested() method exists to avoid duplicate experiments',
     ],
   },
 
@@ -584,36 +798,113 @@ The response shape for GET /api/agents should be:
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
     validationCmd: 'npx tsc --noEmit 2>&1 | tail -20',
     description: `
-The ohwow.fun dashboard has no way to display the market intel briefs that the
-runtime generates. The briefs live in ~/.ohwow/workspaces/{slug}/intel/ on the
-server running the daemon.
+WRITE THIS FILE EXACTLY. No exploration needed. Create the single file below.
 
-However, ohwow.fun talks to the runtime via the daemon REST API (port 7700).
-Your task is to add a proxy route that reads intel from the daemon.
+Target: src/app/api/intel/latest/route.ts
 
-Steps:
-1. Check if /api/intel exists: ls src/app/api/intel/ 2>/dev/null || echo "missing"
-2. Look at how other API routes proxy to the daemon:
-   grep -rn "7700\|daemon.*token\|DAEMON_URL" src/app/api/ --include="*.ts" | head -20
-3. Create src/app/api/intel/latest/route.ts with a GET handler that:
-   - Gets the workspace slug from the auth session
-   - Reads the daemon token from the workspace config
-   - Proxies GET to http://localhost:7700/api/intel/latest (or the daemon port)
-   - Returns the briefs JSON to the client
-4. If the daemon doesn't have an /api/intel route, instead read directly:
-   - Find OHWOW_DATA_DIR or equivalent env var
-   - Read ~/.ohwow/workspaces/{slug}/intel/{latest-day}/briefs.json
-   - Return it as JSON
-5. The response shape should be: { briefs: Brief[], day: string }
-   where Brief has: { id, bucket, headline, ohwow_implications, score }
+Use write_file with this exact content:
 
-This enables the dashboard to show "Market Intel" as a live feed.
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
+import { resolveWorkspaceFromRequest } from '@/lib/agents/resolve-workspace';
+import { resolveDaemonTarget } from '@/lib/local-runtime/daemon-target';
+import { logger } from '@/lib/logger';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+
+export interface IntelBrief {
+  id: string;
+  bucket: string;
+  headline: string;
+  ohwow_implications: string;
+  score: number;
+}
+
+export interface IntelLatestResponse {
+  briefs: IntelBrief[];
+  day: string | null;
+  source: 'daemon' | 'local' | 'empty';
+}
+
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const workspace = await resolveWorkspaceFromRequest(supabase, request, user.id);
+  if (!workspace) {
+    return NextResponse.json({ error: 'No workspace found' }, { status: 401 });
+  }
+
+  const { workspaceId } = workspace;
+
+  // Try proxying to the daemon first
+  const target = await resolveDaemonTarget(supabase, workspaceId, user.id);
+  if (target) {
+    try {
+      const proxyRes = await fetch(\`\${target.url}/api/intel/latest\`, {
+        headers: { Authorization: target.authorization },
+      });
+      if (proxyRes.ok) {
+        const data = (await proxyRes.json()) as IntelLatestResponse;
+        return NextResponse.json({ ...data, source: 'daemon' as const });
+      }
+      logger.warn({ status: proxyRes.status }, 'intel/latest: daemon proxy failed, falling back to local read');
+    } catch (err) {
+      logger.warn({ err }, 'intel/latest: daemon proxy error, falling back to local read');
+    }
+  }
+
+  // Fallback: read directly from disk (dev mode where dashboard and daemon share filesystem)
+  try {
+    const intelDir = join(homedir(), '.ohwow', 'workspaces', 'default', 'intel');
+    if (!existsSync(intelDir)) {
+      return NextResponse.json({ briefs: [], day: null, source: 'empty' } satisfies IntelLatestResponse);
+    }
+
+    const days = readdirSync(intelDir)
+      .filter(d => /^\\d{4}-\\d{2}-\\d{2}$/.test(d))
+      .sort()
+      .reverse();
+
+    if (days.length === 0) {
+      return NextResponse.json({ briefs: [], day: null, source: 'empty' } satisfies IntelLatestResponse);
+    }
+
+    const latestDay = days[0];
+    const briefsPath = join(intelDir, latestDay, 'briefs.json');
+
+    if (!existsSync(briefsPath)) {
+      return NextResponse.json({ briefs: [], day: latestDay, source: 'empty' } satisfies IntelLatestResponse);
+    }
+
+    const briefs = JSON.parse(readFileSync(briefsPath, 'utf8')) as IntelBrief[];
+    return NextResponse.json({ briefs, day: latestDay, source: 'local' } satisfies IntelLatestResponse);
+  } catch (err) {
+    logger.warn({ err }, 'intel/latest: local read failed');
+    return NextResponse.json({ briefs: [], day: null, source: 'empty' } satisfies IntelLatestResponse);
+  }
+}
+
+After writing the file, run: npx tsc --noEmit 2>&1 | tail -20
+Fix any TypeScript errors. The most common issue is the satisfies operator needing TypeScript 4.9+
+(if it errors, replace "satisfies IntelLatestResponse" with just the object literal without satisfies).
+Do NOT modify any other files.
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npx tsc --noEmit)',
       'src/app/api/intel/latest/route.ts exists with a GET handler',
-      'Handler reads intel briefs and returns them as JSON',
-      'Proper error handling if intel directory is missing',
+      'Handler tries daemon proxy first via resolveDaemonTarget, then falls back to local disk read',
+      'Response shape is { briefs: IntelBrief[], day: string | null, source: string }',
+      'Proper error handling if intel directory or briefs.json is missing',
     ],
   },
 
