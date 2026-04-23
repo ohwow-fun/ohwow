@@ -78,6 +78,7 @@ interface ChatMessage {
 interface McpEnvVar {
   key: string;
   label: string;
+  secret?: boolean;
 }
 
 interface McpIntegration {
@@ -131,6 +132,69 @@ export interface UseOnboardingOptions {
 
 function slugify(name: string): string {
   return name.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9\-_]/g, '');
+}
+
+/**
+ * Maps selected agent preset IDs to the MCP integrations they require.
+ * Agents that manage social media need Twitter; email agents need Gmail; etc.
+ */
+function deriveIntegrationsFromPresets(selectedAgentIds: Set<string>): McpIntegration[] {
+  const needed = new Set<string>();
+
+  for (const id of selectedAgentIds) {
+    // Social media agents
+    if (id.includes('social') || id.includes('linkedin') || id.includes('sponsor')) {
+      needed.add('twitter');
+      needed.add('linkedin');
+    }
+    // Email / campaign agents
+    if (id.includes('email') || id.includes('campaign') || id.includes('outreach') || id.includes('follow_up')) {
+      needed.add('gmail');
+    }
+    // Calendar / scheduling agents
+    if (id.includes('schedule') || id.includes('calendar') || id.includes('dispatch') || id.includes('meeting')) {
+      needed.add('gcal');
+    }
+    // GitHub / dev agents
+    if (id.includes('github') || id.includes('code') || id.includes('developer')) {
+      needed.add('github');
+    }
+  }
+
+  const INTEGRATION_DEFS: Record<string, McpIntegration> = {
+    twitter: {
+      id: 'twitter',
+      name: 'Twitter / X',
+      description: 'Post and read tweets for your social media agents',
+      envVarsRequired: [{ key: 'TWITTER_API_KEY', label: 'API Key', secret: true }, { key: 'TWITTER_API_SECRET', label: 'API Secret', secret: true }],
+    },
+    linkedin: {
+      id: 'linkedin',
+      name: 'LinkedIn',
+      description: 'Post updates and manage LinkedIn presence',
+      envVarsRequired: [{ key: 'LINKEDIN_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'LINKEDIN_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    gmail: {
+      id: 'gmail',
+      name: 'Gmail',
+      description: 'Read and send emails on behalf of your agents',
+      envVarsRequired: [{ key: 'GMAIL_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'GMAIL_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    gcal: {
+      id: 'gcal',
+      name: 'Google Calendar',
+      description: 'Read and create calendar events',
+      envVarsRequired: [{ key: 'GCAL_CLIENT_ID', label: 'Client ID', secret: false }, { key: 'GCAL_CLIENT_SECRET', label: 'Client Secret', secret: true }],
+    },
+    github: {
+      id: 'github',
+      name: 'GitHub',
+      description: 'Read repositories, issues, and pull requests',
+      envVarsRequired: [{ key: 'GITHUB_TOKEN', label: 'Personal Access Token', secret: true }],
+    },
+  };
+
+  return Array.from(needed).map(id => INTEGRATION_DEFS[id]).filter(Boolean);
 }
 
 export function useOnboarding(options: UseOnboardingOptions = {}) {
@@ -526,9 +590,11 @@ export function useOnboarding(options: UseOnboardingOptions = {}) {
   // ── Integration Setup ────────────────────────────────────────────────
 
   const goToIntegrationSetup = useCallback(() => {
-    // TODO: In the future, derive integrations from selected agent presets
-    // For now, show empty (no integrations needed) and auto-advance to ready
-    setState(s => ({ ...s, screen: 'integration_setup' }));
+    setState(s => ({
+      ...s,
+      screen: 'integration_setup',
+      integrations: deriveIntegrationsFromPresets(s.selectedAgentIds),
+    }));
   }, []);
 
   const setIntegrationValue = useCallback((serverId: string, envKey: string, value: string) => {
