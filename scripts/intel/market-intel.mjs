@@ -298,6 +298,93 @@ function extractBuyerLeads(classified) {
     }));
 }
 
+/**
+ * Push buyer_intent leads into the ohwow CRM.
+ *
+ * Dedup strategy: each lead stores its Reddit post URL in
+ * custom_fields.source_url. Before creating, we search
+ * GET /api/contacts?custom_field_key=source_url&custom_field_value=<url>
+ * to skip contacts that already exist.
+ *
+ * Fields mapped to the contacts API:
+ *   name          — lead.author (falls back to 'Reddit User')
+ *   contact_type  — 'lead'
+ *   tags          — ['market-intel', 'buyer-intent', source_label]
+ *   notes         — lead.title + lead.why (plain text provenance)
+ *   custom_fields — { source_url, source_label, subreddit, bucket_score, intel_date }
+ *
+ * Never throws. Per-lead errors are logged and counted.
+ */
+async function pushLeadsToCrm(leads, { baseUrl, token }) {
+  const headers = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+  let pushed = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const lead of leads) {
+    try {
+      // 1. Dedup check: search by source_url stored in custom_fields
+      const checkUrl = `${baseUrl}/api/contacts?custom_field_key=source_url&custom_field_value=${encodeURIComponent(lead.url || '')}`;
+      const checkRes = await fetch(checkUrl, { headers });
+      if (!checkRes.ok) {
+        console.warn(`[market-intel] crm dedup check failed (${checkRes.status}) for ${lead.url}`);
+        errors++;
+        continue;
+      }
+      const checkBody = await checkRes.json();
+      if (checkBody.data && checkBody.data.length > 0) {
+        skipped++;
+        continue;
+      }
+
+      // 2. Build contact body using only fields the API accepts
+      const tags = ['market-intel', 'buyer-intent'];
+      if (lead.source_label) tags.push(lead.source_label);
+
+      const notes = [lead.title, lead.why].filter(Boolean).join('\n\n');
+
+      const body = {
+        name: lead.author || 'Reddit User',
+        contact_type: 'lead',
+        tags,
+        notes,
+        custom_fields: {
+          source_url: lead.url || '',
+          source_label: lead.source_label || '',
+          subreddit: lead.subreddit || '',
+          bucket_score: lead.score ?? null,
+          intel_date: today,
+        },
+      };
+
+      const postRes = await fetch(`${baseUrl}/api/contacts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+
+      if (!postRes.ok) {
+        const errText = await postRes.text().catch(() => '');
+        console.warn(`[market-intel] crm create failed (${postRes.status}) for "${lead.title?.slice(0, 60)}": ${errText}`);
+        errors++;
+        continue;
+      }
+
+      pushed++;
+      const created = await postRes.json();
+      console.log(`[market-intel] crm pushed: ${created.data?.id || '?'} — "${lead.title?.slice(0, 60)}"`);
+    } catch (err) {
+      console.warn(`[market-intel] crm push error for "${lead.title?.slice(0, 60)}": ${err.message}`);
+      errors++;
+    }
+  }
+
+  return { pushed, skipped, errors };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -358,7 +445,7 @@ if (fresh.length === 0) {
 }
 
 // 3. CLASSIFY ----------------------------------------------------------------
-const budget = { llm_calls: 0, buyer_leads: 0, briefs: 0 };
+const budget = { llm_calls: 0, buyer_leads: 0, briefs: 0, crm_pushed: 0, crm_skipped: 0, crm_errors: 0 };
 console.log(`[market-intel] classifying ${fresh.length} items in batches of ${CLASSIFY_BATCH}...`);
 const classified = await classifyAll(fresh);
 budget.llm_calls += Math.ceil(fresh.length / CLASSIFY_BATCH);
@@ -419,6 +506,19 @@ if (!DRY) {
   // Mark seen before synthesis — avoids re-classifying on partial run.
   // Never called in dry-run mode: dry runs must not write to the seen-file.
   appendSeen(fresh);
+
+  // Push buyer_intent leads to CRM
+  if (buyerLeads.length > 0) {
+    const { url: crmBaseUrl, token: crmToken } = resolveOhwow();
+    console.log(`[market-intel] pushing ${buyerLeads.length} buyer leads to CRM...`);
+    const crmResult = await pushLeadsToCrm(buyerLeads, { baseUrl: crmBaseUrl, token: crmToken });
+    budget.crm_pushed = crmResult.pushed;
+    budget.crm_skipped = crmResult.skipped;
+    budget.crm_errors = crmResult.errors;
+    console.log(`[market-intel] crm push: pushed=${crmResult.pushed} skipped=${crmResult.skipped} errors=${crmResult.errors}`);
+  } else {
+    console.log('[market-intel] no buyer leads to push to CRM');
+  }
 
   const actionableBuckets = Object.keys(byBucket).filter(b => b !== 'skip' && byBucket[b]?.length > 0);
   console.log(`[market-intel] synthesizing ${actionableBuckets.length} bucket briefs...`);
@@ -507,6 +607,9 @@ const summary = {
     Object.entries(byBucket).map(([k, v]) => [k, v.length])
   ),
   buyer_leads: budget.buyer_leads,
+  crm_pushed: budget.crm_pushed,
+  crm_skipped: budget.crm_skipped,
+  crm_errors: budget.crm_errors,
   model_releases: modelReleases.length,
   research_papers: research.length,
   briefs: budget.briefs,
@@ -522,5 +625,8 @@ console.log(`[market-intel] summary:`, {
   new_items: fresh.length,
   bucket_counts: summary.bucket_counts,
   buyer_leads: budget.buyer_leads,
+  crm_pushed: budget.crm_pushed,
+  crm_skipped: budget.crm_skipped,
+  crm_errors: budget.crm_errors,
   briefs: budget.briefs,
 });
