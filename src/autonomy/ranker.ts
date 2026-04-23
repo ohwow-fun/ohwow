@@ -622,7 +622,9 @@ export function rankNextPhase(inputs: RankInputs): RankedPhase[] {
       '',
       '## Resume after founder answer',
       `Original blocker: ${subject}`,
-      ans.context ? `Context: ${ans.context}` : '',
+      ans.context
+        ? `Context: ${typeof ans.context === 'string' ? ans.context : JSON.stringify(ans.context)}`
+        : '',
       '',
       '## Founder answer',
       ans.answer,

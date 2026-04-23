@@ -443,6 +443,32 @@ describe('rankNextPhase — founder-answer with unknown mode', () => {
   });
 });
 
+describe('rankNextPhase — founder-answer context serialization', () => {
+  it('renders context as JSON string when DB adapter pre-parses it to an object', () => {
+    // parseJsonColumns in the SQLite adapter auto-parses {"…"} strings to objects.
+    // The plan brief must not contain "[object Object]".
+    const ans: FounderInboxRecord = {
+      id: 'fi_ctx',
+      workspace_id: 'ws-test',
+      arc_id: null,
+      phase_id: null,
+      mode: 'plumbing',
+      blocker: 'relationship-decay',
+      context: { contactId: 'c-abc', contactName: 'Alice' } as unknown as string,
+      options: [],
+      recommended: null,
+      screenshot_path: null,
+      asked_at: REF_ISO,
+      answered_at: REF_ISO,
+      answer: 'snooze',
+      status: 'answered',
+    };
+    const out = rankNextPhase({ pulse: emptyPulse(), ledger: emptyLedger(), newly_answered: [ans], refTimeMs: REF_TIME_MS });
+    expect(out[0].initial_plan_brief).not.toContain('[object Object]');
+    expect(out[0].initial_plan_brief).toContain('c-abc');
+  });
+});
+
 describe('rankNextPhase — tie-breaking', () => {
   it('two equal-score approvals order by source_id ascending', () => {
     const pulse = emptyPulse({
