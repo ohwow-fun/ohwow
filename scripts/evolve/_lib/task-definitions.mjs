@@ -254,34 +254,58 @@ Do NOT modify any existing files. Do NOT wire this into daemon startup.
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
     validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-src/presence/inner-thoughts.ts line 244 has:
-  unreadMessages: [], // TODO: Wire when channel message storage is implemented
+EXACT TASK — make two precise edits to src/presence/inner-thoughts.ts.
 
-The conversation/channel message storage DOES exist in the codebase. Your job is
-to find it and wire it in.
+BACKGROUND (do NOT re-read these files — all context is here):
+- The ContextSnapshot type (in src/presence/types.ts line 69) defines:
+    unreadMessages: Array<{ channel: string; from: string; preview: string }>;
+- The DB has a table orchestrator_conversations with columns:
+    id, workspace_id, title, source, channel, last_message_at, message_count, is_archived
+  and a table orchestrator_messages with columns:
+    id, conversation_id, workspace_id, role, content, model, created_at
+- The gatherContext() method is at line 171 of src/presence/inner-thoughts.ts
+- Line 244 currently reads:
+    unreadMessages: [], // TODO: Wire when channel message storage is implemented
 
-Steps:
-1. Run: grep -rn "conversation\|channel.*message\|inbox" src --include="*.ts" | grep -v __tests__ | grep -v node_modules | head -30
-   to find where messages are stored.
-2. Run: grep -rn "unread\|read_at\|is_read" src --include="*.ts" | head -20
-   to find how read/unread state is tracked.
-3. Read inner-thoughts.ts in full to understand the ContextSnapshot interface
-   and the gatherContext() method.
-4. Add a real query to gatherContext() that fetches unread messages from the DB
-   for the current workspace. Look at how pendingTasks is queried for the pattern.
-5. The unreadMessages field in ContextSnapshot should be typed as an array with
-   at minimum: { id: string; agentId: string; content: string; created_at: string }.
-   Remove the empty array literal and return real data.
+EDIT 1 — Add a query for recent messages INSIDE gatherContext(), right before the "return {" on line 241.
+Add this block (after the existing fleet sensing at line 219):
 
-If the conversation tables don't exist or have no unread concept yet, add a
-graceful fallback (try/catch that returns []) so the feature degrades safely.
-The goal is to remove the TODO comment and make a real attempt to wire the data.
+    // Fetch recent inbound messages from the last 24 hours as a proxy for "unread"
+    let unreadMessages: Array<{ channel: string; from: string; preview: string }> = [];
+    try {
+      const msgCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentMsgRows } = await this.db
+        .from('orchestrator_messages')
+        .select('id, conversation_id, role, content, created_at')
+        .eq('workspace_id', this.workspaceId)
+        .eq('role', 'user')
+        .gte('created_at', msgCutoff)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if (recentMsgRows) {
+        unreadMessages = (recentMsgRows as Array<Record<string, unknown>>).map(m => ({
+          channel: 'chat',
+          from: 'user',
+          preview: String(m.content).slice(0, 120),
+        }));
+      }
+    } catch {
+      // conversations table may not exist yet — degrade gracefully
+    }
+
+EDIT 2 — On line 244, replace:
+    unreadMessages: [], // TODO: Wire when channel message storage is implemented
+with:
+    unreadMessages,
+
+That's it. Do not change anything else in the file. Do not modify types.ts.
+After making both edits, run: npm run typecheck 2>&1 | tail -20
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npm run typecheck)',
       'The TODO comment on unreadMessages line is removed',
-      'gatherContext() attempts a real DB query for unread messages',
-      'Graceful fallback returns [] if the query fails',
+      'gatherContext() queries orchestrator_messages for recent user messages',
+      'Graceful try/catch fallback returns [] if the query fails',
     ],
   },
 
