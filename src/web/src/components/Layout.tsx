@@ -35,6 +35,8 @@ import {
   Megaphone,
   ChatsCircle,
   Buildings,
+  Gauge,
+  CaretDown,
 } from '@phosphor-icons/react';
 import type { Icon as PhosphorIcon } from '@phosphor-icons/react';
 
@@ -42,43 +44,46 @@ interface NavItem {
   path: string;
   label: string;
   icon: PhosphorIcon;
-  group: 'primary' | 'manage' | 'connect' | 'configure';
+  group: 'primary' | 'command' | 'studio' | 'knowledge' | 'people' | 'growth' | 'control_room';
 }
 
 const NAV_ITEMS: NavItem[] = [
-  // Primary (unlabeled)
+  // Pinned
   { path: '/', label: 'Pulse', icon: Pulse, group: 'primary' },
   { path: '/chat', label: 'Chat', icon: ChatCircle, group: 'primary' },
   { path: '/portfolio', label: 'Businesses', icon: Buildings, group: 'primary' },
-  { path: '/dashboard', label: 'Overview', icon: SquaresFour, group: 'primary' },
-  { path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'primary' },
-  { path: '/activity', label: 'Activity', icon: Lightning, group: 'primary' },
-  { path: '/messages', label: 'Messages', icon: ChatCircleDots, group: 'primary' },
-  // Manage
-  { path: '/agents', label: 'Agents', icon: Robot, group: 'manage' },
-  { path: '/projects', label: 'Projects', icon: Kanban, group: 'manage' },
-  { path: '/workflows', label: 'Workflows', icon: FlowArrow, group: 'manage' },
-  { path: '/automations', label: 'Automations', icon: Lightning, group: 'manage' },
-  { path: '/templates', label: 'Templates', icon: Cube, group: 'manage' },
-  { path: '/schedules', label: 'Schedules', icon: CalendarBlank, group: 'manage' },
-  { path: '/approvals', label: 'Approvals', icon: ShieldCheck, group: 'manage' },
-  { path: '/goals', label: 'Goals', icon: Target, group: 'manage' },
-  { path: '/marketing', label: 'Marketing', icon: Megaphone, group: 'manage' },
-  { path: '/social', label: 'Social', icon: ChatsCircle, group: 'manage' },
-  { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'manage' },
-  // Connect
-  { path: '/messaging', label: 'Messaging', icon: ChatCircleDots, group: 'connect' },
-  { path: '/peers', label: 'Peers', icon: ShareNetwork, group: 'connect' },
-  { path: '/team', label: 'Team', icon: UsersThree, group: 'connect' },
-  { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'connect' },
-  // Configure
-  { path: '/webhook-events', label: 'Webhooks', icon: Plug, group: 'configure' },
-  { path: '/browser', label: 'Browser', icon: Browser, group: 'configure' },
-  { path: '/eye', label: 'Eye', icon: Eye, group: 'configure' },
-  { path: '/briefings', label: 'Briefings', icon: Newspaper, group: 'configure' },
-  { path: '/podcast', label: 'Podcast', icon: Microphone, group: 'configure' },
-  { path: '/knowledge', label: 'Knowledge', icon: BookOpen, group: 'configure' },
-  { path: '/settings', label: 'Settings', icon: GearSix, group: 'configure' },
+  // Command
+  { path: '/dashboard', label: 'Overview', icon: SquaresFour, group: 'command' },
+  { path: '/activity', label: 'Activity', icon: Lightning, group: 'command' },
+  { path: '/messages', label: 'Messages', icon: ChatCircleDots, group: 'command' },
+  { path: '/approvals', label: 'Approvals', icon: ShieldCheck, group: 'command' },
+  // Studio
+  { path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'studio' },
+  { path: '/projects', label: 'Projects', icon: Kanban, group: 'studio' },
+  { path: '/agents', label: 'Agents', icon: Robot, group: 'studio' },
+  { path: '/workflows', label: 'Workflows', icon: FlowArrow, group: 'studio' },
+  { path: '/automations', label: 'Automations', icon: Lightning, group: 'studio' },
+  { path: '/schedules', label: 'Schedules', icon: CalendarBlank, group: 'studio' },
+  { path: '/templates', label: 'Templates', icon: Cube, group: 'studio' },
+  // Knowledge
+  { path: '/knowledge', label: 'Knowledge', icon: BookOpen, group: 'knowledge' },
+  { path: '/briefings', label: 'Briefings', icon: Newspaper, group: 'knowledge' },
+  { path: '/podcast', label: 'Podcast', icon: Microphone, group: 'knowledge' },
+  // People
+  { path: '/team', label: 'Team', icon: UsersThree, group: 'people' },
+  { path: '/peers', label: 'Peers', icon: ShareNetwork, group: 'people' },
+  { path: '/connections', label: 'Connections', icon: PlugsConnected, group: 'people' },
+  { path: '/messaging', label: 'Messaging', icon: ChatCircleDots, group: 'people' },
+  // Growth
+  { path: '/goals', label: 'Goals', icon: Target, group: 'growth' },
+  { path: '/revenue', label: 'Revenue', icon: CurrencyDollar, group: 'growth' },
+  { path: '/marketing', label: 'Marketing', icon: Megaphone, group: 'growth' },
+  { path: '/social', label: 'Social', icon: ChatsCircle, group: 'growth' },
+  // Control Room
+  { path: '/webhook-events', label: 'Webhooks', icon: Plug, group: 'control_room' },
+  { path: '/browser', label: 'Browser', icon: Browser, group: 'control_room' },
+  { path: '/eye', label: 'Eye', icon: Eye, group: 'control_room' },
+  { path: '/settings', label: 'Settings', icon: GearSix, group: 'control_room' },
 ];
 
 interface HealthData {
@@ -94,11 +99,56 @@ function formatUptime(seconds: number): string {
   return `${m}m`;
 }
 
-function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
+function NavGroup({
+  label,
+  groupKey,
+  icon: Icon,
+  accentColor,
+  children,
+}: {
+  label: string;
+  groupKey: string;
+  icon: PhosphorIcon;
+  accentColor: string;
+  children: React.ReactNode;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
     <div>
-      <p className="text-[10px] uppercase tracking-widest text-neutral-600 px-3 mb-1.5">{label}</p>
-      <div className="space-y-0.5">{children}</div>
+      <button
+        onClick={() => setCollapsed(c => !c)}
+        className="flex items-center justify-between w-full px-3 mb-1 group cursor-pointer"
+      >
+        <div className="flex items-center gap-2">
+          <span className={`transition-colors ${collapsed ? 'text-neutral-600' : accentColor}`}>
+            <Icon size={14} weight="bold" />
+          </span>
+          <p className="text-[11px] font-medium tracking-wide text-neutral-500 group-hover:text-neutral-400 transition-colors">
+            {label}
+          </p>
+        </div>
+        <motion.span
+          animate={{ rotate: collapsed ? -90 : 0 }}
+          transition={{ duration: 0.15 }}
+          className="text-neutral-600 group-hover:text-neutral-400 transition-colors"
+        >
+          <CaretDown size={10} weight="bold" />
+        </motion.span>
+      </button>
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="overflow-hidden"
+          >
+            <div className="space-y-0.5">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -163,11 +213,15 @@ function SidebarContent({
       ? pathname === '/' || pathname === ''
       : pathname.startsWith(path);
 
-  const groups: { key: NavItem['group']; label?: string }[] = [
+  type DeptKey = NavItem['group'];
+  const groups: { key: DeptKey; label?: string; icon?: PhosphorIcon; accentColor?: string }[] = [
     { key: 'primary' },
-    { key: 'manage', label: 'Manage' },
-    { key: 'connect', label: 'Connect' },
-    { key: 'configure', label: 'Configure' },
+    { key: 'command', label: 'Command', icon: Gauge, accentColor: 'text-amber-400' },
+    { key: 'studio', label: 'Studio', icon: Kanban, accentColor: 'text-violet-400' },
+    { key: 'knowledge', label: 'Knowledge', icon: BookOpen, accentColor: 'text-teal-400' },
+    { key: 'people', label: 'People', icon: UsersThree, accentColor: 'text-sky-400' },
+    { key: 'growth', label: 'Growth', icon: CurrencyDollar, accentColor: 'text-emerald-400' },
+    { key: 'control_room', label: 'Control Room', icon: GearSix, accentColor: 'text-neutral-400' },
   ];
 
   const renderItems = (items: NavItem[]) =>
@@ -197,15 +251,15 @@ function SidebarContent({
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto p-3 space-y-5">
-        {groups.map(({ key, label }) => {
+      <nav className="flex-1 overflow-y-auto p-3 space-y-4">
+        {groups.map(({ key, label, icon, accentColor }) => {
           const items = visibleNav.filter(item => item.group === key);
           if (items.length === 0) return null;
-          if (!label) {
+          if (!label || !icon || !accentColor) {
             return <div key={key} className="space-y-0.5">{renderItems(items)}</div>;
           }
           return (
-            <NavGroup key={key} label={label}>
+            <NavGroup key={key} label={label} groupKey={key} icon={icon} accentColor={accentColor}>
               {renderItems(items)}
             </NavGroup>
           );
