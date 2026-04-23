@@ -132,7 +132,7 @@ Score 0.0–1.0 (how strategically relevant to ohwow). Items with score < 0.40 �
 
 Respond ONLY with valid JSON (no markdown fences): { "items": [{ "n": 1, "bucket": "...", "score": 0.85, "tags": ["tag1", "tag2"], "why": "one concise sentence" }, ...] }`;
 
-async function classifyBatch(items, batchOffset) {
+async function classifyBatch(items, batchOffset, attempt = 1) {
   const lines = items.map((item, i) => formatItemLine(item, batchOffset + i + 1)).join('\n');
   const prompt = `Classify these ${items.length} intelligence items:\n\n${lines}`;
 
@@ -140,13 +140,31 @@ async function classifyBatch(items, batchOffset) {
     const result = await llm({ purpose: 'simple_classification', prompt, system: CLASSIFY_SYSTEM, max_tokens: 2000 });
     const text = typeof result === 'string' ? result : result?.text || result?.content || JSON.stringify(result);
 
-    // Extract JSON
+    // Extract JSON — try full object first, then try to salvage partial arrays
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('no JSON in response');
-    const parsed = JSON.parse(jsonMatch[0]);
-    return parsed.items || [];
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return parsed.items || [];
+    } catch (parseErr) {
+      // Truncated JSON: extract any complete item objects from partial array
+      const itemMatches = [...jsonMatch[0].matchAll(/\{\s*"n"\s*:\s*(\d+)[^}]*\}/g)];
+      if (itemMatches.length > 0) {
+        const rescued = itemMatches.map(m => { try { return JSON.parse(m[0]); } catch { return null; } }).filter(Boolean);
+        if (rescued.length > 0) {
+          console.warn(`[classify] batch ${batchOffset} partial parse: rescued ${rescued.length}/${items.length} items`);
+          return rescued;
+        }
+      }
+      if (attempt < 2) {
+        console.warn(`[classify] batch ${batchOffset} parse failed, retrying...`);
+        await new Promise(r => setTimeout(r, 1500));
+        return classifyBatch(items, batchOffset, attempt + 1);
+      }
+      throw parseErr;
+    }
   } catch (err) {
-    console.warn(`[classify] batch ${batchOffset} failed: ${err.message}`);
+    console.warn(`[classify] batch ${batchOffset} failed (attempt ${attempt}): ${err.message}`);
     return items.map((_, i) => ({ n: batchOffset + i + 1, bucket: 'market_signal', score: 0.4, tags: [], why: 'classification error' }));
   }
 }
