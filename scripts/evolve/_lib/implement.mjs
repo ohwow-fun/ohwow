@@ -265,10 +265,12 @@ Start by using list_files() and bash to discover and read all relevant files. Un
         let result;
         try {
           result = await executeTool(block.name, block.input, { targetRepo: task.targetRepo });
-          if (block.name === 'write_file') filesChanged.add(block.input.path);
-          // Track files modified via bash (e.g., sed -i)
+          if (block.name === 'write_file') filesChanged.add(path.resolve(block.input.path));
+          // Track files modified via bash (e.g., sed -i) — normalize to absolute paths
           if (block.name === 'bash' && Array.isArray(block.input.modified_files)) {
-            for (const f of block.input.modified_files) filesChanged.add(f);
+            for (const f of block.input.modified_files) {
+              filesChanged.add(f.startsWith('/') ? f : path.resolve(task.targetRepo, f));
+            }
           }
         } catch (err) {
           result = `ERROR: ${err.message}`;
