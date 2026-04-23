@@ -1,7 +1,9 @@
-import { useState } from 'react';
-import { ChatCircleDots, Plus, Trash, Power, QrCode, CircleNotch, X } from '@phosphor-icons/react';
+import { useState, useRef } from 'react';
+import { ChatCircleDots, Plus, Power, QrCode, CircleNotch, X } from '@phosphor-icons/react';
 import { motion, AnimatePresence } from 'framer-motion';
+import QRCode from 'qrcode';
 import { useApi } from '../hooks/useApi';
+import { useWsListener } from '../hooks/useWebSocket';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { RowSkeleton } from '../components/Skeleton';
@@ -28,12 +30,14 @@ export function MessagingPage() {
 
   const handleConnect = async () => {
     setConnecting(true);
+    setWaitingForQr(true);
+    setQrDataUrl(null);
     try {
       await api('/api/whatsapp/connect', { method: 'POST' });
-      toast('success', 'Connecting to WhatsApp. Check for QR code.');
       refetch();
     } catch {
       toast('error', 'Couldn\'t start WhatsApp connection');
+      setWaitingForQr(false);
     } finally {
       setConnecting(false);
     }
@@ -84,6 +88,27 @@ export function MessagingPage() {
     }
   };
 
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [waitingForQr, setWaitingForQr] = useState(false);
+  const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useWsListener((event, data) => {
+    if (event === 'whatsapp:qr') {
+      const { qr } = data as { qr: string };
+      QRCode.toDataURL(qr, { width: 256, margin: 2 }).then(url => {
+        setQrDataUrl(url);
+        setWaitingForQr(false);
+        if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+        qrTimeoutRef.current = setTimeout(() => setQrDataUrl(null), 60_000);
+      }).catch(() => {});
+    } else if (event === 'whatsapp:connected') {
+      setQrDataUrl(null);
+      setWaitingForQr(false);
+      if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+      refetch();
+    }
+  });
+
   const realConnections = connections?.filter(c => c.connectionId) ?? [];
   const isEmpty = !loading && realConnections.length === 0;
   const activeConn = realConnections.find(c => c.status === 'connected' || c.status === 'active');
@@ -115,6 +140,30 @@ export function MessagingPage() {
           )
         }
       />
+
+      <AnimatePresence>
+        {(waitingForQr || qrDataUrl) && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="mb-6 border border-white/[0.08] rounded-lg p-6 flex flex-col items-center gap-4"
+          >
+            {qrDataUrl ? (
+              <>
+                <p className="text-sm font-medium">Scan with WhatsApp</p>
+                <img src={qrDataUrl} alt="WhatsApp QR code" className="rounded-lg w-48 h-48" />
+                <p className="text-xs text-neutral-500">Open WhatsApp → Settings → Linked Devices → Link a Device</p>
+              </>
+            ) : (
+              <>
+                <CircleNotch size={32} className="animate-spin text-neutral-400" />
+                <p className="text-sm text-neutral-400">Generating QR code…</p>
+              </>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {loading ? (
         <RowSkeleton count={3} />
