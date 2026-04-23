@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { ChatCircleDots, Plus, Power, QrCode, CircleNotch, X } from '@phosphor-icons/react';
+import { ChatCircleDots, Power, QrCode, CircleNotch, X, CaretDown } from '@phosphor-icons/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import QRCode from 'qrcode';
 import { useApi } from '../hooks/useApi';
@@ -10,6 +10,140 @@ import { RowSkeleton } from '../components/Skeleton';
 import { FeatureIntro } from '../components/FeatureIntro';
 import { api } from '../api/client';
 import { toast } from '../components/Toast';
+
+const COUNTRY_CODES = [
+  { code: '1',   flag: '🇺🇸', name: 'US' },
+  { code: '1',   flag: '🇨🇦', name: 'CA' },
+  { code: '44',  flag: '🇬🇧', name: 'GB' },
+  { code: '57',  flag: '🇨🇴', name: 'CO' },
+  { code: '52',  flag: '🇲🇽', name: 'MX' },
+  { code: '54',  flag: '🇦🇷', name: 'AR' },
+  { code: '55',  flag: '🇧🇷', name: 'BR' },
+  { code: '56',  flag: '🇨🇱', name: 'CL' },
+  { code: '51',  flag: '🇵🇪', name: 'PE' },
+  { code: '58',  flag: '🇻🇪', name: 'VE' },
+  { code: '34',  flag: '🇪🇸', name: 'ES' },
+  { code: '33',  flag: '🇫🇷', name: 'FR' },
+  { code: '49',  flag: '🇩🇪', name: 'DE' },
+  { code: '39',  flag: '🇮🇹', name: 'IT' },
+  { code: '31',  flag: '🇳🇱', name: 'NL' },
+  { code: '351', flag: '🇵🇹', name: 'PT' },
+  { code: '91',  flag: '🇮🇳', name: 'IN' },
+  { code: '86',  flag: '🇨🇳', name: 'CN' },
+  { code: '81',  flag: '🇯🇵', name: 'JP' },
+  { code: '82',  flag: '🇰🇷', name: 'KR' },
+  { code: '61',  flag: '🇦🇺', name: 'AU' },
+  { code: '64',  flag: '🇳🇿', name: 'NZ' },
+  { code: '27',  flag: '🇿🇦', name: 'ZA' },
+  { code: '234', flag: '🇳🇬', name: 'NG' },
+  { code: '20',  flag: '🇪🇬', name: 'EG' },
+  { code: '971', flag: '🇦🇪', name: 'AE' },
+  { code: '966', flag: '🇸🇦', name: 'SA' },
+  { code: '972', flag: '🇮🇱', name: 'IL' },
+  { code: '7',   flag: '🇷🇺', name: 'RU' },
+  { code: '380', flag: '🇺🇦', name: 'UA' },
+];
+
+interface PhoneInputProps {
+  countryCode: string;
+  phone: string;
+  onCountryChange: (code: string) => void;
+  onPhoneChange: (val: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  submitting: boolean;
+}
+
+function PhoneInput({ countryCode, phone, onCountryChange, onPhoneChange, onSubmit, onCancel, submitting }: PhoneInputProps) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const selected = COUNTRY_CODES.find(c => c.code === countryCode) ?? COUNTRY_CODES[0];
+
+  const filtered = search
+    ? COUNTRY_CODES.filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.code.includes(search))
+    : COUNTRY_CODES;
+
+  useEffect(() => {
+    if (!open) { setSearch(''); return; }
+    function onClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [open]);
+
+  return (
+    <div className="flex gap-2">
+      {/* Country code picker */}
+      <div ref={dropdownRef} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1.5 h-full px-3 bg-white/5 border border-white/10 rounded text-sm text-white hover:border-white/20 transition-colors whitespace-nowrap"
+        >
+          <span>{selected.flag}</span>
+          <span className="text-neutral-400">+{selected.code}</span>
+          <CaretDown size={10} className="text-neutral-500" />
+        </button>
+        {open && (
+          <div className="absolute z-50 top-full mt-1 left-0 w-52 bg-neutral-900 border border-white/10 rounded-lg shadow-xl overflow-hidden">
+            <div className="p-2 border-b border-white/[0.06]">
+              <input
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search…"
+                className="w-full bg-white/5 rounded px-2 py-1 text-xs text-white placeholder:text-neutral-500 focus:outline-none"
+              />
+            </div>
+            <div className="max-h-48 overflow-y-auto">
+              {filtered.map(c => (
+                <button
+                  key={`${c.name}-${c.code}`}
+                  type="button"
+                  onClick={() => { onCountryChange(c.code); setOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-neutral-300 hover:bg-white/5 transition-colors text-left"
+                >
+                  <span>{c.flag}</span>
+                  <span className="font-medium">{c.name}</span>
+                  <span className="ml-auto text-neutral-500">+{c.code}</span>
+                </button>
+              ))}
+              {filtered.length === 0 && (
+                <p className="px-3 py-3 text-xs text-neutral-500">No results</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Phone number */}
+      <input
+        type="tel"
+        value={phone}
+        onChange={e => onPhoneChange(e.target.value.replace(/\D/g, ''))}
+        onKeyDown={e => e.key === 'Enter' && onSubmit()}
+        placeholder="Phone number"
+        className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
+      />
+
+      <button
+        onClick={onSubmit}
+        disabled={submitting || !phone.trim()}
+        className="px-3 py-2 text-xs font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
+      >
+        {submitting ? 'Adding…' : 'Add'}
+      </button>
+      <button
+        onClick={onCancel}
+        className="text-neutral-500 hover:text-white transition-colors px-2"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
 
 interface WhatsAppConnection {
   connectionId: string | null;
@@ -42,9 +176,9 @@ export function MessagingPage() {
 
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
-  const [newChatId, setNewChatId] = useState('');
+  const [addPhone, setAddPhone] = useState('');
+  const [addCountry, setAddCountry] = useState('1');
   const [addingChat, setAddingChat] = useState(false);
-  const [showAddChat, setShowAddChat] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [waitingForQr, setWaitingForQr] = useState(false);
   const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,6 +186,17 @@ export function MessagingPage() {
   const realConnections = connections?.filter(c => c.connectionId) ?? [];
   const isEmpty = !loading && realConnections.length === 0;
   const activeConn = realConnections.find(c => c.status === 'connected' || c.status === 'active');
+
+  // Pre-select country code from the connected number once data loads
+  useEffect(() => {
+    if (!activeConn?.phoneNumber) return;
+    const digits = activeConn.phoneNumber.replace(/\D/g, '');
+    const match = COUNTRY_CODES
+      .slice()
+      .sort((a, b) => b.code.length - a.code.length) // longest prefix first
+      .find(c => digits.startsWith(c.code));
+    if (match) setAddCountry(match.code);
+  }, [activeConn?.phoneNumber]);
 
   // Dismiss QR whenever the connection data reports connected (catches missed WS events)
   useEffect(() => {
@@ -110,16 +255,16 @@ export function MessagingPage() {
   };
 
   const handleAddChat = async () => {
-    if (!newChatId.trim()) return;
+    if (!addPhone.trim()) return;
+    const chatId = `${addCountry}${addPhone.trim()}@c.us`;
     setAddingChat(true);
     try {
       await api('/api/whatsapp/chats', {
         method: 'POST',
-        body: JSON.stringify({ chatId: newChatId.trim() }),
+        body: JSON.stringify({ chatId }),
       });
-      toast('success', 'Chat added to allowed list');
-      setNewChatId('');
-      setShowAddChat(false);
+      toast('success', 'Chat added');
+      setAddPhone('');
       refetch();
     } catch {
       toast('error', 'Couldn\'t add chat');
@@ -229,52 +374,22 @@ export function MessagingPage() {
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider">Allowed chats</h3>
-              <button
-                onClick={() => setShowAddChat(!showAddChat)}
-                className="flex items-center gap-1 text-xs text-neutral-400 hover:text-white transition-colors"
-              >
-                <Plus size={12} /> Add chat
-              </button>
+            <h3 className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider mb-3">Allowed chats</h3>
+
+            <div className="mb-3">
+              <PhoneInput
+                countryCode={addCountry}
+                phone={addPhone}
+                onCountryChange={setAddCountry}
+                onPhoneChange={setAddPhone}
+                onSubmit={handleAddChat}
+                onCancel={() => setAddPhone('')}
+                submitting={addingChat}
+              />
             </div>
 
-            <AnimatePresence>
-              {showAddChat && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mb-3 overflow-hidden"
-                >
-                  <div className="flex gap-2">
-                    <input
-                      value={newChatId}
-                      onChange={e => setNewChatId(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && handleAddChat()}
-                      placeholder="Chat ID (e.g. 1234567890@c.us)"
-                      className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
-                    />
-                    <button
-                      onClick={handleAddChat}
-                      disabled={addingChat || !newChatId.trim()}
-                      className="px-3 py-2 text-xs font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
-                    >
-                      {addingChat ? 'Adding…' : 'Add'}
-                    </button>
-                    <button
-                      onClick={() => { setShowAddChat(false); setNewChatId(''); }}
-                      className="text-neutral-500 hover:text-white transition-colors px-2"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
             <p className="text-xs text-neutral-500">
-              Agents will only respond to messages from allowed chats. If none are added, all chats are accessible.
+              Agents only respond to allowed numbers. Leave empty to allow all chats.
             </p>
           </div>
         </div>
