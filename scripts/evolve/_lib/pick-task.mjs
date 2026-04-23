@@ -3,7 +3,7 @@
  *
  * Priority:
  *   1. Seed tasks (SEED_TASKS) — returns the first uncompleted seed.
- *   2. Smart pick — when all seeds are done, calls Claude (haiku, cheap) to
+ *   2. Smart pick — when all seeds are done, calls GLM-5.1 (cheap) to
  *      generate a fresh bounded task based on recent git history, TODOs,
  *      test coverage gaps, and market intel from the evolution system.
  */
@@ -181,7 +181,7 @@ async function gatherSmartContext({ repos }) {
 }
 
 // ---------------------------------------------------------------------------
-// Smart-pick: call Claude haiku to propose a new task
+// Smart-pick: call GLM-5.1 to propose a new task
 // ---------------------------------------------------------------------------
 
 /**
@@ -196,10 +196,10 @@ async function gatherSmartContext({ repos }) {
  */
 function resolveClientAndModel(anthropicApiKey) {
   if (anthropicApiKey && anthropicApiKey.startsWith('sk-ant-')) {
-    return { client: new Anthropic({ apiKey: anthropicApiKey }), model: 'claude-haiku-4-5' };
+    return { client: new Anthropic({ apiKey: anthropicApiKey }), model: 'z-ai/glm-5.1' };
   }
   if (process.env.ANTHROPIC_API_KEY) {
-    return { client: new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), model: 'claude-haiku-4-5' };
+    return { client: new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }), model: 'z-ai/glm-5.1' };
   }
   const configPath = path.join(os.homedir(), '.ohwow', 'config.json');
   if (fs.existsSync(configPath)) {
@@ -215,11 +215,11 @@ function resolveClientAndModel(anthropicApiKey) {
               'X-Title': 'ohwow self-evolution',
             },
           }),
-          model: 'anthropic/claude-haiku-4-5',
+          model: 'z-ai/glm-5.1',
         };
       }
       if (cfg.anthropicApiKey) {
-        return { client: new Anthropic({ apiKey: cfg.anthropicApiKey }), model: 'claude-haiku-4-5' };
+        return { client: new Anthropic({ apiKey: cfg.anthropicApiKey }), model: 'z-ai/glm-5.1' };
       }
     } catch { /* non-fatal */ }
   }

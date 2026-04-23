@@ -5,7 +5,7 @@
  * API key resolution order:
  *   1. anthropicApiKey arg (from caller)
  *   2. ANTHROPIC_API_KEY env
- *   3. openRouterApiKey from ~/.ohwow/config.json (uses OpenRouter with claude-sonnet)
+ *   3. openRouterApiKey from ~/.ohwow/config.json (uses OpenRouter with glm-5.1)
  */
 import Anthropic from '@anthropic-ai/sdk';
 import fs from 'node:fs';
@@ -21,7 +21,7 @@ function resolveClientAndModel(anthropicApiKey) {
   if (anthropicApiKey && anthropicApiKey.startsWith('sk-ant-')) {
     return {
       client: new Anthropic({ apiKey: anthropicApiKey }),
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-6', // direct Anthropic key path (not in use)
     };
   }
   // Fallback: OpenRouter key from ohwow config — supports Anthropic tool-use format
@@ -39,7 +39,7 @@ function resolveClientAndModel(anthropicApiKey) {
               'X-Title': 'ohwow-self-evolve',
             },
           }),
-          model: 'anthropic/claude-sonnet-4-5',
+          model: 'z-ai/glm-5.1',
         };
       }
     } catch {}
