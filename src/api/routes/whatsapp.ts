@@ -110,18 +110,42 @@ export function createWhatsAppRouter(
   // POST /api/whatsapp/chats — add an allowed chat
   router.post('/api/whatsapp/chats', (req, res) => {
     withClient(req, res, (client) => {
-      const { chatId, chatName, chatType } = req.body as {
+      const { chatId, chatName, chatType, contactId, teamMemberId } = req.body as {
         chatId?: string;
         chatName?: string;
         chatType?: 'individual' | 'group';
+        contactId?: string;
+        teamMemberId?: string;
       };
       if (!chatId) {
         res.status(400).json({ error: 'chatId is required' });
         return;
       }
-      client.addAllowedChat(chatId, chatName || null, chatType || 'individual');
+      client.addAllowedChat(chatId, chatName || null, chatType || 'individual', contactId ?? null, teamMemberId ?? null);
       const allowedChats = client.getAllowedChats();
       res.status(201).json({ data: { allowedChats } });
+    });
+  });
+
+  // PATCH /api/whatsapp/chats — update contact/team-member link for an existing chat
+  router.patch('/api/whatsapp/chats', (req, res) => {
+    withClient(req, res, (client) => {
+      const { chatId, contactId, teamMemberId } = req.body as {
+        chatId?: string;
+        contactId?: string | null;
+        teamMemberId?: string | null;
+      };
+      if (!chatId) {
+        res.status(400).json({ error: 'chatId is required' });
+        return;
+      }
+      const updated = client.linkChat(chatId, contactId ?? null, teamMemberId ?? null);
+      if (!updated) {
+        res.status(404).json({ error: 'Chat not found in allowlist' });
+        return;
+      }
+      const allowedChats = client.getAllowedChats();
+      res.json({ data: { allowedChats } });
     });
   });
 

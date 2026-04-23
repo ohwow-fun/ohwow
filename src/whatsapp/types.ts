@@ -20,6 +20,8 @@ export interface WhatsAppAllowedChat {
   chat_id: string;
   chat_name: string | null;
   chat_type: 'individual' | 'group';
+  contact_id: string | null;
+  team_member_id: string | null;
   created_at: string;
 }
 

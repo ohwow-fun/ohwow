@@ -345,12 +345,19 @@ export class WhatsAppClient implements MessagingChannel {
   /**
    * Add a chat to the allowlist.
    */
-  addAllowedChat(chatId: string, name: string | null, type: 'individual' | 'group' = 'individual'): void {
+  addAllowedChat(
+    chatId: string,
+    name: string | null,
+    type: 'individual' | 'group' = 'individual',
+    contactId: string | null = null,
+    teamMemberId: string | null = null,
+  ): void {
     if (!this.connectionId) return;
     this.rawDb.prepare(`
-      INSERT OR IGNORE INTO whatsapp_allowed_chats (connection_id, chat_id, chat_name, chat_type)
-      VALUES (?, ?, ?, ?)
-    `).run(this.connectionId, chatId, name, type);
+      INSERT OR IGNORE INTO whatsapp_allowed_chats
+        (connection_id, chat_id, chat_name, chat_type, contact_id, team_member_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(this.connectionId, chatId, name, type, contactId, teamMemberId);
   }
 
   /**
@@ -361,6 +368,17 @@ export class WhatsAppClient implements MessagingChannel {
     const result = this.rawDb.prepare(
       'UPDATE whatsapp_allowed_chats SET chat_name = ? WHERE connection_id = ? AND chat_id = ?',
     ).run(name, this.connectionId, chatId);
+    return result.changes > 0;
+  }
+
+  /**
+   * Link an allowed chat to a CRM contact and/or team member.
+   */
+  linkChat(chatId: string, contactId: string | null, teamMemberId: string | null): boolean {
+    if (!this.connectionId) return false;
+    const result = this.rawDb.prepare(
+      'UPDATE whatsapp_allowed_chats SET contact_id = ?, team_member_id = ? WHERE connection_id = ? AND chat_id = ?',
+    ).run(contactId, teamMemberId, this.connectionId, chatId);
     return result.changes > 0;
   }
 
