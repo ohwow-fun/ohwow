@@ -131,3 +131,32 @@ describe('filterFresh', () => {
     expect(fresh[1].id).toBe('item-2');
   });
 });
+
+describe('roundtrip — loadSeen + appendSeen + filterFresh', () => {
+  it('full cycle: append items, reload, filter out seen, append new batch', () => {
+    const seenPath = join(TMP, 'roundtrip.jsonl');
+
+    // batch 1: append items a, b, c
+    appendSeen(seenPath, [{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+
+    // reload from disk and verify
+    const seen1 = loadSeen(seenPath);
+    expect(seen1.has('a')).toBe(true);
+    expect(seen1.has('b')).toBe(true);
+    expect(seen1.has('c')).toBe(true);
+
+    // filterFresh: d and e are new, a is stale
+    const fresh = filterFresh([{ id: 'a' }, { id: 'd' }, { id: 'e' }], seen1);
+    expect(fresh).toEqual([{ id: 'd' }, { id: 'e' }]);
+
+    // append batch 2 (only the fresh items)
+    appendSeen(seenPath, fresh);
+
+    // final reload: all 5 ids should be present
+    const seen2 = loadSeen(seenPath);
+    expect(seen2.size).toBe(5);
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      expect(seen2.has(id)).toBe(true);
+    }
+  });
+});
