@@ -60,7 +60,7 @@ async function validate(repoPath, cmd) {
   }
 
   try {
-    execSync(cmd, { cwd: repoPath, stdio: 'pipe', timeout: 120_000, shell: true });
+    execSync(cmd, { cwd: repoPath, stdio: 'pipe', timeout: 180_000, shell: true });
     return { pass: true };
   } catch (err) {
     const stdout = err.stdout?.toString() || '';

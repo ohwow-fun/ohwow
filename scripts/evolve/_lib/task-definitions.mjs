@@ -1,274 +1,388 @@
 /**
  * Seed task definitions for the self-evolution system.
- * Each task is a concrete, bounded code improvement.
+ * High-priority product tasks — real feature work, not trivial additions.
  */
 
 export const SEED_TASKS = [
-  {
-    taskId: 'fix-hardcoded-models-ohwow-fun',
-    title: 'Replace hardcoded Claude model strings in ohwow.fun with config-driven selection',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
-    validationCmd: 'npx tsc --noEmit 2>&1 | tail -20',
-    description: `
-Two files in ohwow.fun hardcode specific Claude model strings that should use the
-existing config-driven model selection pattern instead:
-
-1. src/lib/autofix/fix-generator.ts line 57:
-   model: 'claude-sonnet-4-20250514'
-   This is inside callAnthropic() which makes a raw fetch to the Anthropic API.
-   Replace with a constant imported from a shared location (or inline constant
-   AUTOFIX_MODEL = process.env.AUTOFIX_MODEL || 'claude-sonnet-4-5' at the top of the file).
-
-2. src/lib/agents/co-evolution/model-tier.ts line 34:
-   if (progress < 0.8) return 'claude-sonnet-4-20250514';
-   This is the mid-refinement tier in getEvolutionModelTier(). Replace with a
-   named constant CO_EVOLUTION_MID_TIER_MODEL = 'claude-sonnet-4-5' at the top
-   of that file (the function already uses 'claude-haiku-4-20250414' which is
-   similarly hardcoded — leave haiku as-is since that one is intentional breadth
-   model selection; only fix the sonnet reference on line 34).
-
-The goal is to make these model strings obvious and easy to update centrally.
-Use env-variable fallback pattern: process.env.X || 'model-string' is acceptable.
-Do NOT change the existing getSiteBuilderModel() infrastructure — it's already correct.
-`,
-    acceptanceCriteria: [
-      'No hardcoded "claude-sonnet-4-20250514" strings remain in src/',
-      'TypeScript typecheck passes (npx tsc --noEmit)',
-      'Model references use a named constant or env-variable fallback',
-    ],
-  },
-  {
-    taskId: 'add-intel-pipeline-test',
-    title: 'Add seen-file dedup utility and Vitest tests for market-intel pipeline',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose src/lib/__tests__/seen-file-utils.test.ts 2>&1 | tail -40',
-    description: `
-      The market-intel pipeline (scripts/intel/market-intel.mjs) has a seen-file dedup
-      mechanism but the logic is embedded in the script with no tests.
-
-      Your job is to create TWO new files:
-
-      FILE 1: src/lib/seen-file-utils.ts
-      Export these three pure functions:
-
-        import fs from 'node:fs';
-
-        /** Load all IDs already recorded in a JSONL seen-file. Returns an empty Set if the file doesn't exist. */
-        export function loadSeen(seenPath: string): Set<string> {
-          const seen = new Set<string>();
-          if (!fs.existsSync(seenPath)) return seen;
-          const lines = fs.readFileSync(seenPath, 'utf8').split('\\n').filter(Boolean);
-          for (const line of lines) {
-            try { seen.add((JSON.parse(line) as { id: string }).id); } catch {}
-          }
-          return seen;
-        }
-
-        /** Append items to the JSONL seen-file. Each line: {"id":"...","ts":"..."} */
-        export function appendSeen(seenPath: string, items: Array<{ id: string }>): void {
-          const lines = items.map(item => JSON.stringify({ id: item.id, ts: new Date().toISOString() }));
-          if (lines.length === 0) return;
-          fs.appendFileSync(seenPath, lines.join('\\n') + '\\n');
-        }
-
-        /** Filter out items whose IDs are already in the seen set. */
-        export function filterFresh<T extends { id: string }>(items: T[], seen: Set<string>): T[] {
-          return items.filter(item => !seen.has(item.id));
-        }
-
-      FILE 2: src/lib/__tests__/seen-file-utils.test.ts
-      Write at least 5 Vitest test cases. Use a tmp directory for all file I/O.
-      Follow this exact pattern (matches the project's existing test style):
-
-        import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-        import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
-        import { join } from 'node:path';
-        import { tmpdir } from 'node:os';
-        import { loadSeen, appendSeen, filterFresh } from '../seen-file-utils.js';
-
-        const TMP = join(tmpdir(), \`seen-file-test-\${Date.now()}\`);
-
-        beforeEach(() => mkdirSync(TMP, { recursive: true }));
-        afterEach(() => rmSync(TMP, { recursive: true, force: true }));
-
-        describe('loadSeen', () => {
-          it('returns empty set when file does not exist', () => { ... });
-          it('parses ids from JSONL lines', () => { ... });
-          it('skips malformed lines without throwing', () => { ... });
-        });
-
-        describe('appendSeen', () => {
-          it('creates file and appends JSONL entries', () => { ... });
-          it('appends to existing file without overwriting', () => { ... });
-          it('does nothing when items array is empty', () => { ... });
-        });
-
-        describe('filterFresh', () => {
-          it('excludes items already in the seen set', () => { ... });
-          it('returns all items when seen set is empty', () => { ... });
-        });
-
-      IMPORTANT:
-      - Vitest scans src/**. Do NOT put tests anywhere else.
-      - Both files must be TypeScript (.ts). No .mjs files.
-      - Do NOT import from scripts/ — the utility is standalone.
-      - Do NOT modify market-intel.mjs or any existing file.
-      - Do NOT modify package.json or vitest.config.ts.
-      - After writing both files, run: npm test -- src/lib/__tests__/seen-file-utils.test.ts
-        to confirm tests pass before declaring done.
-    `,
-    acceptanceCriteria: [
-      'New file src/lib/seen-file-utils.ts exists and exports loadSeen, appendSeen, filterFresh',
-      'New file src/lib/__tests__/seen-file-utils.test.ts exists with at least 5 test cases',
-      'All tests pass: npm test -- src/lib/__tests__/seen-file-utils.test.ts',
-    ],
-  },
-  {
-    taskId: 'ohwow-fun-add-contact-search-route-test',
-    title: 'Add Vitest tests for contact field normalizer utilities in ohwow.fun',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
-    validationCmd: 'npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts 2>&1 | tail -30',
-    description: `
-      The file src/lib/agents/services/business-metrics.service.ts exports two pure utility
-      functions that have zero test coverage: parseContactTags and parseContactCustomFields.
-      These are exported at the module level (not class methods) and are 100% pure — no Supabase,
-      no Next.js, no I/O needed.
-
-      Your job is to create ONE new test file:
-
-      FILE: src/lib/agents/services/__tests__/contact-normalizers.test.ts
-
-      The test file must import from the service and test both functions.
-      Match the existing test style in src/lib/a2a/__tests__/auth.test.ts exactly.
-
-      Here is the EXACT content to write (copy this verbatim, do not deviate):
-
-      ---
-      import { describe, it, expect } from 'vitest';
-      import {
-        parseContactTags,
-        parseContactCustomFields,
-      } from '../business-metrics.service';
-
-      describe('parseContactTags', () => {
-        it('returns empty array for null', () => {
-          expect(parseContactTags(null)).toEqual([]);
-        });
-
-        it('returns empty array for undefined', () => {
-          expect(parseContactTags(undefined)).toEqual([]);
-        });
-
-        it('returns array as-is when already an array', () => {
-          expect(parseContactTags(['a', 'b'])).toEqual(['a', 'b']);
-        });
-
-        it('filters non-string entries from array', () => {
-          expect(parseContactTags(['a', 42 as unknown as string, 'b'])).toEqual(['a', 'b']);
-        });
-
-        it('parses JSON string to array', () => {
-          expect(parseContactTags('["x","y"]')).toEqual(['x', 'y']);
-        });
-
-        it('returns empty array for malformed JSON string', () => {
-          expect(parseContactTags('not-json')).toEqual([]);
-        });
-
-        it('returns empty array for JSON string that is not an array', () => {
-          expect(parseContactTags('{"a":1}')).toEqual([]);
-        });
-      });
-
-      describe('parseContactCustomFields', () => {
-        it('returns empty object for null', () => {
-          expect(parseContactCustomFields(null)).toEqual({});
-        });
-
-        it('returns empty object for undefined', () => {
-          expect(parseContactCustomFields(undefined)).toEqual({});
-        });
-
-        it('returns object as-is when already an object', () => {
-          expect(parseContactCustomFields({ key: 'val' })).toEqual({ key: 'val' });
-        });
-
-        it('parses JSON string to object', () => {
-          expect(parseContactCustomFields('{"x":1}')).toEqual({ x: 1 });
-        });
-
-        it('returns empty object for malformed JSON string', () => {
-          expect(parseContactCustomFields('bad-json')).toEqual({});
-        });
-
-        it('returns empty object for JSON string that is an array', () => {
-          expect(parseContactCustomFields('[1,2]')).toEqual({});
-        });
-      });
-      ---
-
-      IMPORTANT instructions:
-      - Create the directory src/lib/agents/services/__tests__/ first with: mkdir -p
-      - Write the file using write_file with the exact content above (replacing --- delimiters)
-      - The import path does NOT use '.js' extension (vitest resolves TypeScript imports without extension, matching existing test files like src/lib/a2a/__tests__/auth.test.ts)
-      - Do NOT modify any existing files
-      - Do NOT modify package.json, vitest.config.ts, or any other config
-      - After writing the file, run the validation command to confirm tests pass:
-        npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts
-    `,
-    acceptanceCriteria: [
-      'New file src/lib/agents/services/__tests__/contact-normalizers.test.ts exists',
-      'File imports parseContactTags and parseContactCustomFields from business-metrics.service.js',
-      'At least 10 test cases covering both functions',
-      'All tests pass: npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts',
-    ],
-  },
-
   // -------------------------------------------------------------------------
-  // BATCH 2 — added 2026-04-22
+  // BATCH 1 — Wire the LLM executor into production (Phase 6/7)
   // -------------------------------------------------------------------------
-
   {
-    taskId: 'add-priority-semaphore-tests',
-    title: 'Add Vitest tests for PrioritySemaphore (priority queue + timeout)',
+    taskId: 'wire-llm-executor-production',
+    title: 'Wire real LLM executor into conductor production path (Phase 6)',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/priority-semaphore.test.ts 2>&1 | tail -40',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-The class PrioritySemaphore in src/execution/priority-semaphore.ts is the core
-concurrency gate for the agent execution loop. It has no dedicated tests — the
-only semaphore test file covers the simpler base Semaphore class.
+The autonomy conductor at src/autonomy/conductor.ts has a StubConductorExecutor
+(lines 67-116) that returns no-op rounds. The real LLM executor already exists
+at src/autonomy/executors/llm-executor.ts and is wired into the eval harness but
+"never wired into production today" (its own comment says so).
 
-Create ONE new file: src/execution/__tests__/priority-semaphore.test.ts
+src/autonomy/wire-daemon.ts (lines 127-148) uses defaultMakeStubExecutor() as
+fallback for impl + qa rounds while only wiring the LLM executor for PLAN rounds
+via dark-launch config.
 
-Cover these behaviours with at least 7 Vitest test cases:
+Your task: update wire-daemon.ts to use the LlmPlanExecutor for ALL three round
+kinds (plan, impl, qa) when the OHWOW_REAL_EXECUTOR=true env var is set, instead
+of only using it for plan. Specifically:
 
-1. acquire() immediately resolves when below max concurrency.
-2. acquire() queues when at max concurrency.
-3. Higher-priority entries are resolved before lower-priority ones
-   (queue critical before standard, confirm critical resolves first).
-4. release() decrements active count.
-5. rejectAll() rejects every waiting entry and returns the count.
-6. Timeout: acquire() with timeoutMs rejects if slot not granted in time.
-7. getQueueDepths() reflects the waiting counts per priority tier.
+1. Read src/autonomy/wire-daemon.ts and find the section around line 127 where
+   the stub is used for impl + qa.
+2. Read src/autonomy/executors/llm-executor.ts to understand makeLlmPlanExecutor
+   and how it delegates to a fallback executor for non-plan rounds.
+3. In wire-daemon.ts, add a check: if process.env.OHWOW_REAL_EXECUTOR === 'true',
+   wire ALL round kinds through the LLM executor (not just plan). The LlmPlanExecutor
+   already handles plan; for impl and qa, you need to call the executor factory
+   with kind='impl' and kind='qa' as well — check if it supports that or falls back.
+4. Export a new boolean constant IS_REAL_EXECUTOR_ENABLED from wire-daemon.ts
+   so callers can check if the real executor is active.
 
-Use this import (matches the project's ESM convention):
-  import { PrioritySemaphore } from '../priority-semaphore.js';
-  import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-Use real timers for the timeout test (no vi.useFakeTimers needed — just keep
-timeoutMs small, e.g. 10ms, and await at least that long before asserting rejection).
-
-Do NOT modify priority-semaphore.ts or any other existing file.
-Do NOT modify package.json or vitest.config.ts.
+This is the critical Phase 6 connection that makes the conductor actually do
+real AI work rather than returning stub no-ops.
     `,
     acceptanceCriteria: [
-      'New file src/execution/__tests__/priority-semaphore.test.ts exists',
-      'At least 7 test cases covering priority ordering, timeout, and rejectAll',
-      'All tests pass: npm test -- src/execution/__tests__/priority-semaphore.test.ts',
       'TypeScript typecheck passes (npm run typecheck)',
+      'wire-daemon.ts reads OHWOW_REAL_EXECUTOR env var',
+      'IS_REAL_EXECUTOR_ENABLED boolean is exported from wire-daemon.ts',
+      'When OHWOW_REAL_EXECUTOR=true, all round kinds route through LLM executor',
     ],
   },
 
+  // -------------------------------------------------------------------------
+  // BATCH 2 — Wire channel message storage for inner-thoughts unreadMessages
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-unread-messages-inner-thoughts',
+    title: 'Wire unreadMessages from conversation store into inner-thoughts context snapshot',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+src/presence/inner-thoughts.ts line 244 has:
+  unreadMessages: [], // TODO: Wire when channel message storage is implemented
+
+The conversation/channel message storage DOES exist in the codebase. Your job is
+to find it and wire it in.
+
+Steps:
+1. Run: grep -rn "conversation\|channel.*message\|inbox" src --include="*.ts" | grep -v __tests__ | grep -v node_modules | head -30
+   to find where messages are stored.
+2. Run: grep -rn "unread\|read_at\|is_read" src --include="*.ts" | head -20
+   to find how read/unread state is tracked.
+3. Read inner-thoughts.ts in full to understand the ContextSnapshot interface
+   and the gatherContext() method.
+4. Add a real query to gatherContext() that fetches unread messages from the DB
+   for the current workspace. Look at how pendingTasks is queried for the pattern.
+5. The unreadMessages field in ContextSnapshot should be typed as an array with
+   at minimum: { id: string; agentId: string; content: string; created_at: string }.
+   Remove the empty array literal and return real data.
+
+If the conversation tables don't exist or have no unread concept yet, add a
+graceful fallback (try/catch that returns []) so the feature degrades safely.
+The goal is to remove the TODO comment and make a real attempt to wire the data.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'The TODO comment on unreadMessages line is removed',
+      'gatherContext() attempts a real DB query for unread messages',
+      'Graceful fallback returns [] if the query fails',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 3 — Wire onboarding integration presets from agent selections
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-onboarding-integration-presets',
+    title: 'Derive onboarding integrations from selected agent presets instead of hardcoding',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+src/web/src/hooks/useOnboarding.ts line 529 has:
+  // TODO: In the future, derive integrations from selected agent presets
+
+The agent presets already declare which integrations they need. For example,
+agents that do social media posting need Twitter/X integration; agents that
+read email need Gmail integration; etc.
+
+Steps:
+1. Read src/tui/data/agent-presets.ts to understand the AgentPreset interface
+   and what integration/tool fields exist on each preset.
+2. Read src/web/src/hooks/useOnboarding.ts around line 529 and the surrounding
+   ~50 lines to understand the current onboarding state and what selectedAgents
+   looks like.
+3. Implement a pure function (can be in the same file or a new utils file):
+     function deriveIntegrationsFromPresets(selectedAgents: string[]): string[]
+   that maps agent preset IDs to the integrations they require. For example:
+   - social/twitter agents → ['twitter']
+   - email agents → ['gmail']
+   - calendar agents → ['gcal']
+   - github agents → ['github']
+4. Replace the TODO comment with a real call to this function, using the
+   currently selected agent IDs from the onboarding state.
+
+The goal is that when a user picks "Social Media Manager" during onboarding,
+the integration step automatically pre-selects Twitter/X instead of showing
+an empty list.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'deriveIntegrationsFromPresets function exists and maps preset IDs to integration names',
+      'The TODO comment is removed and replaced with a real call',
+      'At least 3 agent categories are mapped to their required integrations',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 4 — Add real contacts/CRM search to the orchestrator tool catalog
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'add-crm-contact-search-tool',
+    title: 'Add search_contacts tool to orchestrator MCP catalog for CRM agent access',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+The orchestrator MCP catalog at src/mcp/catalog.ts lists tools agents can use.
+Currently agents have no way to search the contacts/CRM database directly.
+
+Your task: add a search_contacts built-in tool that lets agents query the
+contacts table by name, email, company, or tag.
+
+Steps:
+1. Read src/mcp/catalog.ts to understand the MCPToolDefinition interface and
+   how existing tools are structured.
+2. Read src/db/ to find the contacts table schema (look for contacts migration
+   or CREATE TABLE contacts).
+3. Add a new tool entry to the catalog:
+   {
+     id: 'search_contacts',
+     name: 'Search Contacts',
+     description: 'Search the CRM contacts database by name, email, company, or tag',
+     category: 'crm',
+     icon: 'Users',
+     envVarsRequired: [],
+     isBuiltIn: true,
+     schema: { ... }  // query: string, limit?: number
+   }
+4. Add the corresponding tool handler in the built-in tool executor
+   (find where other built-in tools are executed — grep for isBuiltIn or
+   built-in in src/orchestrator/ or src/mcp/).
+5. The handler should query the contacts table with a LIKE search on
+   name, email, company columns and return matching rows as JSON.
+
+If the contacts table doesn't exist, add a migration file in src/db/migrations/
+following the existing pattern, and create the minimal schema.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'search_contacts appears in the MCP catalog with correct schema',
+      'Built-in tool handler queries contacts table with LIKE search',
+      'Tool is categorized as crm and marked isBuiltIn: true',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 5 — Wire market intel buyer_intent → outreach pipeline
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-market-intel-outreach-trigger',
+    title: 'Wire buyer_intent market intel signals into the outreach trigger pipeline',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+The market intel system at scripts/intel/market-intel.mjs generates briefs with
+bucket=buyer_intent. These briefs exist in ~/.ohwow/workspaces/default/intel/ but
+nothing reads them to trigger follow-up actions.
+
+Your task: create a new scheduler module that reads buyer_intent briefs from the
+intel directory and enqueues outreach tasks for the configured workspace.
+
+Steps:
+1. Read src/scheduling/ to understand existing scheduler patterns (e.g.,
+   approved-draft-queue.ts, synthesis-auto-learner.ts).
+2. Read the intel brief format by checking scripts/intel/market-intel.mjs for
+   how briefs.json is structured.
+3. Create src/scheduling/intel-outreach-trigger.ts that:
+   - Exports class IntelOutreachTrigger with a tick() method
+   - On each tick, reads the latest intel day's briefs.json
+   - Filters for bucket=buyer_intent items not yet processed
+   - For each unprocessed signal, creates a task in the agent_workforce_tasks
+     table with a prompt like "Follow up on buyer intent signal: {headline}"
+   - Tracks processed signals in a seen-file at the intel day directory
+4. Export the class and wire it into the daemon startup in src/daemon/start.ts
+   (find where other schedulers are initialized and follow that pattern).
+
+The seen-file should use the existing loadSeen/appendSeen pattern if it exists
+in src/lib/, otherwise implement a simple JSON array in the intel dir.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'src/scheduling/intel-outreach-trigger.ts exists with IntelOutreachTrigger class',
+      'tick() method reads briefs.json and creates tasks for buyer_intent signals',
+      'Processed signals are tracked to avoid duplicate task creation',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 6 — A2A agent card endpoint (Google A2A spec compliance)
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'implement-a2a-agent-card-endpoint',
+    title: 'Implement /.well-known/agent.json A2A agent card endpoint in Express API',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+Google's Agent-to-Agent (A2A) protocol requires agents to expose a
+/.well-known/agent.json endpoint with capability metadata. The ohwow runtime
+has an A2A module at src/a2a/ but check if this endpoint exists in the API.
+
+Steps:
+1. Run: grep -rn "well-known\|agent.json\|agentCard" src/api/ src/a2a/ | head -20
+   to check if it already exists.
+2. Read src/api/routes/ to understand Express route registration patterns.
+3. Read src/a2a/ to understand the AgentCard interface shape (likely from the
+   Google A2A spec: name, description, url, version, capabilities, skills).
+4. If the endpoint doesn't exist, create src/api/routes/a2a-agent-card.ts that:
+   - Handles GET /.well-known/agent.json
+   - Returns a JSON body with: name, description, url, version, capabilities
+     (streaming: false, pushNotifications: false, stateTransitionHistory: false)
+   - Reads the workspace name and configured base URL from config
+   - Sets Content-Type: application/json
+5. Register the route in src/api/routes/index.ts or the main router file.
+
+If the endpoint already exists, instead extend it: add a skills[] array that
+lists the configured agents from the workspace as A2A skills with id, name,
+description, and inputModes: ['text'].
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'GET /.well-known/agent.json route exists in Express API',
+      'Response includes name, description, url, version, capabilities fields',
+      'Route is registered in the main API router',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 7 — Presence: wire real peer count from mesh into inner-thoughts
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-mesh-peer-count-inner-thoughts',
+    title: 'Wire real mesh peer count into inner-thoughts context (replace hardcoded 0)',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+The InnerThoughtsEngine at src/presence/inner-thoughts.ts generates "thoughts"
+about what's happening on the platform. One dimension it should consider is
+how many peer nodes are currently connected via the mesh network.
+
+Steps:
+1. Read src/presence/inner-thoughts.ts fully to understand the ContextSnapshot
+   interface and gatherContext().
+2. Read src/mesh/mesh-coordinator.ts or similar to find how to get the current
+   connected peer count (look for connectedPeers, peerCount, getPeers(), etc.).
+3. Add a connectedPeerCount: number field to the ContextSnapshot interface in
+   inner-thoughts.ts.
+4. In gatherContext(), populate it by calling the mesh coordinator or reading
+   from the peers table. If InnerThoughtsEngine doesn't have a reference to
+   the mesh, add an optional meshCoordinator parameter to the constructor.
+5. Update the distill() prompt in inner-thoughts.ts to mention peer count when
+   relevant (e.g., "X peer nodes connected" in the context summary).
+
+The purpose: if the daemon has 3 peer nodes syncing work, the thoughts should
+reflect "distributed team active" rather than assuming solo operation.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'ContextSnapshot interface has a connectedPeerCount: number field',
+      'gatherContext() populates connectedPeerCount from mesh state',
+      'No hardcoded 0 for peer count',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 8 — Self-bench: implement real experiment result persistence
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-self-bench-result-persistence',
+    title: 'Persist self-bench experiment results to SQLite instead of in-memory only',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+The self-bench system at src/self-bench/ runs experiments comparing model
+configurations. Currently experiment results may only live in memory.
+
+Steps:
+1. Run: grep -rn "result\|experiment\|persist\|store\|save" src/self-bench/ --include="*.ts" | head -30
+   to understand what exists.
+2. Check if there's a self_bench_results or experiments table in src/db/migrations/.
+3. If no table exists, create src/db/migrations/<next-number>-self-bench-results.ts
+   with CREATE TABLE self_bench_results (
+     id TEXT PRIMARY KEY,
+     experiment_id TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     config_a TEXT NOT NULL,
+     config_b TEXT NOT NULL,
+     winner TEXT,
+     score_a REAL,
+     score_b REAL,
+     verdict TEXT,
+     raw_json TEXT
+   );
+4. In the self-bench runner (src/self-bench/self-commit.ts or similar),
+   after an experiment completes, insert the result into self_bench_results.
+5. Add a getSelfBenchHistory(limit) function that reads the last N results
+   from the table, for use in prompts and reporting.
+
+The goal: experiment results survive daemon restarts and can inform future
+experiment design (avoid re-running the same comparison).
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'A self_bench_results table migration exists in src/db/migrations/',
+      'Experiment results are inserted into the table after completion',
+      'getSelfBenchHistory() function exists and queries the table',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 9 — Add list_agents REST endpoint to Express API
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'add-list-agents-rest-endpoint',
+    title: 'Add GET /api/agents endpoint to Express API for agent workforce listing',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+The ohwow Express API at src/api/ likely has endpoints for tasks, workspace info,
+and other data but may be missing a simple agent listing endpoint that clients
+(ohwow.fun, mobile, A2A peers) can use.
+
+Steps:
+1. Run: grep -rn "router\\.get\|router\\.post\|app\\.get" src/api/ --include="*.ts" | head -30
+   to map existing endpoints.
+2. Check if GET /api/agents already exists (grep for 'agents' in src/api/routes/).
+3. If missing, create src/api/routes/agents.ts with:
+   - GET /api/agents — returns agent_workforce_agents rows for the active workspace,
+     with fields: id, name, status, model, created_at, last_active_at, task_count
+   - GET /api/agents/:id — returns a single agent's full config + recent task history
+4. Use the DatabaseAdapter pattern from other route files (don't raw-SQL outside db/).
+5. Add appropriate auth middleware (look at how other routes are protected).
+6. Register the router in src/api/routes/index.ts or equivalent.
+
+The response shape for GET /api/agents should be:
+  { agents: AgentRow[], total: number, workspace: string }
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'GET /api/agents endpoint exists and returns agent list',
+      'GET /api/agents/:id endpoint exists and returns single agent',
+      'Routes are registered in the API router',
+      'Auth middleware is applied',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 10 — Fix hardcoded model strings across seed templates
+  // -------------------------------------------------------------------------
   {
     taskId: 'fix-seed-templates-hardcoded-model',
     title: 'Replace hardcoded claude-sonnet-4-20250514 in seed-templates.ts with a named constant',
@@ -301,217 +415,82 @@ SEED_TEMPLATES array. Do NOT modify package.json.
     ],
   },
 
+  // -------------------------------------------------------------------------
+  // BATCH 11 — ohwow.fun: wire market intel reading API route
+  // -------------------------------------------------------------------------
   {
-    taskId: 'add-jsdoc-co-evolution-executor',
-    title: 'Add JSDoc to public API surface of co-evolution-executor.ts',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm run typecheck 2>&1 | tail -20',
-    description: `
-src/orchestrator/co-evolution/co-evolution-executor.ts exposes two public
-TypeScript interfaces and one exported async function that are used by the
-orchestrator to drive the co-evolution loop. None of them have JSDoc comments.
-
-Add JSDoc to:
-
-1. Interface CoEvolutionProgressEvent (exported) — describe what this union
-   type represents: a progress event emitted by the co-evolution loop. Each
-   event has a 'type' discriminant field plus optional payload keys.
-
-2. Interface ExecuteLocalCoEvolutionOptions (exported) — describe each
-   field: db, engine, workspaceId, config, anthropic (optional, injected
-   Anthropic SDK client), modelRouter (optional model routing override),
-   onEvent (optional progress event callback).
-
-3. Function executeLocalCoEvolution (exported) — describe the overall flow
-   (N agents iterate across R rounds on the same deliverable) and the return
-   value (LocalCoEvolutionResult with bestAttempt, score summary, cost, etc.).
-
-Format: standard TSDoc (/** ... */) with @param and @returns tags on the
-function. Keep descriptions concise (2-3 sentences each). Do not add
-examples or change any logic. Do not touch any other file.
-    `,
-    acceptanceCriteria: [
-      'CoEvolutionProgressEvent has a JSDoc block explaining its purpose',
-      'ExecuteLocalCoEvolutionOptions has JSDoc on the interface and each field',
-      'executeLocalCoEvolution has JSDoc with @param and @returns',
-      'TypeScript typecheck passes (npm run typecheck)',
-      'No logic was changed — diff is comments only',
-    ],
-  },
-
-  {
-    taskId: 'ohwow-fun-extract-blog-feed-url-constant',
-    title: 'Extract hardcoded https://ohwow.fun URL in blog/feed.xml/route.ts to a named constant',
+    taskId: 'add-ohwow-fun-intel-api-route',
+    title: 'Add GET /api/intel/latest route to ohwow.fun to surface market intel in dashboard',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
     validationCmd: 'npx tsc --noEmit 2>&1 | tail -20',
     description: `
-src/app/blog/feed.xml/route.ts contains 5+ hardcoded occurrences of the
-string 'https://ohwow.fun' embedded in the RSS feed metadata (id, link,
-favicon, rss2, and per-article link fields). This is the only file in the
-codebase where these strings are NOT read from an env var or a shared
-constant.
+The ohwow.fun dashboard has no way to display the market intel briefs that the
+runtime generates. The briefs live in ~/.ohwow/workspaces/{slug}/intel/ on the
+server running the daemon.
 
-Fix:
-1. At the top of src/app/blog/feed.xml/route.ts, add:
-   const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ohwow.fun';
+However, ohwow.fun talks to the runtime via the daemon REST API (port 7700).
+Your task is to add a proxy route that reads intel from the daemon.
 
-2. Replace every occurrence of the literal 'https://ohwow.fun' in that file
-   with the SITE_URL constant (template literals where needed, e.g.
-   \`\${SITE_URL}/blog\`).
+Steps:
+1. Check if /api/intel exists: ls src/app/api/intel/ 2>/dev/null || echo "missing"
+2. Look at how other API routes proxy to the daemon:
+   grep -rn "7700\|daemon.*token\|DAEMON_URL" src/app/api/ --include="*.ts" | head -20
+3. Create src/app/api/intel/latest/route.ts with a GET handler that:
+   - Gets the workspace slug from the auth session
+   - Reads the daemon token from the workspace config
+   - Proxies GET to http://localhost:7700/api/intel/latest (or the daemon port)
+   - Returns the briefs JSON to the client
+4. If the daemon doesn't have an /api/intel route, instead read directly:
+   - Find OHWOW_DATA_DIR or equivalent env var
+   - Read ~/.ohwow/workspaces/{slug}/intel/{latest-day}/briefs.json
+   - Return it as JSON
+5. The response shape should be: { briefs: Brief[], day: string }
+   where Brief has: { id, bucket, headline, ohwow_implications, score }
 
-3. Do NOT touch src/app/sitemap.ts, src/app/robots.ts, or any other file.
-   sitemap.ts already uses its own BASE_URL constant and is out of scope.
-
-The goal is consistency: the feed.xml route should respect the same
-NEXT_PUBLIC_APP_URL environment variable that the rest of the app uses.
+This enables the dashboard to show "Market Intel" as a live feed.
     `,
     acceptanceCriteria: [
-      'No string literal "https://ohwow.fun" remains in src/app/blog/feed.xml/route.ts',
-      'SITE_URL constant is defined at the top of the file using process.env.NEXT_PUBLIC_APP_URL',
       'TypeScript typecheck passes (npx tsc --noEmit)',
-      'No other files were modified',
+      'src/app/api/intel/latest/route.ts exists with a GET handler',
+      'Handler reads intel briefs and returns them as JSON',
+      'Proper error handling if intel directory is missing',
     ],
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 4 — added 2026-04-23 showcase
+  // BATCH 12 — Replace hardcoded model in ohwow.fun fix-generator
   // -------------------------------------------------------------------------
-
   {
-    taskId: 'add-response-classifier-tests',
-    title: 'Add Vitest tests for response-classifier.ts (parseResponseMeta, shouldAutoCreateDeliverable, inferTypeFromContent)',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/response-classifier.test.ts 2>&1 | tail -40',
+    taskId: 'fix-hardcoded-models-ohwow-fun',
+    title: 'Replace hardcoded Claude model strings in ohwow.fun with config-driven selection',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
+    validationCmd: 'npx tsc --noEmit 2>&1 | tail -20',
     description: `
-src/execution/response-classifier.ts exports three pure functions with zero test coverage:
-parseResponseMeta, shouldAutoCreateDeliverable, and inferTypeFromContent.
-These are entirely pure — no DB, no I/O, no mocks required.
+Two files in ohwow.fun hardcode specific Claude model strings that should use the
+existing config-driven model selection pattern instead:
 
-Create ONE new file: src/execution/__tests__/response-classifier.test.ts
+1. src/lib/autofix/fix-generator.ts line 57:
+   model: 'claude-sonnet-4-20250514'
+   This is inside callAnthropic() which makes a raw fetch to the Anthropic API.
+   Replace with a constant imported from a shared location (or inline constant
+   AUTOFIX_MODEL = process.env.AUTOFIX_MODEL || 'claude-sonnet-4-5' at the top of the file).
 
-Cover these behaviours with at least 10 Vitest test cases:
+2. src/lib/agents/co-evolution/model-tier.ts line 34:
+   if (progress < 0.8) return 'claude-sonnet-4-20250514';
+   This is the mid-refinement tier in getEvolutionModelTier(). Replace with a
+   named constant CO_EVOLUTION_MID_TIER_MODEL = 'claude-sonnet-4-5' at the top
+   of that file (the function already uses 'claude-haiku-4-20250414' which is
+   similarly hardcoded — leave haiku as-is since that one is intentional breadth
+   model selection; only fix the sonnet reference on line 34).
 
-parseResponseMeta:
-1. Returns { type: null, cleanContent: original } when no header is present.
-2. Returns { type: 'deliverable', cleanContent: stripped } when header has type=deliverable.
-3. Returns { type: 'informational', cleanContent: stripped } when header has type=informational.
-4. Returns { type: null } when header JSON is malformed.
-5. Returns { type: null } when header type is an unknown value.
-
-shouldAutoCreateDeliverable:
-6. Returns { create: false } for content shorter than 200 chars.
-7. Returns { create: false } for a heartbeat task title even with long content.
-8. Returns { create: true } for content >500 chars with at least one structure signal (e.g. a markdown header).
-9. Returns { create: true } for very long plain content (>1500 chars) with no structure.
-10. Returns { create: true } for 200-500 char content with 2+ structure signals.
-
-inferTypeFromContent:
-11. Returns 'code' when content has a fenced code block with a known language.
-12. Returns 'report' when title includes 'analysis'.
-13. Returns 'document' as the fallback when no pattern matches.
-
-Use this import pattern:
-  import { describe, it, expect } from 'vitest';
-  import { parseResponseMeta, shouldAutoCreateDeliverable, inferTypeFromContent } from '../response-classifier.js';
-
-Do NOT modify response-classifier.ts or any other existing file.
-Do NOT modify package.json or vitest.config.ts.
+The goal is to make these model strings obvious and easy to update centrally.
+Use env-variable fallback pattern: process.env.X || 'model-string' is acceptable.
+Do NOT change the existing getSiteBuilderModel() infrastructure — it's already correct.
     `,
     acceptanceCriteria: [
-      'New file src/execution/__tests__/response-classifier.test.ts exists',
-      'At least 10 test cases covering all 3 exported functions',
-      'All tests pass: npm test -- src/execution/__tests__/response-classifier.test.ts',
-      'TypeScript typecheck passes (npm run typecheck)',
-    ],
-  },
-
-  {
-    taskId: 'add-model-router-pure-fn-tests',
-    title: 'Add Vitest tests for shouldForceLocalForBurn and inferProviderFromModel in model-router.ts',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/model-router-pure.test.ts 2>&1 | tail -40',
-    description: `
-src/execution/model-router.ts exports two pure standalone functions at the top of the file
-that have no dedicated tests:
-  - shouldForceLocalForBurn(burnLevel, callerForceLocal): boolean
-  - inferProviderFromModel(model): InferredProvider
-
-These are pure — no class instantiation, no network, no DB.
-
-Create ONE new file: src/execution/__tests__/model-router-pure.test.ts
-
-Cover these behaviours with at least 8 Vitest test cases:
-
-shouldForceLocalForBurn:
-1. Returns false when burnLevel=0 and callerForceLocal=false.
-2. Returns true when callerForceLocal=true regardless of burnLevel.
-3. Returns true when burnLevel=1 and callerForceLocal=false.
-4. Returns true when burnLevel=2 and callerForceLocal=false.
-
-inferProviderFromModel:
-5. Returns 'anthropic' for a model starting with 'claude-'.
-6. Returns 'mlx' for a model starting with 'mlx-community/'.
-7. Returns 'openrouter' for a model containing '/' but not starting with 'mlx-community/'.
-8. Returns 'ollama' for a model containing ':' (e.g. 'llama3:8b').
-9. Returns null for an unrecognised model string with no special characters.
-10. Returns null for an empty string.
-
-Use this import pattern:
-  import { describe, it, expect } from 'vitest';
-  import { shouldForceLocalForBurn, inferProviderFromModel } from '../model-router.js';
-
-Do NOT modify model-router.ts or any other existing file.
-Do NOT modify package.json or vitest.config.ts.
-    `,
-    acceptanceCriteria: [
-      'New file src/execution/__tests__/model-router-pure.test.ts exists',
-      'At least 8 test cases covering both functions',
-      'All tests pass: npm test -- src/execution/__tests__/model-router-pure.test.ts',
-      'TypeScript typecheck passes (npm run typecheck)',
-    ],
-  },
-
-  {
-    taskId: 'add-savepoint-store-tests',
-    title: 'Add Vitest tests for SavepointStore (ring buffer, create, rollbackTo, list)',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/savepoint-store.test.ts 2>&1 | tail -40',
-    description: `
-src/execution/savepoint-store.ts exports SavepointStore — an in-memory ring-buffer class
-with no DB, no network, no I/O. It has zero test coverage despite being a core checkpoint
-mechanism in the agent execution loop.
-
-Create ONE new file: src/execution/__tests__/savepoint-store.test.ts
-
-Cover these behaviours with at least 8 Vitest test cases:
-
-1. create() stores a savepoint retrievable via has() and list().
-2. rollbackTo() returns a deep copy of the saved data (mutations to result don't affect stored copy).
-3. rollbackTo() returns null for an unknown savepoint name.
-4. list() returns savepoints in insertion order.
-5. Ring buffer: when the store is at maxSavepoints and a new name is added, the oldest is evicted.
-6. Overwriting an existing name (same name, new data): size stays the same; list() puts it at the end (re-ordered to back of insertion order); rollbackTo returns the new data.
-7. get size property reflects the current count.
-8. An empty store has size === 0 and list() returns [].
-
-Use this import:
-  import { describe, it, expect } from 'vitest';
-  import { SavepointStore } from '../savepoint-store.js';
-  import type { SavepointData } from '../savepoint-store.js';
-
-Helper for a minimal SavepointData:
-  function makeData(iteration: number): SavepointData {
-    return { messages: [], iteration, toolCallHashes: [], totalInputTokens: 0, totalOutputTokens: 0 };
-  }
-
-Do NOT modify savepoint-store.ts or any other existing file.
-Do NOT modify package.json or vitest.config.ts.
-    `,
-    acceptanceCriteria: [
-      'New file src/execution/__tests__/savepoint-store.test.ts exists',
-      'At least 8 test cases covering ring buffer eviction, rollback, and list ordering',
-      'All tests pass: npm test -- src/execution/__tests__/savepoint-store.test.ts',
-      'TypeScript typecheck passes (npm run typecheck)',
+      'No hardcoded "claude-sonnet-4-20250514" strings remain in src/',
+      'TypeScript typecheck passes (npx tsc --noEmit)',
+      'Model references use a named constant or env-variable fallback',
     ],
   },
 ];

@@ -231,35 +231,40 @@ async function generateSmartTask({ completedTaskIds, anthropicApiKey, repos }) {
 
   const context = await gatherSmartContext({ repos });
 
-  const systemPrompt = `You are a senior engineer on the ohwow AI platform team.
-Your job: read the codebase context below and propose ONE concrete improvement task that a Claude Code agent can complete autonomously in a single session.
+  const systemPrompt = `You are a senior engineer and product lead on the ohwow AI business OS platform.
+Your job: read the codebase context below and propose ONE high-leverage product task that a Claude Code agent can complete autonomously in a single session.
 
-Task categories (pick the most impactful one given the context):
-  (a) Add missing tests — write unit tests for source files that have no test counterpart
-  (b) Fix hardcoded values — replace magic strings/numbers with named constants
-  (c) Add JSDoc to public APIs — add param/return docs to exported functions that lack them
-  (d) Fix concrete TODOs — resolve a specific TODO or FIXME comment already in the code
-  (e) Extract utility functions — move duplicated logic into a shared helper
+PRIORITY ORDER — pick the highest-priority category that has available work:
+1. Features that are half-built (TODOs in working code, stubs that return nothing, commented-out integrations)
+2. Integrations between systems that exist but aren't connected (e.g., market intel exists but nothing reads it)
+3. New API endpoints or routes that are clearly missing (the frontend references them but they don't exist)
+4. Performance or reliability improvements to core paths (concurrency, error handling, retry logic)
+5. Hardcoded values that should be config-driven (model names, URLs, magic numbers in hot paths)
+6. Tests for critical business logic — ONLY if no higher-priority work exists
+
+Do NOT pick:
+- JSDoc / documentation-only tasks
+- Renaming things or extracting constants from non-critical code
+- Tasks that only add comments
+- Anything that is purely cosmetic
 
 Rules:
 - The task MUST be VERIFIABLE within 5 minutes using a single shell command
 - Each task MUST include a specific acceptanceCriteria list and a validationCmd
-- Max 5 files changed; under 100 lines of code
 - No package.json changes
 - No new npm dependencies
-- No UI/visual changes
-- No database schema migrations
 - No external service calls required during validation
 - The targetRepo MUST be one of the repos listed in the context
 - Do NOT repeat any task from the completed list
+- Pick tasks that ship real value to the product
 
 Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
 {
   "taskId": "unique-kebab-case-id",
   "title": "Short imperative title (under 80 chars)",
   "targetRepo": "/absolute/path/to/repo",
-  "validationCmd": "npm test -- --reporter=verbose path/to/test.ts 2>&1 | tail -30",
-  "description": "2-5 sentences: what file(s) to change, what to add/fix, and why it matters.",
+  "validationCmd": "npm run typecheck 2>&1 | tail -30",
+  "description": "3-6 sentences: what problem this solves, which files to change, what to implement, and why it matters for the product.",
   "acceptanceCriteria": ["criterion 1", "criterion 2", "criterion 3"]
 }`;
 

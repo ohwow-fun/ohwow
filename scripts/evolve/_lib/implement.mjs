@@ -1,11 +1,11 @@
 /**
  * Core implementation engine for the self-evolution system.
- * Runs Claude with tool-use to implement a bounded task.
+ * Runs Claude with tool-use to implement real product tasks.
  *
  * API key resolution order:
  *   1. anthropicApiKey arg (from caller)
  *   2. ANTHROPIC_API_KEY env
- *   3. openRouterApiKey from ~/.ohwow/config.json (uses OpenRouter with claude-haiku)
+ *   3. openRouterApiKey from ~/.ohwow/config.json (uses OpenRouter with claude-sonnet)
  */
 import Anthropic from '@anthropic-ai/sdk';
 import fs from 'node:fs';
@@ -21,7 +21,7 @@ function resolveClientAndModel(anthropicApiKey) {
   if (anthropicApiKey && anthropicApiKey.startsWith('sk-ant-')) {
     return {
       client: new Anthropic({ apiKey: anthropicApiKey }),
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-6',
     };
   }
   // Fallback: OpenRouter key from ohwow config — supports Anthropic tool-use format
@@ -39,7 +39,7 @@ function resolveClientAndModel(anthropicApiKey) {
               'X-Title': 'ohwow-self-evolve',
             },
           }),
-          model: 'anthropic/claude-haiku-4-5',
+          model: 'anthropic/claude-sonnet-4-5',
         };
       }
     } catch {}
@@ -73,6 +73,17 @@ const TOOLS = [
         content: { type: 'string', description: 'Full file content to write' },
       },
       required: ['path', 'content'],
+    },
+  },
+  {
+    name: 'list_files',
+    description: 'List TypeScript/TSX files in a directory recursively. Use this to discover what files exist before reading them.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        dir: { type: 'string', description: 'Absolute path to the directory to list' },
+      },
+      required: ['dir'],
     },
   },
   {
@@ -145,6 +156,20 @@ async function executeTool(toolName, toolInput, { targetRepo }) {
     return `Written: ${safePath} (${content.length} chars)`;
   }
 
+  if (toolName === 'list_files') {
+    const safePath = validatePath(toolInput.dir, targetRepo);
+    try {
+      const result = await execFileAsync('bash', ['-c', `find "${safePath}" \\( -name "*.ts" -o -name "*.tsx" \\) ! -path "*/node_modules/*" ! -path "*/__tests__/*" | sort | head -60`], {
+        cwd: targetRepo,
+        timeout: 15_000,
+        env: { ...process.env, PATH: process.env.PATH },
+      });
+      return (result.stdout || '(no files found)').slice(0, 4000);
+    } catch (err) {
+      return `ERROR listing files: ${err.message}`;
+    }
+  }
+
   if (toolName === 'bash') {
     const cwd = toolInput.cwd || targetRepo;
     try {
@@ -176,24 +201,28 @@ async function executeTool(toolName, toolInput, { targetRepo }) {
 export async function implementTask(task, { anthropicApiKey } = {}) {
   const { client, model } = resolveClientAndModel(anthropicApiKey);
 
-  const systemPrompt = `You are an expert software engineer implementing a specific, bounded code improvement task.
-You have access to three tools: read_file, write_file, bash.
+  const systemPrompt = `You are implementing a real product feature for the ohwow AI business OS platform.
+You have access to four tools: read_file, write_file, list_files, bash.
+
+Be thorough. Read all relevant files first. Make complete, working implementations — not stubs or placeholders.
 
 RULES:
-- Change at most 5 files per task
 - Never modify package.json, package-lock.json, or yarn.lock
 - Never delete existing tests
 - For SMALL targeted changes (e.g., changing a string constant, adding a line): PREFER bash with sed/python/awk over read_file + write_file. This is safer and avoids truncation.
 - For NEW files: use write_file (you are writing from scratch, no truncation risk).
 - For read_file: if the file is large and you only need a few lines, use bash grep/head/sed to read the specific section instead.
 - write_file is ONLY safe when you have the COMPLETE file content. Never write a file if you only have a partial view.
-- After making changes, verify with bash (e.g., grep to confirm old string is gone)
+- After making changes, verify with bash (e.g., grep to confirm old string is gone, run tsc for type errors)
 - When done, stop using tools and output a clear summary of what you changed and why
 
 PREFERRED PATTERN for replacing a string in a file:
   bash: sed -i '' 's/old_string/new_string/g' /path/to/file   (macOS)
   or:   python3 -c "content=open('f').read(); open('f','w').write(content.replace('old','new'))"
 Then verify with: bash grep -n 'old_string' /path/to/file
+
+DISCOVERY PATTERN: Before implementing, always use list_files() to discover what files exist
+in the relevant directories. Then read the key files. Then implement.
 
 TARGET REPO: ${task.targetRepo}
 Today: ${new Date().toISOString().slice(0, 10)}`;
@@ -205,7 +234,7 @@ ${task.description.trim()}
 ACCEPTANCE CRITERIA:
 ${task.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-Start by using bash to find and read the relevant files, then implement the changes. Be surgical and minimal.`;
+Start by using list_files() and bash to discover and read all relevant files. Understand the full context before writing code. Then implement a complete, working solution that satisfies every acceptance criterion.`;
 
   const messages = [{ role: 'user', content: userMessage }];
   const filesChanged = new Set();
@@ -217,7 +246,7 @@ Start by using bash to find and read the relevant files, then implement the chan
 
     const response = await client.messages.create({
       model,
-      max_tokens: 8096,
+      max_tokens: 16000,
       system: systemPrompt,
       tools: TOOLS,
       messages,
