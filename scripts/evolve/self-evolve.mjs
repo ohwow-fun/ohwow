@@ -84,8 +84,14 @@ function gitCommit(repoPath, changedFiles, message) {
       console.warn(`[self-evolve] git add failed for ${f}: ${err.message}`);
     }
   }
-  const escaped = message.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  execSync(`git commit -s -m "${escaped}"`, { cwd: repoPath, stdio: 'pipe' });
+  // Write message to a temp file so newlines are preserved (avoids literal \n in subject)
+  const msgFile = path.join(os.tmpdir(), `evolve-commit-msg-${Date.now()}.txt`);
+  fs.writeFileSync(msgFile, message);
+  try {
+    execSync(`git commit -s -F "${msgFile}"`, { cwd: repoPath, stdio: 'pipe' });
+  } finally {
+    try { fs.unlinkSync(msgFile); } catch {}
+  }
   return execSync('git rev-parse --short HEAD', { cwd: repoPath }).toString().trim();
 }
 
