@@ -255,9 +255,16 @@ Start by using list_files() and bash to discover and read all relevant files. Un
     // Append assistant turn to conversation
     messages.push({ role: 'assistant', content: response.content });
 
-    if (response.stop_reason === 'end_turn') break;
+    if (response.stop_reason === 'max_tokens') {
+      console.warn('[implement] hit max_tokens — continuing to next iteration');
+    }
 
-    if (response.stop_reason === 'tool_use') {
+    // Some models (e.g. GLM) may return tool_use blocks with stop_reason=end_turn
+    const hasPendingToolUse = response.content.some(b => b.type === 'tool_use');
+
+    if (!hasPendingToolUse) break;
+
+    if (hasPendingToolUse) {
       const toolResults = [];
       for (const block of response.content) {
         if (block.type !== 'tool_use') continue;
