@@ -20,6 +20,7 @@ import {
   TextShadowTrail,
 } from "../motion/generative";
 import { VideoClipLayer } from "./VideoClipLayer";
+import { ImageLayer } from "./ImageLayer";
 import { CountUp } from "./semantic-primitives/CountUp";
 import { BadgeReveal } from "./semantic-primitives/BadgeReveal";
 import { VersusCard } from "./semantic-primitives/VersusCard";
@@ -124,7 +125,8 @@ register("film-grain", FilmGrain as PrimitiveComponent, ["intensity"], "Subtle n
 register("particle-burst", ParticleBurst as PrimitiveComponent, ["count", "color", "seed", "speed", "size", "cx", "cy"], "Explosion of particles from center. Reveals, energy, impact.", true);
 register("grid-morph", GridMorph as PrimitiveComponent, ["cols", "rows", "cellSize", "color", "seed", "speed", "morphIntensity"], "Morphing grid pattern. Data, tech, structure.", true);
 register("text-shadow-trail", TextShadowTrail as PrimitiveComponent, ["text", "color", "trailColor", "trailCount", "speed", "fontSize"], "Text with trailing shadow copies. Motion, emphasis.", true);
-register("video-clip", VideoClipLayer as PrimitiveComponent, ["src", "opacity", "blendMode", "fit", "muted"], "Generative mp4 clip resolved at render time by the configured video provider.", true);
+register("video-clip", VideoClipLayer as PrimitiveComponent, ["src", "opacity", "blendMode", "fit", "muted", "prompt", "durationSeconds", "aspectRatio"], "Generative mp4 clip resolved at render time by the configured video provider.", true);
+register("image", ImageLayer as PrimitiveComponent, ["src", "width", "height", "cx", "cy", "opacity", "fadeIn", "fit"], "Static image or logo. Positioned by cx/cy (0–1 center ratios). Fades in over fadeIn frames.", true);
 
 // ─── Semantic primitives (2D) — carry real script content ──────────────
 // These animate on a fixed timeline inside their enclosing scene. They

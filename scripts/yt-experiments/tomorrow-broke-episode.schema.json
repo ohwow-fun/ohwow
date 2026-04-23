@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TomorrowBrokeEpisode",
+  "description": "Minimal input for make-tomorrow-broke.mjs. All brand, style, audio, and transition decisions are baked into the generator — only episode identity, narration lines, and video prompts are needed here.",
+  "type": "object",
+  "required": ["episode", "title", "scenes"],
+  "properties": {
+    "episode": {
+      "type": "string",
+      "description": "URL-safe slug, e.g. 'the-last-shift'. Used for progress checkpoint file and output video name.",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable episode title for log output."
+    },
+    "music": {
+      "type": "string",
+      "description": "Audio track relative to packages/video/public/. Optional — defaults to 'audio/ambient-noir.mp3'.",
+      "default": "audio/ambient-noir.mp3",
+      "enum": [
+        "audio/ambient-noir.mp3",
+        "audio/ambient-cosmic.mp3",
+        "audio/ambient-electric.mp3",
+        "audio/ambient-contemplative.mp3",
+        "audio/ambient-warm.mp3"
+      ]
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 14,
+      "description": "Episode scenes in order. The standard outro (ohwow logo + show title) is auto-appended by the generator.",
+      "items": {
+        "type": "object",
+        "required": ["id", "narration", "videoPrompt"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Scene slug, unique within the episode.",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "narration": {
+            "type": "string",
+            "description": "Exactly what the noir narrator says. Short sentences. Deadpan, understated. No questions. Let pauses breathe. Max 20 words per scene.",
+            "maxLength": 200
+          },
+          "videoPrompt": {
+            "type": "string",
+            "description": "Shot description for Seedance Lite (5-second clip). Include: subject, action or stillness, lighting quality and color, camera movement, cinematic style. No place names. ~80-120 words. End with: '8K photorealistic, anamorphic lens, film grain.'",
+            "maxLength": 600
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "episode": "the-last-shift",
+      "title": "The Last Shift",
+      "scenes": [
+        {
+          "id": "hook",
+          "narration": "The last shift ended at 3 a.m.",
+          "videoPrompt": "Industrial factory floor at 3 a.m., amber emergency lighting casting long shadows across conveyor belts and robotic arms moving in perfect mechanical rhythm. A lone worker silhouette stands motionless in the background. Camera slow push-in through rows of machinery. Cinematic noir, desaturated amber and deep shadow, shallow depth of field. 8K photorealistic, anamorphic lens, film grain."
+        },
+        {
+          "id": "landing",
+          "narration": "The machines didn't notice. They never had.",
+          "videoPrompt": "Factory machines running in deep night, rhythmic mechanical motion, perfect and indifferent. No human presence. Camera slow crane shot rising from floor level toward the ceiling. Cinematic noir, amber industrial light in the vast darkness. 8K photorealistic, anamorphic lens, film grain."
+        }
+      ]
+    }
+  ]
+}
