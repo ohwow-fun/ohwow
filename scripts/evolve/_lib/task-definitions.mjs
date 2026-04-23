@@ -372,4 +372,146 @@ NEXT_PUBLIC_APP_URL environment variable that the rest of the app uses.
       'No other files were modified',
     ],
   },
+
+  // -------------------------------------------------------------------------
+  // BATCH 4 — added 2026-04-23 showcase
+  // -------------------------------------------------------------------------
+
+  {
+    taskId: 'add-response-classifier-tests',
+    title: 'Add Vitest tests for response-classifier.ts (parseResponseMeta, shouldAutoCreateDeliverable, inferTypeFromContent)',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/response-classifier.test.ts 2>&1 | tail -40',
+    description: `
+src/execution/response-classifier.ts exports three pure functions with zero test coverage:
+parseResponseMeta, shouldAutoCreateDeliverable, and inferTypeFromContent.
+These are entirely pure — no DB, no I/O, no mocks required.
+
+Create ONE new file: src/execution/__tests__/response-classifier.test.ts
+
+Cover these behaviours with at least 10 Vitest test cases:
+
+parseResponseMeta:
+1. Returns { type: null, cleanContent: original } when no header is present.
+2. Returns { type: 'deliverable', cleanContent: stripped } when header has type=deliverable.
+3. Returns { type: 'informational', cleanContent: stripped } when header has type=informational.
+4. Returns { type: null } when header JSON is malformed.
+5. Returns { type: null } when header type is an unknown value.
+
+shouldAutoCreateDeliverable:
+6. Returns { create: false } for content shorter than 200 chars.
+7. Returns { create: false } for a heartbeat task title even with long content.
+8. Returns { create: true } for content >500 chars with at least one structure signal (e.g. a markdown header).
+9. Returns { create: true } for very long plain content (>1500 chars) with no structure.
+10. Returns { create: true } for 200-500 char content with 2+ structure signals.
+
+inferTypeFromContent:
+11. Returns 'code' when content has a fenced code block with a known language.
+12. Returns 'report' when title includes 'analysis'.
+13. Returns 'document' as the fallback when no pattern matches.
+
+Use this import pattern:
+  import { describe, it, expect } from 'vitest';
+  import { parseResponseMeta, shouldAutoCreateDeliverable, inferTypeFromContent } from '../response-classifier.js';
+
+Do NOT modify response-classifier.ts or any other existing file.
+Do NOT modify package.json or vitest.config.ts.
+    `,
+    acceptanceCriteria: [
+      'New file src/execution/__tests__/response-classifier.test.ts exists',
+      'At least 10 test cases covering all 3 exported functions',
+      'All tests pass: npm test -- src/execution/__tests__/response-classifier.test.ts',
+      'TypeScript typecheck passes (npm run typecheck)',
+    ],
+  },
+
+  {
+    taskId: 'add-model-router-pure-fn-tests',
+    title: 'Add Vitest tests for shouldForceLocalForBurn and inferProviderFromModel in model-router.ts',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/model-router-pure.test.ts 2>&1 | tail -40',
+    description: `
+src/execution/model-router.ts exports two pure standalone functions at the top of the file
+that have no dedicated tests:
+  - shouldForceLocalForBurn(burnLevel, callerForceLocal): boolean
+  - inferProviderFromModel(model): InferredProvider
+
+These are pure — no class instantiation, no network, no DB.
+
+Create ONE new file: src/execution/__tests__/model-router-pure.test.ts
+
+Cover these behaviours with at least 8 Vitest test cases:
+
+shouldForceLocalForBurn:
+1. Returns false when burnLevel=0 and callerForceLocal=false.
+2. Returns true when callerForceLocal=true regardless of burnLevel.
+3. Returns true when burnLevel=1 and callerForceLocal=false.
+4. Returns true when burnLevel=2 and callerForceLocal=false.
+
+inferProviderFromModel:
+5. Returns 'anthropic' for a model starting with 'claude-'.
+6. Returns 'mlx' for a model starting with 'mlx-community/'.
+7. Returns 'openrouter' for a model containing '/' but not starting with 'mlx-community/'.
+8. Returns 'ollama' for a model containing ':' (e.g. 'llama3:8b').
+9. Returns null for an unrecognised model string with no special characters.
+10. Returns null for an empty string.
+
+Use this import pattern:
+  import { describe, it, expect } from 'vitest';
+  import { shouldForceLocalForBurn, inferProviderFromModel } from '../model-router.js';
+
+Do NOT modify model-router.ts or any other existing file.
+Do NOT modify package.json or vitest.config.ts.
+    `,
+    acceptanceCriteria: [
+      'New file src/execution/__tests__/model-router-pure.test.ts exists',
+      'At least 8 test cases covering both functions',
+      'All tests pass: npm test -- src/execution/__tests__/model-router-pure.test.ts',
+      'TypeScript typecheck passes (npm run typecheck)',
+    ],
+  },
+
+  {
+    taskId: 'add-savepoint-store-tests',
+    title: 'Add Vitest tests for SavepointStore (ring buffer, create, rollbackTo, list)',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/savepoint-store.test.ts 2>&1 | tail -40',
+    description: `
+src/execution/savepoint-store.ts exports SavepointStore — an in-memory ring-buffer class
+with no DB, no network, no I/O. It has zero test coverage despite being a core checkpoint
+mechanism in the agent execution loop.
+
+Create ONE new file: src/execution/__tests__/savepoint-store.test.ts
+
+Cover these behaviours with at least 8 Vitest test cases:
+
+1. create() stores a savepoint retrievable via has() and list().
+2. rollbackTo() returns a deep copy of the saved data (mutations to result don't affect stored copy).
+3. rollbackTo() returns null for an unknown savepoint name.
+4. list() returns savepoints in insertion order.
+5. Ring buffer: when the store is at maxSavepoints and a new name is added, the oldest is evicted.
+6. Overwriting an existing name (same name, new data): size stays the same; list() puts it at the end (re-ordered to back of insertion order); rollbackTo returns the new data.
+7. get size property reflects the current count.
+8. An empty store has size === 0 and list() returns [].
+
+Use this import:
+  import { describe, it, expect } from 'vitest';
+  import { SavepointStore } from '../savepoint-store.js';
+  import type { SavepointData } from '../savepoint-store.js';
+
+Helper for a minimal SavepointData:
+  function makeData(iteration: number): SavepointData {
+    return { messages: [], iteration, toolCallHashes: [], totalInputTokens: 0, totalOutputTokens: 0 };
+  }
+
+Do NOT modify savepoint-store.ts or any other existing file.
+Do NOT modify package.json or vitest.config.ts.
+    `,
+    acceptanceCriteria: [
+      'New file src/execution/__tests__/savepoint-store.test.ts exists',
+      'At least 8 test cases covering ring buffer eviction, rollback, and list ordering',
+      'All tests pass: npm test -- src/execution/__tests__/savepoint-store.test.ts',
+      'TypeScript typecheck passes (npm run typecheck)',
+    ],
+  },
 ];
