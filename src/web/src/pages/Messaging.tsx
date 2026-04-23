@@ -170,9 +170,18 @@ function connBadgeStatus(status: string): string {
   return 'disconnected';
 }
 
+interface AllowedChat {
+  id: string;
+  chat_id: string;
+  chat_name: string | null;
+  chat_type: string;
+}
+
 export function MessagingPage() {
   const { data, loading, refetch } = useApi<{ connections: WhatsAppConnection[] }>('/api/whatsapp/connections');
   const connections = data?.connections;
+  const { data: statusData, refetch: refetchStatus } = useApi<{ allowedChats: AllowedChat[] }>('/api/whatsapp/status');
+  const allowedChats = statusData?.allowedChats ?? [];
 
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
@@ -266,6 +275,7 @@ export function MessagingPage() {
       toast('success', 'Chat added');
       setAddPhone('');
       refetch();
+      refetchStatus();
     } catch {
       toast('error', 'Couldn\'t add chat');
     } finally {
@@ -281,6 +291,7 @@ export function MessagingPage() {
       });
       toast('success', 'Chat removed');
       refetch();
+      refetchStatus();
     } catch {
       toast('error', 'Couldn\'t remove chat');
     }
@@ -375,6 +386,25 @@ export function MessagingPage() {
 
           <div>
             <h3 className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider mb-3">Allowed chats</h3>
+
+            {allowedChats.length > 0 && (
+              <div className="border border-white/[0.08] rounded-lg divide-y divide-white/[0.08] mb-3">
+                {allowedChats.map(chat => (
+                  <div key={chat.id} className="flex items-center justify-between px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium">{chat.chat_name || formatPhone(chat.chat_id.replace('@c.us', '').replace('@g.us', ''))}</p>
+                      <p className="text-xs text-neutral-500">{chat.chat_id}</p>
+                    </div>
+                    <button
+                      onClick={() => handleRemoveChat(chat.chat_id)}
+                      className="text-neutral-500 hover:text-critical transition-colors p-1"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="mb-3">
               <PhoneInput
