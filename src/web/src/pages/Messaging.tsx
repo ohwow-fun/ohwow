@@ -294,7 +294,7 @@ function PhoneInput({ countryCode, phone, onCountryChange, onPhoneChange, linkVa
         onChange={e => onPhoneChange(e.target.value.replace(/\D/g, ''))}
         onKeyDown={e => e.key === 'Enter' && onSubmit()}
         placeholder="Phone number"
-        className="w-36 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
+        className="flex-[2] min-w-0 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
       />
 
       {people.length > 0 && (
