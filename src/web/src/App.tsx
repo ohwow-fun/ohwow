@@ -24,6 +24,11 @@ import { AutomationsListPage } from './pages/AutomationsListPage';
 import { AutomationBuilderPage } from './pages/AutomationBuilderPage';
 import { ConnectionsPage } from './pages/Connections';
 import { KnowledgePage } from './pages/Knowledge';
+import { WorkPage } from './pages/WorkPage';
+import { PeoplePage } from './pages/PeoplePage';
+import { IntelligencePage } from './pages/IntelligencePage';
+import { GrowthPage } from './pages/GrowthPage';
+import { ControlRoomPage } from './pages/ControlRoomPage';
 import { TemplatesPage } from './pages/TemplatesPage';
 import { WorkflowsHub } from './pages/WorkflowsHub';
 import { WebhookEventsPage } from './pages/WebhookEvents';
@@ -83,6 +88,11 @@ export function App() {
           <Route path="activity" element={<ActivityPage />} />
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="knowledge" element={<KnowledgePage />} />
+          <Route path="work" element={<WorkPage />} />
+          <Route path="people" element={<PeoplePage />} />
+          <Route path="intelligence" element={<IntelligencePage />} />
+          <Route path="growth" element={<GrowthPage />} />
+          <Route path="control-room" element={<ControlRoomPage />} />
           <Route path="messages" element={<MessagesPage />} />
           <Route path="conversations" element={<Navigate to="/messages" replace />} />
           <Route path="conversations/:pair" element={<Navigate to="/messages" replace />} />
