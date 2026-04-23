@@ -23,18 +23,33 @@ import type {
 // TYPES
 // ============================================================================
 
+/**
+ * Progress event emitted by the co-evolution loop.
+ * The `type` discriminant identifies the phase (e.g. `round_start`, `attempt_done`, `complete`).
+ * Additional payload keys vary by event type and are accessed via the index signature.
+ */
 export interface CoEvolutionProgressEvent {
   type: string;
   [key: string]: unknown;
 }
 
+/**
+ * Options for running a local co-evolution session.
+ */
 export interface ExecuteLocalCoEvolutionOptions {
+  /** DatabaseAdapter for persisting attempts and results. */
   db: DatabaseAdapter;
+  /** RuntimeEngine used to execute each agent turn. */
   engine: RuntimeEngine;
+  /** Workspace to scope the run. */
   workspaceId: string;
+  /** Co-evolution config: agentIds, rounds, topK context window, deliverable spec. */
   config: LocalCoEvolutionConfig;
+  /** Optional pre-configured Anthropic SDK client (injected for testing). */
   anthropic?: Anthropic;
+  /** Optional model routing override. Pass null to disable routing. */
   modelRouter?: ModelRouter | null;
+  /** Optional callback for streaming progress events as the loop runs. */
   onEvent?: (event: CoEvolutionProgressEvent) => void;
 }
 
@@ -42,6 +57,15 @@ export interface ExecuteLocalCoEvolutionOptions {
 // MAIN EXECUTOR
 // ============================================================================
 
+/**
+ * Run a local co-evolution session: N agents iterate across R rounds improving
+ * a shared deliverable. Each round, every agent sees the top-K prior attempts
+ * and tries to produce a better result. Returns a LocalCoEvolutionResult with
+ * the best attempt, score summary, total cost, and per-agent metadata.
+ *
+ * @param options - Session configuration including agents, rounds, and callbacks.
+ * @returns The best attempt, scoring breakdown, elapsed time, and total token cost.
+ */
 export async function executeLocalCoEvolution(
   options: ExecuteLocalCoEvolutionOptions,
 ): Promise<LocalCoEvolutionResult> {
