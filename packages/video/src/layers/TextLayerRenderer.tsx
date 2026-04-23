@@ -243,7 +243,9 @@ const CountUpText: React.FC<{
 const LetterScatterText: React.FC<{
   text: string;
   style: React.CSSProperties;
-}> = ({ text, style }) => {
+  lineColors?: string[];
+  lineFontSizeRatios?: number[];
+}> = ({ text, style, lineColors, lineFontSizeRatios }) => {
   const frame = useCurrentFrame();
 
   const lines = text.split("\n");
@@ -254,35 +256,51 @@ const LetterScatterText: React.FC<{
 
   return (
     <div style={{ ...style, display: "flex", flexDirection: "column", gap: 8 }}>
-      {lines.map((line, lineIdx) => (
-        <div key={lineIdx} style={{ display: "flex", flexWrap: "wrap", justifyContent: style.textAlign === "center" ? "center" : "flex-start" }}>
-          {line.split("").map((char, ci) => {
-            const i = lineOffsets[lineIdx] + ci;
-            const delay = i * 0.8;
-            const progress = Math.min(1, Math.max(0, (frame - delay) / 12));
-            const startX = noise2D("scatter-x", i * 0.5, 0) * 60;
-            const startY = noise2D("scatter-y", 0, i * 0.5) * 40;
-            const x = startX * (1 - progress);
-            const y = startY * (1 - progress);
-            const opacity = progress;
-            const rotation = (1 - progress) * (noise2D("scatter-r", i, 0) * 30);
+      {lines.map((line, lineIdx) => {
+        const lineColor = lineColors?.[lineIdx];
+        const ratio = lineFontSizeRatios?.[lineIdx] ?? 1;
+        const baseFontSize = typeof style.fontSize === "number" ? style.fontSize : 46;
+        const lineFontSize = baseFontSize * ratio;
 
-            return (
-              <span
-                key={ci}
-                style={{
-                  display: "inline-block",
-                  opacity,
-                  transform: `translate(${x}px, ${y}px) rotate(${rotation}deg)`,
-                  whiteSpace: char === " " ? "pre" : undefined,
+        return (
+          <div
+            key={lineIdx}
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: style.textAlign === "center" ? "center" : "flex-start",
+              ...(lineColor ? { color: lineColor } : {}),
+              ...(ratio !== 1 ? { fontSize: lineFontSize } : {}),
             }}
           >
-            {char}
-          </span>
-            );
-          })}
-        </div>
-      ))}
+            {line.split("").map((char, ci) => {
+              const i = lineOffsets[lineIdx] + ci;
+              const delay = i * 0.8;
+              const progress = Math.min(1, Math.max(0, (frame - delay) / 12));
+              const startX = noise2D("scatter-x", i * 0.5, 0) * 60;
+              const startY = noise2D("scatter-y", 0, i * 0.5) * 40;
+              const x = startX * (1 - progress);
+              const y = startY * (1 - progress);
+              const opacity = progress;
+              const rotation = (1 - progress) * (noise2D("scatter-r", i, 0) * 30);
+
+              return (
+                <span
+                  key={ci}
+                  style={{
+                    display: "inline-block",
+                    opacity,
+                    transform: `translate(${x}px, ${y}px) rotate(${rotation}deg)`,
+                    whiteSpace: char === " " ? "pre" : undefined,
+                  }}
+                >
+                  {char}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -347,7 +365,12 @@ export const TextLayerRenderer: React.FC<{
         <WordByWordText text={config.content} style={textStyle} accentColor={accent} />
       )}
       {animation === "letter-scatter" && (
-        <LetterScatterText text={config.content} style={textStyle} />
+        <LetterScatterText
+          text={config.content}
+          style={textStyle}
+          lineColors={config.lineColors}
+          lineFontSizeRatios={config.lineFontSizeRatios}
+        />
       )}
       {animation === "glow-text" && (
         <GlowText text={config.content} style={textStyle} accentColor={accent} />

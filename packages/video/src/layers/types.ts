@@ -68,6 +68,8 @@ export interface TextLayer {
   maxWidth?: number;
   letterSpacing?: string;
   filter?: string;
+  lineColors?: string[];
+  lineFontSizeRatios?: number[];
 }
 
 export interface VideoPalette {
