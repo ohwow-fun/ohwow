@@ -4,8 +4,8 @@
  * Priority:
  *   1. Seed tasks (SEED_TASKS) — returns the first uncompleted seed.
  *   2. Smart pick — when all seeds are done, calls Claude (haiku, cheap) to
- *      generate a fresh bounded task based on recent git history, TODOs, and
- *      the last few evolution-ledger entries.
+ *      generate a fresh bounded task based on recent git history, TODOs,
+ *      test coverage gaps, and market intel from the evolution system.
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { execSync } from 'node:child_process';
@@ -41,90 +41,193 @@ export async function pickNextTask({ completedTaskIds, seedTasks, anthropicApiKe
 }
 
 // ---------------------------------------------------------------------------
-// Smart-pick: call Claude haiku to propose a new task
+// Context gathering helpers
 // ---------------------------------------------------------------------------
 
-async function generateSmartTask({ completedTaskIds, anthropicApiKey, repos }) {
-  const client = new Anthropic({ apiKey: anthropicApiKey });
+/**
+ * Safe exec wrapper — returns empty string instead of throwing.
+ */
+function safeExec(cmd, cwd, timeoutMs = 15_000) {
+  try {
+    return execSync(cmd, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true,
+      timeout: timeoutMs,
+    }).toString();
+  } catch {
+    return '';
+  }
+}
 
-  // Gather per-repo context (git log + TODOs)
-  const contexts = [];
+/**
+ * Gather rich context across all repos for the task-picker LLM prompt.
+ */
+async function gatherSmartContext({ repos }) {
+  const sections = [];
+
   for (const repoPath of repos) {
     try {
-      const gitLog = execSync('git log --oneline --since="7 days ago"', {
-        cwd: repoPath,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 10_000,
-      }).toString().slice(0, 1200);
+      const repoName = path.basename(repoPath);
 
-      let todos = '';
-      try {
-        todos = execSync(
-          'grep -rn "TODO\\|FIXME" src --include="*.ts" --include="*.tsx" | grep -v node_modules | head -20',
-          { cwd: repoPath, stdio: ['pipe', 'pipe', 'pipe'], shell: true, timeout: 10_000 },
-        ).toString().slice(0, 1000);
-      } catch { /* grep exits 1 when nothing found */ }
+      // Recent commits (14 days — wider than the old 7-day window)
+      const gitLog = safeExec('git log --oneline --since="14 days ago"', repoPath).slice(0, 800);
 
-      contexts.push(`REPO: ${repoPath}\nRECENT COMMITS:\n${gitLog}\nTODOs:\n${todos}`);
+      // TODOs and FIXMEs
+      const todos = safeExec(
+        'grep -rn "TODO\\|FIXME" src --include="*.ts" --include="*.tsx" | grep -v node_modules | head -15',
+        repoPath,
+      ).slice(0, 600);
+
+      // Test vs source file ratio
+      const testCount = safeExec(
+        'find src -name "*.test.ts" -o -name "*.test.tsx" | wc -l',
+        repoPath,
+      ).trim();
+      const sourceCount = safeExec(
+        'find src -name "*.ts" -o -name "*.tsx" | grep -v "\\.test\\." | grep -v "node_modules" | wc -l',
+        repoPath,
+      ).trim();
+
+      // Source files that have no corresponding test file (up to 10 samples)
+      const untestedFiles = safeExec(
+        `find src -name "*.ts" ! -name "*.test.ts" ! -name "*.d.ts" | grep -v node_modules | while read f; do
+          base=$(basename "$f" .ts);
+          dir=$(dirname "$f");
+          if ! find src -path "*__tests__*/${base}.test.ts" -o -path "*__tests__*/${base}.test.tsx" 2>/dev/null | grep -q .; then
+            echo "$f";
+          fi;
+        done | head -10`,
+        repoPath,
+        20_000,
+      ).trim();
+
+      // Files untouched for 30+ days (stale code likely lacking coverage)
+      const staleFiles = safeExec(
+        `git log --name-only --format="" --since="30 days ago" -- 'src/**/*.ts' | sort -u > /tmp/_touched.txt 2>/dev/null; ` +
+        `find src -name "*.ts" ! -name "*.test.ts" ! -name "*.d.ts" | grep -v node_modules | while read f; do ` +
+        `grep -qF "$f" /tmp/_touched.txt 2>/dev/null || echo "$f"; done | head -8`,
+        repoPath,
+        20_000,
+      ).trim();
+
+      sections.push(
+        `=== ${repoName} ===\n` +
+        `GIT LOG (14d):\n${gitLog || '(none)'}\n\n` +
+        `TODOs/FIXMEs:\n${todos || '(none)'}\n\n` +
+        `Test files: ${testCount} / Source files: ${sourceCount}\n\n` +
+        `Source files with no test counterpart (sample):\n${untestedFiles || '(all covered or check failed)'}\n\n` +
+        `Source files untouched 30+ days:\n${staleFiles || '(all recently touched or check failed)'}`,
+      );
     } catch (err) {
-      contexts.push(`REPO: ${repoPath}\n(could not gather context: ${err.message})`);
+      sections.push(`=== ${path.basename(repoPath)} === (error gathering context: ${err.message})`);
     }
   }
 
-  // Read recent evolution history (last 5 ledger entries)
+  // Evolution history summary
+  const summaryPath = path.join(os.homedir(), '.ohwow', 'evolution-reports', 'SUMMARY.md');
+  if (fs.existsSync(summaryPath)) {
+    const summary = fs.readFileSync(summaryPath, 'utf8').slice(0, 800);
+    sections.push(`=== EVOLUTION HISTORY SUMMARY ===\n${summary}`);
+  }
+
+  // Ledger: last 5 entries (for avoiding exact repeats)
   const ledgerPath = path.join(os.homedir(), '.ohwow', 'evolution-reports', 'evolution-ledger.jsonl');
-  let history = '(none yet)';
   if (fs.existsSync(ledgerPath)) {
     const recent = fs.readFileSync(ledgerPath, 'utf8')
       .split('\n')
       .filter(Boolean)
       .slice(-5)
       .join('\n');
-    if (recent) history = recent;
+    if (recent) sections.push(`=== RECENT LEDGER ENTRIES ===\n${recent}`);
   }
 
-  const prompt = `You are a senior engineer reviewing two repos and picking the next small, high-value improvement to make autonomously.
+  // Market intel brief (buyer_intent + competitor_move items, latest day)
+  const intelDir = path.join(os.homedir(), '.ohwow', 'workspaces', 'default', 'intel');
+  try {
+    if (fs.existsSync(intelDir)) {
+      const latestDay = fs.readdirSync(intelDir)
+        .filter(d => /^\d{4}-\d{2}-\d{2}/.test(d))
+        .sort()
+        .pop();
+      if (latestDay) {
+        const briefPath = path.join(intelDir, latestDay, 'briefs.json');
+        if (fs.existsSync(briefPath)) {
+          const briefs = JSON.parse(fs.readFileSync(briefPath, 'utf8'));
+          const intelLines = (Array.isArray(briefs) ? briefs : [])
+            .filter(b => b.bucket === 'buyer_intent' || b.bucket === 'competitor_move')
+            .slice(0, 3)
+            .map(b => `[${b.bucket}] ${b.headline}`);
+          if (intelLines.length) {
+            sections.push(`=== MARKET INTEL (${latestDay}) ===\n${intelLines.join('\n')}`);
+          }
+        }
+      }
+    }
+  } catch { /* non-fatal */ }
 
-REPOS:
-${contexts.join('\n\n')}
+  return sections.join('\n\n');
+}
 
-RECENT EVOLUTION HISTORY (last 5 ledger entries):
-${history}
+// ---------------------------------------------------------------------------
+// Smart-pick: call Claude haiku to propose a new task
+// ---------------------------------------------------------------------------
 
-COMPLETED TASK IDs (do not repeat these): ${completedTaskIds.join(', ') || '(none)'}
+async function generateSmartTask({ completedTaskIds, anthropicApiKey, repos }) {
+  const client = new Anthropic({ apiKey: anthropicApiKey });
 
-Pick ONE concrete task. Return ONLY valid JSON (no markdown fences, no explanation) in this exact shape:
+  const context = await gatherSmartContext({ repos });
+
+  const systemPrompt = `You are a senior engineer on the ohwow AI platform team.
+Your job: read the codebase context below and propose ONE concrete improvement task that a Claude Code agent can complete autonomously in a single session.
+
+Task categories (pick the most impactful one given the context):
+  (a) Add missing tests — write unit tests for source files that have no test counterpart
+  (b) Fix hardcoded values — replace magic strings/numbers with named constants
+  (c) Add JSDoc to public APIs — add param/return docs to exported functions that lack them
+  (d) Fix concrete TODOs — resolve a specific TODO or FIXME comment already in the code
+  (e) Extract utility functions — move duplicated logic into a shared helper
+
+Rules:
+- The task MUST be VERIFIABLE within 5 minutes using a single shell command
+- Each task MUST include a specific acceptanceCriteria list and a validationCmd
+- Max 5 files changed; under 100 lines of code
+- No package.json changes
+- No new npm dependencies
+- No UI/visual changes
+- No database schema migrations
+- No external service calls required during validation
+- The targetRepo MUST be one of the repos listed in the context
+- Do NOT repeat any task from the completed list
+
+Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
 {
   "taskId": "unique-kebab-case-id",
   "title": "Short imperative title (under 80 chars)",
   "targetRepo": "/absolute/path/to/repo",
-  "validationCmd": "npm run typecheck 2>&1 | tail -20",
-  "description": "2-4 sentences explaining exactly what file(s) to change, what to change, and why.",
+  "validationCmd": "npm test -- --reporter=verbose path/to/test.ts 2>&1 | tail -30",
+  "description": "2-5 sentences: what file(s) to change, what to add/fix, and why it matters.",
   "acceptanceCriteria": ["criterion 1", "criterion 2", "criterion 3"]
-}
+}`;
 
-Rules for picking:
-- Max 5 files changed
-- Must be completable in under 100 lines of code
-- No package.json changes
-- No deletions of existing tests
-- No new npm dependencies
-- Prefer: fixing concrete TODOs, adding tests for untested pure functions, removing hardcoded values, adding JSDoc to public APIs
-- The targetRepo MUST be one of: ${repos.join(' | ')}`;
+  const userPrompt = `CONTEXT:\n${context}\n\nCOMPLETED TASK IDs (do not repeat): ${completedTaskIds.join(', ') || '(none)'}\n\nREPO PATHS AVAILABLE: ${repos.join(' | ')}\n\nPick the single highest-value task now.`;
 
   let text = '';
   try {
     const response = await client.messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
     });
     text = response.content[0]?.text ?? '';
   } catch (err) {
     throw new Error(`Smart task picker LLM call failed: ${err.message}`);
   }
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  // Strip optional markdown fences before extracting JSON
+  const stripped = text.replace(/```(?:json)?/g, '').replace(/```/g, '');
+  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error(`Smart task picker returned no JSON. Raw response:\n${text.slice(0, 500)}`);
   }
@@ -136,10 +239,23 @@ Rules for picking:
     throw new Error(`Smart task picker returned invalid JSON: ${err.message}\nRaw: ${jsonMatch[0].slice(0, 500)}`);
   }
 
-  // Validate required fields
-  const required = ['taskId', 'title', 'targetRepo', 'validationCmd', 'description', 'acceptanceCriteria'];
-  for (const field of required) {
-    if (!task[field]) throw new Error(`Smart task missing required field: ${field}`);
+  // Apply sensible defaults for any missing fields rather than crashing
+  const repoFallback = repos[0] ?? '';
+  task.taskId = task.taskId
+    ? `${task.taskId}-${Date.now().toString(36)}`
+    : `smart-task-${Date.now().toString(36)}`;
+  task.title = task.title ?? 'Untitled smart task';
+  task.targetRepo = task.targetRepo ?? repoFallback;
+  task.validationCmd = task.validationCmd ?? 'npm run typecheck 2>&1 | tail -20';
+  task.description = task.description ?? '(no description provided)';
+  if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
+    task.acceptanceCriteria = ['Validation command exits 0'];
+  }
+
+  // Ensure targetRepo is one of the declared repos (guard against hallucinated paths)
+  if (!repos.includes(task.targetRepo)) {
+    console.warn(`[pick-task] targetRepo "${task.targetRepo}" not in repos list — defaulting to ${repoFallback}`);
+    task.targetRepo = repoFallback;
   }
 
   console.log(`[pick-task] smart pick generated task: ${task.taskId}`);
