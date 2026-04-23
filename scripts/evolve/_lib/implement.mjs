@@ -17,8 +17,8 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 function resolveClientAndModel(anthropicApiKey) {
-  // Direct Anthropic key passed in — use it
-  if (anthropicApiKey) {
+  // Direct Anthropic key passed in (must start with sk-ant- to distinguish from OpenRouter keys)
+  if (anthropicApiKey && anthropicApiKey.startsWith('sk-ant-')) {
     return {
       client: new Anthropic({ apiKey: anthropicApiKey }),
       model: 'claude-haiku-4-5',
