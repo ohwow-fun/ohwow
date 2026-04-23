@@ -244,10 +244,9 @@ function PhoneInput({ countryCode, phone, onCountryChange, onPhoneChange, linkVa
   }, [open]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex gap-2">
-        {/* Country code picker */}
-        <div ref={dropdownRef} className="relative">
+    <div className="flex gap-2">
+      {/* Country code picker */}
+      <div ref={dropdownRef} className="relative">
           <button
             type="button"
             onClick={() => setOpen(o => !o)}
@@ -289,37 +288,38 @@ function PhoneInput({ countryCode, phone, onCountryChange, onPhoneChange, linkVa
           )}
         </div>
 
-        <input
-          type="tel"
-          value={phone}
-          onChange={e => onPhoneChange(e.target.value.replace(/\D/g, ''))}
-          onKeyDown={e => e.key === 'Enter' && onSubmit()}
-          placeholder="Phone number"
-          className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
-        />
-
-        <button
-          onClick={onSubmit}
-          disabled={submitting || !phone.trim()}
-          className="px-3 py-2 text-xs font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
-        >
-          {submitting ? 'Adding…' : 'Add'}
-        </button>
-        <button
-          onClick={onCancel}
-          className="text-neutral-500 hover:text-white transition-colors px-2"
-        >
-          <X size={14} />
-        </button>
-      </div>
+      <input
+        type="tel"
+        value={phone}
+        onChange={e => onPhoneChange(e.target.value.replace(/\D/g, ''))}
+        onKeyDown={e => e.key === 'Enter' && onSubmit()}
+        placeholder="Phone number"
+        className="w-36 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
+      />
 
       {people.length > 0 && (
-        <PersonPicker
-          people={people}
-          value={linkValue}
-          onChange={onLinkChange}
-        />
+        <div className="flex-1 min-w-0">
+          <PersonPicker
+            people={people}
+            value={linkValue}
+            onChange={onLinkChange}
+          />
+        </div>
       )}
+
+      <button
+        onClick={onSubmit}
+        disabled={submitting || !phone.trim()}
+        className="px-3 py-2 text-xs font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
+      >
+        {submitting ? 'Adding…' : 'Add'}
+      </button>
+      <button
+        onClick={onCancel}
+        className="text-neutral-500 hover:text-white transition-colors px-2"
+      >
+        <X size={14} />
+      </button>
     </div>
   );
 }
