@@ -580,19 +580,28 @@ export function MessagingPage() {
 
                   return (
                     <div key={chat.id} className="px-4 py-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium">{chat.chat_name || formatPhone(chat.chat_id.replace('@c.us', '').replace('@g.us', ''))}</p>
-                          <p className="text-xs text-neutral-500">{chat.chat_id}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {linked && !isEditing && (
-                            <span className="flex items-center gap-1 text-xs text-neutral-400">
+                      <div className="flex items-center justify-between gap-4">
+                        {/* Left: name (linked contact) or phone */}
+                        <div className="min-w-0">
+                          {linked ? (
+                            <div className="flex items-center gap-1.5">
                               {linked.kind === 'contact'
-                                ? <UserCircle size={12} className="text-blue-400" />
-                                : <Users size={12} className="text-purple-400" />}
-                              {linked.name}
-                            </span>
+                                ? <UserCircle size={15} className="text-blue-400 shrink-0" />
+                                : <Users size={15} className="text-purple-400 shrink-0" />}
+                              <p className="text-base font-semibold truncate">{linked.name}</p>
+                            </div>
+                          ) : (
+                            <p className="text-sm font-medium truncate">{chat.chat_name || formatPhone(chat.chat_id.replace('@c.us', '').replace('@g.us', ''))}</p>
+                          )}
+                        </div>
+
+                        {/* Right: meta + actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {linked && (
+                            <div className="text-right hidden sm:block">
+                              <p className="text-xs text-neutral-400">{formatPhone(chat.chat_id.replace('@c.us', '').replace('@g.us', ''))}</p>
+                              <p className="text-[10px] text-neutral-600">{chat.chat_id}</p>
+                            </div>
                           )}
                           {people.length > 0 && (
                             <button
