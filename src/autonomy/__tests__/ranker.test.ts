@@ -414,6 +414,35 @@ describe('rankNextPhase — founder-answer bias', () => {
   });
 });
 
+describe('rankNextPhase — founder-answer with unknown mode', () => {
+  it('falls back to plumbing when inbox item has a mode outside the Mode union', () => {
+    // The eternal SLA watcher writes mode='outreach' which is NOT in
+    // 'revenue'|'polish'|'plumbing'|'tooling'. The ranker must not crash.
+    const ans: FounderInboxRecord = {
+      id: 'fi_sla',
+      workspace_id: 'ws-test',
+      arc_id: null,
+      phase_id: null,
+      mode: 'outreach',
+      blocker: 'relationship-decay',
+      context: JSON.stringify({ contactId: 'c-self', contactName: 'Jesus' }),
+      options: [],
+      recommended: null,
+      screenshot_path: null,
+      asked_at: REF_ISO,
+      answered_at: REF_ISO,
+      answer: 'snooze',
+      status: 'answered',
+    };
+    expect(() =>
+      rankNextPhase({ pulse: emptyPulse(), ledger: emptyLedger(), newly_answered: [ans], refTimeMs: REF_TIME_MS }),
+    ).not.toThrow();
+    const out = rankNextPhase({ pulse: emptyPulse(), ledger: emptyLedger(), newly_answered: [ans], refTimeMs: REF_TIME_MS });
+    expect(out[0].mode).toBe('plumbing');
+    expect(out[0].source).toBe('founder-answer');
+  });
+});
+
 describe('rankNextPhase — tie-breaking', () => {
   it('two equal-score approvals order by source_id ascending', () => {
     const pulse = emptyPulse({

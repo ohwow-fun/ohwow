@@ -48,7 +48,7 @@ import type {
   PulseFailingTrigger,
   PulseToolingFriction,
 } from './pulse.js';
-import { getLens } from './lenses/index.js';
+import { getLens, LENSES } from './lenses/index.js';
 import {
   type FounderInboxRecord,
   type PhaseReportRecord,
@@ -611,7 +611,10 @@ export function rankNextPhase(inputs: RankInputs): RankedPhase[] {
   const founderFloor = Math.max(FOUNDER_ANSWER_BONUS, topPulseScore + FOUNDER_ANSWER_BONUS);
   for (const ans of inputs.newly_answered ?? []) {
     if (!ans.answer) continue;
-    const mode = (ans.mode as Mode) ?? 'plumbing';
+    // External systems (e.g. eternal SLA watcher) write inbox items with
+    // mode='outreach' which is not in the conductor's Mode union. Guard
+    // before getLens to prevent a crash on unknown modes.
+    const mode: Mode = ans.mode in LENSES ? (ans.mode as Mode) : 'plumbing';
     const lens = getLens(mode);
     const subject = ans.blocker.split('\n')[0].slice(0, 240);
     const briefBody = [
