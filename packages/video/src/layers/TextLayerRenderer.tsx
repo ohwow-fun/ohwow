@@ -327,6 +327,7 @@ export const TextLayerRenderer: React.FC<{
     color: config.color ?? colors.text,
     lineHeight: 1.35,
     maxWidth,
+    textAlign: (posStyles.textAlign as React.CSSProperties["textAlign"]) ?? "left",
     transform: `scale(${breathe(frame, 0.025, 0.006)})`,
     ...(config.letterSpacing ? { letterSpacing: config.letterSpacing } : {}),
   };
