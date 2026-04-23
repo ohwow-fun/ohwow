@@ -64,7 +64,15 @@ const { workspace } = resolveOhwow();
 const wsDir = path.join(os.homedir(), '.ohwow', 'workspaces', workspace);
 const intelDir = path.join(wsDir, 'intel');
 const today = new Date().toISOString().slice(0, 10);
-const runDir = path.join(intelDir, today);
+let runDir = path.join(intelDir, today);
+// If a completed run already exists for today, use a suffix to avoid overwriting
+{
+  let suffix = 2;
+  while (fs.existsSync(path.join(runDir, 'run-summary.json'))) {
+    runDir = path.join(intelDir, `${today}-${suffix}`);
+    suffix++;
+  }
+}
 const seenPath = path.join(intelDir, 'market-intel-seen.jsonl');
 
 fs.mkdirSync(runDir, { recursive: true });

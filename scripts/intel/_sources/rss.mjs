@@ -17,6 +17,16 @@ const FEEDS = [
   { url: 'https://lilianweng.github.io/index.xml', label: 'lilian_weng', org: 'Lilian Weng' },
   { url: 'https://blog.langchain.dev/rss/', label: 'langchain_blog', org: 'LangChain' },
   { url: 'https://www.interconnects.ai/feed', label: 'interconnects', org: 'Interconnects (Nathan Lambert)' },
+  {
+    url: 'https://www.producthunt.com/feed',
+    label: 'producthunt_launches',
+    org: 'Product Hunt',
+    filter: (item) => {
+      const keywords = ['ai', 'automation', 'agent', 'workflow', 'llm', 'gpt', 'claude', 'chatbot', 'bot', 'ml', 'machine learning', 'autonomous', 'assistant'];
+      const searchText = `${item.title} ${item.summary}`.toLowerCase();
+      return keywords.some(kw => searchText.includes(kw));
+    },
+  },
 ];
 
 async function fetchFeed(url, label) {
@@ -98,13 +108,17 @@ export async function fetchRss({ maxAgeHours = 96 } = {}) {
   const items = [];
   const seen = new Set();
 
-  for (const { url, label, org } of FEEDS) {
+  for (const feed of FEEDS) {
+    const { url, label, org } = feed;
     const xml = await fetchFeed(url, label);
     if (!xml) continue;
 
     const feedItems = parseFeedItems(xml);
+    const filteredItems = feed.filter
+      ? feedItems.filter(fi => feed.filter({ title: fi.title, summary: fi.summary }))
+      : feedItems;
     let added = 0;
-    for (const fi of feedItems) {
+    for (const fi of filteredItems) {
       const id = `rss:${fi.id || fi.link}`;
       if (seen.has(id)) continue;
       const age_h = fi.date ? (Date.now() - fi.date.getTime()) / 3_600_000 : 999;
@@ -130,7 +144,7 @@ export async function fetchRss({ maxAgeHours = 96 } = {}) {
       });
       added++;
     }
-    console.log(`[rss] ${label}: ${added} items`);
+    console.log(`[rss] ${label}: ${added} items${feed.filter ? ` (filtered from ${feedItems.length})` : ''}`);
   }
 
   items.sort((a, b) => {
