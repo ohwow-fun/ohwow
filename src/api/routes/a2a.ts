@@ -165,5 +165,34 @@ export function createA2ARouter(db: DatabaseAdapter): Router {
     }
   });
 
+
+  // /.well-known/agent.json — A2A agent card (no auth required, public)
+  router.get('/.well-known/agent.json', async (req, res) => {
+    try {
+      const baseUrl = process.env.OHWOW_PUBLIC_URL || 'http://localhost:7700';
+      const card = {
+        name: 'ohwow runtime',
+        description: 'Local-first AI business operating system with autonomous agents',
+        url: baseUrl,
+        version: '1.0.0',
+        capabilities: {
+          streaming: false,
+          pushNotifications: false,
+          stateTransitionHistory: false,
+        },
+        authentication: {
+          schemes: ['bearer'],
+        },
+        defaultInputModes: ['text'],
+        defaultOutputModes: ['text'],
+        skills: [],
+      };
+      res.set('Content-Type', 'application/json');
+      res.json(card);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
   return router;
 }
