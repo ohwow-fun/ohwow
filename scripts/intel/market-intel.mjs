@@ -411,13 +411,14 @@ writeJson('research.json', {
   items: research.sort((a, b) => (b.bucket_score || 0) - (a.bucket_score || 0)),
 });
 
-// Mark seen now (before synthesis — avoids re-classifying on partial run)
-appendSeen(fresh);
-
 // 4. SYNTHESIS (skip if DRY) -------------------------------------------------
 const allBriefs = [];
 
 if (!DRY) {
+  // Mark seen before synthesis — avoids re-classifying on partial run.
+  // Never called in dry-run mode: dry runs must not write to the seen-file.
+  appendSeen(fresh);
+
   const actionableBuckets = Object.keys(byBucket).filter(b => b !== 'skip' && byBucket[b]?.length > 0);
   console.log(`[market-intel] synthesizing ${actionableBuckets.length} bucket briefs...`);
 
