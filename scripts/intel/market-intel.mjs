@@ -196,7 +196,8 @@ async function classifyAll(items) {
 // ---------------------------------------------------------------------------
 // Synthesis (one strategic brief per non-skip bucket)
 // ---------------------------------------------------------------------------
-const BRIEF_SYSTEM = `You are a strategic intelligence officer briefing the CEO of ohwow — an autonomous AI business OS.
+const BRIEF_SYSTEM = `Today is ${today}.
+You are a strategic intelligence officer briefing the CEO of ohwow — an autonomous AI business OS.
 
 ohwow context:
 - Autonomous conductor runs plan→impl→QA trios for business tasks

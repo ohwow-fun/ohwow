@@ -17,7 +17,6 @@ const MODEL_ORGS = [
   { author: 'mistralai', label: 'mistral', tier: 1 },
   { author: 'meta-llama', label: 'meta_llama', tier: 1 },
   { author: 'microsoft', label: 'microsoft_phi', tier: 2 },
-  { author: 'anthropic', label: 'anthropic', tier: 1 },
   { author: '01-ai', label: 'yi_01ai', tier: 2 },
   { author: 'internlm', label: 'internlm', tier: 2 },
   { author: 'cohere', label: 'cohere', tier: 2 },
