@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { ChatCircleDots, Plus, Power, QrCode, CircleNotch, X } from '@phosphor-icons/react';
 import { motion, AnimatePresence } from 'framer-motion';
 import QRCode from 'qrcode';
@@ -19,14 +19,67 @@ interface WhatsAppConnection {
   status: string;
 }
 
+function formatPhone(raw: string | null): string {
+  if (!raw) return 'WhatsApp';
+  return raw.startsWith('+') ? raw : `+${raw}`;
+}
+
+function connStatusText(status: string): string {
+  if (status === 'connected') return 'Connected';
+  if (status === 'qr_pending') return 'Waiting for scan';
+  return 'Disconnected';
+}
+
+function connBadgeStatus(status: string): string {
+  if (status === 'connected') return 'active';
+  if (status === 'qr_pending') return 'pending';
+  return 'disconnected';
+}
+
 export function MessagingPage() {
   const { data, loading, refetch } = useApi<{ connections: WhatsAppConnection[] }>('/api/whatsapp/connections');
   const connections = data?.connections;
+
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [newChatId, setNewChatId] = useState('');
   const [addingChat, setAddingChat] = useState(false);
   const [showAddChat, setShowAddChat] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [waitingForQr, setWaitingForQr] = useState(false);
+  const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const realConnections = connections?.filter(c => c.connectionId) ?? [];
+  const isEmpty = !loading && realConnections.length === 0;
+  const activeConn = realConnections.find(c => c.status === 'connected' || c.status === 'active');
+
+  // Dismiss QR whenever the connection data reports connected (catches missed WS events)
+  useEffect(() => {
+    if (activeConn) {
+      setQrDataUrl(null);
+      setWaitingForQr(false);
+      if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+    }
+  }, [activeConn]);
+
+  useWsListener((event, data) => {
+    if (event === 'whatsapp:qr') {
+      const { qr } = data as { qr: string };
+      QRCode.toDataURL(qr, { width: 256, margin: 2 }).then(url => {
+        setQrDataUrl(url);
+        setWaitingForQr(false);
+        if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+        qrTimeoutRef.current = setTimeout(() => setQrDataUrl(null), 60_000);
+      }).catch(() => {});
+    } else if (event === 'whatsapp:connected') {
+      setQrDataUrl(null);
+      setWaitingForQr(false);
+      if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
+      refetch();
+    } else if (event === 'whatsapp:disconnected') {
+      refetch();
+    }
+  });
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -88,31 +141,6 @@ export function MessagingPage() {
     }
   };
 
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
-  const [waitingForQr, setWaitingForQr] = useState(false);
-  const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useWsListener((event, data) => {
-    if (event === 'whatsapp:qr') {
-      const { qr } = data as { qr: string };
-      QRCode.toDataURL(qr, { width: 256, margin: 2 }).then(url => {
-        setQrDataUrl(url);
-        setWaitingForQr(false);
-        if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
-        qrTimeoutRef.current = setTimeout(() => setQrDataUrl(null), 60_000);
-      }).catch(() => {});
-    } else if (event === 'whatsapp:connected') {
-      setQrDataUrl(null);
-      setWaitingForQr(false);
-      if (qrTimeoutRef.current) clearTimeout(qrTimeoutRef.current);
-      refetch();
-    }
-  });
-
-  const realConnections = connections?.filter(c => c.connectionId) ?? [];
-  const isEmpty = !loading && realConnections.length === 0;
-  const activeConn = realConnections.find(c => c.status === 'connected' || c.status === 'active');
-
   return (
     <div className="p-6 max-w-4xl">
       <PageHeader
@@ -131,10 +159,10 @@ export function MessagingPage() {
           ) : (
             <button
               onClick={handleConnect}
-              disabled={connecting}
+              disabled={connecting || waitingForQr}
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
             >
-              {connecting ? <CircleNotch size={14} className="animate-spin" /> : <QrCode size={14} />}
+              {connecting || waitingForQr ? <CircleNotch size={14} className="animate-spin" /> : <QrCode size={14} />}
               Connect WhatsApp
             </button>
           )
@@ -181,29 +209,25 @@ export function MessagingPage() {
         />
       ) : (
         <div className="space-y-6">
-          {/* Connection cards */}
           <div className="border border-white/[0.08] rounded-lg divide-y divide-white/[0.08]">
             {realConnections.map((conn, i) => (
               <div key={conn.connectionId ?? i} className="flex items-center justify-between px-4 py-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center">
-                    <ChatCircleDots size={20} className="text-green-400" />
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${conn.status === 'connected' ? 'bg-green-500/10' : 'bg-white/5'}`}>
+                    <ChatCircleDots size={20} className={conn.status === 'connected' ? 'text-green-400' : 'text-neutral-500'} />
                   </div>
                   <div>
                     <p className="text-sm font-medium">
-                      {conn.phoneNumber || conn.label || 'WhatsApp'}
+                      {formatPhone(conn.phoneNumber) || conn.label || 'WhatsApp'}
                     </p>
-                    <p className="text-xs text-neutral-500">
-                      {conn.status === 'connected' ? 'Connected' : 'No activity yet'}
-                    </p>
+                    <p className="text-xs text-neutral-500">{connStatusText(conn.status)}</p>
                   </div>
                 </div>
-                <StatusBadge status={conn.status === 'connected' ? 'active' : conn.status} />
+                <StatusBadge status={connBadgeStatus(conn.status)} />
               </div>
             ))}
           </div>
 
-          {/* Allowed chats section */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-[11px] font-medium text-neutral-500 uppercase tracking-wider">Allowed chats</h3>
@@ -227,6 +251,7 @@ export function MessagingPage() {
                     <input
                       value={newChatId}
                       onChange={e => setNewChatId(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleAddChat()}
                       placeholder="Chat ID (e.g. 1234567890@c.us)"
                       className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-white/20"
                     />
@@ -235,7 +260,7 @@ export function MessagingPage() {
                       disabled={addingChat || !newChatId.trim()}
                       className="px-3 py-2 text-xs font-medium bg-white text-black rounded-md hover:bg-neutral-200 disabled:opacity-50 transition-colors"
                     >
-                      {addingChat ? 'Adding...' : 'Add'}
+                      {addingChat ? 'Adding…' : 'Add'}
                     </button>
                     <button
                       onClick={() => { setShowAddChat(false); setNewChatId(''); }}
