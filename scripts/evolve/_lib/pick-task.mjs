@@ -263,54 +263,92 @@ Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:
   "acceptanceCriteria": ["criterion 1", "criterion 2", "criterion 3"]
 }`;
 
-  const userPrompt = `CONTEXT:\n${context}\n\nCOMPLETED TASK IDs (do not repeat): ${completedTaskIds.join(', ') || '(none)'}\n\nREPO PATHS AVAILABLE: ${repos.join(' | ')}\n\nPick the single highest-value task now.`;
+  const baseUserPrompt = `CONTEXT:\n${context}\n\nCOMPLETED TASK IDs (do not repeat): ${completedTaskIds.join(', ') || '(none)'}\n\nREPO PATHS AVAILABLE: ${repos.join(' | ')}\n\nPick the single highest-value task now.`;
 
-  let text = '';
-  try {
-    const response = await client.messages.create({
-      model,
-      max_tokens: 1024,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    });
-    text = response.content[0]?.text ?? '';
-  } catch (err) {
-    throw new Error(`Smart task picker LLM call failed: ${err.message}`);
+  const MAX_ATTEMPTS = 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const userPrompt = attempt === 1
+      ? baseUserPrompt
+      : baseUserPrompt + '\n\nIMPORTANT: only reference files that actually exist in the listed repos. Do not invent class names or file paths.';
+
+    let text = '';
+    try {
+      const response = await client.messages.create({
+        model,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      });
+      text = response.content[0]?.text ?? '';
+    } catch (err) {
+      throw new Error(`Smart task picker LLM call failed: ${err.message}`);
+    }
+
+    // Strip optional markdown fences before extracting JSON
+    const stripped = text.replace(/```(?:json)?/g, '').replace(/```/g, '');
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      lastError = new Error(`Smart task picker returned no JSON. Raw response:\n${text.slice(0, 500)}`);
+      continue;
+    }
+
+    let task;
+    try {
+      task = JSON.parse(jsonMatch[0]);
+    } catch (err) {
+      lastError = new Error(`Smart task picker returned invalid JSON: ${err.message}\nRaw: ${jsonMatch[0].slice(0, 500)}`);
+      continue;
+    }
+
+    // Apply sensible defaults for any missing fields rather than crashing
+    const repoFallback = repos[0] ?? '';
+    task.taskId = task.taskId
+      ? `${task.taskId}-${Date.now().toString(36)}`
+      : `smart-task-${Date.now().toString(36)}`;
+    task.title = task.title ?? 'Untitled smart task';
+    task.targetRepo = task.targetRepo ?? repoFallback;
+    task.validationCmd = task.validationCmd ?? 'npm run typecheck 2>&1 | tail -20';
+    task.description = task.description ?? '(no description provided)';
+    if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
+      task.acceptanceCriteria = ['Validation command exits 0'];
+    }
+
+    // Ensure targetRepo is one of the declared repos (guard against hallucinated paths)
+    if (!repos.includes(task.targetRepo)) {
+      console.warn(`[pick-task] targetRepo "${task.targetRepo}" not in repos list — defaulting to ${repoFallback}`);
+      task.targetRepo = repoFallback;
+    }
+
+    // Verify any src/-relative file paths mentioned in the task actually exist
+    if (!verifyTask(task, repos)) {
+      lastError = new Error(`Smart task references non-existent paths (attempt ${attempt})`);
+      continue;
+    }
+
+    console.log(`[pick-task] smart pick generated task: ${task.taskId}`);
+    return task;
   }
 
-  // Strip optional markdown fences before extracting JSON
-  const stripped = text.replace(/```(?:json)?/g, '').replace(/```/g, '');
-  const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Smart task picker returned no JSON. Raw response:\n${text.slice(0, 500)}`);
-  }
+  throw lastError ?? new Error('Smart task picker failed after max attempts');
+}
 
-  let task;
-  try {
-    task = JSON.parse(jsonMatch[0]);
-  } catch (err) {
-    throw new Error(`Smart task picker returned invalid JSON: ${err.message}\nRaw: ${jsonMatch[0].slice(0, 500)}`);
-  }
+// ---------------------------------------------------------------------------
+// Path verification — guard against hallucinated file/class references
+// ---------------------------------------------------------------------------
 
-  // Apply sensible defaults for any missing fields rather than crashing
-  const repoFallback = repos[0] ?? '';
-  task.taskId = task.taskId
-    ? `${task.taskId}-${Date.now().toString(36)}`
-    : `smart-task-${Date.now().toString(36)}`;
-  task.title = task.title ?? 'Untitled smart task';
-  task.targetRepo = task.targetRepo ?? repoFallback;
-  task.validationCmd = task.validationCmd ?? 'npm run typecheck 2>&1 | tail -20';
-  task.description = task.description ?? '(no description provided)';
-  if (!Array.isArray(task.acceptanceCriteria) || task.acceptanceCriteria.length === 0) {
-    task.acceptanceCriteria = ['Validation command exits 0'];
-  }
+function verifyTask(task, repos) {
+  // If description or acceptanceCriteria mentions a src/-relative path, verify it exists
+  const text = (task.description ?? '') + ' ' + (task.acceptanceCriteria ?? []).join(' ');
+  const pathRefs = text.match(/src\/[\w/.-]+\.tsx?/g) ?? [];
 
-  // Ensure targetRepo is one of the declared repos (guard against hallucinated paths)
-  if (!repos.includes(task.targetRepo)) {
-    console.warn(`[pick-task] targetRepo "${task.targetRepo}" not in repos list — defaulting to ${repoFallback}`);
-    task.targetRepo = repoFallback;
+  for (const ref of pathRefs) {
+    const found = repos.some(r => fs.existsSync(path.join(r, ref)));
+    if (!found) {
+      console.warn(`[pick-task] smart task references non-existent path: ${ref} — regenerating`);
+      return false;
+    }
   }
-
-  console.log(`[pick-task] smart pick generated task: ${task.taskId}`);
-  return task;
+  return true;
 }

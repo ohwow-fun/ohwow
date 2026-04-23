@@ -53,6 +53,12 @@ function resolveCompletedTasks() {
 // ---------------------------------------------------------------------------
 
 async function validate(repoPath, cmd) {
+  // Clear stale incremental tsc cache to prevent false negatives after lint-staged revert
+  if (repoPath.endsWith('/ohwow')) {
+    const tsbuildinfo = path.join(repoPath, 'tsconfig.tsbuildinfo');
+    try { fs.unlinkSync(tsbuildinfo); } catch {}
+  }
+
   try {
     execSync(cmd, { cwd: repoPath, stdio: 'pipe', timeout: 120_000, shell: true });
     return { pass: true };
