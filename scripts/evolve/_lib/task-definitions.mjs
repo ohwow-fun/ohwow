@@ -39,23 +39,88 @@ Do NOT change the existing getSiteBuilderModel() infrastructure — it's already
   },
   {
     taskId: 'add-intel-pipeline-test',
-    title: 'Add integration test for market-intel seen-file dedup behavior',
+    title: 'Add seen-file dedup utility and Vitest tests for market-intel pipeline',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm test -- --reporter=verbose 2>&1 | tail -30',
+    validationCmd: 'npm test -- --reporter=verbose src/lib/__tests__/seen-file-utils.test.ts 2>&1 | tail -40',
     description: `
-      The market-intel pipeline at scripts/intel/market-intel.mjs has a seen-file dedup mechanism
-      (~/.ohwow/workspaces/default/intel/market-intel-seen.jsonl). There are no tests verifying
-      this behavior. Add a Vitest test file at scripts/intel/__tests__/market-intel-dedup.test.ts
-      that verifies:
-      1. Items already in the seen-file are excluded from fresh[]
-      2. DRY=1 mode does NOT write to the seen-file (the bug we fixed)
-      3. appendSeen() correctly appends JSONL entries
-      Mock the seen-file path using a tmp dir.
+      The market-intel pipeline (scripts/intel/market-intel.mjs) has a seen-file dedup
+      mechanism but the logic is embedded in the script with no tests.
+
+      Your job is to create TWO new files:
+
+      FILE 1: src/lib/seen-file-utils.ts
+      Export these three pure functions:
+
+        import fs from 'node:fs';
+
+        /** Load all IDs already recorded in a JSONL seen-file. Returns an empty Set if the file doesn't exist. */
+        export function loadSeen(seenPath: string): Set<string> {
+          const seen = new Set<string>();
+          if (!fs.existsSync(seenPath)) return seen;
+          const lines = fs.readFileSync(seenPath, 'utf8').split('\\n').filter(Boolean);
+          for (const line of lines) {
+            try { seen.add((JSON.parse(line) as { id: string }).id); } catch {}
+          }
+          return seen;
+        }
+
+        /** Append items to the JSONL seen-file. Each line: {"id":"...","ts":"..."} */
+        export function appendSeen(seenPath: string, items: Array<{ id: string }>): void {
+          const lines = items.map(item => JSON.stringify({ id: item.id, ts: new Date().toISOString() }));
+          if (lines.length === 0) return;
+          fs.appendFileSync(seenPath, lines.join('\\n') + '\\n');
+        }
+
+        /** Filter out items whose IDs are already in the seen set. */
+        export function filterFresh<T extends { id: string }>(items: T[], seen: Set<string>): T[] {
+          return items.filter(item => !seen.has(item.id));
+        }
+
+      FILE 2: src/lib/__tests__/seen-file-utils.test.ts
+      Write at least 5 Vitest test cases. Use a tmp directory for all file I/O.
+      Follow this exact pattern (matches the project's existing test style):
+
+        import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+        import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from 'node:fs';
+        import { join } from 'node:path';
+        import { tmpdir } from 'node:os';
+        import { loadSeen, appendSeen, filterFresh } from '../seen-file-utils.js';
+
+        const TMP = join(tmpdir(), \`seen-file-test-\${Date.now()}\`);
+
+        beforeEach(() => mkdirSync(TMP, { recursive: true }));
+        afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+        describe('loadSeen', () => {
+          it('returns empty set when file does not exist', () => { ... });
+          it('parses ids from JSONL lines', () => { ... });
+          it('skips malformed lines without throwing', () => { ... });
+        });
+
+        describe('appendSeen', () => {
+          it('creates file and appends JSONL entries', () => { ... });
+          it('appends to existing file without overwriting', () => { ... });
+          it('does nothing when items array is empty', () => { ... });
+        });
+
+        describe('filterFresh', () => {
+          it('excludes items already in the seen set', () => { ... });
+          it('returns all items when seen set is empty', () => { ... });
+        });
+
+      IMPORTANT:
+      - Vitest scans src/**. Do NOT put tests anywhere else.
+      - Both files must be TypeScript (.ts). No .mjs files.
+      - Do NOT import from scripts/ — the utility is standalone.
+      - Do NOT modify market-intel.mjs or any existing file.
+      - Do NOT modify package.json or vitest.config.ts.
+      - After writing both files, run: npm test -- src/lib/__tests__/seen-file-utils.test.ts
+        to confirm tests pass before declaring done.
     `,
     acceptanceCriteria: [
-      'New test file created at scripts/intel/__tests__/market-intel-dedup.test.ts',
-      'At least 3 test cases covering dedup logic',
-      'All tests pass (npm test)',
+      'New file src/lib/seen-file-utils.ts exists and exports loadSeen, appendSeen, filterFresh',
+      'New file src/lib/__tests__/seen-file-utils.test.ts exists with at least 5 test cases',
+      'All tests pass: npm test -- src/lib/__tests__/seen-file-utils.test.ts',
     ],
   },
   {
