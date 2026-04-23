@@ -238,10 +238,33 @@ export class InnerThoughtsLoop {
       completedAt: t.completed_at as string,
     }));
 
+    // Fetch recent inbound messages from the last 24 hours as a proxy for "unread"
+    let unreadMessages: Array<{ channel: string; from: string; preview: string }> = [];
+    try {
+      const msgCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentMsgRows } = await this.db
+        .from('orchestrator_messages')
+        .select('id, conversation_id, role, content, created_at')
+        .eq('workspace_id', this.workspaceId)
+        .eq('role', 'user')
+        .gte('created_at', msgCutoff)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      if (recentMsgRows) {
+        unreadMessages = (recentMsgRows as Array<Record<string, unknown>>).map(m => ({
+          channel: 'chat',
+          from: 'user',
+          preview: String(m.content).slice(0, 120),
+        }));
+      }
+    } catch {
+      // conversations table may not exist yet — degrade gracefully
+    }
+
     return {
       pendingTasks,
       recentCompletions,
-      unreadMessages: [], // TODO: Wire when channel message storage is implemented
+      unreadMessages,
       overnightActivity: {
         tasksCompleted: overnightCompleted.count ?? 0,
         tasksStarted: overnightStarted.count ?? 0,
