@@ -127,25 +127,22 @@ IMPORTANT:
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
     validationCmd: 'npm run typecheck 2>&1 | tail -30',
     description: `
-Create a new TypeScript module that reads market intel briefs and creates
-agent tasks for buyer_intent signals.
+WRITE THIS FILE EXACTLY. No exploration needed. Just create the file.
 
-FILES TO READ FIRST:
-1. src/scheduling/ — list all files, then read one (e.g., read the first .ts you find)
-   to understand the pattern. Look for a class with a tick() method.
-2. src/db/adapter-types.ts — DatabaseAdapter interface (for db.from().insert())
-3. scripts/intel/market-intel.mjs — to understand how briefs.json is structured:
-   look for where it writes the output (grep for writeFileSync or JSON.stringify)
+Target file: src/scheduling/intel-outreach-trigger.ts
 
-THE BRIEF FORMAT (from market-intel.mjs output) is:
-  { id: string, bucket: string, headline: string, ohwow_implications: string, score: number }
+Use write_file with path="src/scheduling/intel-outreach-trigger.ts" and this exact content:
 
-CREATE the file src/scheduling/intel-outreach-trigger.ts with this content:
-
-\`\`\`typescript
+/**
+ * IntelOutreachTrigger — reads market intel briefs and creates agent tasks
+ * for buyer_intent signals that haven't been processed yet.
+ *
+ * Call tick() on a schedule (e.g. hourly) from the daemon.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../lib/logger.js';
 import type { DatabaseAdapter } from '../db/adapter-types.js';
 
@@ -169,12 +166,14 @@ export class IntelOutreachTrigger {
   }
 
   async tick(): Promise<void> {
-    const intelDir = path.join(os.homedir(), '.ohwow', 'workspaces', this.workspaceName, 'intel');
+    const intelDir = path.join(
+      os.homedir(), '.ohwow', 'workspaces', this.workspaceName, 'intel'
+    );
     if (!fs.existsSync(intelDir)) return;
 
-    // Find the latest day directory (YYYY-MM-DD format)
+    // Find the latest day directory (YYYY-MM-DD)
     const days = fs.readdirSync(intelDir)
-      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .filter(d => /^\\d{4}-\\d{2}-\\d{2}$/.test(d))
       .sort()
       .reverse();
     if (days.length === 0) return;
@@ -185,7 +184,7 @@ export class IntelOutreachTrigger {
 
     let briefs: IntelBrief[] = [];
     try {
-      briefs = JSON.parse(fs.readFileSync(briefsPath, 'utf8'));
+      briefs = JSON.parse(fs.readFileSync(briefsPath, 'utf8')) as IntelBrief[];
     } catch {
       return;
     }
@@ -193,15 +192,15 @@ export class IntelOutreachTrigger {
     const seenPath = path.join(dayDir, 'outreach-seen.json');
     let seen: string[] = [];
     try {
-      seen = JSON.parse(fs.readFileSync(seenPath, 'utf8'));
-    } catch { /* first run */ }
+      seen = JSON.parse(fs.readFileSync(seenPath, 'utf8')) as string[];
+    } catch { /* first run — seen list starts empty */ }
 
-    const buyerIntentBriefs = briefs.filter(
+    const unseen = briefs.filter(
       b => b.bucket === 'buyer_intent' && !seen.includes(b.id)
     );
 
-    for (const brief of buyerIntentBriefs) {
-      const id = crypto.randomUUID();
+    for (const brief of unseen) {
+      const id = randomUUID();
       const now = new Date().toISOString();
       try {
         await this.db.from('agent_workforce_tasks').insert({
@@ -216,26 +215,27 @@ export class IntelOutreachTrigger {
           updated_at: now,
         });
         seen.push(brief.id);
-        logger.info({ briefId: brief.id, headline: brief.headline }, '[intel-outreach] task created');
+        logger.info(
+          { briefId: brief.id, headline: brief.headline },
+          '[intel-outreach] task created for buyer_intent signal',
+        );
       } catch (err) {
         logger.warn({ err, briefId: brief.id }, '[intel-outreach] failed to create task');
       }
     }
 
-    if (buyerIntentBriefs.length > 0) {
+    if (unseen.length > 0) {
       fs.writeFileSync(seenPath, JSON.stringify(seen, null, 2));
     }
   }
 }
-\`\`\`
 
-IMPORTANT:
-- Create ONLY src/scheduling/intel-outreach-trigger.ts
-- Do NOT wire it into daemon startup — that is a separate task
-- Do NOT modify any existing files
-- The crypto.randomUUID() call uses the global Node.js crypto (no import needed in ESM with --experimental-global)
-  but to be safe, add: import { randomUUID } from 'node:crypto'; and use randomUUID() instead
-- Replace crypto.randomUUID() with randomUUID() in the final file
+After writing the file, run: npm run typecheck 2>&1 | tail -20
+Fix any TypeScript errors you see. Common issues:
+- If DatabaseAdapter.from().insert() returns a Promise, await it (it already does in the code above).
+- If the insert signature differs, look at how other files call db.from().insert() and match that pattern.
+
+Do NOT modify any existing files. Do NOT wire this into daemon startup.
     `,
     acceptanceCriteria: [
       'TypeScript typecheck passes (npm run typecheck)',
