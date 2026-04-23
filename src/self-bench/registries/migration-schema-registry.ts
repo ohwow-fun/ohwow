@@ -122,6 +122,7 @@ export const MIGRATION_SCHEMA_REGISTRY: readonly MigrationSchemaProbeConfig[] = 
   { migrationFile: '148-eternal-state.sql', expectedTables: ['eternal_state'] },
   { migrationFile: '149-eternal-notifications.sql', expectedTables: ['eternal_notifications'] },
   { migrationFile: '150-infrastructure-bills.sql', expectedTables: ['infrastructure_bills'] },
+  { migrationFile: '151-self-bench-results.sql', expectedTables: ['self_bench_results'] },
 ];
 
 // Migrations skipped (all tables claimed by an earlier migration —

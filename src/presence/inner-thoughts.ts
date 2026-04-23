@@ -316,6 +316,13 @@ export class InnerThoughtsLoop {
 
     parts.push(`Time: ${snapshot.timeOfDay}. Tasks completed overnight: ${snapshot.overnightActivity.tasksCompleted}.`);
 
+    // Add mesh peer context
+    if (snapshot.connectedPeerCount > 1) {
+      parts.push(`Mesh: ${snapshot.connectedPeerCount} peer nodes connected (distributed team active).`);
+    } else {
+      parts.push(`Mesh: Solo operation (1 node).`);
+    }
+
     const prompt = `You are an AI assistant's inner monologue. Given the current workspace state, produce ONE brief thought (1-2 sentences) about the most noteworthy thing happening. Focus on what the user would care about most when they sit down.
 
 Context:
