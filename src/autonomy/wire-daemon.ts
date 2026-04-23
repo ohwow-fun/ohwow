@@ -46,6 +46,15 @@ export const DEFAULT_LLM_MODEL = 'anthropic/claude-haiku-4.5';
  * check in director.ts is the outer guard; this cap is a safety floor.
  */
 export const CONDUCTOR_ARC_SPEND_CAP_CENTS = 5;
+/**
+ * Feature flag: when true, wire the real LLM executor for all round kinds
+ * (plan, impl, qa) instead of using the stub. Requires modelRouter to be
+ * provided; if absent, the stub is used regardless.
+ * 
+ * Phase 6 production rollout gate.
+ */
+export const IS_REAL_EXECUTOR_ENABLED = process.env.OHWOW_REAL_EXECUTOR === 'true';
+
 
 export interface WireConductorOptions {
   db: DatabaseAdapter;
