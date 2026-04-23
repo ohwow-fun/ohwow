@@ -4,10 +4,37 @@
  */
 
 import { join } from 'path';
+import { homedir } from 'os';
 import { spawn } from 'child_process';
 import { openSync, existsSync, statSync, renameSync, writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { readLock, isProcessAlive } from '../lib/instance-lock.js';
 import { logger } from '../lib/logger.js';
+
+const OHWOW_DIR = join(homedir(), '.ohwow');
+
+/**
+ * Parse a simple KEY=VALUE env file (like conductor-on.env) and return
+ * the key/value pairs. Skips blank lines and comment lines (starting with #).
+ * Exported for unit testing.
+ */
+export function parseEnvFile(filePath: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    for (const raw of content.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 1) continue;
+      const key = line.slice(0, eq).trim();
+      const val = line.slice(eq + 1).trim();
+      if (key) result[key] = val;
+    }
+  } catch {
+    // File absent or unreadable — silently ignore
+  }
+  return result;
+}
 
 /** Path to the replaced marker file */
 function getReplacedPath(dataDir: string): string {
@@ -144,7 +171,16 @@ export function startDaemonBackground(execPath: string, port: number, dataDir: s
   // workspace as the parent. (process.env spread above already covers this in
   // most cases, but we set it explicitly to be defensive against tools that
   // strip env vars when spawning subprocesses.)
+  //
+  // Also merge ~/.ohwow/conductor-on.env (if present) so that persistent
+  // flags like OHWOW_AUTONOMY_CONDUCTOR=1 survive daemon restarts without
+  // requiring the operator to manually prefix every `ohwow restart` call.
+  // The file is opt-in (ships as a comment-only template by default) and
+  // process.env values take precedence so the operator can still override
+  // from the shell.
+  const conductorEnvOverrides = parseEnvFile(join(OHWOW_DIR, 'conductor-on.env'));
   const childEnv: NodeJS.ProcessEnv = {
+    ...conductorEnvOverrides,
     ...process.env,
     OHWOW_PORT: String(port),
   };

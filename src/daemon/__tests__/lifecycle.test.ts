@@ -44,6 +44,7 @@ import {
   writeReplacedMarker,
   wasRecentlyReplaced,
   clearReplacedMarker,
+  parseEnvFile,
 } from '../lifecycle.js';
 
 const mockReadLock = vi.mocked(readLock);
@@ -284,5 +285,42 @@ describe('clearReplacedMarker', () => {
     clearReplacedMarker(DATA_DIR);
 
     expect(mockUnlinkSync).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseEnvFile
+// ---------------------------------------------------------------------------
+
+describe('parseEnvFile', () => {
+  const mockReadFileSyncLocal = vi.mocked(readFileSync);
+
+  it('parses KEY=VALUE pairs', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSyncLocal.mockReturnValue('OHWOW_AUTONOMY_CONDUCTOR=1\nFOO=bar\n');
+    const result = parseEnvFile('/fake/conductor-on.env');
+    expect(result).toEqual({ OHWOW_AUTONOMY_CONDUCTOR: '1', FOO: 'bar' });
+  });
+
+  it('skips blank lines and comment lines', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSyncLocal.mockReturnValue(
+      '# This is a comment\n\nOHWOW_AUTONOMY_CONDUCTOR=1\n# another comment\n',
+    );
+    const result = parseEnvFile('/fake/conductor-on.env');
+    expect(result).toEqual({ OHWOW_AUTONOMY_CONDUCTOR: '1' });
+  });
+
+  it('returns empty object when file is absent (readFileSync throws)', () => {
+    mockReadFileSyncLocal.mockImplementation(() => { throw new Error('ENOENT'); });
+    const result = parseEnvFile('/fake/missing.env');
+    expect(result).toEqual({});
+  });
+
+  it('skips lines with no equals sign', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSyncLocal.mockReturnValue('NOT_A_VAR\nKEY=value\n');
+    const result = parseEnvFile('/fake/conductor-on.env');
+    expect(result).toEqual({ KEY: 'value' });
   });
 });
