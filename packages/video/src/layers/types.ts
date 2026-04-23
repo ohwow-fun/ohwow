@@ -66,6 +66,8 @@ export interface TextLayer {
   accentColor?: string;
   subtitle?: string;
   maxWidth?: number;
+  letterSpacing?: string;
+  filter?: string;
 }
 
 export interface VideoPalette {

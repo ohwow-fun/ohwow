@@ -14,6 +14,11 @@
       "type": "string",
       "description": "Human-readable episode title for log output."
     },
+    "seriesName": {
+      "type": "string",
+      "description": "Series name shown in the outro card. Defaults to 'IF IT GOES WRONG'.",
+      "default": "IF IT GOES WRONG"
+    },
     "music": {
       "type": "string",
       "description": "Audio track relative to packages/video/public/. Optional — defaults to 'audio/ambient-noir.mp3'.",

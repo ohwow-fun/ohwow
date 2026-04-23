@@ -12,8 +12,12 @@ export const ImageLayer: React.FC<Record<string, unknown>> = (props) => {
   const frame = useCurrentFrame();
   const width       = (props.width   as number) ?? 120;
   const height      = (props.height  as number) ?? 120;
-  const cx          = (props.cx      as number) ?? 0.5;
-  const cy          = (props.cy      as number) ?? 0.5;
+  // LayerRenderer pre-converts 0-1 ratios to "50%" strings via POSITION_KEYS;
+  // accept both forms so the component works inside and outside a LayerStack.
+  const cx          = (props.cx as string | number | undefined) ?? "50%";
+  const cy          = (props.cy as string | number | undefined) ?? "50%";
+  const left        = typeof cx === "number" ? `${cx * 100}%` : cx;
+  const top         = typeof cy === "number" ? `${cy * 100}%` : cy;
   const fadeIn      = (props.fadeIn  as number) ?? 0;
   const baseOpacity = (props.opacity as number) ?? 1;
 
@@ -27,8 +31,8 @@ export const ImageLayer: React.FC<Record<string, unknown>> = (props) => {
     <div
       style={{
         position: "absolute",
-        left: `${cx * 100}%`,
-        top: `${cy * 100}%`,
+        left,
+        top,
         transform: "translate(-50%, -50%)",
         width,
         height,

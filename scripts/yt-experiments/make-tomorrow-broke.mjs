@@ -87,31 +87,40 @@ function overlayLayers(isLast, isSecondToLast) {
   ];
 }
 
-// ─── Standard outro scene (150 frames = 5s, auto-appended) ───────────────
-const OUTRO_SCENE = {
-  id: 'outro',
-  kind: 'composable',
-  durationInFrames: 150,
-  params: {
-    mood: 'midnight',
-    pacing: 'reflective',
-    visualLayers: [
-      { primitive: 'glow-orb',   params: { cx: 0.5, cy: 0.36, size: 160, color: '#ff2d9c', pulseSpeed: 0.25 } },
-      { primitive: 'image',      params: { src: 'ohwow-logo.png', width: 60, height: 60, cx: 0.5, cy: 0.36, fadeIn: 20, opacity: 0.95 } },
-      { primitive: 'film-grain', params: { intensity: 0.2 } },
-      { primitive: 'vignette',   params: { intensity: 0.9 } },
-    ],
-    text: {
-      content:    'TOMORROW BROKE',
-      subtitle:   'by ohwow.fun',
-      animation:  'letter-scatter',
-      position:   'center',
-      fontSize:   80,
-      fontWeight: 800,
-      fontFamily: 'display',
+// ─── Standard outro scene builder (150 frames = 5s, auto-appended) ──────────
+// Fully grayscale. ohwow.fun logo + Smooch Sans display with wide tracking.
+// Shows series name + chapter title + "BY OHWOW.FUN" subtitle.
+function buildOutroScene(seriesName, chapterTitle) {
+  return {
+    id: 'outro',
+    kind: 'composable',
+    durationInFrames: 150,
+    params: {
+      mood: 'dark',
+      pacing: 'reflective',
+      visualLayers: [
+        { primitive: 'gradient-wash', params: { colors: ['#000000', '#111111', '#000000'], speed: 0.002, opacity: 1 } },
+        { primitive: 'glow-orb',      params: { cx: 0.5, cy: 0.32, size: 180, color: '#ffffff', pulseSpeed: 0.2 } },
+        { primitive: 'image',         params: { src: 'ohwow-fun-logo.png', width: 64, height: 64, cx: 0.5, cy: 0.32, fadeIn: 25, opacity: 0.85 } },
+        { primitive: 'film-grain',    params: { intensity: 0.18 } },
+        { primitive: 'vignette',      params: { intensity: 0.92 } },
+      ],
+      text: {
+        content:       `${seriesName}\n${chapterTitle.toUpperCase()}`,
+        subtitle:      'BY OHWOW.FUN',
+        animation:     'letter-scatter',
+        position:      'center',
+        fontSize:      52,
+        fontWeight:    800,
+        fontFamily:    'display',
+        color:         '#ffffff',
+        accentColor:   '#cccccc',
+        letterSpacing: '0.12em',
+        filter:        'grayscale(1)',
+      },
     },
-  },
-};
+  };
+}
 
 // ─── Fal.ai Seedance Lite clip generation ─────────────────────────────────
 const FAL_BASE  = 'https://queue.fal.run';
@@ -354,7 +363,13 @@ if (!episodeFile) {
 }
 
 const episode = JSON.parse(fs.readFileSync(episodeFile, 'utf8'));
-const { episode: slug, title, scenes, music = 'audio/ambient-noir.mp3' } = episode;
+const {
+  episode: slug,
+  title,
+  scenes,
+  music       = 'audio/ambient-noir.mp3',
+  seriesName  = 'IF IT GOES WRONG',
+} = episode;
 
 if (!slug || !title || !Array.isArray(scenes) || scenes.length === 0) {
   console.error('Invalid episode file — must have episode, title, and scenes[]');
@@ -458,7 +473,7 @@ const builtScenes = scenes.map((scene, i) => {
 });
 
 // Standard outro always appended last
-const allScenes = [...builtScenes, { ...OUTRO_SCENE }];
+const allScenes = [...builtScenes, buildOutroScene(seriesName, title)];
 
 // N-1 transitions for N scenes; all fades at 15 frames
 const transitions = allScenes.slice(0, -1).map(() => ({ kind: 'fade', durationInFrames: 15 }));
@@ -477,7 +492,7 @@ for (let i = 0; i < allScenes.length; i++) {
       src:            stingSrc,
       startFrame:     cursor + 5,
       durationFrames: Math.ceil((stingMs / 1000) * FPS),
-      volume:         0.8,
+      volume:         0.4,
     });
   } else if (voice) {
     voiceovers.push({

@@ -310,6 +310,7 @@ export const TextLayerRenderer: React.FC<{
     lineHeight: 1.35,
     maxWidth,
     transform: `scale(${breathe(frame, 0.025, 0.006)})`,
+    ...(config.letterSpacing ? { letterSpacing: config.letterSpacing } : {}),
   };
 
   const dur = durationInFrames ?? 180;
@@ -332,6 +333,7 @@ export const TextLayerRenderer: React.FC<{
         padding: "0 100px",
         opacity: fadeIn,
         pointerEvents: "none",
+        ...(config.filter ? { filter: config.filter } : {}),
         ...posStyles,
       }}
     >
