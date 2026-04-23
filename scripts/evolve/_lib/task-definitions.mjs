@@ -125,19 +125,251 @@ Do NOT change the existing getSiteBuilderModel() infrastructure — it's already
   },
   {
     taskId: 'ohwow-fun-add-contact-search-route-test',
-    title: 'Add test for ohwow.fun contact search API route',
+    title: 'Add Vitest tests for contact field normalizer utilities in ohwow.fun',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
-    validationCmd: 'npm test 2>&1 | tail -20',
+    validationCmd: 'npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts 2>&1 | tail -30',
     description: `
-      ohwow.fun has many API routes with zero test coverage. Add a test for the contacts search
-      endpoint. Find the contacts route in src/app/api/ and write a test using Next.js route
-      handler testing patterns (or jest/vitest mocks as appropriate for the project's test setup).
-      Cover: basic search, filtering by custom_field_key, empty results.
+      The file src/lib/agents/services/business-metrics.service.ts exports two pure utility
+      functions that have zero test coverage: parseContactTags and parseContactCustomFields.
+      These are exported at the module level (not class methods) and are 100% pure — no Supabase,
+      no Next.js, no I/O needed.
+
+      Your job is to create ONE new test file:
+
+      FILE: src/lib/agents/services/__tests__/contact-normalizers.test.ts
+
+      The test file must import from the service and test both functions.
+      Match the existing test style in src/lib/a2a/__tests__/auth.test.ts exactly.
+
+      Here is the EXACT content to write (copy this verbatim, do not deviate):
+
+      ---
+      import { describe, it, expect } from 'vitest';
+      import {
+        parseContactTags,
+        parseContactCustomFields,
+      } from '../business-metrics.service';
+
+      describe('parseContactTags', () => {
+        it('returns empty array for null', () => {
+          expect(parseContactTags(null)).toEqual([]);
+        });
+
+        it('returns empty array for undefined', () => {
+          expect(parseContactTags(undefined)).toEqual([]);
+        });
+
+        it('returns array as-is when already an array', () => {
+          expect(parseContactTags(['a', 'b'])).toEqual(['a', 'b']);
+        });
+
+        it('filters non-string entries from array', () => {
+          expect(parseContactTags(['a', 42 as unknown as string, 'b'])).toEqual(['a', 'b']);
+        });
+
+        it('parses JSON string to array', () => {
+          expect(parseContactTags('["x","y"]')).toEqual(['x', 'y']);
+        });
+
+        it('returns empty array for malformed JSON string', () => {
+          expect(parseContactTags('not-json')).toEqual([]);
+        });
+
+        it('returns empty array for JSON string that is not an array', () => {
+          expect(parseContactTags('{"a":1}')).toEqual([]);
+        });
+      });
+
+      describe('parseContactCustomFields', () => {
+        it('returns empty object for null', () => {
+          expect(parseContactCustomFields(null)).toEqual({});
+        });
+
+        it('returns empty object for undefined', () => {
+          expect(parseContactCustomFields(undefined)).toEqual({});
+        });
+
+        it('returns object as-is when already an object', () => {
+          expect(parseContactCustomFields({ key: 'val' })).toEqual({ key: 'val' });
+        });
+
+        it('parses JSON string to object', () => {
+          expect(parseContactCustomFields('{"x":1}')).toEqual({ x: 1 });
+        });
+
+        it('returns empty object for malformed JSON string', () => {
+          expect(parseContactCustomFields('bad-json')).toEqual({});
+        });
+
+        it('returns empty object for JSON string that is an array', () => {
+          expect(parseContactCustomFields('[1,2]')).toEqual({});
+        });
+      });
+      ---
+
+      IMPORTANT instructions:
+      - Create the directory src/lib/agents/services/__tests__/ first with: mkdir -p
+      - Write the file using write_file with the exact content above (replacing --- delimiters)
+      - The import path does NOT use '.js' extension (vitest resolves TypeScript imports without extension, matching existing test files like src/lib/a2a/__tests__/auth.test.ts)
+      - Do NOT modify any existing files
+      - Do NOT modify package.json, vitest.config.ts, or any other config
+      - After writing the file, run the validation command to confirm tests pass:
+        npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts
     `,
     acceptanceCriteria: [
-      'New test file created',
-      'At least 3 test cases',
-      'Tests pass',
+      'New file src/lib/agents/services/__tests__/contact-normalizers.test.ts exists',
+      'File imports parseContactTags and parseContactCustomFields from business-metrics.service.js',
+      'At least 10 test cases covering both functions',
+      'All tests pass: npx vitest run src/lib/agents/services/__tests__/contact-normalizers.test.ts',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 2 — added 2026-04-22
+  // -------------------------------------------------------------------------
+
+  {
+    taskId: 'add-priority-semaphore-tests',
+    title: 'Add Vitest tests for PrioritySemaphore (priority queue + timeout)',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm test -- --reporter=verbose src/execution/__tests__/priority-semaphore.test.ts 2>&1 | tail -40',
+    description: `
+The class PrioritySemaphore in src/execution/priority-semaphore.ts is the core
+concurrency gate for the agent execution loop. It has no dedicated tests — the
+only semaphore test file covers the simpler base Semaphore class.
+
+Create ONE new file: src/execution/__tests__/priority-semaphore.test.ts
+
+Cover these behaviours with at least 7 Vitest test cases:
+
+1. acquire() immediately resolves when below max concurrency.
+2. acquire() queues when at max concurrency.
+3. Higher-priority entries are resolved before lower-priority ones
+   (queue critical before standard, confirm critical resolves first).
+4. release() decrements active count.
+5. rejectAll() rejects every waiting entry and returns the count.
+6. Timeout: acquire() with timeoutMs rejects if slot not granted in time.
+7. getQueueDepths() reflects the waiting counts per priority tier.
+
+Use this import (matches the project's ESM convention):
+  import { PrioritySemaphore } from '../priority-semaphore.js';
+  import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+Use real timers for the timeout test (no vi.useFakeTimers needed — just keep
+timeoutMs small, e.g. 10ms, and await at least that long before asserting rejection).
+
+Do NOT modify priority-semaphore.ts or any other existing file.
+Do NOT modify package.json or vitest.config.ts.
+    `,
+    acceptanceCriteria: [
+      'New file src/execution/__tests__/priority-semaphore.test.ts exists',
+      'At least 7 test cases covering priority ordering, timeout, and rejectAll',
+      'All tests pass: npm test -- src/execution/__tests__/priority-semaphore.test.ts',
+      'TypeScript typecheck passes (npm run typecheck)',
+    ],
+  },
+
+  {
+    taskId: 'fix-seed-templates-hardcoded-model',
+    title: 'Replace hardcoded claude-sonnet-4-20250514 in seed-templates.ts with a named constant',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -20',
+    description: `
+src/lib/seed-templates.ts contains 12+ inline occurrences of the string
+'claude-sonnet-4-20250514' embedded directly inside agent config objects.
+This is a maintenance burden — updating the default seed model requires
+a search-and-replace across the whole file.
+
+Fix: at the top of the file (after the existing JSDoc comment) add:
+
+  /** Default LLM model used by seed-template agents. Override via SEED_TEMPLATE_MODEL env var. */
+  const SEED_AGENT_MODEL = process.env.SEED_TEMPLATE_MODEL ?? 'claude-sonnet-4-5';
+
+Then replace every occurrence of 'claude-sonnet-4-20250514' in that file
+with the constant SEED_AGENT_MODEL. There are occurrences on lines ~24, 40,
+56, 72, 88, 104, 120, 136, 152, 168, 188, 189, 209 (check the file for the
+exact count — do not leave any behind).
+
+Do NOT touch any other file. Do NOT change the shape of the exported
+SEED_TEMPLATES array. Do NOT modify package.json.
+    `,
+    acceptanceCriteria: [
+      'No string literal "claude-sonnet-4-20250514" remains in src/lib/seed-templates.ts',
+      'SEED_AGENT_MODEL constant is defined at the top of the file',
+      'TypeScript typecheck passes (npm run typecheck)',
+      'No other files were changed',
+    ],
+  },
+
+  {
+    taskId: 'add-jsdoc-co-evolution-executor',
+    title: 'Add JSDoc to public API surface of co-evolution-executor.ts',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -20',
+    description: `
+src/orchestrator/co-evolution/co-evolution-executor.ts exposes two public
+TypeScript interfaces and one exported async function that are used by the
+orchestrator to drive the co-evolution loop. None of them have JSDoc comments.
+
+Add JSDoc to:
+
+1. Interface CoEvolutionProgressEvent (exported) — describe what this union
+   type represents: a progress event emitted by the co-evolution loop. Each
+   event has a 'type' discriminant field plus optional payload keys.
+
+2. Interface ExecuteLocalCoEvolutionOptions (exported) — describe each
+   field: db, engine, workspaceId, config, anthropic (optional, injected
+   Anthropic SDK client), modelRouter (optional model routing override),
+   onEvent (optional progress event callback).
+
+3. Function executeLocalCoEvolution (exported) — describe the overall flow
+   (N agents iterate across R rounds on the same deliverable) and the return
+   value (LocalCoEvolutionResult with bestAttempt, score summary, cost, etc.).
+
+Format: standard TSDoc (/** ... */) with @param and @returns tags on the
+function. Keep descriptions concise (2-3 sentences each). Do not add
+examples or change any logic. Do not touch any other file.
+    `,
+    acceptanceCriteria: [
+      'CoEvolutionProgressEvent has a JSDoc block explaining its purpose',
+      'ExecuteLocalCoEvolutionOptions has JSDoc on the interface and each field',
+      'executeLocalCoEvolution has JSDoc with @param and @returns',
+      'TypeScript typecheck passes (npm run typecheck)',
+      'No logic was changed — diff is comments only',
+    ],
+  },
+
+  {
+    taskId: 'ohwow-fun-extract-blog-feed-url-constant',
+    title: 'Extract hardcoded https://ohwow.fun URL in blog/feed.xml/route.ts to a named constant',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow.fun',
+    validationCmd: 'npx tsc --noEmit 2>&1 | tail -20',
+    description: `
+src/app/blog/feed.xml/route.ts contains 5+ hardcoded occurrences of the
+string 'https://ohwow.fun' embedded in the RSS feed metadata (id, link,
+favicon, rss2, and per-article link fields). This is the only file in the
+codebase where these strings are NOT read from an env var or a shared
+constant.
+
+Fix:
+1. At the top of src/app/blog/feed.xml/route.ts, add:
+   const SITE_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'https://ohwow.fun';
+
+2. Replace every occurrence of the literal 'https://ohwow.fun' in that file
+   with the SITE_URL constant (template literals where needed, e.g.
+   \`\${SITE_URL}/blog\`).
+
+3. Do NOT touch src/app/sitemap.ts, src/app/robots.ts, or any other file.
+   sitemap.ts already uses its own BASE_URL constant and is out of scope.
+
+The goal is consistency: the feed.xml route should respect the same
+NEXT_PUBLIC_APP_URL environment variable that the rest of the app uses.
+    `,
+    acceptanceCriteria: [
+      'No string literal "https://ohwow.fun" remains in src/app/blog/feed.xml/route.ts',
+      'SITE_URL constant is defined at the top of the file using process.env.NEXT_PUBLIC_APP_URL',
+      'TypeScript typecheck passes (npx tsc --noEmit)',
+      'No other files were modified',
     ],
   },
 ];

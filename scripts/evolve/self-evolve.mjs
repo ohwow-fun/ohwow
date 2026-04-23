@@ -113,15 +113,26 @@ async function main() {
   const { SEED_TASKS } = await import('./_lib/task-definitions.mjs');
   const { implementTask } = await import('./_lib/implement.mjs');
   const { writeRunReport } = await import('./_lib/report.mjs');
+  const { pickNextTask } = await import('./_lib/pick-task.mjs');
 
   const completedTaskIds = resolveCompletedTasks();
   console.log(`[self-evolve] completed tasks: ${completedTaskIds.join(', ') || '(none)'}`);
 
-  const nextTask = SEED_TASKS.find(t => !completedTaskIds.includes(t.taskId));
+  const REPOS = [
+    '/Users/jesus/Documents/ohwow/ohwow',
+    '/Users/jesus/Documents/ohwow/ohwow.fun',
+  ];
+
+  const nextTask = await pickNextTask({
+    completedTaskIds,
+    seedTasks: SEED_TASKS,
+    anthropicApiKey: apiKey,
+    repos: REPOS,
+  });
 
   if (!nextTask) {
-    console.log('[self-evolve] all seed tasks complete. nothing to do this cycle.');
-    writeRunReport({ status: 'idle', task: null, filesChanged: [], summary: 'All seed tasks complete' });
+    console.log('[self-evolve] no task available this cycle (seeds exhausted, smart-pick unavailable).');
+    writeRunReport({ status: 'idle', task: null, filesChanged: [], summary: 'No task available' });
     return;
   }
 
