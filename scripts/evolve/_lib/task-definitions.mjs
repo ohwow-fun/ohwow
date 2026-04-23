@@ -5,51 +5,248 @@
 
 export const SEED_TASKS = [
   // -------------------------------------------------------------------------
-  // BATCH 1 — Wire the LLM executor into production (Phase 6/7)
+  // BATCH 1 — Replace hardcoded model strings in seed-templates.ts
   // -------------------------------------------------------------------------
   {
-    taskId: 'wire-llm-executor-production',
-    title: 'Wire real LLM executor into conductor production path (Phase 6)',
+    taskId: 'fix-seed-templates-hardcoded-model',
+    title: 'Replace hardcoded claude-sonnet-4-20250514 in seed-templates.ts with a named constant',
     targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    validationCmd: 'npm run typecheck 2>&1 | tail -20',
     description: `
-The autonomy conductor at src/autonomy/conductor.ts has a StubConductorExecutor
-(lines 67-116) that returns no-op rounds. The real LLM executor already exists
-at src/autonomy/executors/llm-executor.ts and is wired into the eval harness but
-"never wired into production today" (its own comment says so).
+EXACT TASK — do exactly this and nothing else:
 
-src/autonomy/wire-daemon.ts (lines 127-148) uses defaultMakeStubExecutor() as
-fallback for impl + qa rounds while only wiring the LLM executor for PLAN rounds
-via dark-launch config.
+File to edit: src/lib/seed-templates.ts
 
-Your task: update wire-daemon.ts to use the LlmPlanExecutor for ALL three round
-kinds (plan, impl, qa) when the OHWOW_REAL_EXECUTOR=true env var is set, instead
-of only using it for plan. Specifically:
+Step 1: Read the file. It starts with a JSDoc comment block (lines 1-9) then
+exports const SEED_TEMPLATES = [...].
 
-1. Read src/autonomy/wire-daemon.ts and find the section around line 127 where
-   the stub is used for impl + qa.
-2. Read src/autonomy/executors/llm-executor.ts to understand makeLlmPlanExecutor
-   and how it delegates to a fallback executor for non-plan rounds.
-3. In wire-daemon.ts, add a check: if process.env.OHWOW_REAL_EXECUTOR === 'true',
-   wire ALL round kinds through the LLM executor (not just plan). The LlmPlanExecutor
-   already handles plan; for impl and qa, you need to call the executor factory
-   with kind='impl' and kind='qa' as well — check if it supports that or falls back.
-4. Export a new boolean constant IS_REAL_EXECUTOR_ENABLED from wire-daemon.ts
-   so callers can check if the real executor is active.
+Step 2: After line 9 (the closing */ of the JSDoc block), insert these two lines:
+  /** Default LLM model used by seed-template agents. Override via SEED_TEMPLATE_MODEL env var. */
+  const SEED_AGENT_MODEL = process.env.SEED_TEMPLATE_MODEL ?? 'claude-sonnet-4-5';
 
-This is the critical Phase 6 connection that makes the conductor actually do
-real AI work rather than returning stub no-ops.
+Step 3: The file has exactly 13 occurrences of the string 'claude-sonnet-4-20250514'
+(on lines 24, 40, 40, 56, 72, 88, 104, 120, 136, 152, 168, 188, 189, 209).
+Replace ALL 13 occurrences of 'claude-sonnet-4-20250514' with SEED_AGENT_MODEL.
+
+The replacement turns this:
+  config: { model: 'claude-sonnet-4-20250514', temperature: 0.3 ... }
+into:
+  config: { model: SEED_AGENT_MODEL, temperature: 0.3 ... }
+
+Step 4: Verify with: grep -c "claude-sonnet-4-20250514" src/lib/seed-templates.ts
+The count must be 0.
+
+IMPORTANT:
+- Do NOT touch any other file.
+- Do NOT change the shape of the exported SEED_TEMPLATES array.
+- Do NOT modify package.json.
+- The constant SEED_AGENT_MODEL is NOT exported — it is file-private.
+- Use bash with sed to do the replacement:
+  sed -i '' 's/claude-sonnet-4-20250514/SEED_AGENT_MODEL/g' src/lib/seed-templates.ts
+  Then manually insert the const declaration after line 9.
     `,
     acceptanceCriteria: [
+      'No string literal "claude-sonnet-4-20250514" remains in src/lib/seed-templates.ts',
+      'SEED_AGENT_MODEL constant is defined near the top of the file',
       'TypeScript typecheck passes (npm run typecheck)',
-      'wire-daemon.ts reads OHWOW_REAL_EXECUTOR env var',
-      'IS_REAL_EXECUTOR_ENABLED boolean is exported from wire-daemon.ts',
-      'When OHWOW_REAL_EXECUTOR=true, all round kinds route through LLM executor',
+      'No other files were changed',
     ],
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 2 — Wire channel message storage for inner-thoughts unreadMessages
+  // BATCH 2 — A2A agent card endpoint (Google A2A spec compliance)
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'implement-a2a-agent-card-endpoint',
+    title: 'Implement /.well-known/agent.json A2A agent card endpoint in Express API',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+EXACT TASK — add a /.well-known/agent.json GET route to the existing A2A router.
+
+FILES TO READ FIRST:
+1. src/a2a/types.ts — has A2AAgentCard and A2ASkill interfaces (around line 36-65)
+2. src/api/routes/a2a.ts — existing router file; add the new route here
+3. src/api/server.ts lines 638 area — shows app.use(createA2ARouter(db))
+
+WHAT TO ADD in src/api/routes/a2a.ts (BEFORE the closing "return router;" line):
+
+  // /.well-known/agent.json — A2A agent card (no auth required, public)
+  router.get('/.well-known/agent.json', async (req, res) => {
+    try {
+      const baseUrl = process.env.OHWOW_PUBLIC_URL || 'http://localhost:7700';
+      const card = {
+        name: 'ohwow runtime',
+        description: 'Local-first AI business operating system with autonomous agents',
+        url: baseUrl,
+        version: '1.0.0',
+        capabilities: {
+          streaming: false,
+          pushNotifications: false,
+          stateTransitionHistory: false,
+        },
+        authentication: {
+          schemes: ['bearer'],
+        },
+        defaultInputModes: ['text'],
+        defaultOutputModes: ['text'],
+        skills: [],
+      };
+      res.set('Content-Type', 'application/json');
+      res.json(card);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+The route is intentionally placed WITHOUT auth middleware because A2A card
+endpoints must be publicly readable for peer discovery. The existing auth
+middleware in server.ts is mounted at /api/* so this /.well-known/* path
+is not covered by it.
+
+IMPORTANT:
+- Only modify src/api/routes/a2a.ts
+- Do NOT add a new import for A2AAgentCard — just use the inline object literal
+- Do NOT register a new router in server.ts — it already uses createA2ARouter
+- The route must be /.well-known/agent.json (not /agent-card, not /agent.json)
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'GET /.well-known/agent.json route exists in src/api/routes/a2a.ts',
+      'Response includes name, description, url, version, capabilities fields',
+      'Route returns Content-Type: application/json',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 3 — Wire market intel buyer_intent → outreach pipeline
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-market-intel-outreach-trigger',
+    title: 'Wire buyer_intent market intel signals into the outreach trigger pipeline',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+Create a new TypeScript module that reads market intel briefs and creates
+agent tasks for buyer_intent signals.
+
+FILES TO READ FIRST:
+1. src/scheduling/ — list all files, then read one (e.g., read the first .ts you find)
+   to understand the pattern. Look for a class with a tick() method.
+2. src/db/adapter-types.ts — DatabaseAdapter interface (for db.from().insert())
+3. scripts/intel/market-intel.mjs — to understand how briefs.json is structured:
+   look for where it writes the output (grep for writeFileSync or JSON.stringify)
+
+THE BRIEF FORMAT (from market-intel.mjs output) is:
+  { id: string, bucket: string, headline: string, ohwow_implications: string, score: number }
+
+CREATE the file src/scheduling/intel-outreach-trigger.ts with this content:
+
+\`\`\`typescript
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { logger } from '../lib/logger.js';
+import type { DatabaseAdapter } from '../db/adapter-types.js';
+
+interface IntelBrief {
+  id: string;
+  bucket: string;
+  headline: string;
+  ohwow_implications: string;
+  score: number;
+}
+
+export class IntelOutreachTrigger {
+  private db: DatabaseAdapter;
+  private workspaceId: string;
+  private workspaceName: string;
+
+  constructor(db: DatabaseAdapter, workspaceId: string, workspaceName = 'default') {
+    this.db = db;
+    this.workspaceId = workspaceId;
+    this.workspaceName = workspaceName;
+  }
+
+  async tick(): Promise<void> {
+    const intelDir = path.join(os.homedir(), '.ohwow', 'workspaces', this.workspaceName, 'intel');
+    if (!fs.existsSync(intelDir)) return;
+
+    // Find the latest day directory (YYYY-MM-DD format)
+    const days = fs.readdirSync(intelDir)
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort()
+      .reverse();
+    if (days.length === 0) return;
+
+    const dayDir = path.join(intelDir, days[0]);
+    const briefsPath = path.join(dayDir, 'briefs.json');
+    if (!fs.existsSync(briefsPath)) return;
+
+    let briefs: IntelBrief[] = [];
+    try {
+      briefs = JSON.parse(fs.readFileSync(briefsPath, 'utf8'));
+    } catch {
+      return;
+    }
+
+    const seenPath = path.join(dayDir, 'outreach-seen.json');
+    let seen: string[] = [];
+    try {
+      seen = JSON.parse(fs.readFileSync(seenPath, 'utf8'));
+    } catch { /* first run */ }
+
+    const buyerIntentBriefs = briefs.filter(
+      b => b.bucket === 'buyer_intent' && !seen.includes(b.id)
+    );
+
+    for (const brief of buyerIntentBriefs) {
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      try {
+        await this.db.from('agent_workforce_tasks').insert({
+          id,
+          workspace_id: this.workspaceId,
+          title: \`Follow up on buyer intent signal: \${brief.headline}\`,
+          description: brief.ohwow_implications || brief.headline,
+          status: 'pending',
+          priority: 'high',
+          source: 'intel_outreach_trigger',
+          created_at: now,
+          updated_at: now,
+        });
+        seen.push(brief.id);
+        logger.info({ briefId: brief.id, headline: brief.headline }, '[intel-outreach] task created');
+      } catch (err) {
+        logger.warn({ err, briefId: brief.id }, '[intel-outreach] failed to create task');
+      }
+    }
+
+    if (buyerIntentBriefs.length > 0) {
+      fs.writeFileSync(seenPath, JSON.stringify(seen, null, 2));
+    }
+  }
+}
+\`\`\`
+
+IMPORTANT:
+- Create ONLY src/scheduling/intel-outreach-trigger.ts
+- Do NOT wire it into daemon startup — that is a separate task
+- Do NOT modify any existing files
+- The crypto.randomUUID() call uses the global Node.js crypto (no import needed in ESM with --experimental-global)
+  but to be safe, add: import { randomUUID } from 'node:crypto'; and use randomUUID() instead
+- Replace crypto.randomUUID() with randomUUID() in the final file
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'src/scheduling/intel-outreach-trigger.ts exists with IntelOutreachTrigger class',
+      'tick() method reads briefs.json and creates tasks for buyer_intent signals',
+      'Processed signals are tracked in outreach-seen.json to avoid duplicates',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 4 — Wire channel message storage for inner-thoughts unreadMessages
   // -------------------------------------------------------------------------
   {
     taskId: 'wire-unread-messages-inner-thoughts',
@@ -89,7 +286,7 @@ The goal is to remove the TODO comment and make a real attempt to wire the data.
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 3 — Wire onboarding integration presets from agent selections
+  // BATCH 5 — Wire onboarding integration presets from agent selections
   // -------------------------------------------------------------------------
   {
     taskId: 'wire-onboarding-integration-presets',
@@ -133,7 +330,7 @@ an empty list.
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 4 — Add real contacts/CRM search to the orchestrator tool catalog
+  // BATCH 6 — Add real contacts/CRM search to the orchestrator tool catalog
   // -------------------------------------------------------------------------
   {
     taskId: 'add-crm-contact-search-tool',
@@ -177,87 +374,6 @@ following the existing pattern, and create the minimal schema.
       'search_contacts appears in the MCP catalog with correct schema',
       'Built-in tool handler queries contacts table with LIKE search',
       'Tool is categorized as crm and marked isBuiltIn: true',
-    ],
-  },
-
-  // -------------------------------------------------------------------------
-  // BATCH 5 — Wire market intel buyer_intent → outreach pipeline
-  // -------------------------------------------------------------------------
-  {
-    taskId: 'wire-market-intel-outreach-trigger',
-    title: 'Wire buyer_intent market intel signals into the outreach trigger pipeline',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm run typecheck 2>&1 | tail -30',
-    description: `
-The market intel system at scripts/intel/market-intel.mjs generates briefs with
-bucket=buyer_intent. These briefs exist in ~/.ohwow/workspaces/default/intel/ but
-nothing reads them to trigger follow-up actions.
-
-Your task: create a new scheduler module that reads buyer_intent briefs from the
-intel directory and enqueues outreach tasks for the configured workspace.
-
-Steps:
-1. Read src/scheduling/ to understand existing scheduler patterns (e.g.,
-   approved-draft-queue.ts, synthesis-auto-learner.ts).
-2. Read the intel brief format by checking scripts/intel/market-intel.mjs for
-   how briefs.json is structured.
-3. Create src/scheduling/intel-outreach-trigger.ts that:
-   - Exports class IntelOutreachTrigger with a tick() method
-   - On each tick, reads the latest intel day's briefs.json
-   - Filters for bucket=buyer_intent items not yet processed
-   - For each unprocessed signal, creates a task in the agent_workforce_tasks
-     table with a prompt like "Follow up on buyer intent signal: {headline}"
-   - Tracks processed signals in a seen-file at the intel day directory
-4. Export the class and wire it into the daemon startup in src/daemon/start.ts
-   (find where other schedulers are initialized and follow that pattern).
-
-The seen-file should use the existing loadSeen/appendSeen pattern if it exists
-in src/lib/, otherwise implement a simple JSON array in the intel dir.
-    `,
-    acceptanceCriteria: [
-      'TypeScript typecheck passes (npm run typecheck)',
-      'src/scheduling/intel-outreach-trigger.ts exists with IntelOutreachTrigger class',
-      'tick() method reads briefs.json and creates tasks for buyer_intent signals',
-      'Processed signals are tracked to avoid duplicate task creation',
-    ],
-  },
-
-  // -------------------------------------------------------------------------
-  // BATCH 6 — A2A agent card endpoint (Google A2A spec compliance)
-  // -------------------------------------------------------------------------
-  {
-    taskId: 'implement-a2a-agent-card-endpoint',
-    title: 'Implement /.well-known/agent.json A2A agent card endpoint in Express API',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm run typecheck 2>&1 | tail -30',
-    description: `
-Google's Agent-to-Agent (A2A) protocol requires agents to expose a
-/.well-known/agent.json endpoint with capability metadata. The ohwow runtime
-has an A2A module at src/a2a/ but check if this endpoint exists in the API.
-
-Steps:
-1. Run: grep -rn "well-known\|agent.json\|agentCard" src/api/ src/a2a/ | head -20
-   to check if it already exists.
-2. Read src/api/routes/ to understand Express route registration patterns.
-3. Read src/a2a/ to understand the AgentCard interface shape (likely from the
-   Google A2A spec: name, description, url, version, capabilities, skills).
-4. If the endpoint doesn't exist, create src/api/routes/a2a-agent-card.ts that:
-   - Handles GET /.well-known/agent.json
-   - Returns a JSON body with: name, description, url, version, capabilities
-     (streaming: false, pushNotifications: false, stateTransitionHistory: false)
-   - Reads the workspace name and configured base URL from config
-   - Sets Content-Type: application/json
-5. Register the route in src/api/routes/index.ts or the main router file.
-
-If the endpoint already exists, instead extend it: add a skills[] array that
-lists the configured agents from the workspace as A2A skills with id, name,
-description, and inputModes: ['text'].
-    `,
-    acceptanceCriteria: [
-      'TypeScript typecheck passes (npm run typecheck)',
-      'GET /.well-known/agent.json route exists in Express API',
-      'Response includes name, description, url, version, capabilities fields',
-      'Route is registered in the main API router',
     ],
   },
 
@@ -344,7 +460,62 @@ experiment design (avoid re-running the same comparison).
   },
 
   // -------------------------------------------------------------------------
-  // BATCH 9 — Add list_agents REST endpoint to Express API
+  // BATCH 9 — Wire LLM executor into conductor production path (Phase 6)
+  // -------------------------------------------------------------------------
+  {
+    taskId: 'wire-llm-executor-production',
+    title: 'Use IS_REAL_EXECUTOR_ENABLED flag in wireConductor to force real executor without modelRouter',
+    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
+    validationCmd: 'npm run typecheck 2>&1 | tail -30',
+    description: `
+CONTEXT: src/autonomy/wire-daemon.ts already exports:
+  export const IS_REAL_EXECUTOR_ENABLED = process.env.OHWOW_REAL_EXECUTOR === 'true';
+
+But this flag is NEVER READ in wireConductor(). The real LLM executor is only used
+when opts.modelRouter is provided. So IS_REAL_EXECUTOR_ENABLED is exported but
+does nothing.
+
+YOUR TASK: In wireConductor() in src/autonomy/wire-daemon.ts, modify the
+makeExecutor factory (currently at lines ~144-167) so that when
+IS_REAL_EXECUTOR_ENABLED is true AND opts.modelRouter is NOT provided, it still
+creates a real LlmPlanExecutor using a default Anthropic client.
+
+Read src/autonomy/executors/llm-executor.ts to understand:
+- What makeLlmPlanExecutor() needs: { model, client, fallback, meter }
+- What type "client" is (look for LlmClient or similar interface)
+- Whether there's a default/direct Anthropic client factory
+
+Then in wire-daemon.ts, add a branch:
+  if (IS_REAL_EXECUTOR_ENABLED && !opts.modelRouter) {
+    // Create a minimal LlmPlanExecutor with a direct Anthropic client
+    // for environments where modelRouter isn't available but operator
+    // has explicitly opted into the real executor.
+    const meter = newLlmMeter();
+    const client = /* direct anthropic client from llm-executor.ts */;
+    return makeLlmPlanExecutor({
+      model: DEFAULT_LLM_MODEL,
+      client,
+      fallback: defaultMakeStubExecutor(),
+      meter,
+    });
+  }
+
+If the Anthropic client constructor requires an API key, read it from
+process.env.ANTHROPIC_API_KEY with a fallback to empty string (the executor
+will fail gracefully at runtime if the key is missing).
+
+Only modify src/autonomy/wire-daemon.ts. No other files.
+    `,
+    acceptanceCriteria: [
+      'TypeScript typecheck passes (npm run typecheck)',
+      'IS_REAL_EXECUTOR_ENABLED is read in wireConductor(), not just exported',
+      'When IS_REAL_EXECUTOR_ENABLED=true and modelRouter is absent, real executor is created',
+      'No other files were changed',
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // BATCH 10 — Add list_agents REST endpoint to Express API
   // -------------------------------------------------------------------------
   {
     taskId: 'add-list-agents-rest-endpoint',
@@ -377,41 +548,6 @@ The response shape for GET /api/agents should be:
       'GET /api/agents/:id endpoint exists and returns single agent',
       'Routes are registered in the API router',
       'Auth middleware is applied',
-    ],
-  },
-
-  // -------------------------------------------------------------------------
-  // BATCH 10 — Fix hardcoded model strings across seed templates
-  // -------------------------------------------------------------------------
-  {
-    taskId: 'fix-seed-templates-hardcoded-model',
-    title: 'Replace hardcoded claude-sonnet-4-20250514 in seed-templates.ts with a named constant',
-    targetRepo: '/Users/jesus/Documents/ohwow/ohwow',
-    validationCmd: 'npm run typecheck 2>&1 | tail -20',
-    description: `
-src/lib/seed-templates.ts contains 12+ inline occurrences of the string
-'claude-sonnet-4-20250514' embedded directly inside agent config objects.
-This is a maintenance burden — updating the default seed model requires
-a search-and-replace across the whole file.
-
-Fix: at the top of the file (after the existing JSDoc comment) add:
-
-  /** Default LLM model used by seed-template agents. Override via SEED_TEMPLATE_MODEL env var. */
-  const SEED_AGENT_MODEL = process.env.SEED_TEMPLATE_MODEL ?? 'claude-sonnet-4-5';
-
-Then replace every occurrence of 'claude-sonnet-4-20250514' in that file
-with the constant SEED_AGENT_MODEL. There are occurrences on lines ~24, 40,
-56, 72, 88, 104, 120, 136, 152, 168, 188, 189, 209 (check the file for the
-exact count — do not leave any behind).
-
-Do NOT touch any other file. Do NOT change the shape of the exported
-SEED_TEMPLATES array. Do NOT modify package.json.
-    `,
-    acceptanceCriteria: [
-      'No string literal "claude-sonnet-4-20250514" remains in src/lib/seed-templates.ts',
-      'SEED_AGENT_MODEL constant is defined at the top of the file',
-      'TypeScript typecheck passes (npm run typecheck)',
-      'No other files were changed',
     ],
   },
 
