@@ -80,10 +80,25 @@ function gitCommit(repoPath, changedFiles, message) {
   return execSync('git rev-parse --short HEAD', { cwd: repoPath }).toString().trim();
 }
 
-function gitRevert(repoPath) {
+function gitRevert(repoPath, changedFiles) {
+  // Restore tracked files that were modified
   try {
     execSync('git checkout -- .', { cwd: repoPath, stdio: 'pipe' });
   } catch {}
+  // Remove new untracked files that were created by the LLM
+  if (Array.isArray(changedFiles)) {
+    for (const f of changedFiles) {
+      try {
+        // Only remove if it's untracked (not in git index)
+        const status = execSync(`git status --porcelain "${f}"`, { cwd: repoPath, encoding: 'utf8' }).trim();
+        if (status.startsWith('??')) {
+          fs.rmSync(f, { force: true });
+          // Also remove empty parent dirs created for the file
+          try { fs.rmdirSync(path.dirname(f)); } catch {}
+        }
+      } catch {}
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +156,7 @@ async function main() {
   if (!validation.pass) {
     console.warn('[self-evolve] validation FAILED — reverting changes');
     if (validation.output) console.warn(validation.output.slice(0, 1000));
-    gitRevert(nextTask.targetRepo);
+    gitRevert(nextTask.targetRepo, implResult.filesChanged);
     writeRunReport({
       status: 'failed',
       task: nextTask,
