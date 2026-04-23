@@ -29,7 +29,9 @@ import {
   modelClientFromRouter,
   newLlmMeter,
   withSpendCap,
+  type PlanModelClient,
 } from './executors/llm-executor.js';
+import { AnthropicProvider } from '../execution/model-router.js';
 
 /** Default tick: 1h (matches the spec's IMPROVEMENT_INTERVAL_MS default). */
 export const DEFAULT_CONDUCTOR_INTERVAL_MS = 60 * 60 * 1000;
@@ -141,6 +143,18 @@ export function wireConductor(
   // is always coherent: makeExecutor() is called once per arc, before
   // runArc starts, and getArcMeter is read synchronously in the same tick.
   let currentMeter = newLlmMeter();
+
+  /**
+   * Build a PlanModelClient from a direct Anthropic SDK connection.
+   * Used when IS_REAL_EXECUTOR_ENABLED=true but no ModelRouter is wired
+   * (e.g., minimal daemon boot without cloud control plane).
+   */
+  function makeDirectAnthropicClient(): PlanModelClient {
+    const apiKey = process.env.ANTHROPIC_API_KEY ?? '';
+    const provider = new AnthropicProvider(apiKey);
+    return { call: (params) => provider.createMessage(params) };
+  }
+
   const makeExecutor: () => RoundExecutor = opts.modelRouter
     ? () => {
         currentMeter = newLlmMeter();
@@ -164,7 +178,27 @@ export function wireConductor(
           meter: currentMeter,
         });
       }
-    : opts.makeExecutor ?? defaultMakeStubExecutor;
+    : IS_REAL_EXECUTOR_ENABLED
+      ? () => {
+          // IS_REAL_EXECUTOR_ENABLED=true but no modelRouter provided —
+          // create a direct Anthropic client so the real executor path
+          // still runs in environments without a full model-router stack.
+          currentMeter = newLlmMeter();
+          const directClient = makeDirectAnthropicClient();
+          const cappedClient = withSpendCap(
+            directClient,
+            currentMeter,
+            CONDUCTOR_ARC_SPEND_CAP_CENTS,
+          );
+          const stubFallback = defaultMakeStubExecutor();
+          return makeLlmPlanExecutor({
+            model: DEFAULT_LLM_MODEL,
+            client: cappedClient,
+            fallback: stubFallback,
+            meter: currentMeter,
+          });
+        }
+      : opts.makeExecutor ?? defaultMakeStubExecutor;
 
   const handle = startConductorLoop({
     db: opts.db,
