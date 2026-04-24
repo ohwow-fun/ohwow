@@ -85,4 +85,60 @@ export function registerCalendarTools(server: McpServer, client: DaemonApiClient
       }
     },
   );
+
+  server.tool(
+    'ohwow_sync_calendars',
+    '[Calendar] Sync all connected Google Calendar accounts into the local database. Returns counts of created/updated events per account.',
+    {},
+    async () => {
+      try {
+        const data = await client.post('/api/calendar/sync', {}) as Record<string, unknown>;
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data.data || data, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'ohwow_analyze_calendar',
+    '[Calendar] Analyze calendar usage for the current week. Returns time allocation by business, focus vs meeting ratio, and summary stats.',
+    {},
+    async () => {
+      try {
+        const data = await client.get('/api/calendar/analysis') as Record<string, unknown>;
+        return { content: [{ type: 'text' as const, text: JSON.stringify(data.data || data, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'ohwow_block_focus_time',
+    '[Calendar] Create a focus block event in a business calendar to protect uninterrupted work time.',
+    {
+      title: z.string().describe('Focus block title (e.g. "Deep work — ohwow")'),
+      start_at: z.string().describe('Start time (ISO 8601)'),
+      end_at: z.string().describe('End time (ISO 8601)'),
+      account_id: z.string().optional().describe('Calendar account ID. If omitted, uses the first enabled account.'),
+      description: z.string().optional().describe('Optional notes about what to work on'),
+    },
+    async ({ title, start_at, end_at, account_id, description }) => {
+      try {
+        const body: Record<string, unknown> = {
+          title,
+          start_at,
+          end_at,
+          all_day: false,
+        };
+        if (account_id) body.account_id = account_id;
+        if (description) body.description = description;
+        const result = await client.post('/api/calendar/events', body);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
 }

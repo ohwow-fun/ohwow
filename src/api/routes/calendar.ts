@@ -7,6 +7,8 @@ import { Router } from 'express';
 import type { TypedEventBus } from '../../lib/typed-event-bus.js';
 import type { RuntimeEvents } from '../../tui/types.js';
 import type { DatabaseAdapter } from '../../db/adapter-types.js';
+import { logger } from '../../lib/logger.js';
+import { GoogleCalendarConnector, eventToLocalRow } from '../../integrations/connectors/google-calendar-connector.js';
 export function createCalendarRouter(
   db: DatabaseAdapter,
   _eventBus: TypedEventBus<RuntimeEvents>,
@@ -212,6 +214,190 @@ export function createCalendarRouter(
       }
 
       res.json({ data: { free_slots: slots, busy_count: busy.length } });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // ── Google Calendar Sync ─────────────────────────────────────────
+
+  router.post('/api/calendar/sync', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const results: Array<{ accountId: string; label: string; created: number; updated: number; errors: string[] }> = [];
+
+      const { data: accounts } = await db.from('calendar_accounts')
+        .select('id, label, provider, credentials, sync_cursor')
+        .eq('workspace_id', workspaceId)
+        .eq('enabled', 1)
+        .eq('provider', 'google');
+
+      for (const acct of (accounts || []) as Array<{ id: string; label: string; provider: string; credentials: string; sync_cursor: string | null }>) {
+        let creds: { access_token?: string; calendar_id?: string };
+        try { creds = JSON.parse(acct.credentials || '{}'); } catch { creds = {}; }
+        if (!creds.access_token) { results.push({ accountId: acct.id, label: acct.label, created: 0, updated: 0, errors: ['No access token'] }); continue; }
+
+        const connector = new GoogleCalendarConnector(creds as { access_token: string });
+        const calendarId = creds.calendar_id || 'primary';
+
+        let created = 0; let updated = 0; const errors: string[] = [];
+
+        try {
+          const syncToken = acct.sync_cursor || undefined;
+          let syncResult;
+          try {
+            syncResult = await connector.syncEvents(calendarId, syncToken);
+          } catch (err) {
+            if ((err as { code?: string }).code === 'SYNC_TOKEN_EXPIRED') {
+              logger.warn({ accountId: acct.id }, '[calendar] sync token expired, falling back to full sync');
+              syncResult = await connector.syncEvents(calendarId, undefined);
+            } else throw err;
+          }
+
+          for (const event of syncResult.events) {
+            if (event.status === 'cancelled') {
+              await db.from('calendar_events').delete().eq('account_id', acct.id).eq('external_id', event.id);
+              continue;
+            }
+            const row = eventToLocalRow(event, workspaceId, acct.id);
+            const { data: existing } = await db.from('calendar_events')
+              .select('id').eq('account_id', acct.id).eq('external_id', event.id).maybeSingle();
+
+            if (existing) {
+              await db.from('calendar_events').update(row).eq('id', (existing as { id: string }).id);
+              updated++;
+            } else {
+              const id = crypto.randomUUID();
+              await db.from('calendar_events').insert({ id, ...row, created_at: new Date().toISOString() });
+              created++;
+            }
+          }
+
+          if (syncResult.nextSyncToken) {
+            await db.from('calendar_accounts').update({
+              sync_cursor: syncResult.nextSyncToken,
+              last_synced_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }).eq('id', acct.id);
+          }
+
+          results.push({ accountId: acct.id, label: acct.label, created, updated, errors });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Sync failed';
+          logger.error({ err, accountId: acct.id }, '[calendar] sync error');
+          results.push({ accountId: acct.id, label: acct.label, created, updated, errors: [msg] });
+        }
+      }
+
+      res.json({ data: { results, synced_at: new Date().toISOString() } });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // ── Create Business Calendar ──────────────────────────────────────
+
+  router.post('/api/calendar/accounts/create-business', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const { business_id, access_token, time_zone } = req.body as { business_id?: string; access_token?: string; time_zone?: string };
+      if (!business_id || !access_token) {
+        res.status(400).json({ error: 'business_id and access_token are required' });
+        return;
+      }
+
+      const businessNames: Record<string, string> = {
+        ohwow: 'ohwow',
+        avenued: 'AvenueD',
+        dplaza: 'dPlaza',
+        studentcenter: 'StudentCenter',
+      };
+      const calName = businessNames[business_id] || business_id;
+
+      const connector = new GoogleCalendarConnector({ access_token });
+      const cal = await connector.createCalendar(`${calName} — Business`, time_zone || 'America/Bogota');
+
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const credentials = JSON.stringify({ access_token, calendar_id: cal.id });
+      await db.from('calendar_accounts').insert({
+        id, workspace_id: workspaceId,
+        provider: 'google',
+        label: `${calName} Calendar`,
+        credentials,
+        business_id,
+        calendar_type: 'created',
+        created_at: now, updated_at: now,
+      });
+
+      logger.info({ accountId: id, calendarId: cal.id, businessId: business_id }, '[calendar] created business calendar account');
+      res.status(201).json({ data: { account_id: id, calendar_id: cal.id, calendar_name: cal.summary, business_id } });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
+    }
+  });
+
+  // ── Calendar Analysis ─────────────────────────────────────────────
+
+  router.get('/api/calendar/analysis', async (req, res) => {
+    try {
+      const { workspaceId } = req;
+      const now = new Date();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 7);
+
+      const { data: events } = await db.from('calendar_events')
+        .select('title, start_at, end_at, account_id, status')
+        .eq('workspace_id', workspaceId)
+        .gte('start_at', weekStart.toISOString())
+        .lte('end_at', weekEnd.toISOString())
+        .neq('status', 'cancelled');
+
+      const { data: accounts } = await db.from('calendar_accounts')
+        .select('id, business_id, label')
+        .eq('workspace_id', workspaceId);
+
+      const accountMap = new Map<string, string>();
+      for (const a of (accounts || []) as Array<{ id: string; business_id: string | null }>) {
+        accountMap.set(a.id, a.business_id || 'personal');
+      }
+
+      type BusinessStats = { hours: number; meeting_count: number };
+      const byBusiness: Record<string, BusinessStats> = {};
+      let totalHours = 0;
+      let meetingHours = 0;
+
+      for (const ev of (events || []) as Array<{ title: string; start_at: string; end_at: string; account_id: string | null }>) {
+        const start = new Date(ev.start_at);
+        const end = new Date(ev.end_at);
+        const hours = (end.getTime() - start.getTime()) / 3_600_000;
+        const biz = ev.account_id ? (accountMap.get(ev.account_id) || 'personal') : 'personal';
+
+        if (!byBusiness[biz]) byBusiness[biz] = { hours: 0, meeting_count: 0 };
+        byBusiness[biz].hours += hours;
+        byBusiness[biz].meeting_count++;
+        totalHours += hours;
+
+        const title = ev.title.toLowerCase();
+        if (title.includes('meeting') || title.includes('call') || title.includes('sync') || title.includes('standup') || ev.account_id === null) {
+          meetingHours += hours;
+        }
+      }
+
+      res.json({
+        data: {
+          week_start: weekStart.toISOString(),
+          week_end: weekEnd.toISOString(),
+          total_hours: Math.round(totalHours * 10) / 10,
+          meeting_hours: Math.round(meetingHours * 10) / 10,
+          focus_hours: Math.round((totalHours - meetingHours) * 10) / 10,
+          by_business: byBusiness,
+          event_count: (events || []).length,
+        },
+      });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Internal error' });
     }
