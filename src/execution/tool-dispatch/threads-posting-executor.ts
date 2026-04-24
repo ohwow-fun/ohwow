@@ -1,15 +1,24 @@
 /**
- * Threads posting tool executor — task-agent dispatch for
- * threads_compose_post, threads_compose_thread, threads_read_profile.
+ * Threads posting executor — task-agent dispatch for threads_compose_post,
+ * threads_compose_thread, threads_read_profile, threads_scan_posts,
+ * threads_compose_reply, threads_delete_reply.
  *
- * Mirrors x-posting-executor.ts: resolves the target Chrome profile,
- * ensures debug Chrome is up, opens the profile window, reads the
- * expected handle, and dispatches to the matching composer function.
- *
- * Defaults to dry_run=true per safety convention.
+ * Chrome lifecycle, profile resolution, tab acquisition, withTabRecovery,
+ * and withTimeout are all handled by `createSocialExecutor` in
+ * social-executor.ts. This file only defines what is Threads-specific:
+ *   - Which tool names belong to this platform
+ *   - Which settings keys resolve the target profile
+ *   - The host/home URL for tab acquisition
+ *   - Per-tool timeouts
+ *   - The composer map: tool name → implementation function
  */
 
-import type { ToolExecutor, ToolExecutionContext, ToolCallResult } from './types.js';
+import {
+  createSocialExecutor,
+  type PlatformConfig,
+  type ComposerMap,
+  type ComposerContext,
+} from './social-executor.js';
 import {
   composeThreadsPostViaBrowser,
   composeThreadsThreadViaBrowser,
@@ -20,339 +29,117 @@ import {
   composeThreadsReplyViaBrowser,
 } from '../../orchestrator/tools/threads-reply.js';
 import { deleteThreadsReplyViaBrowser } from '../../orchestrator/tools/threads-delete.js';
-import {
-  ensureDebugChrome,
-  findProfileByIdentity,
-  listProfiles,
-  openProfileWindow,
-  findReusableTabForHost,
-  closeTabById,
-  resolveBrowserContextForProfile,
-} from '../browser/chrome-profile-router.js';
-import { claimTarget, releaseAllForOwner } from '../browser/browser-claims.js';
-import { withProfileLock } from '../browser/profile-mutex.js';
-import { withTabRecovery } from '../browser/tab-recovery.js';
-import { profileByHandleHint } from '../browser/chrome-lifecycle.js';
-import { logger } from '../../lib/logger.js';
-import { withTimeout, TimeoutError } from '../../lib/with-timeout.js';
 
-const THREADS_TOOL_NAMES = new Set([
-  'threads_compose_post',
-  'threads_compose_thread',
-  'threads_read_profile',
-  'threads_scan_posts',
-  'threads_compose_reply',
-  'threads_delete_reply',
-]);
+// ---------------------------------------------------------------------------
+// Platform config
+// ---------------------------------------------------------------------------
 
-const TOOL_TIMEOUT_MS: Record<string, number> = {
-  threads_compose_post: 90_000,
-  threads_compose_thread: 180_000,
-  threads_read_profile: 30_000,
-  threads_scan_posts: 45_000,
-  threads_compose_reply: 90_000,
-  threads_delete_reply: 60_000,
+const threadsConfig: PlatformConfig = {
+  id: 'threads',
+  displayName: 'Threads',
+  toolNames: new Set([
+    'threads_compose_post',
+    'threads_compose_thread',
+    'threads_read_profile',
+    'threads_scan_posts',
+    'threads_compose_reply',
+    'threads_delete_reply',
+  ]),
+  settingsProfileKey: 'threads_posting_profile',
+  settingsHandleKey: 'threads_posting_handle',
+  settingsProfileKeyFallback: 'x_posting_profile',
+  settingsHandleKeyFallback: 'x_posting_handle',
+  hostMatch: 'threads.com',
+  homeUrl: 'https://www.threads.com/',
+  toolTimeouts: {
+    threads_compose_post: 90_000,
+    threads_compose_thread: 180_000,
+    threads_read_profile: 30_000,
+    threads_scan_posts: 45_000,
+    threads_compose_reply: 90_000,
+    threads_delete_reply: 60_000,
+  },
+  defaultTimeoutMs: 90_000,
 };
-const DEFAULT_TOOL_TIMEOUT_MS = 90_000;
 
-async function readSetting(ctx: ToolExecutionContext, key: string): Promise<string | null> {
-  try {
-    const { data } = await ctx.db
-      .from('runtime_settings')
-      .select('value')
-      .eq('key', key)
-      .maybeSingle();
-    const val = (data as { value: string } | null)?.value;
-    return val && val.trim().length > 0 ? val.trim() : null;
-  } catch {
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Composer map
+// ---------------------------------------------------------------------------
 
-async function readLiveMode(ctx: ToolExecutionContext): Promise<boolean> {
-  const raw = await readSetting(ctx, 'deliverable_executor_live');
-  return raw === 'true' || raw === '1';
-}
-
-export const threadsPostingExecutor: ToolExecutor = {
-  canHandle(toolName: string): boolean {
-    return THREADS_TOOL_NAMES.has(toolName);
+const threadsComposers: ComposerMap = {
+  async threads_compose_post(input, ctx: ComposerContext) {
+    return composeThreadsPostViaBrowser({
+      text: String(input.text || ''),
+      dryRun: ctx.dryRun,
+      expectedHandle: ctx.expectedHandle,
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      profileDir: ctx.profileDir,
+    });
   },
 
-  async execute(
-    toolName: string,
-    input: Record<string, unknown>,
-    ctx: ToolExecutionContext,
-  ): Promise<ToolCallResult> {
-    // ---- 1. Resolve target Chrome profile ----
-    let profiles: ReturnType<typeof listProfiles>;
-    try {
-      profiles = listProfiles();
-    } catch (err) {
-      return {
-        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        is_error: true,
-      };
-    }
-    if (profiles.length === 0) {
-      return {
-        content: 'Error: No Chrome profiles found in ~/.ohwow/chrome-cdp/. Log into Threads in desktop Chrome via onboarding.',
-        is_error: true,
-      };
-    }
+  async threads_compose_thread(input, ctx: ComposerContext) {
+    const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
+    return composeThreadsThreadViaBrowser({
+      posts,
+      dryRun: ctx.dryRun,
+      expectedHandle: ctx.expectedHandle,
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      profileDir: ctx.profileDir,
+    });
+  },
 
-    const profileOverride = typeof input.profile === 'string' && input.profile.trim().length > 0
-      ? input.profile.trim()
-      : null;
-    const profileHint = profileOverride
-      || (await readSetting(ctx, 'threads_posting_profile'))
-      || (await readSetting(ctx, 'x_posting_profile'));
-    const handleHint = profileHint
-      ? null
-      : (await readSetting(ctx, 'threads_posting_handle'))
-        || (await readSetting(ctx, 'x_posting_handle'));
+  async threads_read_profile(_input, ctx: ComposerContext) {
+    return readThreadsProfileViaBrowser({
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      profileDir: ctx.profileDir,
+    });
+  },
 
-    const target = (profileHint && findProfileByIdentity(profiles, profileHint))
-      || (handleHint && profileByHandleHint(profiles, handleHint))
-      || profiles.find((p) => !!p.email)
-      || profiles[0];
-
-    // ---- 2. Ensure Chrome + reuse-or-open profile tab → browserContextId ----
-    // Prefer reusing an UNCLAIMED threads.com tab owned by a prior task
-    // (`findReusableTabForHost` claims it + `resetTab`s back to the host
-    // landing so stale drafts or modals from the previous task don't
-    // leak in). `withProfileLock` serializes this lookup + claim + open
-    // sequence so two concurrent tasks on the same profile don't both
-    // see "no match" and open duplicate windows.
-    const claimOwner = ctx.taskId;
-    // Tracks the fresh tab we opened (if any) on the most recent acquire
-    // attempt so the post-run cleanup can close it when the composer
-    // failed. Updated each attempt; earlier attempts' ids are no longer
-    // live (destroyed by whatever killed the tab).
-    let freshTargetId: string | null = null;
-
-    async function acquireThreadsTab(): Promise<{
-      page: { expectedBrowserContextId: string | undefined };
-      targetId: string;
-      release: () => void;
-    }> {
-      // Clear any claim from a previous attempt so findReusable isn't
-      // confused by our own stale ownership under this owner.
-      releaseAllForOwner(claimOwner);
-      freshTargetId = null;
-      let localContextId: string | undefined;
-      let localFreshTargetId: string | null = null;
-      await withProfileLock(target.directory, async () => {
-        await ensureDebugChrome({ preferredProfile: target.directory });
-        // Pin tab-reuse to the target profile's browser context so a
-        // human's threads.com tab in a DIFFERENT profile can't be
-        // grabbed. `resolveBrowserContextForProfile` returns the
-        // context seen by a prior `openProfileWindow` call this
-        // daemon lifetime. On the very first tick after daemon
-        // restart (no cache hit) we deliberately skip the reusable
-        // lookup entirely and fall through to `openProfileWindow` so
-        // we never hijack an unrelated tab on a cold start.
-        const expectedContext = resolveBrowserContextForProfile(target.directory);
-        const reusable = expectedContext
-          ? await findReusableTabForHost({
-            hostMatch: 'threads.com',
-            profileDir: target.directory,
-            owner: claimOwner,
-            resetUrl: 'https://www.threads.com/',
-            expectedBrowserContextId: expectedContext,
-          })
-          : null;
-        if (reusable) {
-          localContextId = reusable.browserContextId ?? undefined;
-          reusable.page.close();
-          reusable.closeBrowser();
-          return;
-        }
-
-        const opened = await openProfileWindow({
-          profileDir: target.directory,
-          url: 'https://www.threads.com/',
-        });
-        localContextId = opened.browserContextId ?? undefined;
-        localFreshTargetId = opened.targetId;
-        const claim = claimTarget(
-          { profileDir: target.directory, targetId: opened.targetId },
-          claimOwner,
-        );
-        if (!claim) {
-          logger.warn(
-            { targetId: opened.targetId.slice(0, 8), profileDir: target.directory, owner: claimOwner },
-            '[threads-posting-executor] freshly opened tab already claimed by another owner — racing task likely; closing and bailing',
-          );
-          await closeTabById(opened.targetId);
-          throw new Error('Couldn\'t claim threads.com tab (racing task holds it). Retry.');
-        }
-      });
-      freshTargetId = localFreshTargetId;
-      return {
-        page: { expectedBrowserContextId: localContextId },
-        targetId: localFreshTargetId ?? 'reused',
-        release: () => {
-          // Release task-scoped claims so retries can re-claim a fresh
-          // tab. Safe to call when no claim was created (returns 0).
-          releaseAllForOwner(claimOwner);
-        },
-      };
-    }
-
-    // ---- 3. Read expected handle for identity verification ----
-    const expectedHandleRaw = (await readSetting(ctx, 'threads_posting_handle'))
-      || (await readSetting(ctx, 'x_posting_handle'));
-    const expectedHandle = expectedHandleRaw ? expectedHandleRaw.replace(/^@/, '') : undefined;
-
-    // ---- 4. Dispatch to the matching composer ----
-    // Dry-run default flips with runtime_settings.deliverable_executor_live.
-    // Mirrors xPostingExecutor: live flag on → agent tool-calls that
-    // omit dry_run publish for real (cadence path); live flag off →
-    // default stays dry_run=true for chat safety. Explicit input.dry_run
-    // always wins.
-    const liveFlag = await readLiveMode(ctx);
-    const dryRun = typeof input.dry_run === 'boolean' ? input.dry_run : !liveFlag;
-    let result: {
-      success: boolean;
-      message: string;
-      screenshotBase64?: string;
-      postsTyped?: number;
-      postsPublished?: number;
-      currentUrl?: string;
-      handle?: string;
-      replyTyped?: number;
-      replyPublished?: number;
-      threads?: unknown[];
-    } | undefined;
-    const timeoutMs = TOOL_TIMEOUT_MS[toolName] ?? DEFAULT_TOOL_TIMEOUT_MS;
-
-    try {
-      // Acquisition runs inside `withTabRecovery` so a tab closed
-      // mid-call triggers a re-acquire + retry. Stage-boundary log
-      // lines make the retry trail visible in daemon logs.
-      logger.debug({ tool: toolName, taskId: ctx.taskId }, '[threads-posting-executor] acquiring threads.com tab');
-      result = await withTabRecovery(
-        { acquire: acquireThreadsTab, label: 'threads-posting', maxRetries: 2 },
-        async ({ expectedBrowserContextId }) => {
-          logger.debug(
-            { tool: toolName, taskId: ctx.taskId, ctx: expectedBrowserContextId?.slice(0, 8) },
-            '[threads-posting-executor] tab acquired; dispatching composer',
-          );
-          return withTimeout(`threads-posting:${toolName}`, timeoutMs, async () => {
-            if (toolName === 'threads_compose_post') {
-              return composeThreadsPostViaBrowser({
-                text: String(input.text || ''),
-                dryRun,
-                expectedHandle,
-                expectedBrowserContextId,
-                profileDir: target.directory,
-              });
-            }
-            if (toolName === 'threads_compose_thread') {
-              const posts = Array.isArray(input.posts) ? (input.posts as string[]) : [];
-              return composeThreadsThreadViaBrowser({ posts, dryRun, expectedHandle, expectedBrowserContextId, profileDir: target.directory });
-            }
-            if (toolName === 'threads_scan_posts') {
-              const scanned = await scanThreadsPostsViaBrowser({
-                source: String(input.source || ''),
-                limit: typeof input.limit === 'number' ? input.limit : undefined,
-                scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
-                expectedBrowserContextId,
-                profileDir: target.directory,
-              });
-              return {
-                success: scanned.success,
-                message: scanned.message,
-                screenshotBase64: scanned.screenshotBase64,
-                currentUrl: scanned.currentUrl,
-                threads: scanned.posts as unknown[],
-              };
-            }
-            if (toolName === 'threads_compose_reply') {
-              return composeThreadsReplyViaBrowser({
-                replyToUrl: String(input.reply_to_url || ''),
-                text: String(input.text || ''),
-                dryRun,
-                expectedHandle,
-                expectedBrowserContextId,
-                db: ctx.db,
-                workspaceId: ctx.workspaceId,
-                profileDir: target.directory,
-              });
-            }
-            if (toolName === 'threads_delete_reply') {
-              const del = await deleteThreadsReplyViaBrowser({
-                postUrl: String(input.post_url || ''),
-                authorHandle: String(input.author_handle || ''),
-                containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
-                index: typeof input.index === 'number' ? input.index : undefined,
-                dryRun,
-                expectedBrowserContextId,
-                profileDir: target.directory,
-              });
-              return {
-                success: del.success,
-                message: del.message,
-                screenshotBase64: del.screenshotBase64,
-                currentUrl: del.currentUrl,
-              };
-            }
-            // threads_read_profile
-            return readThreadsProfileViaBrowser({ expectedBrowserContextId, profileDir: target.directory });
-          });
-        },
-      );
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (err instanceof TimeoutError) {
-        logger.error(
-          { tool: toolName, timeoutMs, elapsedMs: err.elapsedMs },
-          '[threads-posting-executor] composer exceeded timeout',
-        );
-        return {
-          content: `Error: ${toolName} timed out after ${timeoutMs}ms. Task should retry or check Chrome state.`,
-          is_error: true,
-        };
-      }
-      logger.error({ err: msg, tool: toolName }, '[threads-posting-executor] handler crashed');
-      return { content: `Error: threads-posting handler crashed: ${msg}`, is_error: true };
-    } finally {
-      // Keep owned tabs alive for reuse across ticks. Mirror of the
-      // x-posting executor: the ownership registry + 'ours' lookup
-      // ensures at most one owned threads.com tab per daemon, and the
-      // next tick attaches to it instead of flashing a new one. On
-      // compose error (result unassigned, or success=false), close
-      // the tab so a broken tab can't permanently block future ticks.
-      if (freshTargetId) {
-        const composeFailed = !result || result.success === false;
-        if (composeFailed) {
-          await closeTabById(freshTargetId);
-        }
-      }
-      // Release task-scoped claims so the next task run can re-claim
-      // the same tab. Safe to call when no claim exists (returns 0).
-      releaseAllForOwner(claimOwner);
-    }
-
-    // ---- 5. Shape the result for the agent ----
-    const envelope: Record<string, unknown> = {
-      success: result.success,
-      message: result.message,
-    };
-    if (result.currentUrl) envelope.currentUrl = result.currentUrl;
-    if (result.postsTyped !== undefined) envelope.postsTyped = result.postsTyped;
-    if (result.postsPublished !== undefined) envelope.postsPublished = result.postsPublished;
-    if (result.replyTyped !== undefined) envelope.replyTyped = result.replyTyped;
-    if (result.replyPublished !== undefined) envelope.replyPublished = result.replyPublished;
-    if (result.handle !== undefined) envelope.handle = result.handle;
-    if (result.threads !== undefined) envelope.threads = result.threads;
-    envelope.dry_run = dryRun;
-    envelope.profile_used = target.email || target.directory;
-
+  async threads_scan_posts(input, ctx: ComposerContext) {
+    const scanned = await scanThreadsPostsViaBrowser({
+      source: String(input.source || ''),
+      limit: typeof input.limit === 'number' ? input.limit : undefined,
+      scrollRounds: typeof input.scroll_rounds === 'number' ? input.scroll_rounds : undefined,
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      profileDir: ctx.profileDir,
+    });
     return {
-      content: JSON.stringify(envelope),
-      is_error: !result.success,
+      success: scanned.success,
+      message: scanned.message,
+      screenshotBase64: scanned.screenshotBase64,
+      currentUrl: scanned.currentUrl,
+      threads: scanned.posts as unknown[],
     };
   },
+
+  async threads_compose_reply(input, ctx: ComposerContext) {
+    return composeThreadsReplyViaBrowser({
+      replyToUrl: String(input.reply_to_url || ''),
+      text: String(input.text || ''),
+      dryRun: ctx.dryRun,
+      expectedHandle: ctx.expectedHandle,
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      db: ctx.db,
+      workspaceId: ctx.workspaceId,
+      profileDir: ctx.profileDir,
+    });
+  },
+
+  async threads_delete_reply(input, ctx: ComposerContext) {
+    return deleteThreadsReplyViaBrowser({
+      postUrl: String(input.post_url || ''),
+      authorHandle: String(input.author_handle || ''),
+      containsText: typeof input.contains_text === 'string' ? input.contains_text : undefined,
+      index: typeof input.index === 'number' ? input.index : undefined,
+      dryRun: ctx.dryRun,
+      expectedBrowserContextId: ctx.expectedBrowserContextId,
+      profileDir: ctx.profileDir,
+    });
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+
+export const threadsPostingExecutor = createSocialExecutor(threadsConfig, threadsComposers);

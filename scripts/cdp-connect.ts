@@ -9,22 +9,31 @@
  *   tsx scripts/cdp-connect.ts --profile "Profile 2"    # by dir name
  *   tsx scripts/cdp-connect.ts --kill                   # kill debug Chrome
  *
- * Module usage:
+ * Module usage (import into other scripts):
  *   import { cdpConnect, listDebugProfiles } from './cdp-connect.js'
  *   const { browser, page } = await cdpConnect({ profile: 'you@example.com', url: 'https://x.com' })
  *   // ... do stuff ...
- *   await browser.close()
+ *   browser.close()
  *
  * Profile resolution order:
  *   1. --profile / profile option (email, directory name, or local display name)
  *   2. OHWOW_CHROME_PROFILE env var
  *   3. 'Default'
+ *
+ * The CDP driver (RawCdpBrowser / RawCdpPage) comes from
+ * src/execution/browser/raw-cdp.ts — the canonical implementation shared
+ * with all runtime code. No duplication.
  */
 
 import { spawn, exec } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { RawCdpBrowser, RawCdpPage } from '../src/execution/browser/raw-cdp.js';
+
+// Re-export the canonical types so callers can use them without reaching
+// into src/execution/browser directly.
+export { RawCdpBrowser, RawCdpPage };
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -40,6 +49,14 @@ const CHROME_BIN =
     : 'google-chrome';
 const LOCAL_STATE_PATH = join(DEBUG_DIR, 'Local State');
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function execCapture(cmd: string): Promise<{ stdout: string; code: number }> {
+  return new Promise((resolve) => {
+    exec(cmd, (err, stdout) => resolve({ stdout: stdout ?? '', code: err ? 1 : 0 }));
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -50,192 +67,23 @@ export interface ProfileEntry {
   displayName: string | null;
 }
 
-export interface CdpTarget {
-  targetId: string;
-  type: string;
-  title: string;
-  url: string;
-  browserContextId: string | null;
-}
-
 export interface ConnectOptions {
   /** Email, directory name (e.g. "Profile 2"), or local display name. Falls back to env/Default. */
   profile?: string;
   /** URL to navigate to after connecting. If omitted returns the browser only. */
   url?: string;
-  /** If true, open a brand-new tab even if one for the URL already exists. Default: false (reuse). */
+  /** Open a brand-new tab even if one for the URL already exists. Default: false (reuse). */
   freshTab?: boolean;
   /** CDP port. Default: 9222. */
   port?: number;
 }
 
 export interface ConnectResult {
-  browser: RawBrowser;
+  browser: RawCdpBrowser;
   /** Attached page, or null if no URL was requested. */
-  page: RawPage | null;
+  page: RawCdpPage | null;
   /** Profile directory that Chrome was launched with (or is running with). */
   profileDir: string;
-}
-
-// ---------------------------------------------------------------------------
-// Minimal raw CDP driver (self-contained, no imports from src/)
-// ---------------------------------------------------------------------------
-
-import WebSocket from 'ws';
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-function execCapture(cmd: string): Promise<{ stdout: string; code: number }> {
-  return new Promise((resolve) => {
-    exec(cmd, (err, stdout) => resolve({ stdout: stdout ?? '', code: err ? 1 : 0 }));
-  });
-}
-
-interface PendingRequest {
-  resolve: (v: unknown) => void;
-  reject: (e: Error) => void;
-}
-
-export class RawBrowser {
-  private ws: WebSocket | null = null;
-  private nextId = 0;
-  private pending = new Map<number, PendingRequest>();
-  private eventHandlers = new Map<string, Array<(p: unknown, sid?: string) => void>>();
-  private _closed = false;
-
-  private constructor(private wsUrl: string) {}
-
-  static async connect(httpBase = `http://localhost:${CDP_PORT}`, timeoutMs = 8000): Promise<RawBrowser> {
-    const v = await fetch(`${httpBase}/json/version`).then((r) => r.json() as Promise<{ webSocketDebuggerUrl: string }>);
-    const b = new RawBrowser(v.webSocketDebuggerUrl);
-    await b.openWs(timeoutMs);
-    return b;
-  }
-
-  private openWs(timeoutMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.wsUrl);
-      const timer = setTimeout(() => { reject(new Error(`CDP connect timeout (${timeoutMs}ms)`)); this.ws?.close(); }, timeoutMs);
-      this.ws.once('open', () => { clearTimeout(timer); resolve(); });
-      this.ws.once('error', (e: Error) => { clearTimeout(timer); reject(e); });
-      this.ws.on('message', (d: Buffer) => this.onMsg(d));
-      this.ws.on('close', () => { this._closed = true; });
-    });
-  }
-
-  private onMsg(data: Buffer): void {
-    let msg: Record<string, unknown>;
-    try { msg = JSON.parse(data.toString()); } catch { return; }
-    if (typeof msg.id === 'number') {
-      const p = this.pending.get(msg.id);
-      if (p) {
-        this.pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(JSON.stringify(msg.error)));
-        else p.resolve(msg.result);
-      }
-      return;
-    }
-    if (typeof msg.method === 'string') {
-      for (const h of this.eventHandlers.get(msg.method) ?? []) {
-        try { h(msg.params, msg.sessionId as string | undefined); } catch { /* ignore */ }
-      }
-    }
-  }
-
-  send<T = unknown>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
-    if (this._closed) throw new Error('CDP connection closed');
-    const id = ++this.nextId;
-    const frame: Record<string, unknown> = { id, method, params };
-    if (sessionId) frame.sessionId = sessionId;
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.ws!.send(JSON.stringify(frame));
-    });
-  }
-
-  on(method: string, handler: (params: unknown, sessionId?: string) => void): () => void {
-    if (!this.eventHandlers.has(method)) this.eventHandlers.set(method, []);
-    this.eventHandlers.get(method)!.push(handler);
-    return () => {
-      const list = this.eventHandlers.get(method)!;
-      const i = list.indexOf(handler);
-      if (i >= 0) list.splice(i, 1);
-    };
-  }
-
-  async getTargets(): Promise<CdpTarget[]> {
-    const r = await this.send<{ targetInfos: Array<{ targetId: string; type: string; title: string; url: string; browserContextId?: string }> }>('Target.getTargets');
-    return r.targetInfos.map((t) => ({
-      targetId: t.targetId,
-      type: t.type,
-      title: t.title,
-      url: t.url,
-      browserContextId: t.browserContextId ?? null,
-    }));
-  }
-
-  async attachToPage(targetId: string): Promise<RawPage> {
-    const r = await this.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
-    const page = new RawPage(this, r.sessionId, targetId);
-    await page.send('Page.enable');
-    await page.send('Runtime.enable');
-    this.on('Page.javascriptDialogOpening', (_p, sid) => {
-      if (sid !== r.sessionId) return;
-      this.send('Page.handleJavaScriptDialog', { accept: true }, r.sessionId).catch(() => {});
-    });
-    return page;
-  }
-
-  async createTarget(url = 'about:blank', browserContextId?: string): Promise<string> {
-    const params: Record<string, unknown> = { url };
-    if (browserContextId) params.browserContextId = browserContextId;
-    const r = await this.send<{ targetId: string }>('Target.createTarget', params);
-    return r.targetId;
-  }
-
-  async closeTarget(targetId: string): Promise<void> {
-    await this.send('Target.closeTarget', { targetId }).catch(() => {});
-  }
-
-  close(): void {
-    this._closed = true;
-    this.ws?.close();
-  }
-}
-
-export class RawPage {
-  constructor(
-    private browser: RawBrowser,
-    public readonly sessionId: string,
-    public readonly targetId: string,
-  ) {}
-
-  send<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    return this.browser.send<T>(method, params, this.sessionId);
-  }
-
-  async navigate(url: string, waitMs = 3000): Promise<void> {
-    await this.send('Page.navigate', { url });
-    await sleep(waitMs);
-  }
-
-  async evaluate<T = unknown>(expression: string): Promise<T> {
-    const r = await this.send<{ result: { value?: unknown } }>('Runtime.evaluate', {
-      expression,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-    return r.result.value as T;
-  }
-
-  async screenshot(): Promise<string> {
-    const r = await this.send<{ data: string }>('Page.captureScreenshot', { format: 'png' });
-    return r.data;
-  }
-
-  async close(): Promise<void> {
-    await this.browser.closeTarget(this.targetId);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,12 +112,9 @@ export function listDebugProfiles(): ProfileEntry[] {
 function resolveProfileDir(identity?: string): string {
   const id = identity ?? process.env.OHWOW_CHROME_PROFILE ?? 'Default';
   const profiles = listDebugProfiles();
-  if (!profiles.length) return id; // bootstrap hasn't run, pass through
+  if (!profiles.length) return id;
   const match = profiles.find(
-    (p) =>
-      p.directory === id ||
-      p.email === id ||
-      p.displayName === id,
+    (p) => p.directory === id || p.email === id || p.displayName === id,
   );
   return match?.directory ?? id;
 }
@@ -316,9 +161,7 @@ async function killDebugChrome(): Promise<void> {
   const pids = stdout.trim().split('\n').map(Number).filter(Boolean);
   for (const pid of pids) {
     const { stdout: cmd } = await execCapture(`ps -o command= -p ${pid}`);
-    if (cmd.includes(DEBUG_DIR)) {
-      await execCapture(`kill -TERM ${pid}`);
-    }
+    if (cmd.includes(DEBUG_DIR)) await execCapture(`kill -TERM ${pid}`);
   }
 }
 
@@ -330,26 +173,21 @@ export async function cdpConnect(opts: ConnectOptions = {}): Promise<ConnectResu
   const port = opts.port ?? CDP_PORT;
   const profileDir = resolveProfileDir(opts.profile);
 
-  // Ensure Chrome is running on the CDP port
   if (!(await probeCdp(port))) {
     console.log(`[cdp-connect] no Chrome on :${port}, spawning with profile=${profileDir}`);
     await spawnChrome(profileDir, port);
   }
 
-  const browser = await RawBrowser.connect(`http://localhost:${port}`);
+  const browser = await RawCdpBrowser.connect(`http://localhost:${port}`);
 
-  if (!opts.url) {
-    return { browser, page: null, profileDir };
-  }
+  if (!opts.url) return { browser, page: null, profileDir };
 
-  // Find or open a tab for the requested URL
   const targets = await browser.getTargets();
   const pages = targets.filter((t) => t.type === 'page');
 
   let targetId: string | null = null;
 
   if (!opts.freshTab) {
-    // Reuse an existing tab whose URL matches the origin
     const origin = new URL(opts.url).origin;
     const existing = pages.find((t) => {
       try { return new URL(t.url).origin === origin; } catch { return false; }
@@ -358,14 +196,16 @@ export async function cdpConnect(opts: ConnectOptions = {}): Promise<ConnectResu
   }
 
   if (!targetId) {
-    // Find any live page to get the browserContextId (so we open in the right profile)
     const anchor = pages[0];
-    targetId = await browser.createTarget('about:blank', anchor?.browserContextId ?? undefined);
+    targetId = await browser.createTargetInContext(
+      anchor?.browserContextId ?? '',
+      'about:blank',
+    ).catch(() => browser.createTargetDefault('about:blank'));
     await sleep(500);
   }
 
   const page = await browser.attachToPage(targetId);
-  await page.navigate(opts.url, 2500);
+  await page.goto(opts.url);
 
   return { browser, page, profileDir };
 }
@@ -408,7 +248,6 @@ async function cli(): Promise<void> {
   const fresh = flag('fresh');
 
   if (!url) {
-    // Status check
     const alive = await probeCdp(CDP_PORT);
     console.log(`Debug Chrome on :${CDP_PORT}: ${alive ? 'running' : 'not running'}`);
     if (alive) {
@@ -438,13 +277,11 @@ async function cli(): Promise<void> {
     console.log(`[cdp-connect] page title: "${title}"`);
   }
 
-  // Keep process alive so the browser stays connected (Ctrl+C to exit)
   console.log('[cdp-connect] press Ctrl+C to disconnect');
   process.on('SIGINT', () => { browser.close(); process.exit(0); });
   await new Promise(() => {});
 }
 
-// Run CLI only when executed directly
 const isMain = process.argv[1]?.endsWith('cdp-connect.ts') || process.argv[1]?.endsWith('cdp-connect.js');
 if (isMain) {
   cli().catch((err: unknown) => {
