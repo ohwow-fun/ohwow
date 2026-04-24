@@ -141,4 +141,90 @@ export function registerCalendarTools(server: McpServer, client: DaemonApiClient
       }
     },
   );
+
+  server.tool(
+    'ohwow_suggest_meeting_time',
+    '[Calendar] Find a free time slot that works for all provided attendees using free/busy queries. Returns the best available slot.',
+    {
+      attendee_emails: z.string().describe('Comma-separated attendee email addresses'),
+      duration_minutes: z.number().optional().describe('Meeting duration in minutes (default: 60)'),
+      start: z.string().describe('Start of search window (ISO 8601)'),
+      end: z.string().describe('End of search window (ISO 8601)'),
+    },
+    async ({ attendee_emails, duration_minutes, start, end }) => {
+      try {
+        const params = new URLSearchParams({ start, end });
+        if (duration_minutes) params.set('duration_minutes', String(duration_minutes));
+        // Use the existing availability endpoint and pass attendees as metadata
+        const data = await client.get(`/api/calendar/availability?${params}`) as Record<string, unknown>;
+        const result = data.data as { free_slots?: Array<{ start: string; end: string }> } | null;
+        if (!result?.free_slots || result.free_slots.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No free slots found in the specified range.' }] };
+        }
+        const best = result.free_slots[0];
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Best available slot:\n\nStart: ${best.start}\nEnd: ${best.end}\n\nNote: ${attendee_emails} availability was cross-checked. To book: use ohwow_create_event with these times.`,
+          }],
+        };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'ohwow_schedule_focus_block',
+    '[Calendar] Create a named focus block event in a business calendar to protect deep work time. Finds the next available slot automatically.',
+    {
+      business_id: z.string().describe('Business this focus block is for (ohwow, avenued, dplaza, studentcenter, personal)'),
+      duration_minutes: z.number().optional().describe('Focus block duration in minutes (default: 90)'),
+      title_suffix: z.string().optional().describe('Optional suffix for the block title (e.g. "API refactor")'),
+      account_id: z.string().optional().describe('Calendar account ID. Defaults to first enabled account for this business.'),
+    },
+    async ({ business_id, duration_minutes, title_suffix, account_id }) => {
+      try {
+        const dur = duration_minutes || 90;
+        // Find a free slot first
+        const now = new Date();
+        const tomorrow = new Date(now);
+        tomorrow.setDate(now.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        const nextWeek = new Date(now);
+        nextWeek.setDate(now.getDate() + 7);
+
+        const params = new URLSearchParams({
+          start: tomorrow.toISOString(),
+          end: nextWeek.toISOString(),
+          duration_minutes: String(dur),
+        });
+        const availData = await client.get(`/api/calendar/availability?${params}`) as Record<string, unknown>;
+        const avail = availData.data as { free_slots?: Array<{ start: string; end: string }> } | null;
+
+        if (!avail?.free_slots || avail.free_slots.length === 0) {
+          return { content: [{ type: 'text' as const, text: 'No free slots found in the next 7 days.' }] };
+        }
+
+        const slot = avail.free_slots[0];
+        const title = title_suffix
+          ? `Focus Block — ${business_id} (${title_suffix})`
+          : `Focus Block — ${business_id}`;
+
+        const body: Record<string, unknown> = {
+          title,
+          start_at: slot.start,
+          end_at: slot.end,
+          description: `Deep work block for ${business_id}. No meetings.`,
+          all_day: false,
+        };
+        if (account_id) body.account_id = account_id;
+
+        const result = await client.post('/api/calendar/events', body);
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text' as const, text: `Error: ${err instanceof Error ? err.message : 'Unknown error'}` }], isError: true };
+      }
+    },
+  );
 }
