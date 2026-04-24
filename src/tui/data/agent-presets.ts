@@ -109,6 +109,51 @@ export const BUSINESS_TYPES: BusinessType[] = [
         tools: ['web_research', 'deep_research', 'local_crm'],
         department: 'Sales',
       },
+      {
+        id: 'calendar_manager',
+        name: 'Calendar Manager',
+        role: 'Schedule Analyst & Optimizer',
+        description: 'Analyzes your calendar across all businesses, finds scheduling conflicts, and blocks focus time',
+        systemPrompt: `You are a calendar manager for a founder running multiple businesses. Your job is to keep their schedule healthy and productive.
+
+Each week you:
+1. Sync all connected Google Calendar accounts using ohwow_sync_calendars
+2. Analyze time allocation with ohwow_analyze_calendar — identify which businesses are over/under-scheduled
+3. Find focus time gaps — days with back-to-back meetings and no deep work blocks
+4. Create focus blocks with ohwow_block_focus_time when gaps are found
+5. Report a concise summary: top priorities, scheduling concerns, and next week's outlook
+
+Always be direct about scheduling problems. If a business has too few hours scheduled, say so and suggest what to do.`,
+        tools: ['ohwow_list_events', 'ohwow_create_event', 'ohwow_sync_calendars', 'ohwow_analyze_calendar', 'ohwow_block_focus_time', 'ohwow_find_availability'],
+        recommended: true,
+        department: 'Operations',
+        automations: [
+          {
+            ref_id: 'calendar_weekly_review',
+            name: 'Weekly Calendar Review',
+            description: 'Syncs calendars and generates a weekly time allocation report every Monday morning',
+            trigger_type: 'schedule' as const,
+            trigger_config: { cron: '0 8 * * 1', timezone: 'America/Bogota' },
+            steps: [
+              {
+                id: 'step_sync',
+                step_type: 'agent_prompt',
+                label: 'Sync Calendars',
+                agent_ref: 'calendar_manager',
+                prompt: 'Sync all connected Google Calendar accounts now.',
+              },
+              {
+                id: 'step_analyze',
+                step_type: 'agent_prompt',
+                label: 'Weekly Analysis',
+                agent_ref: 'calendar_manager',
+                prompt: 'Analyze this week\'s calendar. Report: hours per business, days with no focus blocks, and 3 specific recommendations for next week.',
+              },
+            ],
+            cooldown_seconds: 604800,
+          },
+        ],
+      },
     ],
   },
   {
@@ -519,6 +564,51 @@ export const BUSINESS_TYPES: BusinessType[] = [
         systemPrompt: 'You are a webinar promoter for a consulting business. Create compelling promotional emails and social posts for webinars and speaking engagements. Highlight the value attendees will gain. Use FOMO appropriately with limited seats or exclusive content. Include speaker credibility and past attendee testimonials. Make registration frictionless.',
         tools: ['web_research'],
         department: 'Marketing',
+      },
+      {
+        id: 'calendar_manager',
+        name: 'Calendar Manager',
+        role: 'Schedule Analyst & Optimizer',
+        description: 'Analyzes your calendar across all businesses, finds scheduling conflicts, and blocks focus time',
+        systemPrompt: `You are a calendar manager for a founder running multiple businesses. Your job is to keep their schedule healthy and productive.
+
+Each week you:
+1. Sync all connected Google Calendar accounts using ohwow_sync_calendars
+2. Analyze time allocation with ohwow_analyze_calendar — identify which businesses are over/under-scheduled
+3. Find focus time gaps — days with back-to-back meetings and no deep work blocks
+4. Create focus blocks with ohwow_block_focus_time when gaps are found
+5. Report a concise summary: top priorities, scheduling concerns, and next week's outlook
+
+Always be direct about scheduling problems. If a business has too few hours scheduled, say so and suggest what to do.`,
+        tools: ['ohwow_list_events', 'ohwow_create_event', 'ohwow_sync_calendars', 'ohwow_analyze_calendar', 'ohwow_block_focus_time', 'ohwow_find_availability'],
+        recommended: true,
+        department: 'Operations',
+        automations: [
+          {
+            ref_id: 'calendar_weekly_review',
+            name: 'Weekly Calendar Review',
+            description: 'Syncs calendars and generates a weekly time allocation report every Monday morning',
+            trigger_type: 'schedule' as const,
+            trigger_config: { cron: '0 8 * * 1', timezone: 'America/Bogota' },
+            steps: [
+              {
+                id: 'step_sync',
+                step_type: 'agent_prompt',
+                label: 'Sync Calendars',
+                agent_ref: 'calendar_manager',
+                prompt: 'Sync all connected Google Calendar accounts now.',
+              },
+              {
+                id: 'step_analyze',
+                step_type: 'agent_prompt',
+                label: 'Weekly Analysis',
+                agent_ref: 'calendar_manager',
+                prompt: 'Analyze this week\'s calendar. Report: hours per business, days with no focus blocks, and 3 specific recommendations for next week.',
+              },
+            ],
+            cooldown_seconds: 604800,
+          },
+        ],
       },
     ],
   },
