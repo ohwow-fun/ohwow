@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.11.0] — 2026-04-25
+
+### Added
+- **Calendar:** Google Calendar connector with sync, freeBusy, and event creation; sync routes, business mapping, analysis snapshot schema, and MCP tools (`ohwow_sync_calendars`, `ohwow_analyze_calendar`, `ohwow_block_focus_time`, suggest meeting time, schedule focus block)
+- **Calendar:** Calendar Manager agent preset
+- **Self-evolution:** Self-evolving code improvement system with smart task-picking, evolution dashboard script, SUMMARY.md generation, seed task batches, A/B experiment result persistence, and OpenRouter/GLM model support
+- **Market intel:** Unified market-intel pipeline (replaces x-intel); ProductHunt RSS source with keyword filtering; buyer intent leads pushed to CRM; automation registration script
+- **Web dashboard:** Intelligence, Growth, ControlRoom, Work, People merged tab pages; TabShell component; sidebar reorganized into 6 department groups; WhatsApp QR code display; phone + country picker for allowed chats
+- **WhatsApp:** Link allowed chats to CRM contacts and teammates
+- **Video:** Image primitive; Tomorrow Broke deterministic episode pipeline; per-line color/size in letter-scatter; chapter title styling in outro
+- **A2A:** `/.well-known/agent.json` agent card endpoint
+- **Autonomy:** `IS_REAL_EXECUTOR_ENABLED` feature flag for Phase 6 rollout; buyer intent signals wired into outreach trigger pipeline; unread messages and peer count in inner-thoughts context snapshot
+- **Scripts:** Universal CDP Chrome connector
+- **Daemon:** Auto-source `conductor-on.env` on every daemon start
+- **Tests:** Vitest coverage for model-router, response-classifier, execution-policy, PrioritySemaphore, LocalLLMCache, seen-file utils, market-intel pipeline
+
+### Fixed
+- `self_findings` table unbounded growth (371 MB → steady-state target <20 MB)
+- Autonomy: plan brief showing `[object Object]`; `getLens` crash on unknown founder inbox mode
+- Eternal: dedup check failing when DB adapter pre-parsed context JSON
+- Intel: date injection in briefs; dry-run seen-file poisoning; JSON parse retry; RSS feed URLs
+- Evolve: commit message newlines; tsconfig cache; smart-picker path hallucination; OpenRouter key routing; file truncation on revert
+- Web: allowed chats list refresh; QR dismiss on connect; messaging UX cleanup; inline editor overflow
+- Video: `textAlign` propagation into `textStyle` for LetterScatterText
+- x-intel: auto-spawn Chrome when not on `:9222`
+
+### Changed
+- Browser: extracted generic social platform executor
+- Web: sidebar flattened to 9 items; contact picker moved inline with phone input row
+- Evolve: smart-picker priority framework (`money > relations > plumbing`); upgraded to GLM-5.1 via OpenRouter
+- Onboarding: integrations derived from selected agent presets instead of hardcoded
+
+### Security
+- `ENV_REFERENCE_MARKERS` expanded to cover `credentials`, `creds`, `data`, `payload`, `body`, `req`, `request`, `row`, `record` — prevents false positives on property-access passthroughs in the pre-push hook
+
 ## [0.10.2] — 2026-04-22
 
 ### Added
