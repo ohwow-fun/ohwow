@@ -71,7 +71,7 @@ const ENV_REFERENCE_MARKERS = [
   /os\.environ\b/i,
   /Deno\.env\b/i,
   /\$\{?[A-Z_][A-Z0-9_]*\}?/,
-  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input)\.[A-Za-z_][A-Za-z0-9_]*/i,
+  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input|credentials|creds|data|payload|body|req|request|row|record)\.[A-Za-z_][A-Za-z0-9_]*/i,
 ];
 function isEnvReference(match) {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));

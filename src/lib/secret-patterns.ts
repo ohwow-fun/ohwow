@@ -148,7 +148,7 @@ const ENV_REFERENCE_MARKERS: readonly RegExp[] = [
   // the left of the match is already constrained by the bearer/api-key
   // regex, so only matches that LOOK like a real assignment-of-variable
   // get suppressed here.
-  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input)\.[A-Za-z_][A-Za-z0-9_]*/i,
+  /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input|credentials|creds|data|payload|body|req|request|row|record)\.[A-Za-z_][A-Za-z0-9_]*/i,
 ];
 function isEnvReference(match: string): boolean {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));
