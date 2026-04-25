@@ -149,6 +149,9 @@ const ENV_REFERENCE_MARKERS: readonly RegExp[] = [
   // regex, so only matches that LOOK like a real assignment-of-variable
   // get suppressed here.
   /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input|credentials|creds|data|payload|body|req|request|row|record)\.[A-Za-z_][A-Za-z0-9_]*/i,
+  // Test-fixture literals: value strings containing test/mock/fake/local markers
+  // (e.g. 'test-jwt-secret-for-token-codec', 'local-session-token-for-tests')
+  /['"][^'"]*(?:test|mock|fake|dummy|placeholder|fixture|example|local)[-_][^'"]*['"]/i,
 ];
 function isEnvReference(match: string): boolean {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));

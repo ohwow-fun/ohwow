@@ -72,6 +72,9 @@ const ENV_REFERENCE_MARKERS = [
   /Deno\.env\b/i,
   /\$\{?[A-Z_][A-Z0-9_]*\}?/,
   /\b(?:this\.)?(?:config|opts|options|args|params|env|settings|input|credentials|creds|data|payload|body|req|request|row|record)\.[A-Za-z_][A-Za-z0-9_]*/i,
+  // Test-fixture literals: value strings containing test/mock/fake/local markers
+  // (e.g. 'test-jwt-secret-for-token-codec', 'local-session-token-for-tests')
+  /['"][^'"]*(?:test|mock|fake|dummy|placeholder|fixture|example|local)[-_][^'"]*['"]/i,
 ];
 function isEnvReference(match) {
   return ENV_REFERENCE_MARKERS.some((re) => re.test(match));
