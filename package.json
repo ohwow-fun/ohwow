@@ -81,7 +81,7 @@
     "*.ts": "bash -c 'npx tsc --noEmit'"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.85.0",
+    "@anthropic-ai/sdk": "^0.91.1",
     "@huggingface/transformers": "^4.1.0",
     "@mediapipe/tasks-vision": "^0.10.34",
     "@modelcontextprotocol/sdk": "^1.27.1",
